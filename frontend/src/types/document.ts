@@ -80,7 +80,21 @@ export interface CoincidentConstraint {
   targetPointIndex: number;
 }
 
-export type Constraint = FixedConstraint | EqualConstraint | CoincidentConstraint;
+export interface HorizontalConstraint {
+  id: string;
+  type: 'horizontal';
+  entityId: string;
+  segmentIndex: number;
+}
+
+export interface VerticalConstraint {
+  id: string;
+  type: 'vertical';
+  entityId: string;
+  segmentIndex: number;
+}
+
+export type Constraint = FixedConstraint | EqualConstraint | CoincidentConstraint | HorizontalConstraint | VerticalConstraint;
 
 export interface Sketch {
   id: string;

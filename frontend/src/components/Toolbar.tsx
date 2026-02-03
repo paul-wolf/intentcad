@@ -6,10 +6,11 @@ import { exportDocumentToDxf } from '@/export/dxf';
 import { exportDocumentToPdf } from '@/export/pdf';
 import { downloadTextFile, downloadBlob } from '@/export/download';
 import { getEntityPoint, getEntityPoints } from '@/utils/entityPoints';
+import { requestSave } from '@/api/autoSave';
 import type { ToolType } from '@/types/editor';
 
 const TOOLS: { type: ToolType; label: string; shortcut: string }[] = [
-  { type: 'select', label: 'Select', shortcut: 'V — X construction, K fix, = equal, J coincident, M mirror, A circular, G grid' },
+  { type: 'select', label: 'Select', shortcut: 'V — X construction, K fix, = equal, J coincident, H horiz, V vert, M mirror, A circular, G grid' },
   { type: 'line', label: 'Line', shortcut: 'l' },
   { type: 'point', label: 'Point', shortcut: '.' },
   { type: 'circle', label: 'Circle', shortcut: 'c' },
@@ -161,6 +162,48 @@ export function Toolbar() {
         title="Coincident constraint — join closest points (J)"
       >
         Coincident
+      </button>
+      <button
+        onClick={() => {
+          const ids = useEditorStore.getState().selectedEntityIds;
+          if (ids.size === 0) return;
+          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().toggleHorizontal([...ids]);
+          requestSave();
+        }}
+        style={{
+          padding: '4px 12px',
+          border: `1px solid ${palette.inputBorder}`,
+          borderRadius: '4px',
+          background: palette.buttonBg,
+          color: palette.text,
+          cursor: 'pointer',
+          fontSize: '13px',
+        }}
+        title="Horizontal constraint — force segment endpoints to same Y (H)"
+      >
+        Horiz
+      </button>
+      <button
+        onClick={() => {
+          const ids = useEditorStore.getState().selectedEntityIds;
+          if (ids.size === 0) return;
+          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().toggleVertical([...ids]);
+          requestSave();
+        }}
+        style={{
+          padding: '4px 12px',
+          border: `1px solid ${palette.inputBorder}`,
+          borderRadius: '4px',
+          background: palette.buttonBg,
+          color: palette.text,
+          cursor: 'pointer',
+          fontSize: '13px',
+        }}
+        title="Vertical constraint — force segment endpoints to same X (V)"
+      >
+        Vert
       </button>
       <button
         onClick={() => {

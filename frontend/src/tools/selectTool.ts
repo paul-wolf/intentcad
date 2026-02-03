@@ -386,6 +386,22 @@ export function createSelectTool(): Tool {
           requestSave();
         }
       }
+      if (e.key === 'h' || e.key === 'H') {
+        const ids = useEditorStore.getState().selectedEntityIds;
+        if (ids.size > 0) {
+          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().toggleHorizontal([...ids]);
+          requestSave();
+        }
+      }
+      if (e.key === 'v') {
+        const ids = useEditorStore.getState().selectedEntityIds;
+        if (ids.size > 0) {
+          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().toggleVertical([...ids]);
+          requestSave();
+        }
+      }
       if (e.key === 'x' || e.key === 'X') {
         const ids = useEditorStore.getState().selectedEntityIds;
         if (ids.size > 0) {

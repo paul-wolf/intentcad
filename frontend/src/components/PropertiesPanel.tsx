@@ -42,6 +42,16 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
     const sketch = doc.sketches.find((sk) => sk.id === doc.activeSketchId);
     return sketch?.constraints.some((c) => c.type === 'coincident' && (c.entityId === entity.id || c.targetEntityId === entity.id)) ?? false;
   });
+  const isHorizontal = useDocumentStore((s) => {
+    const doc = s.document;
+    const sketch = doc.sketches.find((sk) => sk.id === doc.activeSketchId);
+    return sketch?.constraints.some((c) => c.type === 'horizontal' && c.entityId === entity.id) ?? false;
+  });
+  const isVertical = useDocumentStore((s) => {
+    const doc = s.document;
+    const sketch = doc.sketches.find((sk) => sk.id === doc.activeSketchId);
+    return sketch?.constraints.some((c) => c.type === 'vertical' && c.entityId === entity.id) ?? false;
+  });
 
   const isDerived = 'sourceId' in entity && !!entity.sourceId;
 
@@ -79,6 +89,16 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
         {isCoincident && (
           <span style={{ fontSize: '10px', color: palette.constrained, fontStyle: 'italic' }}>
             (Coincident)
+          </span>
+        )}
+        {isHorizontal && (
+          <span style={{ fontSize: '10px', color: palette.constrained, fontStyle: 'italic' }}>
+            (Horizontal)
+          </span>
+        )}
+        {isVertical && (
+          <span style={{ fontSize: '10px', color: palette.constrained, fontStyle: 'italic' }}>
+            (Vertical)
           </span>
         )}
       </div>
