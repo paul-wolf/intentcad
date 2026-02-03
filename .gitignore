@@ -1,0 +1,29 @@
+# Dependencies
+frontend/node_modules/
+
+# Build output
+frontend/dist/
+
+# Python virtualenv
+backend/.venv/
+
+# Database
+backend/db.sqlite3
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Editor backups
+*~
+*.swp
+
+# Environment files
+.env
+.env.local
+
+# OS files
+.DS_Store
+
+# Claude Code
+.claude/
