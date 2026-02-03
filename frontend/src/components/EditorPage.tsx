@@ -87,6 +87,16 @@ export function EditorPage() {
         return;
       }
 
+      if (e.key === 'Home') {
+        e.preventDefault();
+        useEditorStore.getState().setViewportCommand('center-origin');
+        return;
+      }
+      if (e.key === 'f' || e.key === 'F') {
+        useEditorStore.getState().setViewportCommand('fit-entities');
+        return;
+      }
+
       if (e.key === 'l' || e.key === 'L') setActiveTool('line');
       if (e.key === 'c' || e.key === 'C') setActiveTool('circle');
       if (e.key === 'r' || e.key === 'R') setActiveTool('rectangle');

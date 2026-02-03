@@ -133,6 +133,37 @@ export function Toolbar() {
       >
         Grid
       </button>
+      <button
+        onClick={() => useEditorStore.getState().setViewportCommand('center-origin')}
+        style={{
+          padding: '4px 12px',
+          border: `1px solid ${palette.inputBorder}`,
+          borderRadius: '4px',
+          background: palette.buttonBg,
+          color: palette.text,
+          cursor: 'pointer',
+          fontSize: '13px',
+          marginLeft: '4px',
+        }}
+        title="Center origin in viewport (Home)"
+      >
+        Origin
+      </button>
+      <button
+        onClick={() => useEditorStore.getState().setViewportCommand('fit-entities')}
+        style={{
+          padding: '4px 12px',
+          border: `1px solid ${palette.inputBorder}`,
+          borderRadius: '4px',
+          background: palette.buttonBg,
+          color: palette.text,
+          cursor: 'pointer',
+          fontSize: '13px',
+        }}
+        title="Fit all entities in viewport (F)"
+      >
+        Fit All
+      </button>
       <div style={{ flex: 1 }} />
       <button
         onClick={() => {

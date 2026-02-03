@@ -16,6 +16,7 @@ interface EditorStore {
   circularCopyCenter: Point | null;
   gridCopyEntityIds: string[] | null;
   viewportScale: number;
+  viewportCommand: 'center-origin' | 'fit-entities' | null;
 
   setActiveTool(tool: ToolType): void;
   setSelectedEntityIds(ids: Set<string>): void;
@@ -32,6 +33,7 @@ interface EditorStore {
   setCircularCopyCenter(center: Point | null): void;
   setGridCopyEntityIds(ids: string[] | null): void;
   setViewportScale(scale: number): void;
+  setViewportCommand(cmd: 'center-origin' | 'fit-entities' | null): void;
 }
 
 function defaultToolState(tool: ToolType): ToolState {
@@ -65,6 +67,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
   circularCopyCenter: null,
   gridCopyEntityIds: null,
   viewportScale: 1,
+  viewportCommand: null,
 
   setActiveTool(tool) {
     set({ activeTool: tool, toolState: defaultToolState(tool), selectedEntityIds: new Set() });
@@ -128,5 +131,9 @@ export const useEditorStore = create<EditorStore>((set) => ({
 
   setViewportScale(scale) {
     set({ viewportScale: scale });
+  },
+
+  setViewportCommand(cmd) {
+    set({ viewportCommand: cmd });
   },
 }));

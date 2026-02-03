@@ -270,6 +270,73 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
     };
   }, []);
 
+  // React to viewport commands (center-origin, fit-entities)
+  const viewportCommand = useEditorStore((s) => s.viewportCommand);
+  useEffect(() => {
+    if (!viewportCommand) return;
+    const vp = viewportRef.current;
+    if (!vp) return;
+
+    const MIN_SCALE = 0.5;
+    const MAX_SCALE = 80;
+
+    if (viewportCommand === 'center-origin') {
+      vp.offset = { x: vp.width / 2, y: vp.height / 2 };
+    } else if (viewportCommand === 'fit-entities') {
+      const sketch = useDocumentStore.getState().getActiveSketch();
+      const entities = sketch?.entities ?? [];
+
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      let hasGeometry = false;
+
+      for (const entity of entities) {
+        if (entity.type === 'dimension') continue;
+        if (entity.type === 'line') {
+          for (const p of entity.points) {
+            minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+            maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
+          }
+          hasGeometry = true;
+        } else if (entity.type === 'circle') {
+          minX = Math.min(minX, entity.center.x - entity.radius);
+          minY = Math.min(minY, entity.center.y - entity.radius);
+          maxX = Math.max(maxX, entity.center.x + entity.radius);
+          maxY = Math.max(maxY, entity.center.y + entity.radius);
+          hasGeometry = true;
+        } else if (entity.type === 'rectangle') {
+          const hw = entity.width / 2, hh = entity.height / 2;
+          minX = Math.min(minX, entity.center.x - hw);
+          minY = Math.min(minY, entity.center.y - hh);
+          maxX = Math.max(maxX, entity.center.x + hw);
+          maxY = Math.max(maxY, entity.center.y + hh);
+          hasGeometry = true;
+        }
+      }
+
+      if (!hasGeometry) {
+        // Fallback: center origin
+        vp.offset = { x: vp.width / 2, y: vp.height / 2 };
+      } else {
+        const bbW = (maxX - minX) * 1.1 || 1;
+        const bbH = (maxY - minY) * 1.1 || 1;
+        const centerX = (minX + maxX) / 2;
+        const centerY = (minY + maxY) / 2;
+        const scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, Math.min(vp.width / bbW, vp.height / bbH)));
+        vp.scale = scale;
+        vp.offset = {
+          x: vp.width / 2 - centerX * scale,
+          y: vp.height / 2 - centerY * scale,
+        };
+      }
+    }
+
+    useEditorStore.getState().setViewportScale(vp.scale);
+    if (docId) {
+      useUIStateStore.getState().setViewport(docId, vp.offset, vp.scale);
+    }
+    useEditorStore.getState().setViewportCommand(null);
+  }, [viewportCommand, viewportRef, docId]);
+
   const editingDimensionId = useEditorStore((s) => s.editingDimensionId);
 
   const dimensionEditPos = useMemo((): { pos: Point; value: number } | null => {
