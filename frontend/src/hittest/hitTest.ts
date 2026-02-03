@@ -54,11 +54,30 @@ export function hitTestPoint(
         best = { entityId: entity.id, pointIndex: 0, isCenter: true };
       }
     } else if (entity.type === 'rectangle') {
+      // Center point
       const sp = viewport.worldToScreen(entity.center);
       const d = distance(screenPos, sp);
       if (d < bestDist) {
         bestDist = d;
         best = { entityId: entity.id, pointIndex: 0, isCenter: true };
+      }
+      // Corner points: 1=TL, 2=TR, 3=BR, 4=BL
+      const hw = entity.width / 2;
+      const hh = entity.height / 2;
+      const c = entity.center;
+      const corners: [number, Point][] = [
+        [1, { x: c.x - hw, y: c.y + hh }],
+        [2, { x: c.x + hw, y: c.y + hh }],
+        [3, { x: c.x + hw, y: c.y - hh }],
+        [4, { x: c.x - hw, y: c.y - hh }],
+      ];
+      for (const [idx, corner] of corners) {
+        const spc = viewport.worldToScreen(corner);
+        const dc = distance(screenPos, spc);
+        if (dc < bestDist) {
+          bestDist = dc;
+          best = { entityId: entity.id, pointIndex: idx };
+        }
       }
     }
   }

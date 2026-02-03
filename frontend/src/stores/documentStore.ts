@@ -1,10 +1,155 @@
 import { create } from 'zustand';
-import type { Document, Entity, Point, Sketch, Constraint } from '@/types/document';
+import type { Document, Entity, Point, Sketch, Constraint, EqualConstraint, CoincidentConstraint } from '@/types/document';
 import { createEmptyDocument, createEmptySketch } from '@/utils/document';
 import { createMirroredEntity, createRotatedEntity, createTranslatedEntity, propagateDerived } from '@/utils/propagate';
 import { rotatePoint } from '@/utils/geometry';
+import { getEntityPoint, setEntityPoint, getEntityPoints } from '@/utils/entityPoints';
+import type { SelectedPoint } from '@/stores/editorStore';
 
 const UNDO_STACK_LIMIT = 100;
+
+/** Make target entity's size match source entity's size. Returns null if incompatible. */
+function matchEntitySize(target: Entity, source: Entity): Entity | null {
+  if (target.type !== source.type) return null;
+
+  if (source.type === 'circle' && target.type === 'circle') {
+    return { ...target, radius: source.radius };
+  }
+
+  if (source.type === 'rectangle' && target.type === 'rectangle') {
+    return { ...target, width: source.width, height: source.height };
+  }
+
+  if (source.type === 'line' && target.type === 'line') {
+    // Polygons: scale apothem to match
+    if (source.polygonCenter && target.polygonCenter) {
+      const srcMid = { x: (source.points[0]!.x + source.points[1]!.x) / 2, y: (source.points[0]!.y + source.points[1]!.y) / 2 };
+      const srcApothem = Math.sqrt((srcMid.x - source.polygonCenter.x) ** 2 + (srcMid.y - source.polygonCenter.y) ** 2);
+      const tgtMid = { x: (target.points[0]!.x + target.points[1]!.x) / 2, y: (target.points[0]!.y + target.points[1]!.y) / 2 };
+      const tgtApothem = Math.sqrt((tgtMid.x - target.polygonCenter.x) ** 2 + (tgtMid.y - target.polygonCenter.y) ** 2);
+      if (tgtApothem === 0) return null;
+      const scale = srcApothem / tgtApothem;
+      const center = target.polygonCenter;
+      return { ...target, points: target.points.map((p) => ({ x: center.x + (p.x - center.x) * scale, y: center.y + (p.y - center.y) * scale })) };
+    }
+
+    // Regular lines: scale total length around centroid
+    let srcLen = 0;
+    for (let i = 0; i < source.points.length - 1; i++) {
+      srcLen += Math.sqrt((source.points[i + 1]!.x - source.points[i]!.x) ** 2 + (source.points[i + 1]!.y - source.points[i]!.y) ** 2);
+    }
+    let tgtLen = 0;
+    for (let i = 0; i < target.points.length - 1; i++) {
+      tgtLen += Math.sqrt((target.points[i + 1]!.x - target.points[i]!.x) ** 2 + (target.points[i + 1]!.y - target.points[i]!.y) ** 2);
+    }
+    if (tgtLen === 0) return null;
+    const scale = srcLen / tgtLen;
+    const cx = target.points.reduce((s, p) => s + p.x, 0) / target.points.length;
+    const cy = target.points.reduce((s, p) => s + p.y, 0) / target.points.length;
+    return { ...target, points: target.points.map((p) => ({ x: cx + (p.x - cx) * scale, y: cy + (p.y - cy) * scale })) };
+  }
+
+  return null;
+}
+
+/** Propagate equal constraints outward from a modified entity using BFS. */
+function enforceEqual(entities: Entity[], constraints: Constraint[], modifiedId: string): Entity[] {
+  const equalConstraints = constraints.filter((c): c is EqualConstraint => c.type === 'equal');
+  if (equalConstraints.length === 0) return entities;
+
+  const entityMap = new Map(entities.map((e) => [e.id, e]));
+  const visited = new Set([modifiedId]);
+  const queue = [modifiedId];
+
+  while (queue.length > 0) {
+    const currentId = queue.shift()!;
+    const current = entityMap.get(currentId);
+    if (!current) continue;
+
+    for (const c of equalConstraints) {
+      let otherId: string | null = null;
+      if (c.entityId === currentId) otherId = c.targetEntityId;
+      else if (c.targetEntityId === currentId) otherId = c.entityId;
+      if (!otherId || visited.has(otherId)) continue;
+
+      visited.add(otherId);
+      queue.push(otherId);
+
+      const other = entityMap.get(otherId);
+      if (!other) continue;
+
+      const adjusted = matchEntitySize(other, current);
+      if (adjusted) entityMap.set(otherId, adjusted);
+    }
+  }
+
+  return entities.map((e) => entityMap.get(e.id) ?? e);
+}
+
+/** Check if a constraint references any of the given entity IDs. */
+function constraintReferencesAny(c: Constraint, idSet: Set<string>): boolean {
+  if (idSet.has(c.entityId)) return true;
+  if ('targetEntityId' in c && idSet.has(c.targetEntityId)) return true;
+  return false;
+}
+
+
+/** Enforce coincident constraints via BFS from modified entities. */
+function enforceCoincident(entities: Entity[], constraints: Constraint[], movedIds: Set<string>): Entity[] {
+  const coincidentConstraints = constraints.filter((c): c is CoincidentConstraint => c.type === 'coincident');
+  if (coincidentConstraints.length === 0) return entities;
+
+  const entityMap = new Map(entities.map((e) => [e.id, e]));
+  const processed = new Set<string>();
+  const queue = [...movedIds];
+  const visited = new Set(movedIds);
+
+  while (queue.length > 0) {
+    const currentId = queue.shift()!;
+
+    for (const c of coincidentConstraints) {
+      if (processed.has(c.id)) continue;
+
+      let sourceId: string;
+      let sourcePointIdx: number;
+      let targetId: string;
+      let targetPointIdx: number;
+
+      if (c.entityId === currentId) {
+        sourceId = c.entityId;
+        sourcePointIdx = c.pointIndex;
+        targetId = c.targetEntityId;
+        targetPointIdx = c.targetPointIndex;
+      } else if (c.targetEntityId === currentId) {
+        sourceId = c.targetEntityId;
+        sourcePointIdx = c.targetPointIndex;
+        targetId = c.entityId;
+        targetPointIdx = c.pointIndex;
+      } else {
+        continue;
+      }
+
+      if (visited.has(targetId)) continue;
+      processed.add(c.id);
+
+      const source = entityMap.get(sourceId);
+      const target = entityMap.get(targetId);
+      if (!source || !target) continue;
+
+      const pt = getEntityPoint(source, sourcePointIdx);
+      if (!pt) continue;
+
+      const updated = setEntityPoint(target, targetPointIdx, pt);
+      if (updated) {
+        entityMap.set(targetId, updated);
+        visited.add(targetId);
+        queue.push(targetId);
+      }
+    }
+  }
+
+  return entities.map((e) => entityMap.get(e.id) ?? e);
+}
 
 interface DocumentStore {
   document: Document;
@@ -52,6 +197,9 @@ interface DocumentStore {
   addConstraint(constraint: Constraint): void;
   removeConstraints(entityIds: string[]): void;
   toggleFixed(entityIds: string[]): void;
+  toggleEqual(entityIds: string[]): void;
+  toggleCoincident(entityIds: string[]): void;
+  toggleCoincidentWithPoints(pt1: SelectedPoint, pt2: SelectedPoint): void;
 
   // Entity replacement
   updateEntity(entityId: string, updatedEntity: Entity): void;
@@ -211,7 +359,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                   if (e.type === 'dimension' && idSet.has(e.targetEntityId)) return false;
                   return true;
                 }),
-                constraints: sk.constraints.filter((c) => !idSet.has(c.entityId)),
+                constraints: sk.constraints.filter((c) => !constraintReferencesAny(c, idSet)),
               }
             : sk,
         ),
@@ -229,7 +377,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           sk.id === document.activeSketchId
             ? {
                 ...sk,
-                entities: propagateDerived(sk.entities.map((e) => {
+                entities: propagateDerived(enforceCoincident(sk.entities.map((e) => {
                   if (!idSet.has(e.id)) return e;
                   if ('sourceId' in e && e.sourceId) return e; // locked
                   if (e.type === 'line') {
@@ -275,7 +423,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                     };
                   }
                   return e;
-                })),
+                }), sk.constraints, idSet)),
               }
             : sk,
         ),
@@ -292,7 +440,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           sk.id === document.activeSketchId
             ? {
                 ...sk,
-                entities: propagateDerived(sk.entities.map((e) => {
+                entities: propagateDerived(enforceCoincident(sk.entities.map((e) => {
                   if (e.id !== entityId || e.type !== 'line') return e;
                   if (e.sourceId) return e; // locked
                   return {
@@ -303,7 +451,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                         : p,
                     ),
                   };
-                })),
+                }), sk.constraints, new Set([entityId]))),
               }
             : sk,
         ),
@@ -320,7 +468,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           sk.id === document.activeSketchId
             ? {
                 ...sk,
-                entities: propagateDerived(sk.entities.map((e) => {
+                entities: propagateDerived(enforceCoincident(sk.entities.map((e) => {
                   if (e.id !== entityId || e.type !== 'line') return e;
                   if (e.sourceId) return e; // locked
                   if (!e.polygonCenter) return e;
@@ -329,7 +477,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                     ...e,
                     points: e.points.map((p) => rotatePoint(p, center, angleDelta)),
                   };
-                })),
+                }), sk.constraints, new Set([entityId]))),
               }
             : sk,
         ),
@@ -500,7 +648,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
         ...document,
         sketches: document.sketches.map((sk) =>
           sk.id === document.activeSketchId
-            ? { ...sk, constraints: sk.constraints.filter((c) => !idSet.has(c.entityId)) }
+            ? { ...sk, constraints: sk.constraints.filter((c) => !constraintReferencesAny(c, idSet)) }
             : sk,
         ),
       },
@@ -544,6 +692,203 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     }
   },
 
+  toggleEqual(entityIds) {
+    if (entityIds.length !== 2) return;
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return;
+
+    const [id1, id2] = entityIds as [string, string];
+    const e1 = sketch.entities.find((e) => e.id === id1);
+    const e2 = sketch.entities.find((e) => e.id === id2);
+    if (!e1 || !e2) return;
+
+    // Must be same geometric type, no points or dimensions
+    if (e1.type !== e2.type) return;
+    if (e1.type === 'dimension' || e1.type === 'point') return;
+
+    // Check if constraint already exists between these two
+    const existing = sketch.constraints.find((c) =>
+      c.type === 'equal' &&
+      ((c.entityId === id1 && c.targetEntityId === id2) || (c.entityId === id2 && c.targetEntityId === id1)),
+    );
+
+    if (existing) {
+      // Remove it
+      set({
+        document: {
+          ...document,
+          sketches: document.sketches.map((sk) =>
+            sk.id === document.activeSketchId
+              ? { ...sk, constraints: sk.constraints.filter((c) => c.id !== existing.id) }
+              : sk,
+          ),
+        },
+      });
+    } else {
+      // Add constraint and snap target to match source
+      const constraint: Constraint = { id: crypto.randomUUID(), type: 'equal', entityId: id1, targetEntityId: id2 };
+      const snapped = matchEntitySize(e2, e1);
+      set({
+        document: {
+          ...document,
+          sketches: document.sketches.map((sk) =>
+            sk.id === document.activeSketchId
+              ? {
+                  ...sk,
+                  constraints: [...sk.constraints, constraint],
+                  entities: snapped
+                    ? propagateDerived(sk.entities.map((e) => (e.id === id2 ? snapped : e)))
+                    : sk.entities,
+                }
+              : sk,
+          ),
+        },
+      });
+    }
+  },
+
+  toggleCoincident(entityIds) {
+    if (entityIds.length !== 2) return;
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return;
+
+    const [id1, id2] = entityIds as [string, string];
+    const e1 = sketch.entities.find((e) => e.id === id1);
+    const e2 = sketch.entities.find((e) => e.id === id2);
+    if (!e1 || !e2) return;
+    if (e1.type === 'dimension' || e2.type === 'dimension') return;
+
+    // Check if a coincident constraint already exists between these two
+    const existing = sketch.constraints.find((c) =>
+      c.type === 'coincident' &&
+      ((c.entityId === id1 && c.targetEntityId === id2) || (c.entityId === id2 && c.targetEntityId === id1)),
+    );
+
+    if (existing) {
+      // Remove it
+      set({
+        document: {
+          ...document,
+          sketches: document.sketches.map((sk) =>
+            sk.id === document.activeSketchId
+              ? { ...sk, constraints: sk.constraints.filter((c) => c.id !== existing.id) }
+              : sk,
+          ),
+        },
+      });
+    } else {
+      // Find closest pair of characteristic points
+      const pts1 = getEntityPoints(e1);
+      const pts2 = getEntityPoints(e2);
+      if (pts1.length === 0 || pts2.length === 0) return;
+
+      let bestDist = Infinity;
+      let bestI = 0;
+      let bestJ = 0;
+      for (const [i, p1] of pts1) {
+        for (const [j, p2] of pts2) {
+          const d = (p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2;
+          if (d < bestDist) {
+            bestDist = d;
+            bestI = i;
+            bestJ = j;
+          }
+        }
+      }
+
+      // Snap e2's point to e1's point
+      const sourcePoint = getEntityPoint(e1, bestI)!;
+      const snapped = setEntityPoint(e2, bestJ, sourcePoint);
+      const constraint: Constraint = {
+        id: crypto.randomUUID(),
+        type: 'coincident',
+        entityId: id1,
+        pointIndex: bestI,
+        targetEntityId: id2,
+        targetPointIndex: bestJ,
+      };
+
+      set({
+        document: {
+          ...document,
+          sketches: document.sketches.map((sk) =>
+            sk.id === document.activeSketchId
+              ? {
+                  ...sk,
+                  constraints: [...sk.constraints, constraint],
+                  entities: snapped
+                    ? propagateDerived(sk.entities.map((e) => (e.id === id2 ? snapped : e)))
+                    : sk.entities,
+                }
+              : sk,
+          ),
+        },
+      });
+    }
+  },
+
+  toggleCoincidentWithPoints(pt1, pt2) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return;
+
+    const e1 = sketch.entities.find((e) => e.id === pt1.entityId);
+    const e2 = sketch.entities.find((e) => e.id === pt2.entityId);
+    if (!e1 || !e2) return;
+    if (e1.type === 'dimension' || e2.type === 'dimension') return;
+
+    // Check if a coincident constraint already exists between these two entities
+    const existing = sketch.constraints.find((c) =>
+      c.type === 'coincident' &&
+      ((c.entityId === pt1.entityId && c.targetEntityId === pt2.entityId) ||
+       (c.entityId === pt2.entityId && c.targetEntityId === pt1.entityId)),
+    );
+
+    if (existing) {
+      set({
+        document: {
+          ...document,
+          sketches: document.sketches.map((sk) =>
+            sk.id === document.activeSketchId
+              ? { ...sk, constraints: sk.constraints.filter((c) => c.id !== existing.id) }
+              : sk,
+          ),
+        },
+      });
+    } else {
+      const sourcePoint = getEntityPoint(e1, pt1.pointIndex);
+      if (!sourcePoint) return;
+      const snapped = setEntityPoint(e2, pt2.pointIndex, sourcePoint);
+      const constraint: Constraint = {
+        id: crypto.randomUUID(),
+        type: 'coincident',
+        entityId: pt1.entityId,
+        pointIndex: pt1.pointIndex,
+        targetEntityId: pt2.entityId,
+        targetPointIndex: pt2.pointIndex,
+      };
+
+      set({
+        document: {
+          ...document,
+          sketches: document.sketches.map((sk) =>
+            sk.id === document.activeSketchId
+              ? {
+                  ...sk,
+                  constraints: [...sk.constraints, constraint],
+                  entities: snapped
+                    ? propagateDerived(sk.entities.map((e) => (e.id === pt2.entityId ? snapped : e)))
+                    : sk.entities,
+                }
+              : sk,
+          ),
+        },
+      });
+    }
+  },
+
   updateEntity(entityId, updatedEntity) {
     const { document } = get();
     set({
@@ -553,8 +898,12 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           sk.id === document.activeSketchId
             ? {
                 ...sk,
-                entities: propagateDerived(sk.entities.map((e) =>
-                  e.id === entityId ? updatedEntity : e,
+                entities: propagateDerived(enforceEqual(
+                  propagateDerived(sk.entities.map((e) =>
+                    e.id === entityId ? updatedEntity : e,
+                  )),
+                  sk.constraints,
+                  entityId,
                 )),
               }
             : sk,
@@ -582,7 +931,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           sk.id === document.activeSketchId
             ? {
                 ...sk,
-                entities: propagateDerived(sk.entities.map((e) => {
+                entities: propagateDerived(enforceEqual(propagateDerived(sk.entities.map((e) => {
                   if (e.id !== target.id) return e;
                   if (e.type === 'line') {
                     // Polygon apothem dimension
@@ -631,7 +980,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                     }
                   }
                   return e;
-                })),
+                })), sk.constraints, target.id)),
               }
             : sk,
         ),

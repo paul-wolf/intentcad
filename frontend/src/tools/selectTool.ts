@@ -2,6 +2,7 @@ import type { Tool, ToolContext } from './types';
 import type { Entity, LineEntity, Point } from '@/types/document';
 import type { Renderer, Viewport } from '@/types/renderer';
 import { useEditorStore } from '@/stores/editorStore';
+import type { SelectedPoint } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
 import { hitTestEntities, hitTestPoint } from '@/hittest/hitTest';
 import type { PointHit } from '@/hittest/hitTest';
@@ -9,6 +10,7 @@ import { segmentIntersectsRect, circleIntersectsRect, rectIntersectsRect } from 
 import { getThemePalette } from '@/theme';
 import { distance } from '@/utils/geometry';
 import { requestSave } from '@/api/autoSave';
+import { getEntityPoint, getEntityPoints } from '@/utils/entityPoints';
 
 const DRAG_THRESHOLD = 4; // screen pixels before starting drag
 
@@ -24,6 +26,7 @@ export function createSelectTool(): Tool {
 
   let lastClickTime = 0;
   let lastClickScreenPos: Point = { x: 0, y: 0 };
+  let shiftOnDown = false;
 
   const resetDrag = () => {
     mouseDownScreen = null;
@@ -80,6 +83,7 @@ export function createSelectTool(): Tool {
       dragStartWorld = worldPos;
       lastMoveWorld = worldPos;
       dragMode = null;
+      shiftOnDown = !!ctx.shiftKey;
 
       const activeSketch = useDocumentStore.getState().getActiveSketch();
       if (activeSketch) {
@@ -207,6 +211,13 @@ export function createSelectTool(): Tool {
                 ids.add(entity.id);
               }
             }
+            if (entity.type === 'point') {
+              const px = entity.position.x;
+              const py = entity.position.y;
+              if (px >= minX && px <= maxX && py >= minY && py <= maxY) {
+                ids.add(entity.id);
+              }
+            }
           }
           useEditorStore.getState().setSelectedEntityIds(ids);
         }
@@ -234,11 +245,38 @@ export function createSelectTool(): Tool {
         // Click select (no drag occurred)
         const activeSketch = useDocumentStore.getState().getActiveSketch();
         if (activeSketch) {
-          const hit = hitTestEntities(screenPos, activeSketch.entities, ctx.viewport, activeSketch.entities);
-          if (hit) {
-            useEditorStore.getState().setSelectedEntityIds(new Set([hit.id]));
+          // Try vertex hit first
+          const pointHit = hitTestPoint(screenPos, activeSketch.entities, ctx.viewport);
+          if (pointHit) {
+            const sp: SelectedPoint = { entityId: pointHit.entityId, pointIndex: pointHit.pointIndex };
+            if (shiftOnDown) {
+              useEditorStore.getState().toggleSelectedPoint(sp);
+            } else {
+              useEditorStore.getState().setSelectedEntityIds(new Set());
+              useEditorStore.getState().setSelectedPoints([sp]);
+            }
           } else {
-            useEditorStore.getState().clearSelection();
+            // Fall back to entity hit
+            const hit = hitTestEntities(screenPos, activeSketch.entities, ctx.viewport, activeSketch.entities);
+            if (hit) {
+              if (shiftOnDown) {
+                // Toggle entity in/out of selection
+                const current = new Set(useEditorStore.getState().selectedEntityIds);
+                if (current.has(hit.id)) {
+                  current.delete(hit.id);
+                } else {
+                  current.add(hit.id);
+                }
+                useEditorStore.getState().setSelectedEntityIds(current);
+              } else {
+                useEditorStore.getState().setSelectedPoints([]);
+                useEditorStore.getState().setSelectedEntityIds(new Set([hit.id]));
+              }
+            } else {
+              if (!shiftOnDown) {
+                useEditorStore.getState().clearSelection();
+              }
+            }
           }
         }
       }
@@ -291,6 +329,60 @@ export function createSelectTool(): Tool {
         if (ids.size > 0) {
           useDocumentStore.getState().beginTransaction();
           useDocumentStore.getState().toggleFixed([...ids]);
+          requestSave();
+        }
+      }
+      if (e.key === '=') {
+        const ids = useEditorStore.getState().selectedEntityIds;
+        if (ids.size === 2) {
+          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().toggleEqual([...ids]);
+          requestSave();
+        }
+      }
+      if (e.key === 'j' || e.key === 'J') {
+        const es = useEditorStore.getState();
+        const selPts = es.selectedPoints;
+        const ids = es.selectedEntityIds;
+
+        if (selPts.length === 2) {
+          // Case 1: two selected points → coincident with explicit indices
+          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().toggleCoincidentWithPoints(selPts[0]!, selPts[1]!);
+          requestSave();
+        } else if (selPts.length === 1 && ids.size === 1) {
+          // Case 2: one selected point + one selected entity → auto-nearest on entity
+          const entityId = [...ids][0]!;
+          const activeSketch = useDocumentStore.getState().getActiveSketch();
+          if (activeSketch) {
+            const entity = activeSketch.entities.find((ent) => ent.id === entityId);
+            const sourceEntity = activeSketch.entities.find((ent) => ent.id === selPts[0]!.entityId);
+            if (entity && sourceEntity) {
+              const srcPt = getEntityPoint(sourceEntity, selPts[0]!.pointIndex);
+              if (srcPt) {
+                const pts = getEntityPoints(entity);
+                let bestDist = Infinity;
+                let bestIdx = 0;
+                for (const [idx, p] of pts) {
+                  const d = (p.x - srcPt.x) ** 2 + (p.y - srcPt.y) ** 2;
+                  if (d < bestDist) {
+                    bestDist = d;
+                    bestIdx = idx;
+                  }
+                }
+                useDocumentStore.getState().beginTransaction();
+                useDocumentStore.getState().toggleCoincidentWithPoints(
+                  selPts[0]!,
+                  { entityId, pointIndex: bestIdx },
+                );
+                requestSave();
+              }
+            }
+          }
+        } else if (ids.size === 2) {
+          // Case 3: two selected entities → existing auto-closest-pair
+          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().toggleCoincident([...ids]);
           requestSave();
         }
       }

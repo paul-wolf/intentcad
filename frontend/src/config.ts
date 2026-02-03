@@ -31,6 +31,9 @@ export const SNAP_INDICATOR_RADIUS = 5;
 /** Endpoint dot radius in screen pixels */
 export const ENDPOINT_RADIUS = 3;
 
+/** Selected point highlight radius in screen pixels */
+export const SELECTED_POINT_RADIUS = 5;
+
 /** Dimension annotation defaults */
 export const DIMENSION_OFFSET_MM = 8;
 export const DIMENSION_FONT_SIZE = 11;

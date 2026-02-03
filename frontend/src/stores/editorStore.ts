@@ -2,9 +2,15 @@ import { create } from 'zustand';
 import type { Point } from '@/types/document';
 import type { ToolType, ToolState } from '@/types/editor';
 
+export interface SelectedPoint {
+  entityId: string;
+  pointIndex: number;
+}
+
 interface EditorStore {
   activeTool: ToolType;
   selectedEntityIds: Set<string>;
+  selectedPoints: SelectedPoint[];
   toolState: ToolState;
   cursorWorld: Point | null;
   altKeyHeld: boolean;
@@ -21,6 +27,8 @@ interface EditorStore {
   setActiveTool(tool: ToolType): void;
   setSelectedEntityIds(ids: Set<string>): void;
   addToSelection(ids: string[]): void;
+  setSelectedPoints(pts: SelectedPoint[]): void;
+  toggleSelectedPoint(pt: SelectedPoint): void;
   clearSelection(): void;
   setToolState(state: ToolState): void;
   setCursorWorld(p: Point | null): void;
@@ -58,6 +66,7 @@ function defaultToolState(tool: ToolType): ToolState {
 export const useEditorStore = create<EditorStore>((set) => ({
   activeTool: 'line',
   selectedEntityIds: new Set(),
+  selectedPoints: [],
   toolState: { type: 'line', firstPoint: null, activePolylineId: null, activeEnd: null },
   cursorWorld: null,
   altKeyHeld: false,
@@ -72,7 +81,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
   viewportCommand: null,
 
   setActiveTool(tool) {
-    set({ activeTool: tool, toolState: defaultToolState(tool), selectedEntityIds: new Set() });
+    set({ activeTool: tool, toolState: defaultToolState(tool), selectedEntityIds: new Set(), selectedPoints: [] });
   },
 
   setSelectedEntityIds(ids) {
@@ -87,8 +96,24 @@ export const useEditorStore = create<EditorStore>((set) => ({
     });
   },
 
+  setSelectedPoints(pts) {
+    set({ selectedPoints: pts });
+  },
+
+  toggleSelectedPoint(pt) {
+    set((s) => {
+      const idx = s.selectedPoints.findIndex(
+        (sp) => sp.entityId === pt.entityId && sp.pointIndex === pt.pointIndex,
+      );
+      if (idx >= 0) {
+        return { selectedPoints: s.selectedPoints.filter((_, i) => i !== idx) };
+      }
+      return { selectedPoints: [...s.selectedPoints, pt] };
+    });
+  },
+
   clearSelection() {
-    set({ selectedEntityIds: new Set() });
+    set({ selectedEntityIds: new Set(), selectedPoints: [] });
   },
 
   setToolState(state) {

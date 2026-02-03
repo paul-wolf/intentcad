@@ -2,17 +2,20 @@ import type { Renderer, Viewport, LineStyle } from '@/types/renderer';
 import type { Document, Entity, LineEntity, Point } from '@/types/document';
 import type { Tool } from '@/tools/types';
 import type { ThemePalette } from '@/theme';
-import { GRID_SPACING_MM, GRID_MAJOR_EVERY, GHOSTED_OPACITY, ENDPOINT_RADIUS, ORIGIN_RADIUS, AXIS_OPACITY } from '@/config';
+import type { SelectedPoint } from '@/stores/editorStore';
+import { GRID_SPACING_MM, GRID_MAJOR_EVERY, GHOSTED_OPACITY, ENDPOINT_RADIUS, SELECTED_POINT_RADIUS, ORIGIN_RADIUS, AXIS_OPACITY } from '@/config';
 import { getStyles } from './styles';
 import type { ThemeStyles } from './styles';
 import { drawDimension, drawDiameterDimension, drawSegmentLabel, drawDiameterLabel } from './dimensionRenderer';
 import { computeSketchDoF } from '@/utils/dof';
+import { getEntityPoint } from '@/utils/entityPoints';
 
 export interface RenderContext {
   renderer: Renderer;
   viewport: Viewport;
   document: Document;
   selectedEntityIds: Set<string>;
+  selectedPoints: SelectedPoint[];
   activeTool: Tool | null;
   altKeyHeld: boolean;
   palette: ThemePalette;
@@ -278,6 +281,23 @@ function renderDimensionOverlay(ctx: RenderContext) {
   }
 }
 
+/** Step 4c: Draw highlights on selected vertices */
+function renderSelectedPoints(ctx: RenderContext) {
+  const { renderer, viewport, document: doc, selectedPoints, palette } = ctx;
+  if (selectedPoints.length === 0) return;
+  const activeSketch = doc.sketches.find((s) => s.id === doc.activeSketchId);
+  if (!activeSketch) return;
+
+  for (const sp of selectedPoints) {
+    const entity = activeSketch.entities.find((e) => e.id === sp.entityId);
+    if (!entity) continue;
+    const pt = getEntityPoint(entity, sp.pointIndex);
+    if (!pt) continue;
+    const screenPt = viewport.worldToScreen(pt);
+    renderer.fillCircle(screenPt, SELECTED_POINT_RADIUS, palette.accent);
+  }
+}
+
 /** Step 5: Draw tool overlay (preview line, snap indicator, selection rect) */
 function renderToolOverlay(ctx: RenderContext) {
   if (ctx.activeTool?.renderOverlay) {
@@ -324,6 +344,10 @@ function renderEntity(
       }
       const screenCenter = viewport.worldToScreen(c);
       renderer.fillCircle(screenCenter, ENDPOINT_RADIUS, style.color);
+      // Corner dots
+      for (const corner of corners) {
+        renderer.fillCircle(corner, ENDPOINT_RADIUS, style.color);
+      }
       break;
     }
     case 'point': {
@@ -342,5 +366,6 @@ export function renderFrame(ctx: RenderContext): void {
   renderGhostedSketches(ctx);
   renderActiveSketch(ctx);
   renderDimensionOverlay(ctx);
+  renderSelectedPoints(ctx);
   renderToolOverlay(ctx);
 }

@@ -105,6 +105,7 @@ export function exportDocumentToPdf(doc: Document, palette: ThemePalette): Blob 
     viewport,
     document: doc,
     selectedEntityIds: new Set(),
+    selectedPoints: [],
     activeTool: null,
     altKeyHeld: false,
     palette,

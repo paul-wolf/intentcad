@@ -5,10 +5,11 @@ import { useThemeStore } from '@/theme';
 import { exportDocumentToDxf } from '@/export/dxf';
 import { exportDocumentToPdf } from '@/export/pdf';
 import { downloadTextFile, downloadBlob } from '@/export/download';
+import { getEntityPoint, getEntityPoints } from '@/utils/entityPoints';
 import type { ToolType } from '@/types/editor';
 
 const TOOLS: { type: ToolType; label: string; shortcut: string }[] = [
-  { type: 'select', label: 'Select', shortcut: 'V — X construction, K fix, M mirror, A circular, G grid' },
+  { type: 'select', label: 'Select', shortcut: 'V — X construction, K fix, = equal, J coincident, M mirror, A circular, G grid' },
   { type: 'line', label: 'Line', shortcut: 'l' },
   { type: 'point', label: 'Point', shortcut: '.' },
   { type: 'circle', label: 'Circle', shortcut: 'c' },
@@ -93,6 +94,73 @@ export function Toolbar() {
         title="Fix selected entities in place (K)"
       >
         Fix
+      </button>
+      <button
+        onClick={() => {
+          const ids = useEditorStore.getState().selectedEntityIds;
+          if (ids.size !== 2) return;
+          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().toggleEqual([...ids]);
+        }}
+        style={{
+          padding: '4px 12px',
+          border: `1px solid ${palette.inputBorder}`,
+          borderRadius: '4px',
+          background: palette.buttonBg,
+          color: palette.text,
+          cursor: 'pointer',
+          fontSize: '13px',
+        }}
+        title="Equal size constraint between two entities (=)"
+      >
+        Equal
+      </button>
+      <button
+        onClick={() => {
+          const es = useEditorStore.getState();
+          const selPts = es.selectedPoints;
+          const ids = es.selectedEntityIds;
+
+          if (selPts.length === 2) {
+            useDocumentStore.getState().beginTransaction();
+            useDocumentStore.getState().toggleCoincidentWithPoints(selPts[0]!, selPts[1]!);
+          } else if (selPts.length === 1 && ids.size === 1) {
+            const entityId = [...ids][0]!;
+            const activeSketch = useDocumentStore.getState().getActiveSketch();
+            if (!activeSketch) return;
+            const entity = activeSketch.entities.find((ent) => ent.id === entityId);
+            const sourceEntity = activeSketch.entities.find((ent) => ent.id === selPts[0]!.entityId);
+            if (!entity || !sourceEntity) return;
+            const srcPt = getEntityPoint(sourceEntity, selPts[0]!.pointIndex);
+            if (!srcPt) return;
+            const pts = getEntityPoints(entity);
+            let bestDist = Infinity;
+            let bestIdx = 0;
+            for (const [idx, p] of pts) {
+              const d = (p.x - srcPt.x) ** 2 + (p.y - srcPt.y) ** 2;
+              if (d < bestDist) { bestDist = d; bestIdx = idx; }
+            }
+            useDocumentStore.getState().beginTransaction();
+            useDocumentStore.getState().toggleCoincidentWithPoints(selPts[0]!, { entityId, pointIndex: bestIdx });
+          } else if (ids.size === 2) {
+            useDocumentStore.getState().beginTransaction();
+            useDocumentStore.getState().toggleCoincident([...ids]);
+          } else {
+            return;
+          }
+        }}
+        style={{
+          padding: '4px 12px',
+          border: `1px solid ${palette.inputBorder}`,
+          borderRadius: '4px',
+          background: palette.buttonBg,
+          color: palette.text,
+          cursor: 'pointer',
+          fontSize: '13px',
+        }}
+        title="Coincident constraint — join closest points (J)"
+      >
+        Coincident
       </button>
       <button
         onClick={() => {

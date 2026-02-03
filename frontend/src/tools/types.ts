@@ -5,6 +5,7 @@ export interface ToolContext {
   viewport: Viewport;
   screenToWorld(p: Point): Point;
   worldToScreen(p: Point): Point;
+  shiftKey?: boolean;
 }
 
 export interface Tool {

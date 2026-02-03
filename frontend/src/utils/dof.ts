@@ -57,6 +57,25 @@ export function computeSketchDoF(entities: Entity[], constraints: Constraint[] =
     dofMap.set(e.id, Math.max(0, base - dims));
   }
 
+  // Second pass: apply constraint-based DoF reductions
+  for (const c of constraints) {
+    if (c.type === 'equal') {
+      const current = dofMap.get(c.targetEntityId);
+      if (current !== undefined && current > 0) {
+        const target = entities.find((e) => e.id === c.targetEntityId);
+        // Rectangle equality constrains both width and height (-2), others -1
+        const reduction = target?.type === 'rectangle' ? 2 : 1;
+        dofMap.set(c.targetEntityId, Math.max(0, current - reduction));
+      }
+    }
+    if (c.type === 'coincident') {
+      const current = dofMap.get(c.targetEntityId);
+      if (current !== undefined && current > 0) {
+        dofMap.set(c.targetEntityId, Math.max(0, current - 2));
+      }
+    }
+  }
+
   return dofMap;
 }
 

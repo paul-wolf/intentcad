@@ -12,13 +12,14 @@ export function useMouseHandlers(
   const setCursorWorld = useEditorStore((s) => s.setCursorWorld);
   const lastScreenPos = useRef({ x: 0, y: 0 });
 
-  const getToolContext = useCallback((): ToolContext | null => {
+  const getToolContext = useCallback((e?: React.MouseEvent): ToolContext | null => {
     const viewport = viewportRef.current;
     if (!viewport) return null;
     return {
       viewport,
       screenToWorld: (p) => viewport.screenToWorld(p),
       worldToScreen: (p) => viewport.worldToScreen(p),
+      shiftKey: e?.shiftKey || e?.metaKey,
     };
   }, [viewportRef]);
 
@@ -36,7 +37,7 @@ export function useMouseHandlers(
     (e: React.MouseEvent) => {
       if (useEditorStore.getState().editingDimensionId) return;
       const screenPos = getCanvasPos(e);
-      const ctx = getToolContext();
+      const ctx = getToolContext(e);
       if (!ctx) return;
       const worldPos = ctx.screenToWorld(screenPos);
       lastScreenPos.current = screenPos;
@@ -48,7 +49,7 @@ export function useMouseHandlers(
   const onMouseMove = useCallback(
     (e: React.MouseEvent) => {
       const screenPos = getCanvasPos(e);
-      const ctx = getToolContext();
+      const ctx = getToolContext(e);
       if (!ctx) return;
       const worldPos = ctx.screenToWorld(screenPos);
       lastScreenPos.current = screenPos;
@@ -61,7 +62,7 @@ export function useMouseHandlers(
   const onMouseUp = useCallback(
     (e: React.MouseEvent) => {
       const screenPos = getCanvasPos(e);
-      const ctx = getToolContext();
+      const ctx = getToolContext(e);
       if (!ctx) return;
       const worldPos = ctx.screenToWorld(screenPos);
       getActiveTool()?.onMouseUp?.(worldPos, screenPos, ctx);

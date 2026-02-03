@@ -64,7 +64,23 @@ export interface FixedConstraint {
   entityId: string;
 }
 
-export type Constraint = FixedConstraint;
+export interface EqualConstraint {
+  id: string;
+  type: 'equal';
+  entityId: string;
+  targetEntityId: string;
+}
+
+export interface CoincidentConstraint {
+  id: string;
+  type: 'coincident';
+  entityId: string;
+  pointIndex: number;
+  targetEntityId: string;
+  targetPointIndex: number;
+}
+
+export type Constraint = FixedConstraint | EqualConstraint | CoincidentConstraint;
 
 export interface Sketch {
   id: string;

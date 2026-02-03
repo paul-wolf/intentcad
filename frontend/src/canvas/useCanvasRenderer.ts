@@ -5,11 +5,13 @@ import { renderFrame } from '@/rendering/pipeline';
 import type { RenderContext } from '@/rendering/pipeline';
 import type { Tool } from '@/tools/types';
 import type { Document } from '@/types/document';
+import type { SelectedPoint } from '@/stores/editorStore';
 import { useThemeStore } from '@/theme';
 
 interface UseCanvasRendererOpts {
   getDocument: () => Document;
   getSelectedEntityIds: () => Set<string>;
+  getSelectedPoints: () => SelectedPoint[];
   getActiveTool: () => Tool | null;
   getAltKeyHeld: () => boolean;
   initialViewport?: { offset: { x: number; y: number }; scale: number };
@@ -43,6 +45,7 @@ export function useCanvasRenderer(opts: UseCanvasRendererOpts) {
           viewport,
           document: opts.getDocument(),
           selectedEntityIds: opts.getSelectedEntityIds(),
+          selectedPoints: opts.getSelectedPoints(),
           activeTool: opts.getActiveTool(),
           altKeyHeld: opts.getAltKeyHeld(),
           palette: useThemeStore.getState().palette,

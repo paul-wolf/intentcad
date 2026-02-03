@@ -32,6 +32,16 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
     const sketch = doc.sketches.find((sk) => sk.id === doc.activeSketchId);
     return sketch?.constraints.some((c) => c.type === 'fixed' && c.entityId === entity.id) ?? false;
   });
+  const isEqual = useDocumentStore((s) => {
+    const doc = s.document;
+    const sketch = doc.sketches.find((sk) => sk.id === doc.activeSketchId);
+    return sketch?.constraints.some((c) => c.type === 'equal' && (c.entityId === entity.id || c.targetEntityId === entity.id)) ?? false;
+  });
+  const isCoincident = useDocumentStore((s) => {
+    const doc = s.document;
+    const sketch = doc.sketches.find((sk) => sk.id === doc.activeSketchId);
+    return sketch?.constraints.some((c) => c.type === 'coincident' && (c.entityId === entity.id || c.targetEntityId === entity.id)) ?? false;
+  });
 
   const isDerived = 'sourceId' in entity && !!entity.sourceId;
 
@@ -59,6 +69,16 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
         {isFixed && (
           <span style={{ fontSize: '10px', color: palette.constrained, fontStyle: 'italic' }}>
             (Fixed)
+          </span>
+        )}
+        {isEqual && (
+          <span style={{ fontSize: '10px', color: palette.constrained, fontStyle: 'italic' }}>
+            (Equal)
+          </span>
+        )}
+        {isCoincident && (
+          <span style={{ fontSize: '10px', color: palette.constrained, fontStyle: 'italic' }}>
+            (Coincident)
           </span>
         )}
       </div>
