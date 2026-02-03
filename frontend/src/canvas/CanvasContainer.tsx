@@ -40,6 +40,7 @@ function usePanZoom(
       const screenPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
       const factor = Math.pow(1.001, -e.deltaY);
       vp.zoomAt(screenPos, factor);
+      useEditorStore.getState().setViewportScale(vp.scale);
 
       if (zoomTimerRef.current) clearTimeout(zoomTimerRef.current);
       zoomTimerRef.current = setTimeout(saveViewport, 300);
@@ -213,6 +214,9 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
     if (!canvas) return;
     initCanvas(canvas);
     handleResize();
+    if (viewportRef.current) {
+      useEditorStore.getState().setViewportScale(viewportRef.current.scale);
+    }
     startLoop();
 
     const ro = new ResizeObserver(handleResize);

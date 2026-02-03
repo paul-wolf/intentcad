@@ -5,6 +5,7 @@ import { useThemeStore } from '@/theme';
 export function StatusBar() {
   const cursorWorld = useEditorStore((s) => s.cursorWorld);
   const activeTool = useEditorStore((s) => s.activeTool);
+  const viewportScale = useEditorStore((s) => s.viewportScale);
   const docName = useDocumentStore((s) => s.document.name);
   const palette = useThemeStore((s) => s.palette);
 
@@ -31,6 +32,8 @@ export function StatusBar() {
           ? `${cursorWorld.x.toFixed(1)} , ${cursorWorld.y.toFixed(1)} mm`
           : '— , — mm'}
       </span>
+      <span style={{ color: palette.inputBorder }}>|</span>
+      <span>{viewportScale.toFixed(1)}x</span>
     </div>
   );
 }
