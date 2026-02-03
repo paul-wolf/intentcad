@@ -8,6 +8,7 @@ import { getStyles } from '@/rendering/styles';
 import { getThemePalette } from '@/theme';
 import { SNAP_INDICATOR_RADIUS } from '@/config';
 import { generateId } from '@/utils/id';
+import { requestSave } from '@/api/autoSave';
 
 /**
  * Check if a snap result targets the first or last point of a polyline.
@@ -88,6 +89,7 @@ export function createLineTool(): Tool {
         // Already extending a polyline — append/prepend the new point
         useDocumentStore.getState().beginTransaction();
         useDocumentStore.getState().extendPolyline(activePolylineId, snap.point, ts.activeEnd!);
+        requestSave();
         // activeEnd stays the same, polyline keeps growing from that end
         return;
       }
@@ -102,6 +104,7 @@ export function createLineTool(): Tool {
           points: [firstPoint, snap.point],
         });
         setToolState({ firstPoint: null, activePolylineId: id, activeEnd: 'end' });
+        requestSave();
         return;
       }
 

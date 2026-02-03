@@ -42,8 +42,14 @@ export function createSelectTool(): Tool {
 
   return {
     onMouseDown(worldPos: Point, screenPos: Point, ctx: ToolContext) {
-      // Pick-line mode for mirror
+      // Pick-center mode for circular copy
       const editorState = useEditorStore.getState();
+      if (editorState.circularCopyPickingCenter && editorState.circularCopyEntityIds) {
+        editorState.setCircularCopyCenter(worldPos);
+        return;
+      }
+
+      // Pick-line mode for mirror
       if (editorState.mirrorPickingLine && editorState.mirrorEntityIds) {
         const activeSketch = useDocumentStore.getState().getActiveSketch();
         if (activeSketch) {
@@ -210,13 +216,20 @@ export function createSelectTool(): Tool {
           }
         }
       }
-      // dragMode === 'move' → nothing to do, positions already applied incrementally
+      // dragMode === 'move' or 'move-point' → positions already applied incrementally, save
+      if (dragMode === 'move' || dragMode === 'move-point') {
+        requestSave();
+      }
       resetDrag();
     },
 
     onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') {
         const es = useEditorStore.getState();
+        if (es.circularCopyPickingCenter || es.circularCopyEntityIds) {
+          es.setCircularCopyEntityIds(null);
+          return;
+        }
         if (es.mirrorPickingLine || es.mirrorEntityIds) {
           es.setMirrorEntityIds(null);
           es.setMirrorPickingLine(false);
@@ -224,6 +237,12 @@ export function createSelectTool(): Tool {
         }
         es.clearSelection();
         resetDrag();
+      }
+      if (e.key === 'a' || e.key === 'A') {
+        const ids = useEditorStore.getState().selectedEntityIds;
+        if (ids.size > 0) {
+          useEditorStore.getState().setCircularCopyEntityIds([...ids]);
+        }
       }
       if (e.key === 'm' || e.key === 'M') {
         const ids = useEditorStore.getState().selectedEntityIds;
@@ -236,6 +255,7 @@ export function createSelectTool(): Tool {
         if (ids.size > 0) {
           useDocumentStore.getState().beginTransaction();
           useDocumentStore.getState().toggleConstruction([...ids]);
+          requestSave();
         }
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -244,6 +264,7 @@ export function createSelectTool(): Tool {
           useDocumentStore.getState().beginTransaction();
           useDocumentStore.getState().removeEntities([...ids]);
           useEditorStore.getState().clearSelection();
+          requestSave();
         }
       }
     },

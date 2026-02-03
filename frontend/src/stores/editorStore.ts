@@ -11,6 +11,9 @@ interface EditorStore {
   editingDimensionId: string | null;
   mirrorEntityIds: string[] | null;
   mirrorPickingLine: boolean;
+  circularCopyEntityIds: string[] | null;
+  circularCopyPickingCenter: boolean;
+  circularCopyCenter: Point | null;
 
   setActiveTool(tool: ToolType): void;
   setSelectedEntityIds(ids: Set<string>): void;
@@ -22,6 +25,9 @@ interface EditorStore {
   setEditingDimensionId(id: string | null): void;
   setMirrorEntityIds(ids: string[] | null): void;
   setMirrorPickingLine(picking: boolean): void;
+  setCircularCopyEntityIds(ids: string[] | null): void;
+  setCircularCopyPickingCenter(picking: boolean): void;
+  setCircularCopyCenter(center: Point | null): void;
 }
 
 function defaultToolState(tool: ToolType): ToolState {
@@ -48,6 +54,9 @@ export const useEditorStore = create<EditorStore>((set) => ({
   editingDimensionId: null,
   mirrorEntityIds: null,
   mirrorPickingLine: false,
+  circularCopyEntityIds: null,
+  circularCopyPickingCenter: false,
+  circularCopyCenter: null,
 
   setActiveTool(tool) {
     set({ activeTool: tool, toolState: defaultToolState(tool), selectedEntityIds: new Set() });
@@ -91,5 +100,17 @@ export const useEditorStore = create<EditorStore>((set) => ({
 
   setMirrorPickingLine(picking) {
     set({ mirrorPickingLine: picking });
+  },
+
+  setCircularCopyEntityIds(ids) {
+    set({ circularCopyEntityIds: ids, circularCopyPickingCenter: false, circularCopyCenter: null });
+  },
+
+  setCircularCopyPickingCenter(picking) {
+    set({ circularCopyPickingCenter: picking });
+  },
+
+  setCircularCopyCenter(center) {
+    set({ circularCopyCenter: center, circularCopyPickingCenter: false });
   },
 }));

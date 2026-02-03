@@ -10,6 +10,7 @@ import { SNAP_INDICATOR_RADIUS, DIMENSION_OFFSET_MM, GRID_SPACING_MM, ENDPOINT_R
 import { generateId } from '@/utils/id';
 import { snapToGrid } from '@/utils/geometry';
 import { drawDimension } from '@/rendering/dimensionRenderer';
+import { requestSave } from '@/api/autoSave';
 
 export function createRectangleTool(): Tool {
   let currentSnap: SnapResult | null = null;
@@ -64,6 +65,7 @@ export function createRectangleTool(): Tool {
         });
         // Switch to select tool
         useEditorStore.getState().setActiveTool('select');
+        requestSave();
       } else {
         // First click: set center
         useEditorStore.getState().setToolState({

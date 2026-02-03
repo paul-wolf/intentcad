@@ -8,7 +8,7 @@ import { downloadTextFile, downloadBlob } from '@/export/download';
 import type { ToolType } from '@/types/editor';
 
 const TOOLS: { type: ToolType; label: string; shortcut: string }[] = [
-  { type: 'select', label: 'Select', shortcut: 'V — X construction, M mirror' },
+  { type: 'select', label: 'Select', shortcut: 'V — X construction, M mirror, A circular' },
   { type: 'line', label: 'Line', shortcut: 'l' },
   { type: 'circle', label: 'Circle', shortcut: 'c' },
   { type: 'rectangle', label: 'Rect', shortcut: 'r' },
@@ -71,6 +71,47 @@ export function Toolbar() {
           {t.label}
         </button>
       ))}
+      <button
+        onClick={() => {
+          const ids = useEditorStore.getState().selectedEntityIds;
+          if (ids.size === 0) return;
+          if (activeTool !== 'select') setActiveTool('select');
+          useEditorStore.getState().setMirrorEntityIds([...ids]);
+        }}
+        style={{
+          padding: '4px 12px',
+          border: `1px solid ${palette.inputBorder}`,
+          borderRadius: '4px',
+          background: palette.buttonBg,
+          color: palette.text,
+          cursor: 'pointer',
+          fontSize: '13px',
+          marginLeft: '4px',
+        }}
+        title="Mirror selected entities (M)"
+      >
+        Mirror
+      </button>
+      <button
+        onClick={() => {
+          const ids = useEditorStore.getState().selectedEntityIds;
+          if (ids.size === 0) return;
+          if (activeTool !== 'select') setActiveTool('select');
+          useEditorStore.getState().setCircularCopyEntityIds([...ids]);
+        }}
+        style={{
+          padding: '4px 12px',
+          border: `1px solid ${palette.inputBorder}`,
+          borderRadius: '4px',
+          background: palette.buttonBg,
+          color: palette.text,
+          cursor: 'pointer',
+          fontSize: '13px',
+        }}
+        title="Circular copy selected entities (A)"
+      >
+        Circular
+      </button>
       <div style={{ flex: 1 }} />
       <button
         onClick={() => {

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { Document, Entity, Point, Sketch } from '@/types/document';
 import { createEmptyDocument, createEmptySketch } from '@/utils/document';
-import { createMirroredEntity, propagateDerived } from '@/utils/propagate';
+import { createMirroredEntity, createRotatedEntity, propagateDerived } from '@/utils/propagate';
 
 const UNDO_STACK_LIMIT = 100;
 
@@ -37,6 +37,9 @@ interface DocumentStore {
 
   // Mirror
   mirrorEntities(entityIds: string[], lineA: Point, lineB: Point): string[];
+
+  // Circular copy
+  circularCopyEntities(entityIds: string[], center: Point, count: number): string[];
 
   // Dimension editing
   applyDimensionValue(dimensionId: string, newValue: number): void;
@@ -318,6 +321,36 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
       const newId = crypto.randomUUID();
       const mirrored = createMirroredEntity(source, transform, newId);
       if (mirrored) newEntities.push(mirrored);
+    }
+    if (newEntities.length === 0) return [];
+    set({
+      document: {
+        ...document,
+        sketches: document.sketches.map((sk) =>
+          sk.id === document.activeSketchId
+            ? { ...sk, entities: [...sk.entities, ...newEntities] }
+            : sk,
+        ),
+      },
+    });
+    return newEntities.map((e) => e.id);
+  },
+
+  circularCopyEntities(entityIds, center, count) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return [];
+    const newEntities: Entity[] = [];
+    for (const id of entityIds) {
+      const source = sketch.entities.find((e) => e.id === id);
+      if (!source) continue;
+      for (let i = 1; i < count; i++) {
+        const angle = (2 * Math.PI / count) * i;
+        const transform = { type: 'rotate' as const, center, angle };
+        const newId = crypto.randomUUID();
+        const rotated = createRotatedEntity(source, transform, newId);
+        if (rotated) newEntities.push(rotated);
+      }
     }
     if (newEntities.length === 0) return [];
     set({

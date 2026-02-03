@@ -112,6 +112,17 @@ export function snapToGrid(value: number, spacing: number): number {
   return Math.round(value / spacing) * spacing;
 }
 
+export function rotatePoint(p: Point, center: Point, angle: number): Point {
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const dx = p.x - center.x;
+  const dy = p.y - center.y;
+  return {
+    x: center.x + dx * cos - dy * sin,
+    y: center.y + dx * sin + dy * cos,
+  };
+}
+
 export function reflectPoint(p: Point, a: Point, b: Point): Point {
   const dx = b.x - a.x;
   const dy = b.y - a.y;

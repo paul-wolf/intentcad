@@ -4,7 +4,8 @@ export interface Point {
 }
 
 export type SourceTransform =
-  | { type: 'mirror'; lineA: Point; lineB: Point };
+  | { type: 'mirror'; lineA: Point; lineB: Point }
+  | { type: 'rotate'; center: Point; angle: number };
 
 export interface LineEntity {
   id: string;

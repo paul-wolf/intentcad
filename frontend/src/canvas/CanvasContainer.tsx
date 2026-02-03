@@ -7,6 +7,7 @@ import { useCanvasRenderer } from './useCanvasRenderer';
 import { useMouseHandlers } from './useMouseHandlers';
 import { getDimensionTextScreenPos, getDiameterTextScreenPos } from '@/rendering/dimensionRenderer';
 import { MirrorDialog } from '@/components/MirrorDialog';
+import { CircularCopyDialog } from '@/components/CircularCopyDialog';
 import type { DimensionGeom } from '@/rendering/dimensionRenderer';
 import type { Tool } from '@/tools/types';
 import type { ViewportImpl } from '@/rendering/viewport';
@@ -333,6 +334,7 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
         />
       )}
       <MirrorDialog />
+      <CircularCopyDialog />
     </div>
   );
 }

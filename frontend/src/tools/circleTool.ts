@@ -10,6 +10,7 @@ import { SNAP_INDICATOR_RADIUS, DIMENSION_OFFSET_MM, GRID_SPACING_MM } from '@/c
 import { generateId } from '@/utils/id';
 import { distance, snapToGrid } from '@/utils/geometry';
 import { drawDiameterDimension } from '@/rendering/dimensionRenderer';
+import { requestSave } from '@/api/autoSave';
 
 export function createCircleTool(): Tool {
   let currentSnap: SnapResult | null = null;
@@ -50,6 +51,7 @@ export function createCircleTool(): Tool {
         });
         // Switch to select tool
         useEditorStore.getState().setActiveTool('select');
+        requestSave();
       } else {
         // First click: set center
         useEditorStore.getState().setToolState({
