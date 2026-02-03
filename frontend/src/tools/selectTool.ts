@@ -21,6 +21,9 @@ export function createSelectTool(): Tool {
   let dragMode: 'box-select' | 'move' | 'move-point' | null = null;
   let lastMoveWorld: Point | null = null;
 
+  let lastClickTime = 0;
+  let lastClickScreenPos: Point = { x: 0, y: 0 };
+
   const resetDrag = () => {
     mouseDownScreen = null;
     dragStartWorld = null;
@@ -148,6 +151,26 @@ export function createSelectTool(): Tool {
           useEditorStore.getState().setSelectedEntityIds(ids);
         }
       } else if (dragMode === null) {
+        // Double-click detection
+        const now = Date.now();
+        const isDoubleClick =
+          now - lastClickTime < 400 &&
+          distance(screenPos, lastClickScreenPos) < 4;
+        lastClickTime = now;
+        lastClickScreenPos = screenPos;
+
+        if (isDoubleClick) {
+          const activeSketch = useDocumentStore.getState().getActiveSketch();
+          if (activeSketch) {
+            const hit = hitTestEntities(screenPos, activeSketch.entities, ctx.viewport, activeSketch.entities);
+            if (hit && hit.type === 'dimension') {
+              useEditorStore.getState().setEditingDimensionId(hit.id);
+              resetDrag();
+              return;
+            }
+          }
+        }
+
         // Click select (no drag occurred)
         const activeSketch = useDocumentStore.getState().getActiveSketch();
         if (activeSketch) {

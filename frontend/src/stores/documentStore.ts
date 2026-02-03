@@ -31,6 +31,9 @@ interface DocumentStore {
   movePoint(entityId: string, pointIndex: number, delta: Point): void;
   extendPolyline(entityId: string, point: Point, end: 'start' | 'end'): void;
 
+  // Dimension editing
+  applyDimensionValue(dimensionId: string, newValue: number): void;
+
   // Helpers
   getActiveSketch(): Sketch | undefined;
 }
@@ -245,6 +248,63 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                         ? [point, ...e.points]
                         : [...e.points, point],
                   };
+                }),
+              }
+            : sk,
+        ),
+      },
+    });
+  },
+
+  applyDimensionValue(dimensionId, newValue) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return;
+    const dim = sketch.entities.find((e) => e.id === dimensionId);
+    if (!dim || dim.type !== 'dimension') return;
+    const target = sketch.entities.find((e) => e.id === dim.targetEntityId);
+    if (!target) return;
+
+    get().beginTransaction();
+
+    set({
+      document: {
+        ...document,
+        sketches: document.sketches.map((sk) =>
+          sk.id === document.activeSketchId
+            ? {
+                ...sk,
+                entities: sk.entities.map((e) => {
+                  if (e.id !== target.id) return e;
+                  if (e.type === 'line') {
+                    const idx = dim.segmentIndex;
+                    if (idx < 0 || idx >= e.points.length - 1) return e;
+                    const pa = e.points[idx]!;
+                    const pb = e.points[idx + 1]!;
+                    const dx = pb.x - pa.x;
+                    const dy = pb.y - pa.y;
+                    const len = Math.sqrt(dx * dx + dy * dy);
+                    if (len === 0) return e;
+                    const dirX = dx / len;
+                    const dirY = dy / len;
+                    const newPoints = [...e.points];
+                    newPoints[idx + 1] = {
+                      x: pa.x + dirX * newValue,
+                      y: pa.y + dirY * newValue,
+                    };
+                    return { ...e, points: newPoints };
+                  }
+                  if (e.type === 'circle') {
+                    return { ...e, radius: newValue / 2 };
+                  }
+                  if (e.type === 'rectangle') {
+                    if (dim.segmentIndex === 0) {
+                      return { ...e, width: newValue };
+                    } else {
+                      return { ...e, height: newValue };
+                    }
+                  }
+                  return e;
                 }),
               }
             : sk,

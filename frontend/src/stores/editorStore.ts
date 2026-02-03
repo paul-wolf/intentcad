@@ -8,6 +8,7 @@ interface EditorStore {
   toolState: ToolState;
   cursorWorld: Point | null;
   altKeyHeld: boolean;
+  editingDimensionId: string | null;
 
   setActiveTool(tool: ToolType): void;
   setSelectedEntityIds(ids: Set<string>): void;
@@ -16,6 +17,7 @@ interface EditorStore {
   setToolState(state: ToolState): void;
   setCursorWorld(p: Point | null): void;
   setAltKeyHeld(held: boolean): void;
+  setEditingDimensionId(id: string | null): void;
 }
 
 function defaultToolState(tool: ToolType): ToolState {
@@ -39,6 +41,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
   toolState: { type: 'line', firstPoint: null, activePolylineId: null, activeEnd: null },
   cursorWorld: null,
   altKeyHeld: false,
+  editingDimensionId: null,
 
   setActiveTool(tool) {
     set({ activeTool: tool, toolState: defaultToolState(tool), selectedEntityIds: new Set() });
@@ -70,5 +73,9 @@ export const useEditorStore = create<EditorStore>((set) => ({
 
   setAltKeyHeld(held) {
     set({ altKeyHeld: held });
+  },
+
+  setEditingDimensionId(id) {
+    set({ editingDimensionId: id });
   },
 }));

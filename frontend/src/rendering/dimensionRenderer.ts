@@ -26,6 +26,34 @@ function perpDir(a: Point, b: Point): Point {
   return { x: -dy / len, y: dx / len };
 }
 
+export function getDimensionTextScreenPos(
+  viewport: Viewport,
+  geom: DimensionGeom,
+): Point {
+  const { a, b, offset } = geom;
+  const perp = perpDir(a, b);
+  const oa: Point = { x: a.x + perp.x * offset, y: a.y + perp.y * offset };
+  const ob: Point = { x: b.x + perp.x * offset, y: b.y + perp.y * offset };
+  const soa = viewport.worldToScreen(oa);
+  const sob = viewport.worldToScreen(ob);
+  return { x: (soa.x + sob.x) / 2, y: (soa.y + sob.y) / 2 };
+}
+
+export function getDiameterTextScreenPos(
+  viewport: Viewport,
+  center: Point,
+  radius: number,
+  offset: number,
+): Point {
+  const a: Point = { x: center.x - radius, y: center.y };
+  const b: Point = { x: center.x + radius, y: center.y };
+  const oa: Point = { x: a.x, y: a.y + offset };
+  const ob: Point = { x: b.x, y: b.y + offset };
+  const soa = viewport.worldToScreen(oa);
+  const sob = viewport.worldToScreen(ob);
+  return { x: (soa.x + sob.x) / 2, y: (soa.y + sob.y) / 2 };
+}
+
 export function drawDimension(
   renderer: Renderer,
   viewport: Viewport,

@@ -34,6 +34,7 @@ export function useMouseHandlers(
 
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
+      if (useEditorStore.getState().editingDimensionId) return;
       const screenPos = getCanvasPos(e);
       const ctx = getToolContext();
       if (!ctx) return;

@@ -47,7 +47,11 @@ export function useCanvasRenderer(opts: UseCanvasRendererOpts) {
           altKeyHeld: opts.getAltKeyHeld(),
           palette: useThemeStore.getState().palette,
         };
-        renderFrame(ctx);
+        try {
+          renderFrame(ctx);
+        } catch (err) {
+          console.error('Render error:', err);
+        }
       }
       rafRef.current = requestAnimationFrame(loop);
     };

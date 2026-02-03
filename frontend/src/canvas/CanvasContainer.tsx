@@ -1,12 +1,15 @@
-import { useRef, useEffect, useCallback, type RefObject } from 'react';
+import { useRef, useEffect, useCallback, useMemo, type RefObject } from 'react';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useUIStateStore } from '@/stores/uiStateStore';
 import { useThemeStore } from '@/theme';
 import { useCanvasRenderer } from './useCanvasRenderer';
 import { useMouseHandlers } from './useMouseHandlers';
+import { getDimensionTextScreenPos, getDiameterTextScreenPos } from '@/rendering/dimensionRenderer';
+import type { DimensionGeom } from '@/rendering/dimensionRenderer';
 import type { Tool } from '@/tools/types';
 import type { ViewportImpl } from '@/rendering/viewport';
+import type { Point } from '@/types/document';
 
 function usePanZoom(
   canvasRef: RefObject<HTMLCanvasElement | null>,
@@ -79,6 +82,71 @@ function usePanZoom(
       if (zoomTimerRef.current) clearTimeout(zoomTimerRef.current);
     };
   }, [canvasRef, viewportRef, docId]);
+}
+
+function DimensionEditInput({
+  dimensionId,
+  pos,
+  value,
+}: {
+  dimensionId: string;
+  pos: Point;
+  value: number;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    const el = inputRef.current;
+    if (el) {
+      el.focus();
+      el.select();
+    }
+  }, []);
+
+  const commit = (input: string) => {
+    const v = parseFloat(input);
+    if (isNaN(v) || v <= 0) return false;
+    useDocumentStore.getState().applyDimensionValue(dimensionId, v);
+    useEditorStore.getState().setEditingDimensionId(null);
+    return true;
+  };
+
+  const cancel = () => {
+    useEditorStore.getState().setEditingDimensionId(null);
+  };
+
+  return (
+    <input
+      ref={inputRef}
+      defaultValue={value >= 10 ? value.toFixed(1) : value.toFixed(2)}
+      style={{
+        position: 'absolute',
+        left: pos.x - 30,
+        top: pos.y - 9,
+        width: 60,
+        height: 18,
+        background: 'transparent',
+        border: 'none',
+        outline: 'none',
+        color: '#4ade80',
+        fontSize: 11,
+        fontFamily: 'monospace',
+        textAlign: 'center',
+        padding: 0,
+        zIndex: 10,
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          const ok = commit(e.currentTarget.value);
+          if (!ok) return; // invalid: keep input open
+        }
+        if (e.key === 'Escape') {
+          cancel();
+        }
+      }}
+      onBlur={cancel}
+    />
+  );
 }
 
 interface CanvasContainerProps {
@@ -195,6 +263,54 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
     };
   }, []);
 
+  const editingDimensionId = useEditorStore((s) => s.editingDimensionId);
+
+  const dimensionEditPos = useMemo((): { pos: Point; value: number } | null => {
+    if (!editingDimensionId) return null;
+    const vp = viewportRef.current;
+    if (!vp) return null;
+    const sketch = useDocumentStore.getState().getActiveSketch();
+    if (!sketch) return null;
+    const dim = sketch.entities.find((e) => e.id === editingDimensionId);
+    if (!dim || dim.type !== 'dimension') return null;
+    const target = sketch.entities.find((e) => e.id === dim.targetEntityId);
+    if (!target) return null;
+
+    if (target.type === 'circle') {
+      const diameter = target.radius * 2;
+      const pos = getDiameterTextScreenPos(vp, target.center, target.radius, dim.offset);
+      return { pos, value: diameter };
+    }
+    if (target.type === 'rectangle') {
+      const hw = target.width / 2;
+      const hh = target.height / 2;
+      const c = target.center;
+      let a: Point, b: Point;
+      if (dim.segmentIndex === 0) {
+        a = { x: c.x - hw, y: c.y + hh };
+        b = { x: c.x + hw, y: c.y + hh };
+      } else {
+        a = { x: c.x + hw, y: c.y + hh };
+        b = { x: c.x + hw, y: c.y - hh };
+      }
+      const geom: DimensionGeom = { a, b, offset: dim.offset };
+      const pos = getDimensionTextScreenPos(vp, geom);
+      const value = dim.segmentIndex === 0 ? target.width : target.height;
+      return { pos, value };
+    }
+    if (target.type === 'line') {
+      const idx = dim.segmentIndex;
+      if (idx < 0 || idx >= target.points.length - 1) return null;
+      const a = target.points[idx]!;
+      const b = target.points[idx + 1]!;
+      const geom: DimensionGeom = { a, b, offset: dim.offset };
+      const pos = getDimensionTextScreenPos(vp, geom);
+      const value = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
+      return { pos, value };
+    }
+    return null;
+  }, [editingDimensionId, viewportRef]);
+
   return (
     <div
       ref={containerRef}
@@ -207,6 +323,14 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
         onMouseMove={onMouseMove}
         onMouseUp={onMouseUp}
       />
+      {editingDimensionId && dimensionEditPos && (
+        <DimensionEditInput
+          key={editingDimensionId}
+          dimensionId={editingDimensionId}
+          pos={dimensionEditPos.pos}
+          value={dimensionEditPos.value}
+        />
+      )}
     </div>
   );
 }
