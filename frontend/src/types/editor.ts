@@ -1,6 +1,6 @@
 import type { Point } from './document';
 
-export type ToolType = 'select' | 'line' | 'circle' | 'dimension';
+export type ToolType = 'select' | 'line' | 'circle' | 'rectangle' | 'dimension';
 
 export interface LineToolState {
   type: 'line';
@@ -20,11 +20,16 @@ export interface CircleToolState {
   center: Point | null;
 }
 
+export interface RectangleToolState {
+  type: 'rectangle';
+  center: Point | null;
+}
+
 export interface DimensionToolState {
   type: 'dimension';
 }
 
-export type ToolState = LineToolState | SelectToolState | CircleToolState | DimensionToolState;
+export type ToolState = LineToolState | SelectToolState | CircleToolState | RectangleToolState | DimensionToolState;
 
 export interface EditorState {
   activeTool: ToolType;

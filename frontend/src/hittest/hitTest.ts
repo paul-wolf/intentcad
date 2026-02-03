@@ -76,6 +76,25 @@ export function hitTestEntities(
         bestDist = d;
         best = entity;
       }
+    } else if (entity.type === 'rectangle') {
+      const hw = entity.width / 2;
+      const hh = entity.height / 2;
+      const c = entity.center;
+      const corners: Point[] = [
+        { x: c.x - hw, y: c.y + hh },
+        { x: c.x + hw, y: c.y + hh },
+        { x: c.x + hw, y: c.y - hh },
+        { x: c.x - hw, y: c.y - hh },
+      ];
+      for (let i = 0; i < 4; i++) {
+        const sa = viewport.worldToScreen(corners[i]!);
+        const sb = viewport.worldToScreen(corners[(i + 1) % 4]!);
+        const d = pointToSegmentDist(screenPos, sa, sb);
+        if (d < bestDist) {
+          bestDist = d;
+          best = entity;
+        }
+      }
     } else if (entity.type === 'dimension' && allEntities) {
       const target = allEntities.find(
         (e) => e.id === entity.targetEntityId,
@@ -87,6 +106,32 @@ export function hitTestEntities(
         const r = target.radius;
         const oa: Point = { x: c.x - r, y: c.y + entity.offset };
         const ob: Point = { x: c.x + r, y: c.y + entity.offset };
+        const sa = viewport.worldToScreen(oa);
+        const sb = viewport.worldToScreen(ob);
+        const d = pointToSegmentDist(screenPos, sa, sb);
+        if (d < bestDist) {
+          bestDist = d;
+          best = entity;
+        }
+        continue;
+      }
+      if (target.type === 'rectangle') {
+        const hw = target.width / 2;
+        const hh = target.height / 2;
+        const c = target.center;
+        let ea: Point, eb: Point;
+        if (entity.segmentIndex === 0) {
+          // Width dimension along top edge
+          ea = { x: c.x - hw, y: c.y + hh };
+          eb = { x: c.x + hw, y: c.y + hh };
+        } else {
+          // Height dimension along right edge
+          ea = { x: c.x + hw, y: c.y + hh };
+          eb = { x: c.x + hw, y: c.y - hh };
+        }
+        const p = perpDir(ea, eb);
+        const oa: Point = { x: ea.x + p.x * entity.offset, y: ea.y + p.y * entity.offset };
+        const ob: Point = { x: eb.x + p.x * entity.offset, y: eb.y + p.y * entity.offset };
         const sa = viewport.worldToScreen(oa);
         const sb = viewport.worldToScreen(ob);
         const d = pointToSegmentDist(screenPos, sa, sb);

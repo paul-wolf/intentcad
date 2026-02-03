@@ -26,6 +26,8 @@ function defaultToolState(tool: ToolType): ToolState {
       return { type: 'select', dragStart: null, dragEnd: null };
     case 'circle':
       return { type: 'circle', center: null };
+    case 'rectangle':
+      return { type: 'rectangle', center: null };
     case 'dimension':
       return { type: 'dimension' };
   }

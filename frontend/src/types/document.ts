@@ -16,6 +16,14 @@ export interface CircleEntity {
   radius: number;
 }
 
+export interface RectangleEntity {
+  id: string;
+  type: 'rectangle';
+  center: Point;
+  width: number;
+  height: number;
+}
+
 export interface DimensionEntity {
   id: string;
   type: 'dimension';
@@ -24,7 +32,7 @@ export interface DimensionEntity {
   offset: number;
 }
 
-export type Entity = LineEntity | CircleEntity | DimensionEntity;
+export type Entity = LineEntity | CircleEntity | RectangleEntity | DimensionEntity;
 
 export interface Sketch {
   id: string;

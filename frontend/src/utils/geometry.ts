@@ -98,6 +98,16 @@ export function circleIntersectsRect(
   return dx * dx + dy * dy <= radius * radius;
 }
 
+/** Check if two axis-aligned rectangles overlap. */
+export function rectIntersectsRect(
+  aMin: Point,
+  aMax: Point,
+  bMin: Point,
+  bMax: Point,
+): boolean {
+  return aMin.x <= bMax.x && aMax.x >= bMin.x && aMin.y <= bMax.y && aMax.y >= bMin.y;
+}
+
 export function snapToGrid(value: number, spacing: number): number {
   return Math.round(value / spacing) * spacing;
 }

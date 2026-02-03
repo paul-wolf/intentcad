@@ -150,6 +150,11 @@ function renderActiveSketch(ctx: RenderContext) {
         renderer.fillCircle(screenCenter, ENDPOINT_RADIUS, style.color);
         break;
       }
+      case 'rectangle': {
+        const style = isSelected ? styles.lineSelected : styles.line;
+        renderEntity(renderer, viewport, entity, style);
+        break;
+      }
       case 'dimension': {
         const target = activeSketch.entities.find(
           (e) => e.id === entity.targetEntityId,
@@ -159,6 +164,21 @@ function renderActiveSketch(ctx: RenderContext) {
         const textStyle = styles.dimensionText;
         if (target.type === 'circle') {
           drawDiameterDimension(renderer, viewport, target.center, target.radius, entity.offset, lineStyle, textStyle, ctx.palette.background);
+          break;
+        }
+        if (target.type === 'rectangle') {
+          const hw = target.width / 2;
+          const hh = target.height / 2;
+          const c = target.center;
+          let a, b;
+          if (entity.segmentIndex === 0) {
+            a = { x: c.x - hw, y: c.y + hh };
+            b = { x: c.x + hw, y: c.y + hh };
+          } else {
+            a = { x: c.x + hw, y: c.y + hh };
+            b = { x: c.x + hw, y: c.y - hh };
+          }
+          drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background);
           break;
         }
         if (target.type !== 'line') break;
@@ -189,6 +209,15 @@ function renderDimensionOverlay(ctx: RenderContext) {
     }
     if (entity.type === 'circle') {
       drawDiameterLabel(renderer, viewport, entity.center, entity.radius, styles.dimensionOverlayText, ctx.palette.background);
+    }
+    if (entity.type === 'rectangle') {
+      const hw = entity.width / 2;
+      const hh = entity.height / 2;
+      const c = entity.center;
+      // Width label along top edge
+      drawSegmentLabel(renderer, viewport, { x: c.x - hw, y: c.y + hh }, { x: c.x + hw, y: c.y + hh }, styles.dimensionOverlayText, ctx.palette.background);
+      // Height label along right edge
+      drawSegmentLabel(renderer, viewport, { x: c.x + hw, y: c.y + hh }, { x: c.x + hw, y: c.y - hh }, styles.dimensionOverlayText, ctx.palette.background);
     }
   }
 }
@@ -222,6 +251,23 @@ function renderEntity(
       const screenCenter = viewport.worldToScreen(entity.center);
       const screenRadius = entity.radius * viewport.scale;
       renderer.drawCircle(screenCenter, screenRadius, style);
+      break;
+    }
+    case 'rectangle': {
+      const hw = entity.width / 2;
+      const hh = entity.height / 2;
+      const c = entity.center;
+      const corners = [
+        viewport.worldToScreen({ x: c.x - hw, y: c.y + hh }),
+        viewport.worldToScreen({ x: c.x + hw, y: c.y + hh }),
+        viewport.worldToScreen({ x: c.x + hw, y: c.y - hh }),
+        viewport.worldToScreen({ x: c.x - hw, y: c.y - hh }),
+      ];
+      for (let i = 0; i < 4; i++) {
+        renderer.drawLine(corners[i]!, corners[(i + 1) % 4]!, style);
+      }
+      const screenCenter = viewport.worldToScreen(c);
+      renderer.fillCircle(screenCenter, ENDPOINT_RADIUS, style.color);
       break;
     }
   }

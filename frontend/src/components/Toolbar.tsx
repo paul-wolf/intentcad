@@ -7,6 +7,7 @@ const TOOLS: { type: ToolType; label: string; shortcut: string }[] = [
   { type: 'select', label: 'Select', shortcut: 'V' },
   { type: 'line', label: 'Line', shortcut: 'l' },
   { type: 'circle', label: 'Circle', shortcut: 'c' },
+  { type: 'rectangle', label: 'Rect', shortcut: 'r' },
   { type: 'dimension', label: 'Dimension', shortcut: 'D' },
 ];
 
