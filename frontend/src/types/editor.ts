@@ -1,6 +1,6 @@
 import type { Point } from './document';
 
-export type ToolType = 'select' | 'line' | 'circle' | 'rectangle' | 'dimension';
+export type ToolType = 'select' | 'line' | 'circle' | 'rectangle' | 'polygon' | 'dimension';
 
 export interface LineToolState {
   type: 'line';
@@ -25,11 +25,17 @@ export interface RectangleToolState {
   center: Point | null;
 }
 
+export interface PolygonToolState {
+  type: 'polygon';
+  center: Point | null;
+  sides: number;
+}
+
 export interface DimensionToolState {
   type: 'dimension';
 }
 
-export type ToolState = LineToolState | SelectToolState | CircleToolState | RectangleToolState | DimensionToolState;
+export type ToolState = LineToolState | SelectToolState | CircleToolState | RectangleToolState | PolygonToolState | DimensionToolState;
 
 export interface EditorState {
   activeTool: ToolType;

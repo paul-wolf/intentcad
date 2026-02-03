@@ -12,6 +12,7 @@ const TOOLS: { type: ToolType; label: string; shortcut: string }[] = [
   { type: 'line', label: 'Line', shortcut: 'l' },
   { type: 'circle', label: 'Circle', shortcut: 'c' },
   { type: 'rectangle', label: 'Rect', shortcut: 'r' },
+  { type: 'polygon', label: 'Polygon', shortcut: 'P — ↑↓ sides' },
   { type: 'dimension', label: 'Dimension', shortcut: 'D' },
 ];
 
