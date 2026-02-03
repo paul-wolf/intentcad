@@ -26,7 +26,8 @@ export function useCanvasRenderer(opts: UseCanvasRendererOpts) {
   }, []);
 
   const updateSize = useCallback((width: number, height: number) => {
-    viewportRef.current = new ViewportImpl(width, height);
+    const prevOffset = viewportRef.current?.offset;
+    viewportRef.current = new ViewportImpl(width, height, prevOffset);
   }, []);
 
   const startLoop = useCallback(() => {

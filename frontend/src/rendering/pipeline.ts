@@ -2,7 +2,7 @@ import type { Renderer, Viewport } from '@/types/renderer';
 import type { Document, Entity } from '@/types/document';
 import type { Tool } from '@/tools/types';
 import type { ThemePalette } from '@/theme';
-import { GRID_SPACING_MM, GRID_MAJOR_EVERY, GHOSTED_OPACITY, ENDPOINT_RADIUS } from '@/config';
+import { GRID_SPACING_MM, GRID_MAJOR_EVERY, GHOSTED_OPACITY, ENDPOINT_RADIUS, ORIGIN_RADIUS, AXIS_OPACITY } from '@/config';
 import { getStyles } from './styles';
 import { drawDimension, drawSegmentLabel } from './dimensionRenderer';
 
@@ -83,6 +83,33 @@ function renderGrid(ctx: RenderContext) {
       styles.gridMajor,
     );
   }
+}
+
+/** Step 2b: Draw origin axes and point */
+function renderOrigin(ctx: RenderContext) {
+  const { renderer, viewport, palette } = ctx;
+  const origin = viewport.worldToScreen({ x: 0, y: 0 });
+
+  renderer.setGlobalAlpha(AXIS_OPACITY);
+
+  // X axis (horizontal line at y=0)
+  renderer.drawLine(
+    { x: 0, y: origin.y },
+    { x: viewport.width, y: origin.y },
+    { color: palette.axisX, width: 1 },
+  );
+
+  // Y axis (vertical line at x=0)
+  renderer.drawLine(
+    { x: origin.x, y: 0 },
+    { x: origin.x, y: viewport.height },
+    { color: palette.axisY, width: 1 },
+  );
+
+  renderer.resetGlobalAlpha();
+
+  // Origin dot
+  renderer.fillCircle(origin, ORIGIN_RADIUS, palette.origin);
 }
 
 /** Step 3: Draw ghosted (non-active, visible) sketches */
@@ -182,6 +209,7 @@ function renderEntity(
 export function renderFrame(ctx: RenderContext): void {
   renderBackground(ctx);
   renderGrid(ctx);
+  renderOrigin(ctx);
   renderGhostedSketches(ctx);
   renderActiveSketch(ctx);
   renderDimensionOverlay(ctx);

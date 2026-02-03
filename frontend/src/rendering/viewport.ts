@@ -8,9 +8,9 @@ export class ViewportImpl implements IViewport {
   readonly width: number;
   readonly height: number;
 
-  constructor(width: number, height: number) {
+  constructor(width: number, height: number, offset?: Point) {
     this.scale = SCALE;
-    this.offset = { x: 0, y: 0 };
+    this.offset = offset ?? { x: Math.round(width / 2), y: Math.round(height / 2) };
     this.width = width;
     this.height = height;
   }

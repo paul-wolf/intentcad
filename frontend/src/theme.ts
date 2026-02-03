@@ -15,6 +15,9 @@ export interface ThemePalette {
   dimension: string;
   dimensionText: string;
   dimensionOverlay: string;
+  axisX: string;
+  axisY: string;
+  origin: string;
 
   // UI chrome
   panelBg: string;
@@ -46,6 +49,9 @@ export const DARK_PALETTE: ThemePalette = {
   dimension: '#86efac',
   dimensionText: '#86efac',
   dimensionOverlay: '#fde68a',
+  axisX: '#ef4444',
+  axisY: '#22c55e',
+  origin: '#94a3b8',
 
   panelBg: '#1e293b',
   border: '#334155',
@@ -76,6 +82,9 @@ export const LIGHT_PALETTE: ThemePalette = {
   dimension: '#16a34a',
   dimensionText: '#16a34a',
   dimensionOverlay: '#d97706',
+  axisX: '#dc2626',
+  axisY: '#16a34a',
+  origin: '#64748b',
 
   panelBg: '#f1f5f9',
   border: '#cbd5e1',

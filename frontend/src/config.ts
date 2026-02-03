@@ -42,3 +42,9 @@ export const DIMENSION_TEXT_PAD = 2;
 
 /** Ghosted sketch opacity */
 export const GHOSTED_OPACITY = 0.35;
+
+/** Origin indicator radius in screen pixels */
+export const ORIGIN_RADIUS = 4;
+
+/** Axis / origin line opacity */
+export const AXIS_OPACITY = 0.35;
