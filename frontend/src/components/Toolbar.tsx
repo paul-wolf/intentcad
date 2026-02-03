@@ -1,6 +1,9 @@
+import { useDocumentStore } from '@/stores/documentStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useUIStateStore } from '@/stores/uiStateStore';
 import { useThemeStore } from '@/theme';
+import { exportDocumentToDxf } from '@/export/dxf';
+import { downloadTextFile } from '@/export/download';
 import type { ToolType } from '@/types/editor';
 
 const TOOLS: { type: ToolType; label: string; shortcut: string }[] = [
@@ -16,6 +19,7 @@ export function Toolbar() {
   const setActiveTool = useEditorStore((s) => s.setActiveTool);
   const drawerOpen = useUIStateStore((s) => s.drawerOpen);
   const toggleDrawer = useUIStateStore((s) => s.toggleDrawer);
+  const doc = useDocumentStore((s) => s.document);
   const palette = useThemeStore((s) => s.palette);
   const theme = useThemeStore((s) => s.theme);
   const toggleTheme = useThemeStore((s) => s.toggleTheme);
@@ -67,6 +71,24 @@ export function Toolbar() {
         </button>
       ))}
       <div style={{ flex: 1 }} />
+      <button
+        onClick={() => {
+          const dxf = exportDocumentToDxf(doc);
+          downloadTextFile(dxf, `${doc.name}.dxf`, 'application/dxf');
+        }}
+        style={{
+          padding: '4px 12px',
+          border: `1px solid ${palette.inputBorder}`,
+          borderRadius: '4px',
+          background: palette.buttonBg,
+          color: palette.textSecondary,
+          cursor: 'pointer',
+          fontSize: '13px',
+        }}
+        title="Export visible sketches as DXF"
+      >
+        Export DXF
+      </button>
       <button
         onClick={toggleTheme}
         style={{
