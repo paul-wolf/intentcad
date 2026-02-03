@@ -12,6 +12,7 @@ interface UseCanvasRendererOpts {
   getSelectedEntityIds: () => Set<string>;
   getActiveTool: () => Tool | null;
   getAltKeyHeld: () => boolean;
+  initialViewport?: { offset: { x: number; y: number }; scale: number };
 }
 
 export function useCanvasRenderer(opts: UseCanvasRendererOpts) {
@@ -27,8 +28,10 @@ export function useCanvasRenderer(opts: UseCanvasRendererOpts) {
 
   const updateSize = useCallback((width: number, height: number) => {
     const prev = viewportRef.current;
-    viewportRef.current = new ViewportImpl(width, height, prev?.offset, prev?.scale);
-  }, []);
+    const offset = prev?.offset ?? opts.initialViewport?.offset;
+    const scale = prev?.scale ?? opts.initialViewport?.scale;
+    viewportRef.current = new ViewportImpl(width, height, offset, scale);
+  }, [opts.initialViewport]);
 
   const startLoop = useCallback(() => {
     const loop = () => {

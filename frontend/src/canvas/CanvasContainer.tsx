@@ -1,6 +1,7 @@
 import { useRef, useEffect, useCallback, type RefObject } from 'react';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useEditorStore } from '@/stores/editorStore';
+import { useUIStateStore } from '@/stores/uiStateStore';
 import { useThemeStore } from '@/theme';
 import { useCanvasRenderer } from './useCanvasRenderer';
 import { useMouseHandlers } from './useMouseHandlers';
@@ -10,12 +11,20 @@ import type { ViewportImpl } from '@/rendering/viewport';
 function usePanZoom(
   canvasRef: RefObject<HTMLCanvasElement | null>,
   viewportRef: RefObject<ViewportImpl | null>,
+  docId?: string,
 ) {
   const panRef = useRef<{ lastX: number; lastY: number } | null>(null);
+  const zoomTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+
+    const saveViewport = () => {
+      const vp = viewportRef.current;
+      if (!vp || !docId) return;
+      useUIStateStore.getState().setViewport(docId, vp.offset, vp.scale);
+    };
 
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
@@ -25,6 +34,9 @@ function usePanZoom(
       const screenPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
       const factor = Math.pow(1.001, -e.deltaY);
       vp.zoomAt(screenPos, factor);
+
+      if (zoomTimerRef.current) clearTimeout(zoomTimerRef.current);
+      zoomTimerRef.current = setTimeout(saveViewport, 300);
     };
 
     const onMouseDown = (e: MouseEvent) => {
@@ -45,27 +57,36 @@ function usePanZoom(
     };
 
     const onMouseUp = (e: MouseEvent) => {
-      if (e.button === 1) panRef.current = null;
+      if (e.button === 1) {
+        panRef.current = null;
+        saveViewport();
+      }
     };
+
+    const onBeforeUnload = () => saveViewport();
 
     canvas.addEventListener('wheel', onWheel, { passive: false });
     canvas.addEventListener('mousedown', onMouseDown);
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('beforeunload', onBeforeUnload);
     return () => {
       canvas.removeEventListener('wheel', onWheel);
       canvas.removeEventListener('mousedown', onMouseDown);
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener('beforeunload', onBeforeUnload);
+      if (zoomTimerRef.current) clearTimeout(zoomTimerRef.current);
     };
-  }, [canvasRef, viewportRef]);
+  }, [canvasRef, viewportRef, docId]);
 }
 
 interface CanvasContainerProps {
   activeTool: Tool | null;
+  docId?: string;
 }
 
-export function CanvasContainer({ activeTool }: CanvasContainerProps) {
+export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const activeToolRef = useRef<Tool | null>(activeTool);
@@ -73,12 +94,17 @@ export function CanvasContainer({ activeTool }: CanvasContainerProps) {
 
   const getActiveTool = useCallback(() => activeToolRef.current, []);
 
+  const initialViewport = docId
+    ? useUIStateStore.getState().getViewport(docId)
+    : undefined;
+
   const { initCanvas, updateSize, startLoop, stopLoop, viewportRef } =
     useCanvasRenderer({
       getDocument: () => useDocumentStore.getState().document,
       getSelectedEntityIds: () => useEditorStore.getState().selectedEntityIds,
       getActiveTool,
       getAltKeyHeld: () => useEditorStore.getState().altKeyHeld,
+      initialViewport,
     });
 
   const { onMouseDown, onMouseMove, onMouseUp } = useMouseHandlers(
@@ -87,7 +113,7 @@ export function CanvasContainer({ activeTool }: CanvasContainerProps) {
     getActiveTool,
   );
 
-  usePanZoom(canvasRef, viewportRef);
+  usePanZoom(canvasRef, viewportRef, docId);
 
   // Handle resize
   const handleResize = useCallback(() => {

@@ -1,4 +1,5 @@
 import { useEditorStore } from '@/stores/editorStore';
+import { useUIStateStore } from '@/stores/uiStateStore';
 import { useThemeStore } from '@/theme';
 import type { ToolType } from '@/types/editor';
 
@@ -11,6 +12,8 @@ const TOOLS: { type: ToolType; label: string; shortcut: string }[] = [
 export function Toolbar() {
   const activeTool = useEditorStore((s) => s.activeTool);
   const setActiveTool = useEditorStore((s) => s.setActiveTool);
+  const drawerOpen = useUIStateStore((s) => s.drawerOpen);
+  const toggleDrawer = useUIStateStore((s) => s.toggleDrawer);
   const palette = useThemeStore((s) => s.palette);
   const theme = useThemeStore((s) => s.theme);
   const toggleTheme = useThemeStore((s) => s.toggleTheme);
@@ -25,6 +28,23 @@ export function Toolbar() {
         borderBottom: `1px solid ${palette.border}`,
       }}
     >
+      <button
+        onClick={toggleDrawer}
+        style={{
+          padding: '4px 12px',
+          border: `1px solid ${drawerOpen ? palette.accent : palette.inputBorder}`,
+          borderRadius: '4px',
+          background: drawerOpen ? palette.activeItemBg : palette.buttonBg,
+          color: drawerOpen ? palette.accent : palette.text,
+          cursor: 'pointer',
+          fontSize: '16px',
+          marginRight: '8px',
+          lineHeight: 1,
+        }}
+        title="Toggle document drawer"
+      >
+        {'\u2261'}
+      </button>
       {TOOLS.map((t) => (
         <button
           key={t.type}

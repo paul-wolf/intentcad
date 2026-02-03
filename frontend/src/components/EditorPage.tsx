@@ -3,9 +3,11 @@ import { useParams } from 'react-router-dom';
 import { Toolbar } from './Toolbar';
 import { StatusBar } from './StatusBar';
 import { SketchPanel } from './SketchPanel';
+import { DocumentDrawer } from './DocumentDrawer';
 import { CanvasContainer } from '@/canvas/CanvasContainer';
 import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
+import { useUIStateStore } from '@/stores/uiStateStore';
 import { createLineTool } from '@/tools/lineTool';
 import { createSelectTool } from '@/tools/selectTool';
 import { createDimensionTool } from '@/tools/dimensionTool';
@@ -19,6 +21,7 @@ export function EditorPage() {
   const { id } = useParams<{ id: string }>();
   const activeTool = useEditorStore((s) => s.activeTool);
   const setActiveTool = useEditorStore((s) => s.setActiveTool);
+  const drawerOpen = useUIStateStore((s) => s.drawerOpen);
 
   // Load document from backend if navigated directly and backendId not set
   useEffect(() => {
@@ -87,7 +90,8 @@ export function EditorPage() {
     <div style={styles.container}>
       <Toolbar />
       <div style={styles.middle}>
-        <CanvasContainer activeTool={toolInstance} />
+        {drawerOpen && <DocumentDrawer />}
+        <CanvasContainer activeTool={toolInstance} docId={id} />
         <SketchPanel />
       </div>
       <StatusBar />
