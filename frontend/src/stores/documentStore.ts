@@ -247,6 +247,15 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                       },
                     };
                   }
+                  if (e.type === 'point') {
+                    return {
+                      ...e,
+                      position: {
+                        x: e.position.x + delta.x,
+                        y: e.position.y + delta.y,
+                      },
+                    };
+                  }
                   if (e.type === 'rectangle') {
                     return {
                       ...e,
@@ -359,7 +368,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                 entities: sk.entities.map((e) => {
                   if (!idSet.has(e.id)) return e;
                   if ('sourceId' in e && e.sourceId) return e; // locked
-                  if (e.type === 'line' || e.type === 'circle' || e.type === 'rectangle') {
+                  if (e.type === 'line' || e.type === 'circle' || e.type === 'rectangle' || e.type === 'point') {
                     return { ...e, construction: !e.construction };
                   }
                   return e;

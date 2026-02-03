@@ -164,6 +164,14 @@ function renderActiveSketch(ctx: RenderContext) {
         renderEntity(renderer, viewport, entity, style);
         break;
       }
+      case 'point': {
+        const style = entity.construction
+          ? (isSelected ? styles.constructionSelected : styles.construction)
+          : (isSelected ? styles.lineSelected : styles.line);
+        const sp = viewport.worldToScreen(entity.position);
+        renderer.fillCircle(sp, ENDPOINT_RADIUS + 1, style.color);
+        break;
+      }
       case 'dimension': {
         const target = activeSketch.entities.find(
           (e) => e.id === entity.targetEntityId,
@@ -297,6 +305,11 @@ function renderEntity(
       }
       const screenCenter = viewport.worldToScreen(c);
       renderer.fillCircle(screenCenter, ENDPOINT_RADIUS, style.color);
+      break;
+    }
+    case 'point': {
+      const sp = viewport.worldToScreen(entity.position);
+      renderer.fillCircle(sp, ENDPOINT_RADIUS, style.color);
       break;
     }
   }

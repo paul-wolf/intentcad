@@ -39,6 +39,15 @@ export interface RectangleEntity {
   sourceTransform?: SourceTransform;
 }
 
+export interface PointEntity {
+  id: string;
+  type: 'point';
+  position: Point;
+  construction?: boolean;
+  sourceId?: string;
+  sourceTransform?: SourceTransform;
+}
+
 export interface DimensionEntity {
   id: string;
   type: 'dimension';
@@ -47,7 +56,7 @@ export interface DimensionEntity {
   offset: number;
 }
 
-export type Entity = LineEntity | CircleEntity | RectangleEntity | DimensionEntity;
+export type Entity = LineEntity | CircleEntity | RectangleEntity | PointEntity | DimensionEntity;
 
 export interface Sketch {
   id: string;

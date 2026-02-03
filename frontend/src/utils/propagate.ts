@@ -31,6 +31,16 @@ export function createMirroredEntity(
     };
   }
 
+  if (source.type === 'point') {
+    return {
+      ...source,
+      id,
+      position: reflectPoint(source.position, lineA, lineB),
+      sourceId: source.id,
+      sourceTransform: transform,
+    };
+  }
+
   if (source.type === 'rectangle') {
     // Check if mirror axis is axis-aligned (horizontal or vertical)
     const isHorizontal = lineA.y === lineB.y;
@@ -95,6 +105,16 @@ export function createRotatedEntity(
       ...source,
       id,
       center: rotatePoint(source.center, center, angle),
+      sourceId: source.id,
+      sourceTransform: transform,
+    };
+  }
+
+  if (source.type === 'point') {
+    return {
+      ...source,
+      id,
+      position: rotatePoint(source.position, center, angle),
       sourceId: source.id,
       sourceTransform: transform,
     };
@@ -174,6 +194,16 @@ export function createTranslatedEntity(
       ...source,
       id,
       center: { x: source.center.x + dx, y: source.center.y + dy },
+      sourceId: source.id,
+      sourceTransform: transform,
+    };
+  }
+
+  if (source.type === 'point') {
+    return {
+      ...source,
+      id,
+      position: { x: source.position.x + dx, y: source.position.y + dy },
       sourceId: source.id,
       sourceTransform: transform,
     };

@@ -149,6 +149,17 @@ export function exportDocumentToDxf(doc: Document): string {
         w(String(cx - hw));
         w('20');
         w(String(cy + hh));
+      } else if (entity.type === 'point') {
+        w('0');
+        w('POINT');
+        w('8');
+        w(sketch.name);
+        w('10');
+        w(String(entity.position.x));
+        w('20');
+        w(String(entity.position.y));
+        w('30');
+        w('0.0');
       }
       // Dimensions are not exported (annotations, not geometry)
     }

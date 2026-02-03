@@ -6,8 +6,6 @@ TODO:
 
 * Selection mode, intersect or surround
 * Command click de/select individual entities
-A
-* Name sketches
 * AI chat
 * AI file ingest
 * Hover vertices
@@ -20,11 +18,11 @@ A
 * Cut line segment
 * Named parameters
 * Parameter sidebar
-* Point entity
+* history timeline
 
 * two corner rectangle
 * Fillet
-
+* 
 
 **Full feature vision** (across all iterations):
 

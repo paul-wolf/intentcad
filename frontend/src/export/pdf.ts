@@ -44,6 +44,9 @@ function computeWorldBounds(doc: Document): { min: Point; max: Point } {
           expandPoint({ x: entity.center.x + hw, y: entity.center.y + hh });
           break;
         }
+        case 'point':
+          expandPoint(entity.position);
+          break;
         case 'dimension':
           // Dimensions extend outward by their offset; account for clearance
           // We can't resolve the exact geometry here cheaply, but the offset

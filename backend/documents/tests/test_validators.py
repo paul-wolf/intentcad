@@ -83,3 +83,19 @@ class ValidatorTests(TestCase):
         )
         errors = validate_document_data(data)
         self.assertTrue(any("width" in e for e in errors))
+
+    def test_point_entity(self):
+        data = _valid_doc_data()
+        data["sketches"][0]["entities"].append(
+            {"id": "pt_1", "type": "point", "position": {"x": 5, "y": 10}}
+        )
+        errors = validate_document_data(data)
+        self.assertEqual(errors, [])
+
+    def test_point_missing_position(self):
+        data = _valid_doc_data()
+        data["sketches"][0]["entities"].append(
+            {"id": "pt_1", "type": "point"}
+        )
+        errors = validate_document_data(data)
+        self.assertTrue(any("position" in e for e in errors))

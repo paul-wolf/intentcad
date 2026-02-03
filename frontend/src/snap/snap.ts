@@ -53,6 +53,16 @@ export function snapPosition(
           bestPointIndex = undefined;
         }
       }
+      if (entity.type === 'point') {
+        const sp = viewport.worldToScreen(entity.position);
+        const d = distance(sp, screenPos);
+        if (d < bestDist) {
+          bestDist = d;
+          bestEndpoint = entity.position;
+          bestEntityId = entity.id;
+          bestPointIndex = undefined;
+        }
+      }
       if (entity.type === 'rectangle') {
         const hw = entity.width / 2;
         const hh = entity.height / 2;

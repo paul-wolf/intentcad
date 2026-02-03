@@ -48,6 +48,8 @@ function defaultToolState(tool: ToolType): ToolState {
       return { type: 'rectangle', center: null };
     case 'polygon':
       return { type: 'polygon', center: null, sides: 6 };
+    case 'point':
+      return { type: 'point' };
     case 'dimension':
       return { type: 'dimension' };
   }

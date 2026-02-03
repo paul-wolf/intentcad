@@ -43,6 +43,12 @@ def validate_entity(obj: object) -> list[str]:
             errors.append("Entity.width must be a number")
         if "height" not in obj or not isinstance(obj["height"], (int, float)):
             errors.append("Entity.height must be a number")
+    elif obj.get("type") == "point":
+        position = obj.get("position")
+        if not isinstance(position, dict):
+            errors.append("Entity.position must be a Point object")
+        else:
+            errors.extend([f"Entity.position: {e}" for e in validate_point(position)])
     elif obj.get("type") == "dimension":
         if "targetEntityId" not in obj or not isinstance(obj["targetEntityId"], str):
             errors.append("Entity.targetEntityId must be a string")

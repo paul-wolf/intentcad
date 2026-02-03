@@ -95,6 +95,13 @@ export function hitTestEntities(
           best = entity;
         }
       }
+    } else if (entity.type === 'point') {
+      const sp = viewport.worldToScreen(entity.position);
+      const d = distance(screenPos, sp);
+      if (d < bestDist) {
+        bestDist = d;
+        best = entity;
+      }
     } else if (entity.type === 'dimension' && allEntities) {
       const target = allEntities.find(
         (e) => e.id === entity.targetEntityId,
