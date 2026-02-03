@@ -147,6 +147,48 @@ export function createRotatedEntity(
   return null;
 }
 
+export function createTranslatedEntity(
+  source: Entity,
+  transform: Extract<SourceTransform, { type: 'translate' }>,
+  id: string,
+): Entity | null {
+  if (source.type === 'dimension') return null;
+
+  const { dx, dy } = transform;
+
+  if (source.type === 'line') {
+    return {
+      ...source,
+      id,
+      points: source.points.map((p) => ({ x: p.x + dx, y: p.y + dy })),
+      sourceId: source.id,
+      sourceTransform: transform,
+    };
+  }
+
+  if (source.type === 'circle') {
+    return {
+      ...source,
+      id,
+      center: { x: source.center.x + dx, y: source.center.y + dy },
+      sourceId: source.id,
+      sourceTransform: transform,
+    };
+  }
+
+  if (source.type === 'rectangle') {
+    return {
+      ...source,
+      id,
+      center: { x: source.center.x + dx, y: source.center.y + dy },
+      sourceId: source.id,
+      sourceTransform: transform,
+    };
+  }
+
+  return null;
+}
+
 export function propagateDerived(entities: Entity[]): Entity[] {
   const byId = new Map<string, Entity>();
   for (const e of entities) byId.set(e.id, e);
@@ -164,6 +206,8 @@ export function propagateDerived(entities: Entity[]): Entity[] {
       updated = createMirroredEntity(source, transform, e.id);
     } else if (transform.type === 'rotate') {
       updated = createRotatedEntity(source, transform, e.id);
+    } else if (transform.type === 'translate') {
+      updated = createTranslatedEntity(source, transform, e.id);
     }
     if (!updated) return e;
 

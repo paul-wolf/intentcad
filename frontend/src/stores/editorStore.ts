@@ -14,6 +14,7 @@ interface EditorStore {
   circularCopyEntityIds: string[] | null;
   circularCopyPickingCenter: boolean;
   circularCopyCenter: Point | null;
+  gridCopyEntityIds: string[] | null;
 
   setActiveTool(tool: ToolType): void;
   setSelectedEntityIds(ids: Set<string>): void;
@@ -28,6 +29,7 @@ interface EditorStore {
   setCircularCopyEntityIds(ids: string[] | null): void;
   setCircularCopyPickingCenter(picking: boolean): void;
   setCircularCopyCenter(center: Point | null): void;
+  setGridCopyEntityIds(ids: string[] | null): void;
 }
 
 function defaultToolState(tool: ToolType): ToolState {
@@ -57,6 +59,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
   circularCopyEntityIds: null,
   circularCopyPickingCenter: false,
   circularCopyCenter: null,
+  gridCopyEntityIds: null,
 
   setActiveTool(tool) {
     set({ activeTool: tool, toolState: defaultToolState(tool), selectedEntityIds: new Set() });
@@ -112,5 +115,9 @@ export const useEditorStore = create<EditorStore>((set) => ({
 
   setCircularCopyCenter(center) {
     set({ circularCopyCenter: center, circularCopyPickingCenter: false });
+  },
+
+  setGridCopyEntityIds(ids) {
+    set({ gridCopyEntityIds: ids });
   },
 }));

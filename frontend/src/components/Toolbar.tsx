@@ -8,7 +8,7 @@ import { downloadTextFile, downloadBlob } from '@/export/download';
 import type { ToolType } from '@/types/editor';
 
 const TOOLS: { type: ToolType; label: string; shortcut: string }[] = [
-  { type: 'select', label: 'Select', shortcut: 'V — X construction, M mirror, A circular' },
+  { type: 'select', label: 'Select', shortcut: 'V — X construction, M mirror, A circular, G grid' },
   { type: 'line', label: 'Line', shortcut: 'l' },
   { type: 'circle', label: 'Circle', shortcut: 'c' },
   { type: 'rectangle', label: 'Rect', shortcut: 'r' },
@@ -111,6 +111,26 @@ export function Toolbar() {
         title="Circular copy selected entities (A)"
       >
         Circular
+      </button>
+      <button
+        onClick={() => {
+          const ids = useEditorStore.getState().selectedEntityIds;
+          if (ids.size === 0) return;
+          if (activeTool !== 'select') setActiveTool('select');
+          useEditorStore.getState().setGridCopyEntityIds([...ids]);
+        }}
+        style={{
+          padding: '4px 12px',
+          border: `1px solid ${palette.inputBorder}`,
+          borderRadius: '4px',
+          background: palette.buttonBg,
+          color: palette.text,
+          cursor: 'pointer',
+          fontSize: '13px',
+        }}
+        title="Grid copy selected entities (G)"
+      >
+        Grid
       </button>
       <div style={{ flex: 1 }} />
       <button

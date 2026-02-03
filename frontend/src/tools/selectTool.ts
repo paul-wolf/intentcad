@@ -226,6 +226,10 @@ export function createSelectTool(): Tool {
     onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') {
         const es = useEditorStore.getState();
+        if (es.gridCopyEntityIds) {
+          es.setGridCopyEntityIds(null);
+          return;
+        }
         if (es.circularCopyPickingCenter || es.circularCopyEntityIds) {
           es.setCircularCopyEntityIds(null);
           return;
@@ -242,6 +246,12 @@ export function createSelectTool(): Tool {
         const ids = useEditorStore.getState().selectedEntityIds;
         if (ids.size > 0) {
           useEditorStore.getState().setCircularCopyEntityIds([...ids]);
+        }
+      }
+      if (e.key === 'g' || e.key === 'G') {
+        const ids = useEditorStore.getState().selectedEntityIds;
+        if (ids.size > 0) {
+          useEditorStore.getState().setGridCopyEntityIds([...ids]);
         }
       }
       if (e.key === 'm' || e.key === 'M') {
