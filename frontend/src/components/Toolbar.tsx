@@ -3,7 +3,8 @@ import { useEditorStore } from '@/stores/editorStore';
 import { useUIStateStore } from '@/stores/uiStateStore';
 import { useThemeStore } from '@/theme';
 import { exportDocumentToDxf } from '@/export/dxf';
-import { downloadTextFile } from '@/export/download';
+import { exportDocumentToPdf } from '@/export/pdf';
+import { downloadTextFile, downloadBlob } from '@/export/download';
 import type { ToolType } from '@/types/editor';
 
 const TOOLS: { type: ToolType; label: string; shortcut: string }[] = [
@@ -88,6 +89,24 @@ export function Toolbar() {
         title="Export visible sketches as DXF"
       >
         Export DXF
+      </button>
+      <button
+        onClick={() => {
+          const blob = exportDocumentToPdf(doc, palette);
+          downloadBlob(blob, `${doc.name}.pdf`);
+        }}
+        style={{
+          padding: '4px 12px',
+          border: `1px solid ${palette.inputBorder}`,
+          borderRadius: '4px',
+          background: palette.buttonBg,
+          color: palette.textSecondary,
+          cursor: 'pointer',
+          fontSize: '13px',
+        }}
+        title="Export visible sketches as PDF"
+      >
+        Export PDF
       </button>
       <button
         onClick={toggleTheme}
