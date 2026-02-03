@@ -2,6 +2,25 @@
 
 A CAD sketching tool with basic capabilities to draw 2D sketches exportable as DXF. Easy to use, follows best sketch tool conventions.
 
+TODO:
+
+* Hover vertices
+* Selection priority
+* Dragging circle center point
+* Dragging rect center point
+* Suppress sketch
+* Hide sketch
+* Link entities
+* Constraints
+* Parameter sidebar
+* Point entity
+* Mirror
+* Rotate replicate
+* Replicate series v and h
+* two corner rectangle
+* Fillet
+
+
 **Full feature vision** (across all iterations):
 
 * Geometry: Point, Line, Circle, Rectangle, Spline, Polygon
