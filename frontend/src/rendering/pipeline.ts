@@ -118,7 +118,7 @@ function renderGhostedSketches(ctx: RenderContext) {
   const styles = getStyles(ctx.palette);
 
   for (const sketch of doc.sketches) {
-    if (sketch.id === doc.activeSketchId || !sketch.visible) continue;
+    if (sketch.id === doc.activeSketchId || !sketch.visible || sketch.suppressed) continue;
     renderer.setGlobalAlpha(GHOSTED_OPACITY);
     for (const entity of sketch.entities) {
       const ghostStyle: LineStyle = 'construction' in entity && entity.construction
@@ -135,7 +135,7 @@ function renderActiveSketch(ctx: RenderContext) {
   const { renderer, viewport, document: doc, selectedEntityIds } = ctx;
   const styles = getStyles(ctx.palette);
   const activeSketch = doc.sketches.find((s) => s.id === doc.activeSketchId);
-  if (!activeSketch) return;
+  if (!activeSketch || activeSketch.suppressed) return;
 
   for (const entity of activeSketch.entities) {
     const isSelected = selectedEntityIds.has(entity.id);
@@ -218,7 +218,7 @@ function renderDimensionOverlay(ctx: RenderContext) {
   const { renderer, viewport, document: doc } = ctx;
   const styles = getStyles(ctx.palette);
   const activeSketch = doc.sketches.find((s) => s.id === doc.activeSketchId);
-  if (!activeSketch) return;
+  if (!activeSketch || activeSketch.suppressed) return;
 
   for (const entity of activeSketch.entities) {
     if (entity.type === 'line') {

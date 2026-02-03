@@ -1,7 +1,7 @@
 import type { Document } from '@/types/document';
 
 export function exportDocumentToDxf(doc: Document): string {
-  const visibleSketches = doc.sketches.filter((sk) => sk.visible);
+  const visibleSketches = doc.sketches.filter((sk) => !sk.suppressed);
 
   const lines: string[] = [];
   const w = (s: string) => lines.push(s);

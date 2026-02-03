@@ -24,6 +24,8 @@ interface DocumentStore {
   addSketch(name: string): void;
   renameSketch(sketchId: string, name: string): void;
   toggleSketchVisibility(sketchId: string): void;
+  toggleSketchSuppressed(sketchId: string): void;
+  moveSketch(sketchId: string, direction: 'up' | 'down'): void;
   setActiveSketch(sketchId: string): void;
 
   // Entity actions
@@ -128,6 +130,29 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
         ),
       },
     }));
+  },
+
+  toggleSketchSuppressed(sketchId) {
+    set((s) => ({
+      document: {
+        ...s.document,
+        sketches: s.document.sketches.map((sk) =>
+          sk.id === sketchId ? { ...sk, suppressed: !sk.suppressed } : sk,
+        ),
+      },
+    }));
+  },
+
+  moveSketch(sketchId, direction) {
+    set((s) => {
+      const sketches = [...s.document.sketches];
+      const idx = sketches.findIndex((sk) => sk.id === sketchId);
+      if (idx < 0) return s;
+      const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
+      if (targetIdx < 0 || targetIdx >= sketches.length) return s;
+      [sketches[idx], sketches[targetIdx]] = [sketches[targetIdx]!, sketches[idx]!];
+      return { document: { ...s.document, sketches } };
+    });
   },
 
   setActiveSketch(sketchId) {

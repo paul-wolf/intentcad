@@ -53,6 +53,7 @@ export interface Sketch {
   id: string;
   name: string;
   visible: boolean;
+  suppressed?: boolean;
   entities: Entity[];
 }
 

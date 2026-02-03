@@ -28,7 +28,7 @@ export function snapPosition(
   let bestPointIndex: number | undefined;
 
   for (const sketch of document.sketches) {
-    if (!sketch.visible) continue;
+    if (!sketch.visible || sketch.suppressed) continue;
     for (const entity of sketch.entities) {
       if (entity.type === 'line') {
         for (let i = 0; i < entity.points.length; i++) {

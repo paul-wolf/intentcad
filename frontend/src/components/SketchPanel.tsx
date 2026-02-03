@@ -8,11 +8,14 @@ export function SketchPanel() {
   const addSketch = useDocumentStore((s) => s.addSketch);
   const renameSketch = useDocumentStore((s) => s.renameSketch);
   const toggleVisibility = useDocumentStore((s) => s.toggleSketchVisibility);
+  const toggleSuppressed = useDocumentStore((s) => s.toggleSketchSuppressed);
+  const moveSketch = useDocumentStore((s) => s.moveSketch);
   const setActiveSketch = useDocumentStore((s) => s.setActiveSketch);
   const palette = useThemeStore((s) => s.palette);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
 
   const startRename = (id: string, currentName: string) => {
     setEditingId(id);
@@ -77,13 +80,13 @@ export function SketchPanel() {
         </button>
       </div>
       <div style={{ flex: 1, overflowY: 'auto' as const }}>
-        {sketches.map((sk) => (
+        {sketches.map((sk, idx) => (
           <div
             key={sk.id}
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: '6px',
+              gap: '4px',
               padding: '5px 10px',
               cursor: 'pointer',
               fontSize: '13px',
@@ -93,6 +96,8 @@ export function SketchPanel() {
                 : {}),
             }}
             onClick={() => setActiveSketch(sk.id)}
+            onMouseEnter={() => setHoveredId(sk.id)}
+            onMouseLeave={() => setHoveredId(null)}
           >
             <button
               style={{
@@ -103,6 +108,7 @@ export function SketchPanel() {
                 fontSize: '11px',
                 width: '16px',
                 fontFamily: 'monospace',
+                padding: 0,
               }}
               onClick={(e) => {
                 e.stopPropagation();
@@ -112,10 +118,31 @@ export function SketchPanel() {
             >
               {sk.visible ? 'V' : '-'}
             </button>
+            <button
+              style={{
+                background: 'none',
+                border: 'none',
+                color: sk.suppressed ? palette.textMuted : palette.textSecondary,
+                cursor: 'pointer',
+                fontSize: '11px',
+                width: '16px',
+                fontFamily: 'monospace',
+                padding: 0,
+                opacity: sk.suppressed ? 0.5 : 1,
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleSuppressed(sk.id);
+              }}
+              title={sk.suppressed ? 'Unsuppress' : 'Suppress'}
+            >
+              {sk.suppressed ? 'S' : '-'}
+            </button>
             {editingId === sk.id ? (
               <input
                 style={{
                   flex: 1,
+                  minWidth: 0,
                   background: palette.inputBg,
                   border: `1px solid ${palette.inputBorder}`,
                   borderRadius: '2px',
@@ -137,14 +164,64 @@ export function SketchPanel() {
               <span
                 style={{
                   flex: 1,
+                  minWidth: 0,
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap' as const,
+                  ...(sk.suppressed
+                    ? { textDecoration: 'line-through', opacity: 0.5 }
+                    : {}),
                 }}
                 onDoubleClick={() => startRename(sk.id, sk.name)}
               >
                 {sk.name}
               </span>
+            )}
+            {hoveredId === sk.id && (
+              <>
+                <button
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: idx === 0 ? palette.textMuted : palette.textSecondary,
+                    cursor: idx === 0 ? 'default' : 'pointer',
+                    fontSize: '10px',
+                    width: '16px',
+                    fontFamily: 'monospace',
+                    padding: 0,
+                    opacity: idx === 0 ? 0.3 : 1,
+                  }}
+                  disabled={idx === 0}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    moveSketch(sk.id, 'up');
+                  }}
+                  title="Move up"
+                >
+                  ▲
+                </button>
+                <button
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: idx === sketches.length - 1 ? palette.textMuted : palette.textSecondary,
+                    cursor: idx === sketches.length - 1 ? 'default' : 'pointer',
+                    fontSize: '10px',
+                    width: '16px',
+                    fontFamily: 'monospace',
+                    padding: 0,
+                    opacity: idx === sketches.length - 1 ? 0.3 : 1,
+                  }}
+                  disabled={idx === sketches.length - 1}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    moveSketch(sk.id, 'down');
+                  }}
+                  title="Move down"
+                >
+                  ▼
+                </button>
+              </>
             )}
           </div>
         ))}

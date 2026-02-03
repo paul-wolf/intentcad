@@ -27,7 +27,7 @@ function computeWorldBounds(doc: Document): { min: Point; max: Point } {
   }
 
   for (const sketch of doc.sketches) {
-    if (!sketch.visible) continue;
+    if (sketch.suppressed) continue;
     for (const entity of sketch.entities) {
       switch (entity.type) {
         case 'line':

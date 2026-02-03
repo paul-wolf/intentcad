@@ -4,30 +4,24 @@ A CAD sketching tool with basic capabilities to draw 2D sketches exportable as D
 
 TODO:
 
-* Center sketch on origin
-* Fit sketch entities to viewport
 * Selection mode, intersect or surround
 * Command click de/select individual entities
-* pointer instead of cross hair for select tool
+A
 * Name sketches
 * AI chat
 * AI file ingest
 * Hover vertices
-* Polygon tool
+
 * Selection priority
 * Dragging circle center point
 * Dragging rect center point
-* Suppress sketch
-* Hide sketch
-* Link entities
+*
 * Constraints, equals, midpoint, tangent
 * Cut line segment
 * Named parameters
 * Parameter sidebar
 * Point entity
-* Mirror
-* Rotate replicate
-* Replicate series v and h
+
 * two corner rectangle
 * Fillet
 
