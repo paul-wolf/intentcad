@@ -9,6 +9,8 @@ interface EditorStore {
   cursorWorld: Point | null;
   altKeyHeld: boolean;
   editingDimensionId: string | null;
+  mirrorEntityIds: string[] | null;
+  mirrorPickingLine: boolean;
 
   setActiveTool(tool: ToolType): void;
   setSelectedEntityIds(ids: Set<string>): void;
@@ -18,6 +20,8 @@ interface EditorStore {
   setCursorWorld(p: Point | null): void;
   setAltKeyHeld(held: boolean): void;
   setEditingDimensionId(id: string | null): void;
+  setMirrorEntityIds(ids: string[] | null): void;
+  setMirrorPickingLine(picking: boolean): void;
 }
 
 function defaultToolState(tool: ToolType): ToolState {
@@ -42,6 +46,8 @@ export const useEditorStore = create<EditorStore>((set) => ({
   cursorWorld: null,
   altKeyHeld: false,
   editingDimensionId: null,
+  mirrorEntityIds: null,
+  mirrorPickingLine: false,
 
   setActiveTool(tool) {
     set({ activeTool: tool, toolState: defaultToolState(tool), selectedEntityIds: new Set() });
@@ -77,5 +83,13 @@ export const useEditorStore = create<EditorStore>((set) => ({
 
   setEditingDimensionId(id) {
     set({ editingDimensionId: id });
+  },
+
+  setMirrorEntityIds(ids) {
+    set({ mirrorEntityIds: ids });
+  },
+
+  setMirrorPickingLine(picking) {
+    set({ mirrorPickingLine: picking });
   },
 }));

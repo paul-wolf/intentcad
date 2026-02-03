@@ -3,11 +3,16 @@ export interface Point {
   y: number;
 }
 
+export type SourceTransform =
+  | { type: 'mirror'; lineA: Point; lineB: Point };
+
 export interface LineEntity {
   id: string;
   type: 'line';
   points: Point[];
   construction?: boolean;
+  sourceId?: string;
+  sourceTransform?: SourceTransform;
 }
 
 export interface CircleEntity {
@@ -16,6 +21,8 @@ export interface CircleEntity {
   center: Point;
   radius: number;
   construction?: boolean;
+  sourceId?: string;
+  sourceTransform?: SourceTransform;
 }
 
 export interface RectangleEntity {
@@ -25,6 +32,8 @@ export interface RectangleEntity {
   width: number;
   height: number;
   construction?: boolean;
+  sourceId?: string;
+  sourceTransform?: SourceTransform;
 }
 
 export interface DimensionEntity {

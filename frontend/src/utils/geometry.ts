@@ -111,3 +111,15 @@ export function rectIntersectsRect(
 export function snapToGrid(value: number, spacing: number): number {
   return Math.round(value / spacing) * spacing;
 }
+
+export function reflectPoint(p: Point, a: Point, b: Point): Point {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return { ...p };
+  const t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq;
+  return {
+    x: 2 * (a.x + t * dx) - p.x,
+    y: 2 * (a.y + t * dy) - p.y,
+  };
+}

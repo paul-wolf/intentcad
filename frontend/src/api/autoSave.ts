@@ -32,6 +32,12 @@ function doSave(id: string, doc: Record<string, unknown>) {
   });
 }
 
+/** Schedule a debounced save of the current document state. */
+export function requestSave() {
+  const doc = useDocumentStore.getState().document;
+  scheduleSave(doc as unknown as Record<string, unknown>);
+}
+
 /** Immediately persist any pending debounced save. */
 export function flushSave() {
   if (timer) {

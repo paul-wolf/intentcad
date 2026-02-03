@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { Document, Entity, Point, Sketch } from '@/types/document';
 import { createEmptyDocument, createEmptySketch } from '@/utils/document';
+import { createMirroredEntity, propagateDerived } from '@/utils/propagate';
 
 const UNDO_STACK_LIMIT = 100;
 
@@ -33,6 +34,9 @@ interface DocumentStore {
 
   // Construction toggle
   toggleConstruction(entityIds: string[]): void;
+
+  // Mirror
+  mirrorEntities(entityIds: string[], lineA: Point, lineB: Point): string[];
 
   // Dimension editing
   applyDimensionValue(dimensionId: string, newValue: number): void;
@@ -137,8 +141,23 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   },
 
   removeEntities(entityIds) {
-    const idSet = new Set(entityIds);
     const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    // Build the full set of IDs to remove, cascading through derived entities
+    const idSet = new Set(entityIds);
+    if (sketch) {
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const e of sketch.entities) {
+          if (idSet.has(e.id)) continue;
+          if ('sourceId' in e && e.sourceId && idSet.has(e.sourceId)) {
+            idSet.add(e.id);
+            changed = true;
+          }
+        }
+      }
+    }
     set({
       document: {
         ...document,
@@ -168,8 +187,9 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           sk.id === document.activeSketchId
             ? {
                 ...sk,
-                entities: sk.entities.map((e) => {
+                entities: propagateDerived(sk.entities.map((e) => {
                   if (!idSet.has(e.id)) return e;
+                  if ('sourceId' in e && e.sourceId) return e; // locked
                   if (e.type === 'line') {
                     return {
                       ...e,
@@ -198,7 +218,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                     };
                   }
                   return e;
-                }),
+                })),
               }
             : sk,
         ),
@@ -215,8 +235,9 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           sk.id === document.activeSketchId
             ? {
                 ...sk,
-                entities: sk.entities.map((e) => {
+                entities: propagateDerived(sk.entities.map((e) => {
                   if (e.id !== entityId || e.type !== 'line') return e;
+                  if (e.sourceId) return e; // locked
                   return {
                     ...e,
                     points: e.points.map((p, i) =>
@@ -225,7 +246,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                         : p,
                     ),
                   };
-                }),
+                })),
               }
             : sk,
         ),
@@ -242,8 +263,9 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           sk.id === document.activeSketchId
             ? {
                 ...sk,
-                entities: sk.entities.map((e) => {
+                entities: propagateDerived(sk.entities.map((e) => {
                   if (e.id !== entityId || e.type !== 'line') return e;
+                  if (e.sourceId) return e; // locked
                   return {
                     ...e,
                     points:
@@ -251,7 +273,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                         ? [point, ...e.points]
                         : [...e.points, point],
                   };
-                }),
+                })),
               }
             : sk,
         ),
@@ -271,6 +293,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                 ...sk,
                 entities: sk.entities.map((e) => {
                   if (!idSet.has(e.id)) return e;
+                  if ('sourceId' in e && e.sourceId) return e; // locked
                   if (e.type === 'line' || e.type === 'circle' || e.type === 'rectangle') {
                     return { ...e, construction: !e.construction };
                   }
@@ -283,6 +306,33 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     });
   },
 
+  mirrorEntities(entityIds, lineA, lineB) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return [];
+    const transform = { type: 'mirror' as const, lineA, lineB };
+    const newEntities: Entity[] = [];
+    for (const id of entityIds) {
+      const source = sketch.entities.find((e) => e.id === id);
+      if (!source) continue;
+      const newId = crypto.randomUUID();
+      const mirrored = createMirroredEntity(source, transform, newId);
+      if (mirrored) newEntities.push(mirrored);
+    }
+    if (newEntities.length === 0) return [];
+    set({
+      document: {
+        ...document,
+        sketches: document.sketches.map((sk) =>
+          sk.id === document.activeSketchId
+            ? { ...sk, entities: [...sk.entities, ...newEntities] }
+            : sk,
+        ),
+      },
+    });
+    return newEntities.map((e) => e.id);
+  },
+
   applyDimensionValue(dimensionId, newValue) {
     const { document } = get();
     const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
@@ -291,6 +341,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     if (!dim || dim.type !== 'dimension') return;
     const target = sketch.entities.find((e) => e.id === dim.targetEntityId);
     if (!target) return;
+    if ('sourceId' in target && target.sourceId) return; // locked
 
     get().beginTransaction();
 
@@ -301,7 +352,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           sk.id === document.activeSketchId
             ? {
                 ...sk,
-                entities: sk.entities.map((e) => {
+                entities: propagateDerived(sk.entities.map((e) => {
                   if (e.id !== target.id) return e;
                   if (e.type === 'line') {
                     const idx = dim.segmentIndex;
@@ -332,7 +383,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                     }
                   }
                   return e;
-                }),
+                })),
               }
             : sk,
         ),

@@ -8,6 +8,7 @@ import type { PointHit } from '@/hittest/hitTest';
 import { segmentIntersectsRect, circleIntersectsRect, rectIntersectsRect } from '@/utils/geometry';
 import { getThemePalette } from '@/theme';
 import { distance } from '@/utils/geometry';
+import { requestSave } from '@/api/autoSave';
 
 const DRAG_THRESHOLD = 4; // screen pixels before starting drag
 
@@ -41,6 +42,33 @@ export function createSelectTool(): Tool {
 
   return {
     onMouseDown(worldPos: Point, screenPos: Point, ctx: ToolContext) {
+      // Pick-line mode for mirror
+      const editorState = useEditorStore.getState();
+      if (editorState.mirrorPickingLine && editorState.mirrorEntityIds) {
+        const activeSketch = useDocumentStore.getState().getActiveSketch();
+        if (activeSketch) {
+          const hit = hitTestEntities(screenPos, activeSketch.entities, ctx.viewport, activeSketch.entities);
+          if (hit && hit.type === 'line' && hit.points.length >= 2) {
+            const lineA = hit.points[0]!;
+            const lineB = hit.points[hit.points.length - 1]!;
+            useDocumentStore.getState().beginTransaction();
+            const newIds = useDocumentStore.getState().mirrorEntities(
+              editorState.mirrorEntityIds,
+              lineA,
+              lineB,
+            );
+            editorState.setMirrorEntityIds(null);
+            editorState.setMirrorPickingLine(false);
+            if (newIds.length > 0) {
+              editorState.setSelectedEntityIds(new Set(newIds));
+            }
+            requestSave();
+            return;
+          }
+        }
+        return;
+      }
+
       mouseDownScreen = screenPos;
       dragStartWorld = worldPos;
       lastMoveWorld = worldPos;
@@ -188,8 +216,20 @@ export function createSelectTool(): Tool {
 
     onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') {
-        useEditorStore.getState().clearSelection();
+        const es = useEditorStore.getState();
+        if (es.mirrorPickingLine || es.mirrorEntityIds) {
+          es.setMirrorEntityIds(null);
+          es.setMirrorPickingLine(false);
+          return;
+        }
+        es.clearSelection();
         resetDrag();
+      }
+      if (e.key === 'm' || e.key === 'M') {
+        const ids = useEditorStore.getState().selectedEntityIds;
+        if (ids.size > 0) {
+          useEditorStore.getState().setMirrorEntityIds([...ids]);
+        }
       }
       if (e.key === 'x' || e.key === 'X') {
         const ids = useEditorStore.getState().selectedEntityIds;
