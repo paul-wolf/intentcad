@@ -6,7 +6,7 @@ import { useDocumentStore } from '@/stores/documentStore';
 import { hitTestEntities, hitTestPoint } from '@/hittest/hitTest';
 import type { PointHit } from '@/hittest/hitTest';
 import { segmentIntersectsRect } from '@/utils/geometry';
-import { COLORS } from '@/config';
+import { getThemePalette } from '@/theme';
 import { distance } from '@/utils/geometry';
 
 const DRAG_THRESHOLD = 4; // screen pixels before starting drag
@@ -174,8 +174,9 @@ export function createSelectTool(): Tool {
         y: Math.abs(b.y - a.y),
       };
 
-      renderer.drawRect(topLeft, size, COLORS.selectionRect, {
-        color: COLORS.selectionRectBorder,
+      const palette = getThemePalette();
+      renderer.drawRect(topLeft, size, palette.selectionRect, {
+        color: palette.selectionRectBorder,
         width: 1,
       });
     },

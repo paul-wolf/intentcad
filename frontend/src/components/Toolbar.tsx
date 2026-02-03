@@ -1,4 +1,5 @@
 import { useEditorStore } from '@/stores/editorStore';
+import { useThemeStore } from '@/theme';
 import type { ToolType } from '@/types/editor';
 
 const TOOLS: { type: ToolType; label: string; shortcut: string }[] = [
@@ -10,46 +11,55 @@ const TOOLS: { type: ToolType; label: string; shortcut: string }[] = [
 export function Toolbar() {
   const activeTool = useEditorStore((s) => s.activeTool);
   const setActiveTool = useEditorStore((s) => s.setActiveTool);
+  const palette = useThemeStore((s) => s.palette);
+  const theme = useThemeStore((s) => s.theme);
+  const toggleTheme = useThemeStore((s) => s.toggleTheme);
 
   return (
-    <div style={styles.container}>
+    <div
+      style={{
+        display: 'flex',
+        gap: '4px',
+        padding: '6px 8px',
+        background: palette.panelBg,
+        borderBottom: `1px solid ${palette.border}`,
+      }}
+    >
       {TOOLS.map((t) => (
         <button
           key={t.type}
           onClick={() => setActiveTool(t.type)}
           style={{
-            ...styles.button,
-            ...(activeTool === t.type ? styles.active : {}),
+            padding: '4px 12px',
+            border: `1px solid ${palette.inputBorder}`,
+            borderRadius: '4px',
+            background: activeTool === t.type ? palette.activeItemBg : palette.buttonBg,
+            color: activeTool === t.type ? palette.accent : palette.text,
+            borderColor: activeTool === t.type ? palette.accent : palette.inputBorder,
+            cursor: 'pointer',
+            fontSize: '13px',
           }}
           title={`${t.label} (${t.shortcut})`}
         >
           {t.label}
         </button>
       ))}
+      <div style={{ flex: 1 }} />
+      <button
+        onClick={toggleTheme}
+        style={{
+          padding: '4px 12px',
+          border: `1px solid ${palette.inputBorder}`,
+          borderRadius: '4px',
+          background: palette.buttonBg,
+          color: palette.textSecondary,
+          cursor: 'pointer',
+          fontSize: '13px',
+        }}
+        title="Toggle light/dark theme"
+      >
+        {theme === 'dark' ? 'Light' : 'Dark'}
+      </button>
     </div>
   );
 }
-
-const styles = {
-  container: {
-    display: 'flex',
-    gap: '4px',
-    padding: '6px 8px',
-    background: '#1e293b',
-    borderBottom: '1px solid #334155',
-  } as React.CSSProperties,
-  button: {
-    padding: '4px 12px',
-    border: '1px solid #475569',
-    borderRadius: '4px',
-    background: '#0f172a',
-    color: '#e2e8f0',
-    cursor: 'pointer',
-    fontSize: '13px',
-  } as React.CSSProperties,
-  active: {
-    background: '#334155',
-    borderColor: '#60a5fa',
-    color: '#60a5fa',
-  } as React.CSSProperties,
-};

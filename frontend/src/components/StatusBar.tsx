@@ -1,18 +1,32 @@
 import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
+import { useThemeStore } from '@/theme';
 
 export function StatusBar() {
   const cursorWorld = useEditorStore((s) => s.cursorWorld);
   const activeTool = useEditorStore((s) => s.activeTool);
   const docName = useDocumentStore((s) => s.document.name);
+  const palette = useThemeStore((s) => s.palette);
 
   return (
-    <div style={styles.container}>
-      <span style={styles.section}>{docName}</span>
-      <span style={styles.separator}>|</span>
-      <span style={styles.section}>Tool: {activeTool}</span>
-      <span style={styles.separator}>|</span>
-      <span style={styles.section}>
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+        padding: '4px 10px',
+        background: palette.panelBg,
+        borderTop: `1px solid ${palette.border}`,
+        fontSize: '12px',
+        color: palette.textMuted,
+        fontFamily: 'monospace',
+      }}
+    >
+      <span>{docName}</span>
+      <span style={{ color: palette.inputBorder }}>|</span>
+      <span>Tool: {activeTool}</span>
+      <span style={{ color: palette.inputBorder }}>|</span>
+      <span>
         {cursorWorld
           ? `${cursorWorld.x.toFixed(1)} , ${cursorWorld.y.toFixed(1)} mm`
           : '— , — mm'}
@@ -20,21 +34,3 @@ export function StatusBar() {
     </div>
   );
 }
-
-const styles = {
-  container: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    padding: '4px 10px',
-    background: '#1e293b',
-    borderTop: '1px solid #334155',
-    fontSize: '12px',
-    color: '#94a3b8',
-    fontFamily: 'monospace',
-  } as React.CSSProperties,
-  section: {} as React.CSSProperties,
-  separator: {
-    color: '#475569',
-  } as React.CSSProperties,
-};

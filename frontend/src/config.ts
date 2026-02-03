@@ -13,23 +13,6 @@ export const GRID_SPACING_MM = 5;
 /** Major grid every N minor lines */
 export const GRID_MAJOR_EVERY = 10;
 
-/** Colors — dark theme */
-export const COLORS = {
-  background: '#0f172a',
-  gridMinor: '#1e293b',
-  gridMajor: '#334155',
-  line: '#e2e8f0',
-  lineSelected: '#60a5fa',
-  ghosted: '#9ca3af',
-  snap: '#fbbf24',
-  preview: '#94a3b8',
-  selectionRect: 'rgba(96, 165, 250, 0.15)',
-  selectionRectBorder: '#60a5fa',
-  dimension: '#86efac',
-  dimensionText: '#86efac',
-  dimensionOverlay: '#fde68a',
-} as const;
-
 /** Stroke widths in screen pixels */
 export const STROKES = {
   line: 1,

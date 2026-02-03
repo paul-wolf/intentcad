@@ -5,6 +5,7 @@ import { renderFrame } from '@/rendering/pipeline';
 import type { RenderContext } from '@/rendering/pipeline';
 import type { Tool } from '@/tools/types';
 import type { Document } from '@/types/document';
+import { useThemeStore } from '@/theme';
 
 interface UseCanvasRendererOpts {
   getDocument: () => Document;
@@ -40,6 +41,7 @@ export function useCanvasRenderer(opts: UseCanvasRendererOpts) {
           selectedEntityIds: opts.getSelectedEntityIds(),
           activeTool: opts.getActiveTool(),
           altKeyHeld: opts.getAltKeyHeld(),
+          palette: useThemeStore.getState().palette,
         };
         renderFrame(ctx);
       }

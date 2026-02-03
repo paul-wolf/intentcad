@@ -1,11 +1,12 @@
 import json
 from uuid import UUID
+
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from ninja import Router
 
 from .models import Document
-from .schemas import DocumentCreateIn, DocumentUpdateIn, DocumentOut, DocumentListOut
+from .schemas import DocumentCreateIn, DocumentListOut, DocumentOut, DocumentUpdateIn
 from .validators import validate_document_data
 
 router = Router()

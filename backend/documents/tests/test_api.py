@@ -1,5 +1,6 @@
 import json
-from django.test import TestCase, Client
+
+from django.test import Client, TestCase
 
 
 def _valid_doc_data():

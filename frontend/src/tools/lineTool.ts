@@ -4,7 +4,8 @@ import type { Renderer, Viewport } from '@/types/renderer';
 import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
 import { snapPosition, type SnapResult } from '@/snap/snap';
-import { PREVIEW_STYLE, SNAP_STYLE } from '@/rendering/styles';
+import { getStyles } from '@/rendering/styles';
+import { getThemePalette } from '@/theme';
 import { SNAP_INDICATOR_RADIUS } from '@/config';
 import { generateId } from '@/utils/id';
 
@@ -138,13 +139,15 @@ export function createLineTool(): Tool {
       const drawFrom = getDrawFromPoint();
       const snapScreen = viewport.worldToScreen(currentSnap.point);
 
+      const styles = getStyles(getThemePalette());
+
       // Snap indicator
-      renderer.drawCircle(snapScreen, SNAP_INDICATOR_RADIUS, SNAP_STYLE);
+      renderer.drawCircle(snapScreen, SNAP_INDICATOR_RADIUS, styles.snap);
 
       // Preview line from current anchor to snap position
       if (drawFrom) {
         const startScreen = viewport.worldToScreen(drawFrom);
-        renderer.drawLine(startScreen, snapScreen, PREVIEW_STYLE);
+        renderer.drawLine(startScreen, snapScreen, styles.preview);
       }
     },
   };

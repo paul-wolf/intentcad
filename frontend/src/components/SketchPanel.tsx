@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useDocumentStore } from '@/stores/documentStore';
+import { useThemeStore } from '@/theme';
 
 export function SketchPanel() {
   const sketches = useDocumentStore((s) => s.document.sketches);
@@ -8,6 +9,7 @@ export function SketchPanel() {
   const renameSketch = useDocumentStore((s) => s.renameSketch);
   const toggleVisibility = useDocumentStore((s) => s.toggleSketchVisibility);
   const setActiveSketch = useDocumentStore((s) => s.setActiveSketch);
+  const palette = useThemeStore((s) => s.palette);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
@@ -25,29 +27,83 @@ export function SketchPanel() {
   };
 
   return (
-    <div style={styles.container}>
-      <div style={styles.header}>
-        <span style={styles.title}>Sketches</span>
+    <div
+      style={{
+        width: '180px',
+        background: palette.panelBg,
+        borderLeft: `1px solid ${palette.border}`,
+        display: 'flex',
+        flexDirection: 'column' as const,
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          padding: '8px 10px',
+          borderBottom: `1px solid ${palette.border}`,
+        }}
+      >
+        <span
+          style={{
+            fontSize: '12px',
+            fontWeight: 600,
+            textTransform: 'uppercase' as const,
+            letterSpacing: '0.5px',
+            color: palette.textMuted,
+          }}
+        >
+          Sketches
+        </span>
         <button
-          style={styles.addBtn}
+          style={{
+            background: 'none',
+            border: `1px solid ${palette.inputBorder}`,
+            borderRadius: '3px',
+            color: palette.textMuted,
+            cursor: 'pointer',
+            fontSize: '14px',
+            width: '22px',
+            height: '22px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
           onClick={() => addSketch(`Sketch ${sketches.length + 1}`)}
           title="Add sketch"
         >
           +
         </button>
       </div>
-      <div style={styles.list}>
+      <div style={{ flex: 1, overflowY: 'auto' as const }}>
         {sketches.map((sk) => (
           <div
             key={sk.id}
             style={{
-              ...styles.item,
-              ...(sk.id === activeSketchId ? styles.activeItem : {}),
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '5px 10px',
+              cursor: 'pointer',
+              fontSize: '13px',
+              borderLeft: '2px solid transparent',
+              ...(sk.id === activeSketchId
+                ? { background: palette.activeItemBg, borderLeftColor: palette.accent }
+                : {}),
             }}
             onClick={() => setActiveSketch(sk.id)}
           >
             <button
-              style={styles.visBtn}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: palette.textSecondary,
+                cursor: 'pointer',
+                fontSize: '11px',
+                width: '16px',
+                fontFamily: 'monospace',
+              }}
               onClick={(e) => {
                 e.stopPropagation();
                 toggleVisibility(sk.id);
@@ -58,7 +114,16 @@ export function SketchPanel() {
             </button>
             {editingId === sk.id ? (
               <input
-                style={styles.input}
+                style={{
+                  flex: 1,
+                  background: palette.inputBg,
+                  border: `1px solid ${palette.inputBorder}`,
+                  borderRadius: '2px',
+                  color: palette.text,
+                  fontSize: '13px',
+                  padding: '1px 4px',
+                  outline: 'none',
+                }}
                 value={editName}
                 onChange={(e) => setEditName(e.target.value)}
                 onBlur={commitRename}
@@ -70,7 +135,12 @@ export function SketchPanel() {
               />
             ) : (
               <span
-                style={styles.name}
+                style={{
+                  flex: 1,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap' as const,
+                }}
                 onDoubleClick={() => startRename(sk.id, sk.name)}
               >
                 {sk.name}
@@ -82,82 +152,3 @@ export function SketchPanel() {
     </div>
   );
 }
-
-const styles = {
-  container: {
-    width: '180px',
-    background: '#1e293b',
-    borderLeft: '1px solid #334155',
-    display: 'flex',
-    flexDirection: 'column',
-  } as React.CSSProperties,
-  header: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '8px 10px',
-    borderBottom: '1px solid #334155',
-  } as React.CSSProperties,
-  title: {
-    fontSize: '12px',
-    fontWeight: 600,
-    textTransform: 'uppercase',
-    letterSpacing: '0.5px',
-    color: '#94a3b8',
-  } as React.CSSProperties,
-  addBtn: {
-    background: 'none',
-    border: '1px solid #475569',
-    borderRadius: '3px',
-    color: '#94a3b8',
-    cursor: 'pointer',
-    fontSize: '14px',
-    width: '22px',
-    height: '22px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  } as React.CSSProperties,
-  list: {
-    flex: 1,
-    overflowY: 'auto',
-  } as React.CSSProperties,
-  item: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '6px',
-    padding: '5px 10px',
-    cursor: 'pointer',
-    fontSize: '13px',
-    borderLeft: '2px solid transparent',
-  } as React.CSSProperties,
-  activeItem: {
-    background: '#0f172a',
-    borderLeftColor: '#60a5fa',
-  } as React.CSSProperties,
-  visBtn: {
-    background: 'none',
-    border: 'none',
-    color: '#64748b',
-    cursor: 'pointer',
-    fontSize: '11px',
-    width: '16px',
-    fontFamily: 'monospace',
-  } as React.CSSProperties,
-  name: {
-    flex: 1,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  } as React.CSSProperties,
-  input: {
-    flex: 1,
-    background: '#0f172a',
-    border: '1px solid #475569',
-    borderRadius: '2px',
-    color: '#e2e8f0',
-    fontSize: '13px',
-    padding: '1px 4px',
-    outline: 'none',
-  } as React.CSSProperties,
-};

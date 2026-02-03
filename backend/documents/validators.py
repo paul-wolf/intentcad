@@ -24,9 +24,7 @@ def validate_entity(obj: object) -> list[str]:
             errors.append("Entity.points must be an array with at least 2 points")
         else:
             for i, pt in enumerate(points):
-                errors.extend(
-                    [f"Entity.points[{i}]: {e}" for e in validate_point(pt)]
-                )
+                errors.extend([f"Entity.points[{i}]: {e}" for e in validate_point(pt)])
     elif obj.get("type") == "dimension":
         if "targetEntityId" not in obj or not isinstance(obj["targetEntityId"], str):
             errors.append("Entity.targetEntityId must be a string")
@@ -56,9 +54,7 @@ def validate_sketch(obj: object) -> list[str]:
         errors.append("Sketch.entities must be an array")
     else:
         for i, entity in enumerate(entities):
-            errors.extend(
-                [f"Sketch.entities[{i}]: {e}" for e in validate_entity(entity)]
-            )
+            errors.extend([f"Sketch.entities[{i}]: {e}" for e in validate_entity(entity)])
     return errors
 
 
@@ -78,7 +74,5 @@ def validate_document_data(data: object) -> list[str]:
         errors.append("data.sketches must be an array")
     else:
         for i, sketch in enumerate(sketches):
-            errors.extend(
-                [f"data.sketches[{i}]: {e}" for e in validate_sketch(sketch)]
-            )
+            errors.extend([f"data.sketches[{i}]: {e}" for e in validate_sketch(sketch)])
     return errors

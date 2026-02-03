@@ -7,7 +7,8 @@ import { hitTestSegment } from '@/hittest/hitTest';
 import type { SegmentHit } from '@/hittest/hitTest';
 import { drawDimension } from '@/rendering/dimensionRenderer';
 import { DIMENSION_OFFSET_MM } from '@/config';
-import { DIMENSION_LINE_STYLE, DIMENSION_TEXT_STYLE } from '@/rendering/styles';
+import { getStyles } from '@/rendering/styles';
+import { getThemePalette } from '@/theme';
 
 export function createDimensionTool(): Tool {
   let hoverSegment: SegmentHit | null = null;
@@ -90,13 +91,16 @@ export function createDimensionTool(): Tool {
       const a = targetEntity.points[idx]!;
       const b = targetEntity.points[idx + 1]!;
 
+      const palette = getThemePalette();
+      const styles = getStyles(palette);
       renderer.setGlobalAlpha(0.4);
       drawDimension(
         renderer,
         viewport,
         { a, b, offset: DIMENSION_OFFSET_MM },
-        DIMENSION_LINE_STYLE,
-        DIMENSION_TEXT_STYLE,
+        styles.dimensionLine,
+        styles.dimensionText,
+        palette.background,
       );
       renderer.resetGlobalAlpha();
     },

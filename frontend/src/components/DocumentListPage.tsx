@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDocumentStore } from '@/stores/documentStore';
+import { useThemeStore } from '@/theme';
 import { createEmptyDocument, migrateDocument } from '@/utils/document';
 import { api, type DocumentListItem } from '@/api/client';
 import { setBackendId } from '@/api/autoSave';
@@ -9,6 +10,7 @@ import type { Document } from '@/types/document';
 export function DocumentListPage() {
   const navigate = useNavigate();
   const setDocument = useDocumentStore((s) => s.setDocument);
+  const palette = useThemeStore((s) => s.palette);
   const [docs, setDocs] = useState<DocumentListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -64,32 +66,82 @@ export function DocumentListPage() {
   };
 
   return (
-    <div style={styles.container}>
-      <h1 style={styles.title}>IntentCAD</h1>
-      <p style={styles.subtitle}>v0.1</p>
-      <button style={styles.button} onClick={handleNew}>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column' as const,
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100%',
+        gap: '12px',
+      }}
+    >
+      <h1 style={{ fontSize: '28px', fontWeight: 700, color: palette.text }}>
+        IntentCAD
+      </h1>
+      <p style={{ fontSize: '14px', color: palette.textSecondary, marginBottom: '20px' }}>
+        v0.1
+      </p>
+      <button
+        style={{
+          padding: '10px 24px',
+          background: palette.primaryBtn,
+          color: '#fff',
+          border: 'none',
+          borderRadius: '6px',
+          fontSize: '15px',
+          cursor: 'pointer',
+        }}
+        onClick={handleNew}
+      >
         New Document
       </button>
 
       {error === 'offline' && (
-        <p style={styles.offline}>Backend offline — local mode</p>
+        <p style={{ fontSize: '12px', color: palette.warning, marginTop: '8px' }}>
+          Backend offline — local mode
+        </p>
       )}
 
       {!loading && docs.length > 0 && (
-        <div style={styles.docList}>
+        <div
+          style={{
+            marginTop: '20px',
+            width: '320px',
+            display: 'flex',
+            flexDirection: 'column' as const,
+            gap: '4px',
+          }}
+        >
           {docs.map((d) => (
-            <div key={d.id} style={styles.docItem}>
+            <div
+              key={d.id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '8px 12px',
+                background: palette.panelBg,
+                borderRadius: '4px',
+              }}
+            >
               <span
-                style={styles.docName}
+                style={{ flex: 1, cursor: 'pointer', color: palette.text, fontSize: '14px' }}
                 onClick={() => handleOpen(d.id)}
               >
                 {d.name}
               </span>
-              <span style={styles.docDate}>
+              <span style={{ fontSize: '11px', color: palette.textSecondary }}>
                 {new Date(d.updated_at).toLocaleDateString()}
               </span>
               <button
-                style={styles.deleteBtn}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: palette.danger,
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                }}
                 onClick={() => handleDelete(d.id)}
               >
                 x
@@ -101,70 +153,3 @@ export function DocumentListPage() {
     </div>
   );
 }
-
-const styles = {
-  container: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: '100%',
-    gap: '12px',
-  } as React.CSSProperties,
-  title: {
-    fontSize: '28px',
-    fontWeight: 700,
-    color: '#e2e8f0',
-  } as React.CSSProperties,
-  subtitle: {
-    fontSize: '14px',
-    color: '#64748b',
-    marginBottom: '20px',
-  } as React.CSSProperties,
-  button: {
-    padding: '10px 24px',
-    background: '#3b82f6',
-    color: '#fff',
-    border: 'none',
-    borderRadius: '6px',
-    fontSize: '15px',
-    cursor: 'pointer',
-  } as React.CSSProperties,
-  offline: {
-    fontSize: '12px',
-    color: '#f59e0b',
-    marginTop: '8px',
-  } as React.CSSProperties,
-  docList: {
-    marginTop: '20px',
-    width: '320px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '4px',
-  } as React.CSSProperties,
-  docItem: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    padding: '8px 12px',
-    background: '#1e293b',
-    borderRadius: '4px',
-  } as React.CSSProperties,
-  docName: {
-    flex: 1,
-    cursor: 'pointer',
-    color: '#e2e8f0',
-    fontSize: '14px',
-  } as React.CSSProperties,
-  docDate: {
-    fontSize: '11px',
-    color: '#64748b',
-  } as React.CSSProperties,
-  deleteBtn: {
-    background: 'none',
-    border: 'none',
-    color: '#ef4444',
-    cursor: 'pointer',
-    fontSize: '14px',
-  } as React.CSSProperties,
-};

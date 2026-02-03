@@ -3,9 +3,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.environ.get(
-    "SECRET_KEY", "django-insecure-dev-key-change-in-production"
-)
+SECRET_KEY = os.environ.get("SECRET_KEY", "django-insecure-dev-key-change-in-production")
 
 DEBUG = os.environ.get("DEBUG", "True").lower() in ("true", "1", "yes")
 
@@ -23,9 +21,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
 ]
 
-CORS_ALLOWED_ORIGINS = os.environ.get(
-    "CORS_ALLOWED_ORIGINS", "http://localhost:5951"
-).split(",")
+CORS_ALLOWED_ORIGINS = os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:5951").split(",")
 
 ROOT_URLCONF = "intentcad.urls"
 

@@ -6,7 +6,6 @@ import {
   DIMENSION_EXTENSION_GAP,
   DIMENSION_EXTENSION_OVERSHOOT,
   DIMENSION_TEXT_PAD,
-  COLORS,
 } from '@/config';
 
 export interface DimensionGeom {
@@ -33,6 +32,7 @@ export function drawDimension(
   geom: DimensionGeom,
   lineStyle: LineStyle,
   textStyle: TextStyle,
+  bgColor?: string,
 ): void {
   const { a, b, offset } = geom;
 
@@ -100,11 +100,13 @@ export function drawDimension(
 
   const metrics = renderer.measureText(label, textStyle);
   const pad = DIMENSION_TEXT_PAD;
-  renderer.drawRect(
-    { x: mid.x - metrics.width / 2 - pad, y: mid.y - metrics.height / 2 - pad },
-    { x: metrics.width + pad * 2, y: metrics.height + pad * 2 },
-    COLORS.background,
-  );
+  if (bgColor) {
+    renderer.drawRect(
+      { x: mid.x - metrics.width / 2 - pad, y: mid.y - metrics.height / 2 - pad },
+      { x: metrics.width + pad * 2, y: metrics.height + pad * 2 },
+      bgColor,
+    );
+  }
   renderer.drawText(label, mid, textStyle);
 }
 
@@ -114,6 +116,7 @@ export function drawSegmentLabel(
   a: Point,
   b: Point,
   textStyle: TextStyle,
+  bgColor?: string,
 ): void {
   const sa = viewport.worldToScreen(a);
   const sb = viewport.worldToScreen(b);
@@ -135,10 +138,12 @@ export function drawSegmentLabel(
 
   const metrics = renderer.measureText(label, textStyle);
   const pad = DIMENSION_TEXT_PAD;
-  renderer.drawRect(
-    { x: textPos.x - metrics.width / 2 - pad, y: textPos.y - metrics.height / 2 - pad },
-    { x: metrics.width + pad * 2, y: metrics.height + pad * 2 },
-    COLORS.background,
-  );
+  if (bgColor) {
+    renderer.drawRect(
+      { x: textPos.x - metrics.width / 2 - pad, y: textPos.y - metrics.height / 2 - pad },
+      { x: metrics.width + pad * 2, y: metrics.height + pad * 2 },
+      bgColor,
+    );
+  }
   renderer.drawText(label, textPos, textStyle);
 }

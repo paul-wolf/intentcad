@@ -1,6 +1,7 @@
 import { useRef, useEffect, useCallback } from 'react';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useEditorStore } from '@/stores/editorStore';
+import { useThemeStore } from '@/theme';
 import { useCanvasRenderer } from './useCanvasRenderer';
 import { useMouseHandlers } from './useMouseHandlers';
 import type { Tool } from '@/tools/types';
@@ -79,6 +80,17 @@ export function CanvasContainer({ activeTool }: CanvasContainerProps) {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [activeTool]);
+
+  // Sync CSS variables with theme
+  useEffect(() => {
+    const sync = (palette: { background: string; text: string }) => {
+      document.documentElement.style.setProperty('--bg', palette.background);
+      document.documentElement.style.setProperty('--text', palette.text);
+    };
+    sync(useThemeStore.getState().palette);
+    const unsub = useThemeStore.subscribe((s) => sync(s.palette));
+    return unsub;
+  }, []);
 
   // Alt key tracking for dimension overlay
   useEffect(() => {

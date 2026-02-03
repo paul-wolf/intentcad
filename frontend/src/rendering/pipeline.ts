@@ -1,18 +1,9 @@
 import type { Renderer, Viewport } from '@/types/renderer';
 import type { Document, Entity } from '@/types/document';
 import type { Tool } from '@/tools/types';
-import { COLORS, GRID_SPACING_MM, GRID_MAJOR_EVERY, GHOSTED_OPACITY, ENDPOINT_RADIUS } from '@/config';
-import {
-  LINE_STYLE,
-  LINE_SELECTED_STYLE,
-  GHOSTED_STYLE,
-  GRID_MINOR_STYLE,
-  GRID_MAJOR_STYLE,
-  DIMENSION_LINE_STYLE,
-  DIMENSION_SELECTED_STYLE,
-  DIMENSION_TEXT_STYLE,
-  DIMENSION_OVERLAY_TEXT_STYLE,
-} from './styles';
+import type { ThemePalette } from '@/theme';
+import { GRID_SPACING_MM, GRID_MAJOR_EVERY, GHOSTED_OPACITY, ENDPOINT_RADIUS } from '@/config';
+import { getStyles } from './styles';
 import { drawDimension, drawSegmentLabel } from './dimensionRenderer';
 
 export interface RenderContext {
@@ -22,16 +13,18 @@ export interface RenderContext {
   selectedEntityIds: Set<string>;
   activeTool: Tool | null;
   altKeyHeld: boolean;
+  palette: ThemePalette;
 }
 
 /** Step 1: Clear background */
 function renderBackground(ctx: RenderContext) {
-  ctx.renderer.clear(COLORS.background);
+  ctx.renderer.clear(ctx.palette.background);
 }
 
 /** Step 2: Draw grid */
 function renderGrid(ctx: RenderContext) {
   const { renderer, viewport } = ctx;
+  const styles = getStyles(ctx.palette);
   const spacing = GRID_SPACING_MM;
   const majorSpacing = spacing * GRID_MAJOR_EVERY;
 
@@ -55,7 +48,7 @@ function renderGrid(ctx: RenderContext) {
     renderer.drawLine(
       { x: sx, y: 0 },
       { x: sx, y: viewport.height },
-      GRID_MINOR_STYLE,
+      styles.gridMinor,
     );
   }
   for (let y = startY; y <= endY; y += spacing) {
@@ -65,7 +58,7 @@ function renderGrid(ctx: RenderContext) {
     renderer.drawLine(
       { x: 0, y: sy },
       { x: viewport.width, y: sy },
-      GRID_MINOR_STYLE,
+      styles.gridMinor,
     );
   }
 
@@ -77,7 +70,7 @@ function renderGrid(ctx: RenderContext) {
     renderer.drawLine(
       { x: sx, y: 0 },
       { x: sx, y: viewport.height },
-      GRID_MAJOR_STYLE,
+      styles.gridMajor,
     );
   }
   for (let y = startY; y <= endY; y += spacing) {
@@ -87,7 +80,7 @@ function renderGrid(ctx: RenderContext) {
     renderer.drawLine(
       { x: 0, y: sy },
       { x: viewport.width, y: sy },
-      GRID_MAJOR_STYLE,
+      styles.gridMajor,
     );
   }
 }
@@ -95,12 +88,13 @@ function renderGrid(ctx: RenderContext) {
 /** Step 3: Draw ghosted (non-active, visible) sketches */
 function renderGhostedSketches(ctx: RenderContext) {
   const { renderer, viewport, document: doc } = ctx;
+  const styles = getStyles(ctx.palette);
 
   for (const sketch of doc.sketches) {
     if (sketch.id === doc.activeSketchId || !sketch.visible) continue;
     renderer.setGlobalAlpha(GHOSTED_OPACITY);
     for (const entity of sketch.entities) {
-      renderEntity(renderer, viewport, entity, GHOSTED_STYLE);
+      renderEntity(renderer, viewport, entity, styles.ghosted);
     }
     renderer.resetGlobalAlpha();
   }
@@ -109,6 +103,7 @@ function renderGhostedSketches(ctx: RenderContext) {
 /** Step 4: Draw active sketch entities */
 function renderActiveSketch(ctx: RenderContext) {
   const { renderer, viewport, document: doc, selectedEntityIds } = ctx;
+  const styles = getStyles(ctx.palette);
   const activeSketch = doc.sketches.find((s) => s.id === doc.activeSketchId);
   if (!activeSketch) return;
 
@@ -116,7 +111,7 @@ function renderActiveSketch(ctx: RenderContext) {
     const isSelected = selectedEntityIds.has(entity.id);
     switch (entity.type) {
       case 'line': {
-        const style = isSelected ? LINE_SELECTED_STYLE : LINE_STYLE;
+        const style = isSelected ? styles.lineSelected : styles.line;
         renderEntity(renderer, viewport, entity, style);
         break;
       }
@@ -129,9 +124,9 @@ function renderActiveSketch(ctx: RenderContext) {
         if (idx < 0 || idx >= target.points.length - 1) break;
         const a = target.points[idx]!;
         const b = target.points[idx + 1]!;
-        const lineStyle = isSelected ? DIMENSION_SELECTED_STYLE : DIMENSION_LINE_STYLE;
-        const textStyle = DIMENSION_TEXT_STYLE;
-        drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle);
+        const lineStyle = isSelected ? styles.dimensionSelected : styles.dimensionLine;
+        const textStyle = styles.dimensionText;
+        drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background);
         break;
       }
     }
@@ -142,13 +137,14 @@ function renderActiveSketch(ctx: RenderContext) {
 function renderDimensionOverlay(ctx: RenderContext) {
   if (!ctx.altKeyHeld) return;
   const { renderer, viewport, document: doc } = ctx;
+  const styles = getStyles(ctx.palette);
   const activeSketch = doc.sketches.find((s) => s.id === doc.activeSketchId);
   if (!activeSketch) return;
 
   for (const entity of activeSketch.entities) {
     if (entity.type === 'line') {
       for (let i = 0; i < entity.points.length - 1; i++) {
-        drawSegmentLabel(renderer, viewport, entity.points[i]!, entity.points[i + 1]!, DIMENSION_OVERLAY_TEXT_STYLE);
+        drawSegmentLabel(renderer, viewport, entity.points[i]!, entity.points[i + 1]!, styles.dimensionOverlayText, ctx.palette.background);
       }
     }
   }
