@@ -173,6 +173,15 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                       })),
                     };
                   }
+                  if (e.type === 'circle') {
+                    return {
+                      ...e,
+                      center: {
+                        x: e.center.x + delta.x,
+                        y: e.center.y + delta.y,
+                      },
+                    };
+                  }
                   return e;
                 }),
               }

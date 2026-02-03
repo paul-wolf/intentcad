@@ -4,7 +4,7 @@ import type { Tool } from '@/tools/types';
 import type { ThemePalette } from '@/theme';
 import { GRID_SPACING_MM, GRID_MAJOR_EVERY, GHOSTED_OPACITY, ENDPOINT_RADIUS, ORIGIN_RADIUS, AXIS_OPACITY } from '@/config';
 import { getStyles } from './styles';
-import { drawDimension, drawSegmentLabel } from './dimensionRenderer';
+import { drawDimension, drawDiameterDimension, drawSegmentLabel, drawDiameterLabel } from './dimensionRenderer';
 
 export interface RenderContext {
   renderer: Renderer;
@@ -142,17 +142,30 @@ function renderActiveSketch(ctx: RenderContext) {
         renderEntity(renderer, viewport, entity, style);
         break;
       }
+      case 'circle': {
+        const style = isSelected ? styles.lineSelected : styles.line;
+        const screenCenter = viewport.worldToScreen(entity.center);
+        const screenRadius = entity.radius * viewport.scale;
+        renderer.drawCircle(screenCenter, screenRadius, style);
+        renderer.fillCircle(screenCenter, ENDPOINT_RADIUS, style.color);
+        break;
+      }
       case 'dimension': {
         const target = activeSketch.entities.find(
-          (e) => e.id === entity.targetEntityId && e.type === 'line',
+          (e) => e.id === entity.targetEntityId,
         );
-        if (!target || target.type !== 'line') break;
+        if (!target) break;
+        const lineStyle = isSelected ? styles.dimensionSelected : styles.dimensionLine;
+        const textStyle = styles.dimensionText;
+        if (target.type === 'circle') {
+          drawDiameterDimension(renderer, viewport, target.center, target.radius, entity.offset, lineStyle, textStyle, ctx.palette.background);
+          break;
+        }
+        if (target.type !== 'line') break;
         const idx = entity.segmentIndex;
         if (idx < 0 || idx >= target.points.length - 1) break;
         const a = target.points[idx]!;
         const b = target.points[idx + 1]!;
-        const lineStyle = isSelected ? styles.dimensionSelected : styles.dimensionLine;
-        const textStyle = styles.dimensionText;
         drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background);
         break;
       }
@@ -173,6 +186,9 @@ function renderDimensionOverlay(ctx: RenderContext) {
       for (let i = 0; i < entity.points.length - 1; i++) {
         drawSegmentLabel(renderer, viewport, entity.points[i]!, entity.points[i + 1]!, styles.dimensionOverlayText, ctx.palette.background);
       }
+    }
+    if (entity.type === 'circle') {
+      drawDiameterLabel(renderer, viewport, entity.center, entity.radius, styles.dimensionOverlayText, ctx.palette.background);
     }
   }
 }
@@ -200,6 +216,12 @@ function renderEntity(
       for (const pt of entity.points) {
         renderer.fillCircle(viewport.worldToScreen(pt), ENDPOINT_RADIUS, style.color);
       }
+      break;
+    }
+    case 'circle': {
+      const screenCenter = viewport.worldToScreen(entity.center);
+      const screenRadius = entity.radius * viewport.scale;
+      renderer.drawCircle(screenCenter, screenRadius, style);
       break;
     }
   }

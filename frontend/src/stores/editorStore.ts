@@ -24,6 +24,8 @@ function defaultToolState(tool: ToolType): ToolState {
       return { type: 'line', firstPoint: null, activePolylineId: null, activeEnd: null };
     case 'select':
       return { type: 'select', dragStart: null, dragEnd: null };
+    case 'circle':
+      return { type: 'circle', center: null };
     case 'dimension':
       return { type: 'dimension' };
   }

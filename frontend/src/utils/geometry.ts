@@ -83,6 +83,21 @@ function lineClipsRect(a: Point, b: Point, min: Point, max: Point): boolean {
   return false;
 }
 
+/** Check if a circle overlaps an axis-aligned rectangle. */
+export function circleIntersectsRect(
+  center: Point,
+  radius: number,
+  rectMin: Point,
+  rectMax: Point,
+): boolean {
+  // Find the closest point on the rectangle to the circle center
+  const cx = Math.max(rectMin.x, Math.min(center.x, rectMax.x));
+  const cy = Math.max(rectMin.y, Math.min(center.y, rectMax.y));
+  const dx = center.x - cx;
+  const dy = center.y - cy;
+  return dx * dx + dy * dy <= radius * radius;
+}
+
 export function snapToGrid(value: number, spacing: number): number {
   return Math.round(value / spacing) * spacing;
 }

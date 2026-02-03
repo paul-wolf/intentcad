@@ -10,6 +10,7 @@ import { useDocumentStore } from '@/stores/documentStore';
 import { useUIStateStore } from '@/stores/uiStateStore';
 import { createLineTool } from '@/tools/lineTool';
 import { createSelectTool } from '@/tools/selectTool';
+import { createCircleTool } from '@/tools/circleTool';
 import { createDimensionTool } from '@/tools/dimensionTool';
 import { startAutoSave, setBackendId, getBackendId } from '@/api/autoSave';
 import { api } from '@/api/client';
@@ -53,6 +54,8 @@ export function EditorPage() {
     switch (activeTool) {
       case 'line':
         return createLineTool();
+      case 'circle':
+        return createCircleTool();
       case 'select':
         return createSelectTool();
       case 'dimension':
@@ -79,6 +82,7 @@ export function EditorPage() {
       }
 
       if (e.key === 'l' || e.key === 'L') setActiveTool('line');
+      if (e.key === 'c' || e.key === 'C') setActiveTool('circle');
       if (e.key === 'v' || e.key === 'V') setActiveTool('select');
       if (e.key === 'd' || e.key === 'D') setActiveTool('dimension');
     };

@@ -68,11 +68,35 @@ export function hitTestEntities(
           best = entity;
         }
       }
+    } else if (entity.type === 'circle') {
+      const screenCenter = viewport.worldToScreen(entity.center);
+      const screenRadius = entity.radius * viewport.scale;
+      const d = Math.abs(distance(screenPos, screenCenter) - screenRadius);
+      if (d < bestDist) {
+        bestDist = d;
+        best = entity;
+      }
     } else if (entity.type === 'dimension' && allEntities) {
       const target = allEntities.find(
-        (e) => e.id === entity.targetEntityId && e.type === 'line',
+        (e) => e.id === entity.targetEntityId,
       );
-      if (!target || target.type !== 'line') continue;
+      if (!target) continue;
+      if (target.type === 'circle') {
+        // Hit test the diameter dimension line (horizontal, offset above circle)
+        const c = target.center;
+        const r = target.radius;
+        const oa: Point = { x: c.x - r, y: c.y + entity.offset };
+        const ob: Point = { x: c.x + r, y: c.y + entity.offset };
+        const sa = viewport.worldToScreen(oa);
+        const sb = viewport.worldToScreen(ob);
+        const d = pointToSegmentDist(screenPos, sa, sb);
+        if (d < bestDist) {
+          bestDist = d;
+          best = entity;
+        }
+        continue;
+      }
+      if (target.type !== 'line') continue;
       const idx = entity.segmentIndex;
       if (idx < 0 || idx >= target.points.length - 1) continue;
       const pa = target.points[idx]!;

@@ -9,6 +9,13 @@ export interface LineEntity {
   points: Point[];
 }
 
+export interface CircleEntity {
+  id: string;
+  type: 'circle';
+  center: Point;
+  radius: number;
+}
+
 export interface DimensionEntity {
   id: string;
   type: 'dimension';
@@ -17,7 +24,7 @@ export interface DimensionEntity {
   offset: number;
 }
 
-export type Entity = LineEntity | DimensionEntity;
+export type Entity = LineEntity | CircleEntity | DimensionEntity;
 
 export interface Sketch {
   id: string;

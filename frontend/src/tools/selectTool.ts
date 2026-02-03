@@ -5,7 +5,7 @@ import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
 import { hitTestEntities, hitTestPoint } from '@/hittest/hitTest';
 import type { PointHit } from '@/hittest/hitTest';
-import { segmentIntersectsRect } from '@/utils/geometry';
+import { segmentIntersectsRect, circleIntersectsRect } from '@/utils/geometry';
 import { getThemePalette } from '@/theme';
 import { distance } from '@/utils/geometry';
 
@@ -125,6 +125,11 @@ export function createSelectTool(): Tool {
                   ids.add(entity.id);
                   break;
                 }
+              }
+            }
+            if (entity.type === 'circle') {
+              if (circleIntersectsRect(entity.center, entity.radius, { x: minX, y: minY }, { x: maxX, y: maxY })) {
+                ids.add(entity.id);
               }
             }
           }

@@ -43,6 +43,16 @@ export function snapPosition(
           }
         }
       }
+      if (entity.type === 'circle') {
+        const sp = viewport.worldToScreen(entity.center);
+        const d = distance(sp, screenPos);
+        if (d < bestDist) {
+          bestDist = d;
+          bestEndpoint = entity.center;
+          bestEntityId = entity.id;
+          bestPointIndex = undefined;
+        }
+      }
     }
   }
 
