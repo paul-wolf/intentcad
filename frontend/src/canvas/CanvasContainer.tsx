@@ -1,10 +1,65 @@
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useEffect, useCallback, type RefObject } from 'react';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useThemeStore } from '@/theme';
 import { useCanvasRenderer } from './useCanvasRenderer';
 import { useMouseHandlers } from './useMouseHandlers';
 import type { Tool } from '@/tools/types';
+import type { ViewportImpl } from '@/rendering/viewport';
+
+function usePanZoom(
+  canvasRef: RefObject<HTMLCanvasElement | null>,
+  viewportRef: RefObject<ViewportImpl | null>,
+) {
+  const panRef = useRef<{ lastX: number; lastY: number } | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const vp = viewportRef.current;
+      if (!vp) return;
+      const rect = canvas.getBoundingClientRect();
+      const screenPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      const factor = Math.pow(1.001, -e.deltaY);
+      vp.zoomAt(screenPos, factor);
+    };
+
+    const onMouseDown = (e: MouseEvent) => {
+      if (e.button === 1) {
+        e.preventDefault();
+        panRef.current = { lastX: e.clientX, lastY: e.clientY };
+      }
+    };
+
+    const onMouseMove = (e: MouseEvent) => {
+      const pan = panRef.current;
+      if (!pan) return;
+      const vp = viewportRef.current;
+      if (!vp) return;
+      vp.pan(e.clientX - pan.lastX, e.clientY - pan.lastY);
+      pan.lastX = e.clientX;
+      pan.lastY = e.clientY;
+    };
+
+    const onMouseUp = (e: MouseEvent) => {
+      if (e.button === 1) panRef.current = null;
+    };
+
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    canvas.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      canvas.removeEventListener('wheel', onWheel);
+      canvas.removeEventListener('mousedown', onMouseDown);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, [canvasRef, viewportRef]);
+}
 
 interface CanvasContainerProps {
   activeTool: Tool | null;
@@ -31,6 +86,8 @@ export function CanvasContainer({ activeTool }: CanvasContainerProps) {
     viewportRef,
     getActiveTool,
   );
+
+  usePanZoom(canvasRef, viewportRef);
 
   // Handle resize
   const handleResize = useCallback(() => {

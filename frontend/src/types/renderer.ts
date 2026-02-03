@@ -3,8 +3,8 @@ import type { Point } from './document';
 export interface Viewport {
   worldToScreen(p: Point): Point;
   screenToWorld(p: Point): Point;
-  readonly scale: number;
-  readonly offset: Point;
+  scale: number;
+  offset: Point;
   readonly width: number;
   readonly height: number;
 }
