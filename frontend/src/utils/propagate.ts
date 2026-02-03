@@ -15,6 +15,7 @@ export function createMirroredEntity(
       ...source,
       id,
       points: source.points.map((p) => reflectPoint(p, lineA, lineB)),
+      ...(source.polygonCenter ? { polygonCenter: reflectPoint(source.polygonCenter, lineA, lineB) } : {}),
       sourceId: source.id,
       sourceTransform: transform,
     };
@@ -83,6 +84,7 @@ export function createRotatedEntity(
       ...source,
       id,
       points: source.points.map((p) => rotatePoint(p, center, angle)),
+      ...(source.polygonCenter ? { polygonCenter: rotatePoint(source.polygonCenter, center, angle) } : {}),
       sourceId: source.id,
       sourceTransform: transform,
     };
@@ -161,6 +163,7 @@ export function createTranslatedEntity(
       ...source,
       id,
       points: source.points.map((p) => ({ x: p.x + dx, y: p.y + dy })),
+      ...(source.polygonCenter ? { polygonCenter: { x: source.polygonCenter.x + dx, y: source.polygonCenter.y + dy } } : {}),
       sourceId: source.id,
       sourceTransform: transform,
     };

@@ -1,5 +1,5 @@
 import type { Tool, ToolContext } from './types';
-import type { Entity, Point } from '@/types/document';
+import type { Entity, LineEntity, Point } from '@/types/document';
 import type { Renderer, Viewport } from '@/types/renderer';
 import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
@@ -114,8 +114,18 @@ export function createSelectTool(): Tool {
       }
 
       if (dragMode === 'move-point' && lastMoveWorld && hitPointOnDown) {
-        const delta = { x: worldPos.x - lastMoveWorld.x, y: worldPos.y - lastMoveWorld.y };
-        useDocumentStore.getState().movePoint(hitPointOnDown.entityId, hitPointOnDown.pointIndex, delta);
+        const activeSketch = useDocumentStore.getState().getActiveSketch();
+        const entity = activeSketch?.entities.find((e) => e.id === hitPointOnDown!.entityId);
+        if (entity && entity.type === 'line' && (entity as LineEntity).polygonCenter) {
+          const center = (entity as LineEntity).polygonCenter!;
+          const prevAngle = Math.atan2(lastMoveWorld.y - center.y, lastMoveWorld.x - center.x);
+          const currAngle = Math.atan2(worldPos.y - center.y, worldPos.x - center.x);
+          const angleDelta = currAngle - prevAngle;
+          useDocumentStore.getState().rotatePolygon(hitPointOnDown.entityId, angleDelta);
+        } else {
+          const delta = { x: worldPos.x - lastMoveWorld.x, y: worldPos.y - lastMoveWorld.y };
+          useDocumentStore.getState().movePoint(hitPointOnDown.entityId, hitPointOnDown.pointIndex, delta);
+        }
         lastMoveWorld = worldPos;
       }
 

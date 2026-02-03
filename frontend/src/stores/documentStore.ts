@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Document, Entity, Point, Sketch } from '@/types/document';
 import { createEmptyDocument, createEmptySketch } from '@/utils/document';
 import { createMirroredEntity, createRotatedEntity, createTranslatedEntity, propagateDerived } from '@/utils/propagate';
+import { rotatePoint } from '@/utils/geometry';
 
 const UNDO_STACK_LIMIT = 100;
 
@@ -30,6 +31,7 @@ interface DocumentStore {
   removeEntities(entityIds: string[]): void;
   moveEntities(entityIds: string[], delta: Point): void;
   movePoint(entityId: string, pointIndex: number, delta: Point): void;
+  rotatePolygon(entityId: string, angleDelta: number): void;
   extendPolyline(entityId: string, point: Point, end: 'start' | 'end'): void;
 
   // Construction toggle
@@ -203,6 +205,12 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                         x: p.x + delta.x,
                         y: p.y + delta.y,
                       })),
+                      ...(e.polygonCenter ? {
+                        polygonCenter: {
+                          x: e.polygonCenter.x + delta.x,
+                          y: e.polygonCenter.y + delta.y,
+                        },
+                      } : {}),
                     };
                   }
                   if (e.type === 'circle') {
@@ -251,6 +259,32 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                         ? { x: p.x + delta.x, y: p.y + delta.y }
                         : p,
                     ),
+                  };
+                })),
+              }
+            : sk,
+        ),
+      },
+    });
+  },
+
+  rotatePolygon(entityId, angleDelta) {
+    const { document } = get();
+    set({
+      document: {
+        ...document,
+        sketches: document.sketches.map((sk) =>
+          sk.id === document.activeSketchId
+            ? {
+                ...sk,
+                entities: propagateDerived(sk.entities.map((e) => {
+                  if (e.id !== entityId || e.type !== 'line') return e;
+                  if (e.sourceId) return e; // locked
+                  if (!e.polygonCenter) return e;
+                  const center = e.polygonCenter;
+                  return {
+                    ...e,
+                    points: e.points.map((p) => rotatePoint(p, center, angleDelta)),
                   };
                 })),
               }
@@ -423,6 +457,24 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                 entities: propagateDerived(sk.entities.map((e) => {
                   if (e.id !== target.id) return e;
                   if (e.type === 'line') {
+                    // Polygon apothem dimension
+                    if (dim.segmentIndex === -1 && e.polygonCenter) {
+                      const center = e.polygonCenter;
+                      const midA = {
+                        x: (e.points[0]!.x + e.points[1]!.x) / 2,
+                        y: (e.points[0]!.y + e.points[1]!.y) / 2,
+                      };
+                      const curApothem = Math.sqrt((midA.x - center.x) ** 2 + (midA.y - center.y) ** 2);
+                      if (curApothem === 0) return e;
+                      const scale = newValue / curApothem;
+                      return {
+                        ...e,
+                        points: e.points.map((p) => ({
+                          x: center.x + (p.x - center.x) * scale,
+                          y: center.y + (p.y - center.y) * scale,
+                        })),
+                      };
+                    }
                     const idx = dim.segmentIndex;
                     if (idx < 0 || idx >= e.points.length - 1) return e;
                     const pa = e.points[idx]!;

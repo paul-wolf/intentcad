@@ -12,6 +12,7 @@ export interface LineEntity {
   id: string;
   type: 'line';
   points: Point[];
+  polygonCenter?: Point;
   construction?: boolean;
   sourceId?: string;
   sourceTransform?: SourceTransform;

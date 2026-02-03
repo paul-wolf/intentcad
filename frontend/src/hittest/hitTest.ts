@@ -1,4 +1,4 @@
-import type { Point, Entity } from '@/types/document';
+import type { Point, Entity, LineEntity } from '@/types/document';
 import type { Viewport } from '@/types/renderer';
 import { distance, pointToSegmentDist } from '@/utils/geometry';
 import { HIT_TOL } from '@/config';
@@ -142,6 +142,25 @@ export function hitTestEntities(
         continue;
       }
       if (target.type !== 'line') continue;
+      // Polygon apothem dimension
+      if (entity.segmentIndex === -1 && (target as LineEntity).polygonCenter) {
+        const center = (target as LineEntity).polygonCenter!;
+        const midA: Point = {
+          x: (target.points[0]!.x + target.points[1]!.x) / 2,
+          y: (target.points[0]!.y + target.points[1]!.y) / 2,
+        };
+        const perp2 = perpDir(center, midA);
+        const oa: Point = { x: center.x + perp2.x * entity.offset, y: center.y + perp2.y * entity.offset };
+        const ob: Point = { x: midA.x + perp2.x * entity.offset, y: midA.y + perp2.y * entity.offset };
+        const sa = viewport.worldToScreen(oa);
+        const sb = viewport.worldToScreen(ob);
+        const d = pointToSegmentDist(screenPos, sa, sb);
+        if (d < bestDist) {
+          bestDist = d;
+          best = entity;
+        }
+        continue;
+      }
       const idx = entity.segmentIndex;
       if (idx < 0 || idx >= target.points.length - 1) continue;
       const pa = target.points[idx]!;

@@ -1,5 +1,5 @@
 import type { Renderer, Viewport, LineStyle } from '@/types/renderer';
-import type { Document, Entity } from '@/types/document';
+import type { Document, Entity, LineEntity, Point } from '@/types/document';
 import type { Tool } from '@/tools/types';
 import type { ThemePalette } from '@/theme';
 import { GRID_SPACING_MM, GRID_MAJOR_EVERY, GHOSTED_OPACITY, ENDPOINT_RADIUS, ORIGIN_RADIUS, AXIS_OPACITY } from '@/config';
@@ -191,6 +191,16 @@ function renderActiveSketch(ctx: RenderContext) {
           break;
         }
         if (target.type !== 'line') break;
+        // Polygon apothem dimension
+        if (entity.segmentIndex === -1 && (target as LineEntity).polygonCenter) {
+          const center = (target as LineEntity).polygonCenter!;
+          const midA: Point = {
+            x: (target.points[0]!.x + target.points[1]!.x) / 2,
+            y: (target.points[0]!.y + target.points[1]!.y) / 2,
+          };
+          drawDimension(renderer, viewport, { a: center, b: midA, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background);
+          break;
+        }
         const idx = entity.segmentIndex;
         if (idx < 0 || idx >= target.points.length - 1) break;
         const a = target.points[idx]!;
@@ -212,8 +222,18 @@ function renderDimensionOverlay(ctx: RenderContext) {
 
   for (const entity of activeSketch.entities) {
     if (entity.type === 'line') {
-      for (let i = 0; i < entity.points.length - 1; i++) {
-        drawSegmentLabel(renderer, viewport, entity.points[i]!, entity.points[i + 1]!, styles.dimensionOverlayText, ctx.palette.background);
+      if ((entity as LineEntity).polygonCenter) {
+        // Show apothem label for polygons
+        const center = (entity as LineEntity).polygonCenter!;
+        const midA: Point = {
+          x: (entity.points[0]!.x + entity.points[1]!.x) / 2,
+          y: (entity.points[0]!.y + entity.points[1]!.y) / 2,
+        };
+        drawSegmentLabel(renderer, viewport, center, midA, styles.dimensionOverlayText, ctx.palette.background);
+      } else {
+        for (let i = 0; i < entity.points.length - 1; i++) {
+          drawSegmentLabel(renderer, viewport, entity.points[i]!, entity.points[i + 1]!, styles.dimensionOverlayText, ctx.palette.background);
+        }
       }
     }
     if (entity.type === 'circle') {

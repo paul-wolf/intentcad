@@ -51,6 +51,7 @@ export function createPolygonTool(): Tool {
           id: generateId('lin'),
           type: 'line',
           points,
+          polygonCenter: ts.center,
         });
         useEditorStore.getState().setActiveTool('select');
         requestSave();

@@ -1,5 +1,5 @@
 import type { Tool, ToolContext } from './types';
-import type { Point } from '@/types/document';
+import type { LineEntity, Point } from '@/types/document';
 import type { Renderer, Viewport } from '@/types/renderer';
 import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
@@ -21,6 +21,30 @@ export function createDimensionTool(): Tool {
       const hit = hitTestSegment(screenPos, activeSketch.entities, ctx.viewport);
       if (!hit) return;
 
+      const targetEntity = activeSketch.entities.find((e) => e.id === hit.entityId);
+      if (!targetEntity || targetEntity.type !== 'line') return;
+
+      // Polygon: create a radius dimension (segmentIndex -1)
+      if ((targetEntity as LineEntity).polygonCenter) {
+        const exists = activeSketch.entities.some(
+          (e) =>
+            e.type === 'dimension' &&
+            e.targetEntityId === hit.entityId &&
+            e.segmentIndex === -1,
+        );
+        if (exists) return;
+
+        useDocumentStore.getState().beginTransaction();
+        useDocumentStore.getState().addEntity({
+          id: crypto.randomUUID(),
+          type: 'dimension',
+          targetEntityId: hit.entityId,
+          segmentIndex: -1,
+          offset: DIMENSION_OFFSET_MM,
+        });
+        return;
+      }
+
       // Check no existing dimension for this segment already
       const exists = activeSketch.entities.some(
         (e) =>
@@ -29,10 +53,6 @@ export function createDimensionTool(): Tool {
           e.segmentIndex === hit.segmentIndex,
       );
       if (exists) return;
-
-      // Determine offset sign via cross product
-      const targetEntity = activeSketch.entities.find((e) => e.id === hit.entityId);
-      if (!targetEntity || targetEntity.type !== 'line') return;
 
       const a = targetEntity.points[hit.segmentIndex]!;
       const b = targetEntity.points[hit.segmentIndex + 1]!;
@@ -75,6 +95,36 @@ export function createDimensionTool(): Tool {
 
       const targetEntity = activeSketch.entities.find((e) => e.id === hoverSegment!.entityId);
       if (!targetEntity || targetEntity.type !== 'line') return;
+
+      // Polygon: preview radius dimension
+      if ((targetEntity as LineEntity).polygonCenter) {
+        const exists = activeSketch.entities.some(
+          (e) =>
+            e.type === 'dimension' &&
+            e.targetEntityId === hoverSegment!.entityId &&
+            e.segmentIndex === -1,
+        );
+        if (exists) return;
+
+        const center = (targetEntity as LineEntity).polygonCenter!;
+        const midA = {
+          x: (targetEntity.points[0]!.x + targetEntity.points[1]!.x) / 2,
+          y: (targetEntity.points[0]!.y + targetEntity.points[1]!.y) / 2,
+        };
+        const palette = getThemePalette();
+        const styles = getStyles(palette);
+        renderer.setGlobalAlpha(0.4);
+        drawDimension(
+          renderer,
+          viewport,
+          { a: center, b: midA, offset: DIMENSION_OFFSET_MM },
+          styles.dimensionLine,
+          styles.dimensionText,
+          palette.background,
+        );
+        renderer.resetGlobalAlpha();
+        return;
+      }
 
       const idx = hoverSegment.segmentIndex;
       if (idx < 0 || idx >= targetEntity.points.length - 1) return;

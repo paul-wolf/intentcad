@@ -12,7 +12,7 @@ import { GridCopyDialog } from '@/components/GridCopyDialog';
 import type { DimensionGeom } from '@/rendering/dimensionRenderer';
 import type { Tool } from '@/tools/types';
 import type { ViewportImpl } from '@/rendering/viewport';
-import type { Point } from '@/types/document';
+import type { Point, LineEntity } from '@/types/document';
 
 function usePanZoom(
   canvasRef: RefObject<HTMLCanvasElement | null>,
@@ -302,6 +302,18 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
       return { pos, value };
     }
     if (target.type === 'line') {
+      // Polygon radius (apothem) dimension
+      if (dim.segmentIndex === -1 && (target as LineEntity).polygonCenter) {
+        const center = (target as LineEntity).polygonCenter!;
+        const midA: Point = {
+          x: (target.points[0]!.x + target.points[1]!.x) / 2,
+          y: (target.points[0]!.y + target.points[1]!.y) / 2,
+        };
+        const geom: DimensionGeom = { a: center, b: midA, offset: dim.offset };
+        const pos = getDimensionTextScreenPos(vp, geom);
+        const value = Math.sqrt((midA.x - center.x) ** 2 + (midA.y - center.y) ** 2);
+        return { pos, value };
+      }
       const idx = dim.segmentIndex;
       if (idx < 0 || idx >= target.points.length - 1) return null;
       const a = target.points[idx]!;
