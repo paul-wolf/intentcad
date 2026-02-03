@@ -115,6 +115,11 @@ export function createSelectTool(): Tool {
 
       if (dragMode === 'move-point' && lastMoveWorld && hitPointOnDown) {
         const activeSketch = useDocumentStore.getState().getActiveSketch();
+        // Skip if entity has a fixed constraint
+        if (activeSketch?.constraints.some((c) => c.type === 'fixed' && c.entityId === hitPointOnDown!.entityId)) {
+          lastMoveWorld = worldPos;
+          return;
+        }
         const entity = activeSketch?.entities.find((e) => e.id === hitPointOnDown!.entityId);
         if (entity && entity.type === 'line' && (entity as LineEntity).polygonCenter) {
           const center = (entity as LineEntity).polygonCenter!;
@@ -133,7 +138,17 @@ export function createSelectTool(): Tool {
         const delta = { x: worldPos.x - lastMoveWorld.x, y: worldPos.y - lastMoveWorld.y };
         const selectedIds = useEditorStore.getState().selectedEntityIds;
         if (selectedIds.size > 0) {
-          useDocumentStore.getState().moveEntities([...selectedIds], delta);
+          // Filter out fixed entities
+          const activeSketchForMove = useDocumentStore.getState().getActiveSketch();
+          const fixedIds = new Set(
+            activeSketchForMove?.constraints
+              .filter((c) => c.type === 'fixed')
+              .map((c) => c.entityId) ?? [],
+          );
+          const movableIds = [...selectedIds].filter((id) => !fixedIds.has(id));
+          if (movableIds.length > 0) {
+            useDocumentStore.getState().moveEntities(movableIds, delta);
+          }
         }
         lastMoveWorld = worldPos;
       }
@@ -269,6 +284,14 @@ export function createSelectTool(): Tool {
         const ids = useEditorStore.getState().selectedEntityIds;
         if (ids.size > 0) {
           useEditorStore.getState().setMirrorEntityIds([...ids]);
+        }
+      }
+      if (e.key === 'k' || e.key === 'K') {
+        const ids = useEditorStore.getState().selectedEntityIds;
+        if (ids.size > 0) {
+          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().toggleFixed([...ids]);
+          requestSave();
         }
       }
       if (e.key === 'x' || e.key === 'X') {

@@ -4,7 +4,9 @@ import type { Tool } from '@/tools/types';
 import type { ThemePalette } from '@/theme';
 import { GRID_SPACING_MM, GRID_MAJOR_EVERY, GHOSTED_OPACITY, ENDPOINT_RADIUS, ORIGIN_RADIUS, AXIS_OPACITY } from '@/config';
 import { getStyles } from './styles';
+import type { ThemeStyles } from './styles';
 import { drawDimension, drawDiameterDimension, drawSegmentLabel, drawDiameterLabel } from './dimensionRenderer';
+import { computeSketchDoF } from '@/utils/dof';
 
 export interface RenderContext {
   renderer: Renderer;
@@ -130,6 +132,25 @@ function renderGhostedSketches(ctx: RenderContext) {
   }
 }
 
+/** Pick the right line style based on selection, construction, and constraint status. */
+function pickStyle(
+  styles: ThemeStyles,
+  isSelected: boolean,
+  isConstruction: boolean,
+  isConstrained: boolean,
+): LineStyle {
+  if (isConstrained && isConstruction) {
+    return isSelected ? styles.constructionConstrainedSelected : styles.constructionConstrained;
+  }
+  if (isConstrained) {
+    return isSelected ? styles.lineConstrainedSelected : styles.lineConstrained;
+  }
+  if (isConstruction) {
+    return isSelected ? styles.constructionSelected : styles.construction;
+  }
+  return isSelected ? styles.lineSelected : styles.line;
+}
+
 /** Step 4: Draw active sketch entities */
 function renderActiveSketch(ctx: RenderContext) {
   const { renderer, viewport, document: doc, selectedEntityIds } = ctx;
@@ -137,20 +158,20 @@ function renderActiveSketch(ctx: RenderContext) {
   const activeSketch = doc.sketches.find((s) => s.id === doc.activeSketchId);
   if (!activeSketch || activeSketch.suppressed) return;
 
+  const dofMap = computeSketchDoF(activeSketch.entities, activeSketch.constraints);
+
   for (const entity of activeSketch.entities) {
     const isSelected = selectedEntityIds.has(entity.id);
     switch (entity.type) {
       case 'line': {
-        const style = entity.construction
-          ? (isSelected ? styles.constructionSelected : styles.construction)
-          : (isSelected ? styles.lineSelected : styles.line);
+        const isConstrained = dofMap.get(entity.id) === 0;
+        const style = pickStyle(styles, isSelected, !!entity.construction, isConstrained);
         renderEntity(renderer, viewport, entity, style);
         break;
       }
       case 'circle': {
-        const style = entity.construction
-          ? (isSelected ? styles.constructionSelected : styles.construction)
-          : (isSelected ? styles.lineSelected : styles.line);
+        const isConstrained = dofMap.get(entity.id) === 0;
+        const style = pickStyle(styles, isSelected, !!entity.construction, isConstrained);
         const screenCenter = viewport.worldToScreen(entity.center);
         const screenRadius = entity.radius * viewport.scale;
         renderer.drawCircle(screenCenter, screenRadius, style);
@@ -158,16 +179,14 @@ function renderActiveSketch(ctx: RenderContext) {
         break;
       }
       case 'rectangle': {
-        const style = entity.construction
-          ? (isSelected ? styles.constructionSelected : styles.construction)
-          : (isSelected ? styles.lineSelected : styles.line);
+        const isConstrained = dofMap.get(entity.id) === 0;
+        const style = pickStyle(styles, isSelected, !!entity.construction, isConstrained);
         renderEntity(renderer, viewport, entity, style);
         break;
       }
       case 'point': {
-        const style = entity.construction
-          ? (isSelected ? styles.constructionSelected : styles.construction)
-          : (isSelected ? styles.lineSelected : styles.line);
+        const isConstrained = dofMap.get(entity.id) === 0;
+        const style = pickStyle(styles, isSelected, !!entity.construction, isConstrained);
         const sp = viewport.worldToScreen(entity.position);
         renderer.fillCircle(sp, ENDPOINT_RADIUS + 1, style.color);
         break;

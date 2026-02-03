@@ -13,16 +13,16 @@ TODO:
 * Selection priority
 * Dragging circle center point
 * Dragging rect center point
-*
+
 * Constraints, equals, midpoint, tangent
 * Cut line segment
 * Named parameters
-* Parameter sidebar
+
 * history timeline
 
 * two corner rectangle
 * Fillet
-* 
+
 
 **Full feature vision** (across all iterations):
 

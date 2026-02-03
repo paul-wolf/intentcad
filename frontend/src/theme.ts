@@ -33,6 +33,7 @@ export interface ThemePalette {
   inputBorder: string;
   primaryBtn: string;
   warning: string;
+  constrained: string;
 }
 
 export const DARK_PALETTE: ThemePalette = {
@@ -66,6 +67,7 @@ export const DARK_PALETTE: ThemePalette = {
   inputBorder: '#475569',
   primaryBtn: '#3b82f6',
   warning: '#f59e0b',
+  constrained: '#22c55e',
 };
 
 export const LIGHT_PALETTE: ThemePalette = {
@@ -99,6 +101,7 @@ export const LIGHT_PALETTE: ThemePalette = {
   inputBorder: '#94a3b8',
   primaryBtn: '#2563eb',
   warning: '#d97706',
+  constrained: '#16a34a',
 };
 
 const STORAGE_KEY = 'intentcad-theme';

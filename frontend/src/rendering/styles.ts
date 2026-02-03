@@ -16,6 +16,10 @@ export interface ThemeStyles {
   dimensionSelected: LineStyle;
   dimensionText: TextStyle;
   dimensionOverlayText: TextStyle;
+  lineConstrained: LineStyle;
+  lineConstrainedSelected: LineStyle;
+  constructionConstrained: LineStyle;
+  constructionConstrainedSelected: LineStyle;
 }
 
 export function getStyles(palette: ThemePalette): ThemeStyles {
@@ -33,5 +37,9 @@ export function getStyles(palette: ThemePalette): ThemeStyles {
     dimensionSelected: { color: palette.lineSelected, width: STROKES.dimension * 2 },
     dimensionText: { color: palette.dimensionText, fontSize: DIMENSION_FONT_SIZE },
     dimensionOverlayText: { color: palette.dimensionOverlay, fontSize: DIMENSION_FONT_SIZE },
+    lineConstrained: { color: palette.constrained, width: STROKES.line },
+    lineConstrainedSelected: { color: palette.constrained, width: STROKES.lineSelected },
+    constructionConstrained: { color: palette.constrained, width: STROKES.line, dash: [6, 4] },
+    constructionConstrainedSelected: { color: palette.constrained, width: STROKES.lineSelected, dash: [6, 4] },
   };
 }

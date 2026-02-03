@@ -1,4 +1,4 @@
-import type { Document, Entity, Sketch } from '@/types/document';
+import type { Document, Entity, Sketch, Constraint } from '@/types/document';
 import { generateId } from './id';
 
 export function createEmptySketch(name: string): Sketch {
@@ -7,6 +7,7 @@ export function createEmptySketch(name: string): Sketch {
     name,
     visible: true,
     entities: [],
+    constraints: [],
   };
 }
 
@@ -16,6 +17,7 @@ export function migrateDocument(doc: Document): Document {
     ...doc,
     sketches: doc.sketches.map((sk) => ({
       ...sk,
+      constraints: (sk as unknown as { constraints?: Constraint[] }).constraints ?? [],
       entities: sk.entities.map((e): Entity => {
         if (e.type === 'line' && !e.points) {
           const legacy = e as unknown as { start: { x: number; y: number }; end: { x: number; y: number } };

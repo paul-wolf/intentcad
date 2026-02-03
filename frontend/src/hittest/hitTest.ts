@@ -6,6 +6,7 @@ import { HIT_TOL } from '@/config';
 export interface PointHit {
   entityId: string;
   pointIndex: number;
+  isCenter?: boolean;
 }
 
 export interface SegmentHit {
@@ -35,6 +36,29 @@ export function hitTestPoint(
           bestDist = d;
           best = { entityId: entity.id, pointIndex: i };
         }
+      }
+      // Polygon center point
+      if ((entity as LineEntity).polygonCenter) {
+        const sp = viewport.worldToScreen((entity as LineEntity).polygonCenter!);
+        const d = distance(screenPos, sp);
+        if (d < bestDist) {
+          bestDist = d;
+          best = { entityId: entity.id, pointIndex: 0, isCenter: true };
+        }
+      }
+    } else if (entity.type === 'circle') {
+      const sp = viewport.worldToScreen(entity.center);
+      const d = distance(screenPos, sp);
+      if (d < bestDist) {
+        bestDist = d;
+        best = { entityId: entity.id, pointIndex: 0, isCenter: true };
+      }
+    } else if (entity.type === 'rectangle') {
+      const sp = viewport.worldToScreen(entity.center);
+      const d = distance(screenPos, sp);
+      if (d < bestDist) {
+        bestDist = d;
+        best = { entityId: entity.id, pointIndex: 0, isCenter: true };
       }
     }
   }

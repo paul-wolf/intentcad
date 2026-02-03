@@ -58,12 +58,21 @@ export interface DimensionEntity {
 
 export type Entity = LineEntity | CircleEntity | RectangleEntity | PointEntity | DimensionEntity;
 
+export interface FixedConstraint {
+  id: string;
+  type: 'fixed';
+  entityId: string;
+}
+
+export type Constraint = FixedConstraint;
+
 export interface Sketch {
   id: string;
   name: string;
   visible: boolean;
   suppressed?: boolean;
   entities: Entity[];
+  constraints: Constraint[];
 }
 
 export interface Document {

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Document, Entity, Point, Sketch } from '@/types/document';
+import type { Document, Entity, Point, Sketch, Constraint } from '@/types/document';
 import { createEmptyDocument, createEmptySketch } from '@/utils/document';
 import { createMirroredEntity, createRotatedEntity, createTranslatedEntity, propagateDerived } from '@/utils/propagate';
 import { rotatePoint } from '@/utils/geometry';
@@ -47,6 +47,11 @@ interface DocumentStore {
 
   // Grid copy
   gridCopyEntities(entityIds: string[], countX: number, countY: number, spacingX: number, spacingY: number): string[];
+
+  // Constraints
+  addConstraint(constraint: Constraint): void;
+  removeConstraints(entityIds: string[]): void;
+  toggleFixed(entityIds: string[]): void;
 
   // Entity replacement
   updateEntity(entityId: string, updatedEntity: Entity): void;
@@ -206,6 +211,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                   if (e.type === 'dimension' && idSet.has(e.targetEntityId)) return false;
                   return true;
                 }),
+                constraints: sk.constraints.filter((c) => !idSet.has(c.entityId)),
               }
             : sk,
         ),
@@ -470,6 +476,72 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
       },
     });
     return newEntities.map((e) => e.id);
+  },
+
+  addConstraint(constraint) {
+    const { document } = get();
+    set({
+      document: {
+        ...document,
+        sketches: document.sketches.map((sk) =>
+          sk.id === document.activeSketchId
+            ? { ...sk, constraints: [...sk.constraints, constraint] }
+            : sk,
+        ),
+      },
+    });
+  },
+
+  removeConstraints(entityIds) {
+    const idSet = new Set(entityIds);
+    const { document } = get();
+    set({
+      document: {
+        ...document,
+        sketches: document.sketches.map((sk) =>
+          sk.id === document.activeSketchId
+            ? { ...sk, constraints: sk.constraints.filter((c) => !idSet.has(c.entityId)) }
+            : sk,
+        ),
+      },
+    });
+  },
+
+  toggleFixed(entityIds) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return;
+    const fixedSet = new Set(sketch.constraints.filter((c) => c.type === 'fixed').map((c) => c.entityId));
+    const allFixed = entityIds.every((id) => fixedSet.has(id));
+    if (allFixed) {
+      // Remove fixed constraints for these entities
+      const removeSet = new Set(entityIds);
+      set({
+        document: {
+          ...document,
+          sketches: document.sketches.map((sk) =>
+            sk.id === document.activeSketchId
+              ? { ...sk, constraints: sk.constraints.filter((c) => !(c.type === 'fixed' && removeSet.has(c.entityId))) }
+              : sk,
+          ),
+        },
+      });
+    } else {
+      // Add fixed constraints for entities that aren't already fixed
+      const newConstraints = entityIds
+        .filter((id) => !fixedSet.has(id))
+        .map((id) => ({ id: crypto.randomUUID(), type: 'fixed' as const, entityId: id }));
+      set({
+        document: {
+          ...document,
+          sketches: document.sketches.map((sk) =>
+            sk.id === document.activeSketchId
+              ? { ...sk, constraints: [...sk.constraints, ...newConstraints] }
+              : sk,
+          ),
+        },
+      });
+    }
   },
 
   updateEntity(entityId, updatedEntity) {

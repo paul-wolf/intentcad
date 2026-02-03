@@ -1,6 +1,8 @@
+import { useMemo } from 'react';
 import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useThemeStore } from '@/theme';
+import { computeSketchDoF, sketchTotalDoF } from '@/utils/dof';
 
 export function StatusBar() {
   const cursorWorld = useEditorStore((s) => s.cursorWorld);
@@ -8,6 +10,16 @@ export function StatusBar() {
   const viewportScale = useEditorStore((s) => s.viewportScale);
   const docName = useDocumentStore((s) => s.document.name);
   const palette = useThemeStore((s) => s.palette);
+  const activeSketch = useDocumentStore((s) => {
+    const doc = s.document;
+    return doc.sketches.find((sk) => sk.id === doc.activeSketchId);
+  });
+
+  const totalDoF = useMemo(() => {
+    if (!activeSketch) return null;
+    const dofMap = computeSketchDoF(activeSketch.entities, activeSketch.constraints);
+    return sketchTotalDoF(dofMap);
+  }, [activeSketch]);
 
   return (
     <div
@@ -34,6 +46,14 @@ export function StatusBar() {
       </span>
       <span style={{ color: palette.inputBorder }}>|</span>
       <span>{viewportScale.toFixed(1)}x</span>
+      {totalDoF !== null && (
+        <>
+          <span style={{ color: palette.inputBorder }}>|</span>
+          <span style={{ color: totalDoF === 0 ? palette.constrained : undefined }}>
+            DoF: {totalDoF}
+          </span>
+        </>
+      )}
     </div>
   );
 }

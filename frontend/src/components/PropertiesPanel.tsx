@@ -27,6 +27,11 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
   const beginTransaction = useDocumentStore((s) => s.beginTransaction);
   const updateEntity = useDocumentStore((s) => s.updateEntity);
   const toggleConstruction = useDocumentStore((s) => s.toggleConstruction);
+  const isFixed = useDocumentStore((s) => {
+    const doc = s.document;
+    const sketch = doc.sketches.find((sk) => sk.id === doc.activeSketchId);
+    return sketch?.constraints.some((c) => c.type === 'fixed' && c.entityId === entity.id) ?? false;
+  });
 
   const isDerived = 'sourceId' in entity && !!entity.sourceId;
 
@@ -49,6 +54,11 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
         {isDerived && (
           <span style={{ fontSize: '10px', color: palette.warning, fontStyle: 'italic' }}>
             (Derived)
+          </span>
+        )}
+        {isFixed && (
+          <span style={{ fontSize: '10px', color: palette.constrained, fontStyle: 'italic' }}>
+            (Fixed)
           </span>
         )}
       </div>
