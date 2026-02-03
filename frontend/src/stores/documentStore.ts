@@ -48,6 +48,9 @@ interface DocumentStore {
   // Grid copy
   gridCopyEntities(entityIds: string[], countX: number, countY: number, spacingX: number, spacingY: number): string[];
 
+  // Entity replacement
+  updateEntity(entityId: string, updatedEntity: Entity): void;
+
   // Dimension editing
   applyDimensionValue(dimensionId: string, newValue: number): void;
 
@@ -467,6 +470,25 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
       },
     });
     return newEntities.map((e) => e.id);
+  },
+
+  updateEntity(entityId, updatedEntity) {
+    const { document } = get();
+    set({
+      document: {
+        ...document,
+        sketches: document.sketches.map((sk) =>
+          sk.id === document.activeSketchId
+            ? {
+                ...sk,
+                entities: propagateDerived(sk.entities.map((e) =>
+                  e.id === entityId ? updatedEntity : e,
+                )),
+              }
+            : sk,
+        ),
+      },
+    });
   },
 
   applyDimensionValue(dimensionId, newValue) {

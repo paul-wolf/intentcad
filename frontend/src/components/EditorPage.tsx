@@ -2,7 +2,7 @@ import { useMemo, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { Toolbar } from './Toolbar';
 import { StatusBar } from './StatusBar';
-import { SketchPanel } from './SketchPanel';
+import { RightPanel } from './RightPanel';
 import { DocumentDrawer } from './DocumentDrawer';
 import { CanvasContainer } from '@/canvas/CanvasContainer';
 import { useEditorStore } from '@/stores/editorStore';
@@ -118,7 +118,7 @@ export function EditorPage() {
       <div style={styles.middle}>
         {drawerOpen && <DocumentDrawer />}
         <CanvasContainer activeTool={toolInstance} docId={id} />
-        <SketchPanel />
+        <RightPanel />
       </div>
       <StatusBar />
     </div>
