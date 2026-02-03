@@ -16,6 +16,7 @@ export class Canvas2DRenderer implements Renderer {
 
   drawLine(a: Point, b: Point, style: LineStyle): void {
     const { ctx } = this;
+    if (style.dash) ctx.setLineDash(style.dash);
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
@@ -29,15 +30,18 @@ export class Canvas2DRenderer implements Renderer {
     } else {
       ctx.stroke();
     }
+    if (style.dash) ctx.setLineDash([]);
   }
 
   drawCircle(center: Point, radius: number, style: LineStyle): void {
     const { ctx } = this;
+    if (style.dash) ctx.setLineDash(style.dash);
     ctx.beginPath();
     ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
     ctx.strokeStyle = style.color;
     ctx.lineWidth = style.width;
     ctx.stroke();
+    if (style.dash) ctx.setLineDash([]);
   }
 
   fillCircle(center: Point, radius: number, color: string): void {

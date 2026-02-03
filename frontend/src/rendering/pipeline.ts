@@ -1,4 +1,4 @@
-import type { Renderer, Viewport } from '@/types/renderer';
+import type { Renderer, Viewport, LineStyle } from '@/types/renderer';
 import type { Document, Entity } from '@/types/document';
 import type { Tool } from '@/tools/types';
 import type { ThemePalette } from '@/theme';
@@ -121,7 +121,10 @@ function renderGhostedSketches(ctx: RenderContext) {
     if (sketch.id === doc.activeSketchId || !sketch.visible) continue;
     renderer.setGlobalAlpha(GHOSTED_OPACITY);
     for (const entity of sketch.entities) {
-      renderEntity(renderer, viewport, entity, styles.ghosted);
+      const ghostStyle: LineStyle = 'construction' in entity && entity.construction
+        ? { ...styles.ghosted, dash: [6, 4] }
+        : styles.ghosted;
+      renderEntity(renderer, viewport, entity, ghostStyle);
     }
     renderer.resetGlobalAlpha();
   }
@@ -138,12 +141,16 @@ function renderActiveSketch(ctx: RenderContext) {
     const isSelected = selectedEntityIds.has(entity.id);
     switch (entity.type) {
       case 'line': {
-        const style = isSelected ? styles.lineSelected : styles.line;
+        const style = entity.construction
+          ? (isSelected ? styles.constructionSelected : styles.construction)
+          : (isSelected ? styles.lineSelected : styles.line);
         renderEntity(renderer, viewport, entity, style);
         break;
       }
       case 'circle': {
-        const style = isSelected ? styles.lineSelected : styles.line;
+        const style = entity.construction
+          ? (isSelected ? styles.constructionSelected : styles.construction)
+          : (isSelected ? styles.lineSelected : styles.line);
         const screenCenter = viewport.worldToScreen(entity.center);
         const screenRadius = entity.radius * viewport.scale;
         renderer.drawCircle(screenCenter, screenRadius, style);
@@ -151,7 +158,9 @@ function renderActiveSketch(ctx: RenderContext) {
         break;
       }
       case 'rectangle': {
-        const style = isSelected ? styles.lineSelected : styles.line;
+        const style = entity.construction
+          ? (isSelected ? styles.constructionSelected : styles.construction)
+          : (isSelected ? styles.lineSelected : styles.line);
         renderEntity(renderer, viewport, entity, style);
         break;
       }
@@ -233,7 +242,7 @@ function renderEntity(
   renderer: Renderer,
   viewport: Viewport,
   entity: Entity,
-  style: { color: string; width: number },
+  style: LineStyle,
 ) {
   switch (entity.type) {
     case 'line': {

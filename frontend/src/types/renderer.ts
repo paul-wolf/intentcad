@@ -13,6 +13,7 @@ export interface LineStyle {
   color: string;
   width: number;
   opacity?: number;
+  dash?: number[];
 }
 
 export interface TextStyle {

@@ -85,6 +85,7 @@ export function exportDocumentToDxf(doc: Document): string {
 
   for (const sketch of visibleSketches) {
     for (const entity of sketch.entities) {
+      if ('construction' in entity && entity.construction) continue;
       if (entity.type === 'line') {
         for (let i = 0; i < entity.points.length - 1; i++) {
           const p1 = entity.points[i]!;

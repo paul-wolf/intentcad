@@ -7,6 +7,7 @@ export interface LineEntity {
   id: string;
   type: 'line';
   points: Point[];
+  construction?: boolean;
 }
 
 export interface CircleEntity {
@@ -14,6 +15,7 @@ export interface CircleEntity {
   type: 'circle';
   center: Point;
   radius: number;
+  construction?: boolean;
 }
 
 export interface RectangleEntity {
@@ -22,6 +24,7 @@ export interface RectangleEntity {
   center: Point;
   width: number;
   height: number;
+  construction?: boolean;
 }
 
 export interface DimensionEntity {

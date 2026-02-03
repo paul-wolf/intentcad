@@ -5,6 +5,8 @@ import type { LineStyle, TextStyle } from '@/types/renderer';
 export interface ThemeStyles {
   line: LineStyle;
   lineSelected: LineStyle;
+  construction: LineStyle;
+  constructionSelected: LineStyle;
   ghosted: LineStyle;
   preview: LineStyle;
   gridMinor: LineStyle;
@@ -20,6 +22,8 @@ export function getStyles(palette: ThemePalette): ThemeStyles {
   return {
     line: { color: palette.line, width: STROKES.line },
     lineSelected: { color: palette.lineSelected, width: STROKES.lineSelected },
+    construction: { color: palette.line, width: STROKES.line, dash: [6, 4] },
+    constructionSelected: { color: palette.lineSelected, width: STROKES.lineSelected, dash: [6, 4] },
     ghosted: { color: palette.ghosted, width: STROKES.ghosted },
     preview: { color: palette.preview, width: STROKES.preview },
     gridMinor: { color: palette.gridMinor, width: STROKES.grid },

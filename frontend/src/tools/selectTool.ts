@@ -191,6 +191,13 @@ export function createSelectTool(): Tool {
         useEditorStore.getState().clearSelection();
         resetDrag();
       }
+      if (e.key === 'x' || e.key === 'X') {
+        const ids = useEditorStore.getState().selectedEntityIds;
+        if (ids.size > 0) {
+          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().toggleConstruction([...ids]);
+        }
+      }
       if (e.key === 'Delete' || e.key === 'Backspace') {
         const ids = useEditorStore.getState().selectedEntityIds;
         if (ids.size > 0) {

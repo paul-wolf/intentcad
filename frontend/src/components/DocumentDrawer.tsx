@@ -5,7 +5,7 @@ import { useUIStateStore } from '@/stores/uiStateStore';
 import { useThemeStore } from '@/theme';
 import { createEmptyDocument, migrateDocument } from '@/utils/document';
 import { api, type DocumentListItem } from '@/api/client';
-import { setBackendId, getBackendId } from '@/api/autoSave';
+import { setBackendId, getBackendId, flushSave } from '@/api/autoSave';
 import type { Document } from '@/types/document';
 
 export function DocumentDrawer() {
@@ -37,6 +37,7 @@ export function DocumentDrawer() {
 
   const handleOpen = async (id: string) => {
     try {
+      flushSave();
       const full = await api.getDocument(id);
       setDocument(migrateDocument(full.data as unknown as Document));
       setBackendId(full.id);
@@ -47,6 +48,7 @@ export function DocumentDrawer() {
   };
 
   const handleNew = async () => {
+    flushSave();
     const doc = createEmptyDocument('Untitled');
     setDocument(doc);
     try {

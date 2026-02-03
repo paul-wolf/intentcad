@@ -31,6 +31,9 @@ interface DocumentStore {
   movePoint(entityId: string, pointIndex: number, delta: Point): void;
   extendPolyline(entityId: string, point: Point, end: 'start' | 'end'): void;
 
+  // Construction toggle
+  toggleConstruction(entityIds: string[]): void;
+
   // Dimension editing
   applyDimensionValue(dimensionId: string, newValue: number): void;
 
@@ -248,6 +251,30 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                         ? [point, ...e.points]
                         : [...e.points, point],
                   };
+                }),
+              }
+            : sk,
+        ),
+      },
+    });
+  },
+
+  toggleConstruction(entityIds) {
+    const idSet = new Set(entityIds);
+    const { document } = get();
+    set({
+      document: {
+        ...document,
+        sketches: document.sketches.map((sk) =>
+          sk.id === document.activeSketchId
+            ? {
+                ...sk,
+                entities: sk.entities.map((e) => {
+                  if (!idSet.has(e.id)) return e;
+                  if (e.type === 'line' || e.type === 'circle' || e.type === 'rectangle') {
+                    return { ...e, construction: !e.construction };
+                  }
+                  return e;
                 }),
               }
             : sk,

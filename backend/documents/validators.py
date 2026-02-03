@@ -25,6 +25,24 @@ def validate_entity(obj: object) -> list[str]:
         else:
             for i, pt in enumerate(points):
                 errors.extend([f"Entity.points[{i}]: {e}" for e in validate_point(pt)])
+    elif obj.get("type") == "circle":
+        center = obj.get("center")
+        if not isinstance(center, dict):
+            errors.append("Entity.center must be a Point object")
+        else:
+            errors.extend([f"Entity.center: {e}" for e in validate_point(center)])
+        if "radius" not in obj or not isinstance(obj["radius"], (int, float)):
+            errors.append("Entity.radius must be a number")
+    elif obj.get("type") == "rectangle":
+        center = obj.get("center")
+        if not isinstance(center, dict):
+            errors.append("Entity.center must be a Point object")
+        else:
+            errors.extend([f"Entity.center: {e}" for e in validate_point(center)])
+        if "width" not in obj or not isinstance(obj["width"], (int, float)):
+            errors.append("Entity.width must be a number")
+        if "height" not in obj or not isinstance(obj["height"], (int, float)):
+            errors.append("Entity.height must be a number")
     elif obj.get("type") == "dimension":
         if "targetEntityId" not in obj or not isinstance(obj["targetEntityId"], str):
             errors.append("Entity.targetEntityId must be a string")
