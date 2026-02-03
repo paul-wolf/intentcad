@@ -41,6 +41,7 @@ export function createSelectTool(): Tool {
   };
 
   return {
+    cursor: 'default',
     onMouseDown(worldPos: Point, screenPos: Point, ctx: ToolContext) {
       // Pick-center mode for circular copy
       const editorState = useEditorStore.getState();

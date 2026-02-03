@@ -8,6 +8,7 @@ export interface ToolContext {
 }
 
 export interface Tool {
+  cursor?: string;
   onMouseDown?(worldPos: Point, screenPos: Point, ctx: ToolContext): void;
   onMouseMove?(worldPos: Point, screenPos: Point, ctx: ToolContext): void;
   onMouseUp?(worldPos: Point, screenPos: Point, ctx: ToolContext): void;

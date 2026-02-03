@@ -321,7 +321,7 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
     >
       <canvas
         ref={canvasRef}
-        style={{ display: 'block', cursor: 'crosshair' }}
+        style={{ display: 'block', cursor: activeTool?.cursor ?? 'crosshair' }}
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}
         onMouseUp={onMouseUp}
