@@ -432,6 +432,15 @@ export function createSelectTool(): Tool {
           requestSave();
         }
       }
+      if (e.key === 'n' || e.key === 'N') {
+        const es = useEditorStore.getState();
+        const selSegs = es.selectedSegments;
+        if (selSegs.length === 2) {
+          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().toggleParallel(selSegs[0]!, selSegs[1]!);
+          requestSave();
+        }
+      }
       if (e.key === 'i' || e.key === 'I') {
         const es = useEditorStore.getState();
         const selPts = es.selectedPoints;

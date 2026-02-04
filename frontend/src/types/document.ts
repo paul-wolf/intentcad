@@ -103,7 +103,16 @@ export interface MidpointConstraint {
   segmentIndex: number;   // which segment's midpoint
 }
 
-export type Constraint = FixedConstraint | EqualConstraint | CoincidentConstraint | HorizontalConstraint | VerticalConstraint | MidpointConstraint;
+export interface ParallelConstraint {
+  id: string;
+  type: 'parallel';
+  entityId: string;        // reference entity (angle source)
+  segmentIndex: number;    // which segment on reference entity
+  targetEntityId: string;  // entity that adjusts
+  targetSegmentIndex: number; // which segment adjusts
+}
+
+export type Constraint = FixedConstraint | EqualConstraint | CoincidentConstraint | HorizontalConstraint | VerticalConstraint | MidpointConstraint | ParallelConstraint;
 
 export interface Sketch {
   id: string;

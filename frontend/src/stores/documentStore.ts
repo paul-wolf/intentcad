@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Document, Entity, Point, Sketch, Constraint, EqualConstraint, CoincidentConstraint, HorizontalConstraint, VerticalConstraint, MidpointConstraint, LineEntity } from '@/types/document';
+import type { Document, Entity, Point, Sketch, Constraint, EqualConstraint, CoincidentConstraint, HorizontalConstraint, VerticalConstraint, MidpointConstraint, ParallelConstraint, LineEntity } from '@/types/document';
 import { createEmptyDocument, createEmptySketch } from '@/utils/document';
 import { createMirroredEntity, createRotatedEntity, createTranslatedEntity, propagateDerived } from '@/utils/propagate';
 import { rotatePoint } from '@/utils/geometry';
@@ -206,6 +206,55 @@ function enforceMidpoint(entities: Entity[], constraints: Constraint[]): Entity[
   return entities.map((e) => entityMap.get(e.id) ?? e);
 }
 
+/** Enforce parallel constraints: rotate target entities so their segments match reference segment angles. */
+function enforceParallel(entities: Entity[], constraints: Constraint[]): Entity[] {
+  const parallelConstraints = constraints.filter((c): c is ParallelConstraint => c.type === 'parallel');
+  if (parallelConstraints.length === 0) return entities;
+
+  const entityMap = new Map(entities.map((e) => [e.id, e]));
+
+  for (const c of parallelConstraints) {
+    const refEntity = entityMap.get(c.entityId);
+    const tgtEntity = entityMap.get(c.targetEntityId);
+    if (!refEntity || !tgtEntity) continue;
+
+    const refEndpoints = getSegmentEndpoints(refEntity, c.segmentIndex);
+    const tgtEndpoints = getSegmentEndpoints(tgtEntity, c.targetSegmentIndex);
+    if (!refEndpoints || !tgtEndpoints) continue;
+
+    const refAngle = Math.atan2(refEndpoints[1].y - refEndpoints[0].y, refEndpoints[1].x - refEndpoints[0].x);
+    const tgtAngle = Math.atan2(tgtEndpoints[1].y - tgtEndpoints[0].y, tgtEndpoints[1].x - tgtEndpoints[0].x);
+
+    // Pick closer of same-direction or opposite-direction
+    let delta1 = refAngle - tgtAngle;
+    let delta2 = refAngle + Math.PI - tgtAngle;
+    // Normalize to [-PI, PI]
+    delta1 = ((delta1 + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+    delta2 = ((delta2 + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+    const delta = Math.abs(delta1) <= Math.abs(delta2) ? delta1 : delta2;
+
+    if (Math.abs(delta) < 1e-9) continue;
+
+    if (tgtEntity.type === 'line' && (tgtEntity as LineEntity).polygonCenter) {
+      const center = (tgtEntity as LineEntity).polygonCenter!;
+      entityMap.set(c.targetEntityId, {
+        ...tgtEntity,
+        points: (tgtEntity as LineEntity).points.map((p) => rotatePoint(p, center, delta)),
+      } as LineEntity);
+    } else if (tgtEntity.type === 'line') {
+      const tA = tgtEndpoints[0];
+      const len = Math.sqrt((tgtEndpoints[1].x - tA.x) ** 2 + (tgtEndpoints[1].y - tA.y) ** 2);
+      const newAngle = tgtAngle + delta;
+      const newB = { x: tA.x + Math.cos(newAngle) * len, y: tA.y + Math.sin(newAngle) * len };
+      const newPoints = [...(tgtEntity as LineEntity).points];
+      newPoints[c.targetSegmentIndex + 1] = newB;
+      entityMap.set(c.targetEntityId, { ...tgtEntity, points: newPoints } as LineEntity);
+    }
+  }
+
+  return entities.map((e) => entityMap.get(e.id) ?? e);
+}
+
 /** Rotate a polygon so that the segment at segmentIndex becomes horizontal or vertical. */
 function snapPolygonForHV(entity: LineEntity, segmentIndex: number, type: 'horizontal' | 'vertical'): LineEntity {
   if (!entity.polygonCenter) return entity;
@@ -318,6 +367,7 @@ interface DocumentStore {
   toggleCoincident(entityIds: string[]): void;
   toggleCoincidentWithPoints(pt1: SelectedPoint, pt2: SelectedPoint): void;
   toggleMidpoint(point: SelectedPoint, segment: {entityId: string, segmentIndex: number}): void;
+  toggleParallel(seg1: {entityId: string, segmentIndex: number}, seg2: {entityId: string, segmentIndex: number}): void;
   toggleHorizontal(entityIds: string[], segments?: {entityId: string, segmentIndex: number}[]): void;
   toggleVertical(entityIds: string[], segments?: {entityId: string, segmentIndex: number}[]): void;
 
@@ -497,7 +547,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           sk.id === document.activeSketchId
             ? {
                 ...sk,
-                entities: propagateDerived(enforceHorizontalVertical(enforceMidpoint(enforceCoincident(sk.entities.map((e) => {
+                entities: propagateDerived(enforceHorizontalVertical(enforceParallel(enforceMidpoint(enforceCoincident(sk.entities.map((e) => {
                   if (!idSet.has(e.id)) return e;
                   if ('sourceId' in e && e.sourceId) return e; // locked
                   if (e.type === 'line') {
@@ -543,7 +593,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                     };
                   }
                   return e;
-                }), sk.constraints, idSet), sk.constraints), sk.constraints)),
+                }), sk.constraints, idSet), sk.constraints), sk.constraints), sk.constraints)),
               }
             : sk,
         ),
@@ -560,7 +610,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           sk.id === document.activeSketchId
             ? {
                 ...sk,
-                entities: propagateDerived(enforceHorizontalVertical(enforceMidpoint(enforceCoincident(sk.entities.map((e) => {
+                entities: propagateDerived(enforceHorizontalVertical(enforceParallel(enforceMidpoint(enforceCoincident(sk.entities.map((e) => {
                   if (e.id !== entityId || e.type !== 'line') return e;
                   if (e.sourceId) return e; // locked
                   // Polygon: translate rigidly to preserve regular shape
@@ -585,7 +635,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                         : p,
                     ),
                   };
-                }), sk.constraints, new Set([entityId])), sk.constraints), sk.constraints)),
+                }), sk.constraints, new Set([entityId])), sk.constraints), sk.constraints), sk.constraints)),
               }
             : sk,
         ),
@@ -602,7 +652,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           sk.id === document.activeSketchId
             ? {
                 ...sk,
-                entities: propagateDerived(enforceHorizontalVertical(enforceMidpoint(enforceCoincident(sk.entities.map((e) => {
+                entities: propagateDerived(enforceHorizontalVertical(enforceParallel(enforceMidpoint(enforceCoincident(sk.entities.map((e) => {
                   if (e.id !== entityId || e.type !== 'line') return e;
                   if (e.sourceId) return e; // locked
                   if (!e.polygonCenter) return e;
@@ -611,7 +661,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                     ...e,
                     points: e.points.map((p) => rotatePoint(p, center, angleDelta)),
                   };
-                }), sk.constraints, new Set([entityId])), sk.constraints), sk.constraints)),
+                }), sk.constraints, new Set([entityId])), sk.constraints), sk.constraints), sk.constraints)),
               }
             : sk,
         ),
@@ -1085,6 +1135,64 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                   entities: snapped
                     ? propagateDerived(sk.entities.map((e) => (e.id === point.entityId ? snapped : e)))
                     : sk.entities,
+                }
+              : sk,
+          ),
+        },
+      });
+    }
+  },
+
+  toggleParallel(seg1, seg2) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return;
+
+    // Check if a parallel constraint already exists between these two segments (either direction)
+    const existing = sketch.constraints.find((c) =>
+      c.type === 'parallel' &&
+      ((c.entityId === seg1.entityId && c.segmentIndex === seg1.segmentIndex &&
+        c.targetEntityId === seg2.entityId && c.targetSegmentIndex === seg2.segmentIndex) ||
+       (c.entityId === seg2.entityId && c.segmentIndex === seg2.segmentIndex &&
+        c.targetEntityId === seg1.entityId && c.targetSegmentIndex === seg1.segmentIndex)),
+    );
+
+    if (existing) {
+      // Remove it
+      set({
+        document: {
+          ...document,
+          sketches: document.sketches.map((sk) =>
+            sk.id === document.activeSketchId
+              ? { ...sk, constraints: sk.constraints.filter((c) => c.id !== existing.id) }
+              : sk,
+          ),
+        },
+      });
+    } else {
+      // Add constraint with seg1 as reference, seg2 as target, and snap immediately
+      const constraint: Constraint = {
+        id: crypto.randomUUID(),
+        type: 'parallel',
+        entityId: seg1.entityId,
+        segmentIndex: seg1.segmentIndex,
+        targetEntityId: seg2.entityId,
+        targetSegmentIndex: seg2.segmentIndex,
+      };
+
+      // Snap target segment to be parallel immediately
+      const newConstraints = [...sketch.constraints, constraint];
+      const snapped = enforceParallel(sketch.entities, newConstraints);
+
+      set({
+        document: {
+          ...document,
+          sketches: document.sketches.map((sk) =>
+            sk.id === document.activeSketchId
+              ? {
+                  ...sk,
+                  constraints: newConstraints,
+                  entities: propagateDerived(snapped),
                 }
               : sk,
           ),
