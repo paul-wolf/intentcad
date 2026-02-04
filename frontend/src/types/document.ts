@@ -121,7 +121,16 @@ export interface PerpendicularConstraint {
   targetSegmentIndex: number; // which segment adjusts
 }
 
-export type Constraint = FixedConstraint | EqualConstraint | CoincidentConstraint | HorizontalConstraint | VerticalConstraint | MidpointConstraint | ParallelConstraint | PerpendicularConstraint;
+export interface TangentConstraint {
+  id: string;
+  type: 'tangent';
+  entityId: string;           // reference entity (stays fixed)
+  segmentIndex: number;       // segment on reference (-1 for circle)
+  targetEntityId: string;     // entity that adjusts
+  targetSegmentIndex: number; // segment on target (-1 for circle)
+}
+
+export type Constraint = FixedConstraint | EqualConstraint | CoincidentConstraint | HorizontalConstraint | VerticalConstraint | MidpointConstraint | ParallelConstraint | PerpendicularConstraint | TangentConstraint;
 
 export interface Sketch {
   id: string;

@@ -10,7 +10,7 @@ import { requestSave } from '@/api/autoSave';
 import type { ToolType } from '@/types/editor';
 
 const TOOLS: { type: ToolType; label: string; shortcut: string }[] = [
-  { type: 'select', label: 'Select', shortcut: 'V — X construction, K fix, = equal, J coincident, H horiz, V vert, I midpoint, N parallel, T perpendicular, M mirror, A circular, G grid' },
+  { type: 'select', label: 'Select', shortcut: 'V — X construction, K fix, = equal, J coincident, H horiz, V vert, I midpoint, N parallel, T perpendicular, Y tangent, M mirror, A circular, G grid' },
   { type: 'line', label: 'Line', shortcut: 'l' },
   { type: 'point', label: 'Point', shortcut: '.' },
   { type: 'circle', label: 'Circle', shortcut: 'c' },
@@ -279,6 +279,46 @@ export function Toolbar() {
         title="Perpendicular constraint — force two segments perpendicular (T)"
       >
         Perp
+      </button>
+      <button
+        onClick={() => {
+          const es = useEditorStore.getState();
+          const selSegs = es.selectedSegments;
+          const ids = es.selectedEntityIds;
+          const activeSketch = useDocumentStore.getState().getActiveSketch();
+          if (!activeSketch) return;
+          if (selSegs.length === 1 && ids.size === 2) {
+            const segEntityId = selSegs[0]!.entityId;
+            const otherIds = [...ids].filter((id) => id !== segEntityId);
+            if (otherIds.length === 1) {
+              const otherEntity = activeSketch.entities.find((ent) => ent.id === otherIds[0]!);
+              if (otherEntity && otherEntity.type === 'circle') {
+                useDocumentStore.getState().beginTransaction();
+                useDocumentStore.getState().toggleTangent(segEntityId, selSegs[0]!.segmentIndex, otherIds[0]!, -1);
+              }
+            }
+          } else if (ids.size === 2 && selSegs.length === 0) {
+            const idArr = [...ids];
+            const e1 = activeSketch.entities.find((ent) => ent.id === idArr[0]!);
+            const e2 = activeSketch.entities.find((ent) => ent.id === idArr[1]!);
+            if (e1 && e2 && e1.type === 'circle' && e2.type === 'circle') {
+              useDocumentStore.getState().beginTransaction();
+              useDocumentStore.getState().toggleTangent(idArr[0]!, -1, idArr[1]!, -1);
+            }
+          }
+        }}
+        style={{
+          padding: '4px 12px',
+          border: `1px solid ${palette.inputBorder}`,
+          borderRadius: '4px',
+          background: palette.buttonBg,
+          color: palette.text,
+          cursor: 'pointer',
+          fontSize: '13px',
+        }}
+        title="Tangent constraint — force line/circle tangency (Y)"
+      >
+        Tangent
       </button>
       <button
         onClick={() => {

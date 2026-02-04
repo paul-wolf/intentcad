@@ -460,6 +460,37 @@ export function createSelectTool(): Tool {
           requestSave();
         }
       }
+      if (e.key === 'y' || e.key === 'Y') {
+        const es = useEditorStore.getState();
+        const selSegs = es.selectedSegments;
+        const ids = es.selectedEntityIds;
+        const activeSketch = useDocumentStore.getState().getActiveSketch();
+        if (activeSketch) {
+          if (selSegs.length === 1 && ids.size === 2) {
+            // Line-circle: one segment selected, two entities, the non-segment entity is a circle
+            const segEntityId = selSegs[0]!.entityId;
+            const otherIds = [...ids].filter((id) => id !== segEntityId);
+            if (otherIds.length === 1) {
+              const otherEntity = activeSketch.entities.find((ent) => ent.id === otherIds[0]!);
+              if (otherEntity && otherEntity.type === 'circle') {
+                useDocumentStore.getState().beginTransaction();
+                useDocumentStore.getState().toggleTangent(segEntityId, selSegs[0]!.segmentIndex, otherIds[0]!, -1);
+                requestSave();
+              }
+            }
+          } else if (ids.size === 2 && selSegs.length === 0) {
+            // Circle-circle: two entities selected, no segments, both circles
+            const idArr = [...ids];
+            const e1 = activeSketch.entities.find((ent) => ent.id === idArr[0]!);
+            const e2 = activeSketch.entities.find((ent) => ent.id === idArr[1]!);
+            if (e1 && e2 && e1.type === 'circle' && e2.type === 'circle') {
+              useDocumentStore.getState().beginTransaction();
+              useDocumentStore.getState().toggleTangent(idArr[0]!, -1, idArr[1]!, -1);
+              requestSave();
+            }
+          }
+        }
+      }
       if (e.key === 'x' || e.key === 'X') {
         const ids = useEditorStore.getState().selectedEntityIds;
         if (ids.size > 0) {
