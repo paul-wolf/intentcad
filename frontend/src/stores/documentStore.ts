@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Document, Entity, Point, Sketch, Constraint, EqualConstraint, CoincidentConstraint, HorizontalConstraint, VerticalConstraint, LineEntity } from '@/types/document';
+import type { Document, Entity, Point, Sketch, Constraint, EqualConstraint, CoincidentConstraint, HorizontalConstraint, VerticalConstraint, MidpointConstraint, LineEntity } from '@/types/document';
 import { createEmptyDocument, createEmptySketch } from '@/utils/document';
 import { createMirroredEntity, createRotatedEntity, createTranslatedEntity, propagateDerived } from '@/utils/propagate';
 import { rotatePoint } from '@/utils/geometry';
@@ -151,6 +151,61 @@ function enforceCoincident(entities: Entity[], constraints: Constraint[], movedI
   return entities.map((e) => entityMap.get(e.id) ?? e);
 }
 
+/** Get the two endpoints of a segment on an entity. */
+function getSegmentEndpoints(entity: Entity, segmentIndex: number): [Point, Point] | null {
+  if (entity.type === 'line') {
+    const a = entity.points[segmentIndex];
+    const b = entity.points[segmentIndex + 1];
+    if (!a || !b) return null;
+    return [a, b];
+  }
+  if (entity.type === 'rectangle') {
+    const hw = entity.width / 2;
+    const hh = entity.height / 2;
+    const c = entity.center;
+    const corners: Point[] = [
+      { x: c.x - hw, y: c.y + hh }, // TL
+      { x: c.x + hw, y: c.y + hh }, // TR
+      { x: c.x + hw, y: c.y - hh }, // BR
+      { x: c.x - hw, y: c.y - hh }, // BL
+    ];
+    const a = corners[segmentIndex];
+    const b = corners[(segmentIndex + 1) % 4];
+    if (!a || !b) return null;
+    return [a, b];
+  }
+  return null;
+}
+
+/** Enforce midpoint constraints: move constrained points to the midpoint of target segments. */
+function enforceMidpoint(entities: Entity[], constraints: Constraint[]): Entity[] {
+  const midpointConstraints = constraints.filter((c): c is MidpointConstraint => c.type === 'midpoint');
+  if (midpointConstraints.length === 0) return entities;
+
+  const entityMap = new Map(entities.map((e) => [e.id, e]));
+
+  for (const c of midpointConstraints) {
+    const target = entityMap.get(c.targetEntityId);
+    const source = entityMap.get(c.entityId);
+    if (!target || !source) continue;
+
+    const endpoints = getSegmentEndpoints(target, c.segmentIndex);
+    if (!endpoints) continue;
+
+    const midpoint: Point = {
+      x: (endpoints[0].x + endpoints[1].x) / 2,
+      y: (endpoints[0].y + endpoints[1].y) / 2,
+    };
+
+    const updated = setEntityPoint(source, c.pointIndex, midpoint);
+    if (updated) {
+      entityMap.set(c.entityId, updated);
+    }
+  }
+
+  return entities.map((e) => entityMap.get(e.id) ?? e);
+}
+
 /** Rotate a polygon so that the segment at segmentIndex becomes horizontal or vertical. */
 function snapPolygonForHV(entity: LineEntity, segmentIndex: number, type: 'horizontal' | 'vertical'): LineEntity {
   if (!entity.polygonCenter) return entity;
@@ -262,6 +317,7 @@ interface DocumentStore {
   toggleEqual(entityIds: string[]): void;
   toggleCoincident(entityIds: string[]): void;
   toggleCoincidentWithPoints(pt1: SelectedPoint, pt2: SelectedPoint): void;
+  toggleMidpoint(point: SelectedPoint, segment: {entityId: string, segmentIndex: number}): void;
   toggleHorizontal(entityIds: string[], segments?: {entityId: string, segmentIndex: number}[]): void;
   toggleVertical(entityIds: string[], segments?: {entityId: string, segmentIndex: number}[]): void;
 
@@ -441,7 +497,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           sk.id === document.activeSketchId
             ? {
                 ...sk,
-                entities: propagateDerived(enforceHorizontalVertical(enforceCoincident(sk.entities.map((e) => {
+                entities: propagateDerived(enforceHorizontalVertical(enforceMidpoint(enforceCoincident(sk.entities.map((e) => {
                   if (!idSet.has(e.id)) return e;
                   if ('sourceId' in e && e.sourceId) return e; // locked
                   if (e.type === 'line') {
@@ -487,7 +543,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                     };
                   }
                   return e;
-                }), sk.constraints, idSet), sk.constraints)),
+                }), sk.constraints, idSet), sk.constraints), sk.constraints)),
               }
             : sk,
         ),
@@ -504,7 +560,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           sk.id === document.activeSketchId
             ? {
                 ...sk,
-                entities: propagateDerived(enforceHorizontalVertical(enforceCoincident(sk.entities.map((e) => {
+                entities: propagateDerived(enforceHorizontalVertical(enforceMidpoint(enforceCoincident(sk.entities.map((e) => {
                   if (e.id !== entityId || e.type !== 'line') return e;
                   if (e.sourceId) return e; // locked
                   // Polygon: translate rigidly to preserve regular shape
@@ -529,7 +585,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                         : p,
                     ),
                   };
-                }), sk.constraints, new Set([entityId])), sk.constraints)),
+                }), sk.constraints, new Set([entityId])), sk.constraints), sk.constraints)),
               }
             : sk,
         ),
@@ -546,7 +602,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           sk.id === document.activeSketchId
             ? {
                 ...sk,
-                entities: propagateDerived(enforceHorizontalVertical(enforceCoincident(sk.entities.map((e) => {
+                entities: propagateDerived(enforceHorizontalVertical(enforceMidpoint(enforceCoincident(sk.entities.map((e) => {
                   if (e.id !== entityId || e.type !== 'line') return e;
                   if (e.sourceId) return e; // locked
                   if (!e.polygonCenter) return e;
@@ -555,7 +611,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                     ...e,
                     points: e.points.map((p) => rotatePoint(p, center, angleDelta)),
                   };
-                }), sk.constraints, new Set([entityId])), sk.constraints)),
+                }), sk.constraints, new Set([entityId])), sk.constraints), sk.constraints)),
               }
             : sk,
         ),
@@ -959,6 +1015,75 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                   constraints: [...sk.constraints, constraint],
                   entities: snapped
                     ? propagateDerived(sk.entities.map((e) => (e.id === pt2.entityId ? snapped : e)))
+                    : sk.entities,
+                }
+              : sk,
+          ),
+        },
+      });
+    }
+  },
+
+  toggleMidpoint(point, segment) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return;
+
+    // Check if a midpoint constraint already exists between this point and segment
+    const existing = sketch.constraints.find((c) =>
+      c.type === 'midpoint' &&
+      c.entityId === point.entityId &&
+      c.pointIndex === point.pointIndex &&
+      c.targetEntityId === segment.entityId &&
+      c.segmentIndex === segment.segmentIndex,
+    );
+
+    if (existing) {
+      // Remove it
+      set({
+        document: {
+          ...document,
+          sketches: document.sketches.map((sk) =>
+            sk.id === document.activeSketchId
+              ? { ...sk, constraints: sk.constraints.filter((c) => c.id !== existing.id) }
+              : sk,
+          ),
+        },
+      });
+    } else {
+      // Add constraint and snap the point to the midpoint immediately
+      const entity = sketch.entities.find((e) => e.id === point.entityId);
+      const target = sketch.entities.find((e) => e.id === segment.entityId);
+      if (!entity || !target) return;
+
+      const endpoints = getSegmentEndpoints(target, segment.segmentIndex);
+      if (!endpoints) return;
+
+      const midpoint: Point = {
+        x: (endpoints[0].x + endpoints[1].x) / 2,
+        y: (endpoints[0].y + endpoints[1].y) / 2,
+      };
+
+      const snapped = setEntityPoint(entity, point.pointIndex, midpoint);
+      const constraint: Constraint = {
+        id: crypto.randomUUID(),
+        type: 'midpoint',
+        entityId: point.entityId,
+        pointIndex: point.pointIndex,
+        targetEntityId: segment.entityId,
+        segmentIndex: segment.segmentIndex,
+      };
+
+      set({
+        document: {
+          ...document,
+          sketches: document.sketches.map((sk) =>
+            sk.id === document.activeSketchId
+              ? {
+                  ...sk,
+                  constraints: [...sk.constraints, constraint],
+                  entities: snapped
+                    ? propagateDerived(sk.entities.map((e) => (e.id === point.entityId ? snapped : e)))
                     : sk.entities,
                 }
               : sk,

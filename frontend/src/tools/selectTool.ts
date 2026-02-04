@@ -432,6 +432,16 @@ export function createSelectTool(): Tool {
           requestSave();
         }
       }
+      if (e.key === 'i' || e.key === 'I') {
+        const es = useEditorStore.getState();
+        const selPts = es.selectedPoints;
+        const selSegs = es.selectedSegments;
+        if (selPts.length === 1 && selSegs.length === 1) {
+          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().toggleMidpoint(selPts[0]!, selSegs[0]!);
+          requestSave();
+        }
+      }
       if (e.key === 'x' || e.key === 'X') {
         const ids = useEditorStore.getState().selectedEntityIds;
         if (ids.size > 0) {

@@ -94,7 +94,16 @@ export interface VerticalConstraint {
   segmentIndex: number;
 }
 
-export type Constraint = FixedConstraint | EqualConstraint | CoincidentConstraint | HorizontalConstraint | VerticalConstraint;
+export interface MidpointConstraint {
+  id: string;
+  type: 'midpoint';
+  entityId: string;       // entity whose point is constrained
+  pointIndex: number;     // which point on that entity
+  targetEntityId: string; // entity containing the segment
+  segmentIndex: number;   // which segment's midpoint
+}
+
+export type Constraint = FixedConstraint | EqualConstraint | CoincidentConstraint | HorizontalConstraint | VerticalConstraint | MidpointConstraint;
 
 export interface Sketch {
   id: string;

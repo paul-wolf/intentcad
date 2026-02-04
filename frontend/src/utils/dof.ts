@@ -77,6 +77,12 @@ export function computeSketchDoF(entities: Entity[], constraints: Constraint[] =
         dofMap.set(c.targetEntityId, Math.max(0, current - 2));
       }
     }
+    if (c.type === 'midpoint') {
+      const current = dofMap.get(c.entityId);
+      if (current !== undefined && current > 0) {
+        dofMap.set(c.entityId, Math.max(0, current - 2));
+      }
+    }
     if (c.type === 'horizontal' || c.type === 'vertical') {
       const current = dofMap.get(c.entityId);
       if (current !== undefined && current > 0) {
