@@ -5,6 +5,7 @@ import { createMirroredEntity, createRotatedEntity, createTranslatedEntity, prop
 import { rotatePoint } from '@/utils/geometry';
 import { getEntityPoint, setEntityPoint, getEntityPoints } from '@/utils/entityPoints';
 import { solveConstraints, validateConstraint } from '@/utils/constraintSolver';
+import { computeDerivedDimensionIds } from '@/utils/dof';
 import type { SelectedPoint } from '@/stores/editorStore';
 
 const UNDO_STACK_LIMIT = 100;
@@ -242,6 +243,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                 entities: sk.entities.filter((e) => {
                   if (idSet.has(e.id)) return false;
                   if (e.type === 'dimension' && idSet.has(e.targetEntityId)) return false;
+                  if (e.type === 'dimension' && e.targetEntityId2 && idSet.has(e.targetEntityId2)) return false;
                   return true;
                 }),
                 constraints: sk.constraints.filter((c) => !constraintReferencesAny(c, idSet)),
@@ -1197,8 +1199,92 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     if (!sketch) return;
     const dim = sketch.entities.find((e) => e.id === dimensionId);
     if (!dim || dim.type !== 'dimension') return;
+
+    // Reject edits on derived (driven) dimensions
+    const derivedIds = computeDerivedDimensionIds(sketch.entities, sketch.constraints);
+    if (derivedIds.has(dim.id)) return;
+
     const target = sketch.entities.find((e) => e.id === dim.targetEntityId);
     if (!target) return;
+
+    // Two-segment distance dimension
+    if (dim.targetEntityId2 != null) {
+      const target2 = sketch.entities.find((e) => e.id === dim.targetEntityId2);
+      if (!target2 || target.type !== 'line' || target2.type !== 'line') return;
+      const idx1 = dim.segmentIndex;
+      const idx2 = dim.segmentIndex2!;
+      if (idx1 < 0 || idx1 >= target.points.length - 1) return;
+      if (idx2 < 0 || idx2 >= target2.points.length - 1) return;
+      const p1 = target.points[idx1]!;
+      const p2 = target.points[idx1 + 1]!;
+      const q1 = target2.points[idx2]!;
+      const q2 = target2.points[idx2 + 1]!;
+      const a = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+      const dx = q2.x - q1.x;
+      const dy = q2.y - q1.y;
+      const lenSq = dx * dx + dy * dy;
+      if (lenSq === 0) return;
+      const t = ((a.x - q1.x) * dx + (a.y - q1.y) * dy) / lenSq;
+      const b = { x: q1.x + t * dx, y: q1.y + t * dy };
+      const dist = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
+      if (dist === 0) return;
+      // Direction from target1's segment toward target2's segment
+      const nx = (b.x - a.x) / dist;
+      const ny = (b.y - a.y) / dist;
+      const delta = newValue - dist;
+
+      const target1Fixed = sketch.constraints.some((c) => c.type === 'fixed' && c.entityId === target.id);
+      const target2Fixed = sketch.constraints.some((c) => c.type === 'fixed' && c.entityId === target2.id);
+      if (target1Fixed && target2Fixed) return;
+
+      // Split movement symmetrically; if one is fixed the other takes the full delta
+      // target1 moves in -n direction (away from target2), target2 moves in +n direction
+      let move1 = -delta / 2;
+      let move2 = delta / 2;
+      if (target1Fixed) { move1 = 0; move2 = delta; }
+      if (target2Fixed) { move2 = 0; move1 = -delta; }
+
+      get().beginTransaction();
+
+      const movedIds = new Set<string>();
+      const updatedEntities = sketch.entities.map((e) => {
+        if (e.type !== 'line') return e;
+        if ('sourceId' in e && e.sourceId) return e;
+
+        // Only move the referenced segment's endpoints, not the whole entity
+        if (e.id === target.id && move1 !== 0) {
+          movedIds.add(e.id);
+          return {
+            ...e,
+            points: e.points.map((pt, i) =>
+              (i === idx1 || i === idx1 + 1)
+                ? { x: pt.x + nx * move1, y: pt.y + ny * move1 }
+                : pt,
+            ),
+          };
+        }
+        if (e.id === target2.id && move2 !== 0) {
+          movedIds.add(e.id);
+          return {
+            ...e,
+            points: e.points.map((pt, i) =>
+              (i === idx2 || i === idx2 + 1)
+                ? { x: pt.x + nx * move2, y: pt.y + ny * move2 }
+                : pt,
+            ),
+          };
+        }
+        return e;
+      });
+      const solved = solveConstraints(updatedEntities, sketch.constraints, { movedIds });
+      set({
+        document: updateActiveSketch(document, () => ({
+          entities: solved.entities,
+        })),
+      });
+      return;
+    }
+
     if ('sourceId' in target && target.sourceId) return; // locked
 
     get().beginTransaction();

@@ -150,6 +150,39 @@ export function hitTestEntities(
         (e) => e.id === entity.targetEntityId,
       );
       if (!target) continue;
+
+      // Two-segment distance dimension
+      if (entity.targetEntityId2 != null) {
+        const target2 = allEntities.find((e) => e.id === entity.targetEntityId2);
+        if (!target2 || target.type !== 'line' || target2.type !== 'line') continue;
+        const idx1 = entity.segmentIndex;
+        const idx2 = entity.segmentIndex2!;
+        if (idx1 < 0 || idx1 >= target.points.length - 1) continue;
+        if (idx2 < 0 || idx2 >= target2.points.length - 1) continue;
+        const p1 = target.points[idx1]!;
+        const p2 = target.points[idx1 + 1]!;
+        const q1 = target2.points[idx2]!;
+        const q2 = target2.points[idx2 + 1]!;
+        const a = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+        const dx2 = q2.x - q1.x;
+        const dy2 = q2.y - q1.y;
+        const lenSq = dx2 * dx2 + dy2 * dy2;
+        if (lenSq === 0) continue;
+        const t = ((a.x - q1.x) * dx2 + (a.y - q1.y) * dy2) / lenSq;
+        const b = { x: q1.x + t * dx2, y: q1.y + t * dy2 };
+        const perp2 = perpDir(a, b);
+        const oa: Point = { x: a.x + perp2.x * entity.offset, y: a.y + perp2.y * entity.offset };
+        const ob: Point = { x: b.x + perp2.x * entity.offset, y: b.y + perp2.y * entity.offset };
+        const sa = viewport.worldToScreen(oa);
+        const sb = viewport.worldToScreen(ob);
+        const d = pointToSegmentDist(screenPos, sa, sb);
+        if (d < bestDist) {
+          bestDist = d;
+          best = entity;
+        }
+        continue;
+      }
+
       if (target.type === 'circle') {
         // Hit test the diameter dimension line (horizontal, offset above circle)
         const c = target.center;

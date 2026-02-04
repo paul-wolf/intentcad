@@ -61,6 +61,7 @@ export function drawDimension(
   lineStyle: LineStyle,
   textStyle: TextStyle,
   bgColor?: string,
+  derived?: boolean,
 ): void {
   const { a, b, offset } = geom;
 
@@ -123,7 +124,7 @@ export function drawDimension(
 
   // Text label
   const length = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
-  const label = formatLength(length);
+  const label = derived ? `(${formatLength(length)})` : formatLength(length);
   const mid: Point = { x: (soa.x + sob.x) / 2, y: (soa.y + sob.y) / 2 };
 
   const metrics = renderer.measureText(label, textStyle);
@@ -147,6 +148,7 @@ export function drawDiameterDimension(
   lineStyle: LineStyle,
   textStyle: TextStyle,
   bgColor?: string,
+  derived?: boolean,
 ): void {
   // Horizontal diameter endpoints in world space
   const a: Point = { x: center.x - radius, y: center.y };
@@ -210,7 +212,7 @@ export function drawDiameterDimension(
 
   // Text label with diameter symbol
   const diameter = radius * 2;
-  const label = `\u2300${formatLength(diameter)}`;
+  const label = derived ? `(\u2300${formatLength(diameter)})` : `\u2300${formatLength(diameter)}`;
   const mid: Point = { x: (soa.x + sob.x) / 2, y: (soa.y + sob.y) / 2 };
 
   const metrics = renderer.measureText(label, textStyle);

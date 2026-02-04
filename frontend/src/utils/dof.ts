@@ -106,6 +106,94 @@ export function computeSketchDoF(entities: Entity[], constraints: Constraint[] =
   return dofMap;
 }
 
+/**
+ * Compute which dimension entities are "derived" (driven, not driving).
+ * A dimension is derived when all entities it could move are already fully
+ * constrained by non-dimension constraints (fixed, coincident, etc.), so the
+ * dimension is purely observational and cannot drive changes.
+ */
+export function computeDerivedDimensionIds(entities: Entity[], constraints: Constraint[]): Set<string> {
+  // Compute constraint-only DOF (same as computeSketchDoF but without dimension reductions)
+  const constraintDof = new Map<string, number>();
+
+  const fixedIds = new Set<string>();
+  for (const c of constraints) {
+    if (c.type === 'fixed') fixedIds.add(c.entityId);
+  }
+
+  for (const e of entities) {
+    if (e.type === 'dimension') continue;
+    if ('sourceId' in e && e.sourceId) {
+      constraintDof.set(e.id, 0);
+      continue;
+    }
+    if (fixedIds.has(e.id)) {
+      constraintDof.set(e.id, 0);
+      continue;
+    }
+    constraintDof.set(e.id, baseDoF(e));
+  }
+
+  // Apply constraint-based reductions (excluding dimensions)
+  for (const c of constraints) {
+    if (c.type === 'equal') {
+      const current = constraintDof.get(c.targetEntityId);
+      if (current !== undefined && current > 0) {
+        const target = entities.find((e) => e.id === c.targetEntityId);
+        const reduction = target?.type === 'rectangle' ? 2 : 1;
+        constraintDof.set(c.targetEntityId, Math.max(0, current - reduction));
+      }
+    }
+    if (c.type === 'coincident') {
+      const current = constraintDof.get(c.targetEntityId);
+      if (current !== undefined && current > 0) {
+        constraintDof.set(c.targetEntityId, Math.max(0, current - 2));
+      }
+    }
+    if (c.type === 'midpoint') {
+      const current = constraintDof.get(c.entityId);
+      if (current !== undefined && current > 0) {
+        constraintDof.set(c.entityId, Math.max(0, current - 2));
+      }
+    }
+    if (c.type === 'tangent') {
+      const current = constraintDof.get(c.targetEntityId);
+      if (current !== undefined && current > 0) {
+        constraintDof.set(c.targetEntityId, Math.max(0, current - 1));
+      }
+    }
+    if (c.type === 'parallel' || c.type === 'perpendicular') {
+      const current = constraintDof.get(c.targetEntityId);
+      if (current !== undefined && current > 0) {
+        constraintDof.set(c.targetEntityId, Math.max(0, current - 1));
+      }
+    }
+    if (c.type === 'horizontal' || c.type === 'vertical') {
+      const current = constraintDof.get(c.entityId);
+      if (current !== undefined && current > 0) {
+        constraintDof.set(c.entityId, Math.max(0, current - 1));
+      }
+    }
+  }
+
+  // Identify derived dimensions
+  const derived = new Set<string>();
+  for (const e of entities) {
+    if (e.type !== 'dimension') continue;
+    if (e.targetEntityId2 != null) {
+      // Two-segment: derived if BOTH targets have 0 constraint-only DOF
+      const dof1 = constraintDof.get(e.targetEntityId) ?? 0;
+      const dof2 = constraintDof.get(e.targetEntityId2) ?? 0;
+      if (dof1 === 0 && dof2 === 0) derived.add(e.id);
+    } else {
+      // Single-target: derived if target has 0 constraint-only DOF
+      const dof = constraintDof.get(e.targetEntityId) ?? 0;
+      if (dof === 0) derived.add(e.id);
+    }
+  }
+  return derived;
+}
+
 /** Sum of DoF across all entities in the map. */
 export function sketchTotalDoF(dofMap: Map<string, number>): number {
   let total = 0;

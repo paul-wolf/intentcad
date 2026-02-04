@@ -13,6 +13,7 @@ import type { DimensionGeom } from '@/rendering/dimensionRenderer';
 import type { Tool } from '@/tools/types';
 import type { ViewportImpl } from '@/rendering/viewport';
 import type { Point, LineEntity } from '@/types/document';
+import { computeDerivedDimensionIds } from '@/utils/dof';
 
 function usePanZoom(
   canvasRef: RefObject<HTMLCanvasElement | null>,
@@ -132,7 +133,7 @@ function DimensionEditInput({
         background: 'transparent',
         border: 'none',
         outline: 'none',
-        color: '#4ade80',
+        color: '#94a3b8',
         fontSize: 11,
         fontFamily: 'monospace',
         textAlign: 'center',
@@ -349,8 +350,41 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
     if (!sketch) return null;
     const dim = sketch.entities.find((e) => e.id === editingDimensionId);
     if (!dim || dim.type !== 'dimension') return null;
+
+    // Don't allow editing derived (driven) dimensions
+    const derivedIds = computeDerivedDimensionIds(sketch.entities, sketch.constraints);
+    if (derivedIds.has(dim.id)) {
+      useEditorStore.getState().setEditingDimensionId(null);
+      return null;
+    }
+
     const target = sketch.entities.find((e) => e.id === dim.targetEntityId);
     if (!target) return null;
+
+    // Two-segment distance dimension
+    if (dim.targetEntityId2 != null) {
+      const target2 = sketch.entities.find((e) => e.id === dim.targetEntityId2);
+      if (!target2 || target.type !== 'line' || target2.type !== 'line') return null;
+      const idx1 = dim.segmentIndex;
+      const idx2 = dim.segmentIndex2!;
+      if (idx1 < 0 || idx1 >= target.points.length - 1) return null;
+      if (idx2 < 0 || idx2 >= target2.points.length - 1) return null;
+      const p1 = target.points[idx1]!;
+      const p2 = target.points[idx1 + 1]!;
+      const q1 = target2.points[idx2]!;
+      const q2 = target2.points[idx2 + 1]!;
+      const a: Point = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+      const dx = q2.x - q1.x;
+      const dy = q2.y - q1.y;
+      const lenSq = dx * dx + dy * dy;
+      if (lenSq === 0) return null;
+      const t = ((a.x - q1.x) * dx + (a.y - q1.y) * dy) / lenSq;
+      const b: Point = { x: q1.x + t * dx, y: q1.y + t * dy };
+      const geom: DimensionGeom = { a, b, offset: dim.offset };
+      const pos = getDimensionTextScreenPos(vp, geom);
+      const value = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
+      return { pos, value };
+    }
 
     if (target.type === 'circle') {
       const diameter = target.radius * 2;

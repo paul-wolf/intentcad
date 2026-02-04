@@ -54,6 +54,9 @@ export interface DimensionEntity {
   targetEntityId: string;
   segmentIndex: number;
   offset: number;
+  // Two-segment distance dimension (perpendicular distance between segments):
+  targetEntityId2?: string;
+  segmentIndex2?: number;
 }
 
 export type Entity = LineEntity | CircleEntity | RectangleEntity | PointEntity | DimensionEntity;

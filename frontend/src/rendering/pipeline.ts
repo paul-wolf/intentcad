@@ -8,7 +8,7 @@ import { GRID_SPACING_MM, GRID_MAJOR_EVERY, GHOSTED_OPACITY, ENDPOINT_RADIUS, SE
 import { getStyles } from './styles';
 import type { ThemeStyles } from './styles';
 import { drawDimension, drawDiameterDimension, drawSegmentLabel, drawDiameterLabel } from './dimensionRenderer';
-import { computeSketchDoF } from '@/utils/dof';
+import { computeSketchDoF, computeDerivedDimensionIds } from '@/utils/dof';
 import { getEntityPoint } from '@/utils/entityPoints';
 import { getConstraintPartners, getEntityRepresentativePoint, CONSTRAINT_SYMBOLS } from '@/utils/constraints';
 
@@ -174,6 +174,7 @@ function renderActiveSketch(ctx: RenderContext) {
   if (!activeSketch || activeSketch.suppressed) return;
 
   const dofMap = computeSketchDoF(activeSketch.entities, activeSketch.constraints);
+  const derivedDimIds = computeDerivedDimensionIds(activeSketch.entities, activeSketch.constraints);
   const { relatedIds } = getConstraintPartners(selectedEntityIds, activeSketch.constraints);
 
   for (const entity of activeSketch.entities) {
@@ -214,10 +215,37 @@ function renderActiveSketch(ctx: RenderContext) {
           (e) => e.id === entity.targetEntityId,
         );
         if (!target) break;
+        const isDerived = derivedDimIds.has(entity.id);
         const lineStyle = isSelected ? styles.dimensionSelected : styles.dimensionLine;
         const textStyle = styles.dimensionText;
+
+        // Two-segment distance dimension
+        if (entity.targetEntityId2 != null) {
+          const target2 = activeSketch.entities.find(
+            (e) => e.id === entity.targetEntityId2,
+          );
+          if (!target2 || target.type !== 'line' || target2.type !== 'line') break;
+          const idx1 = entity.segmentIndex;
+          const idx2 = entity.segmentIndex2!;
+          if (idx1 < 0 || idx1 >= target.points.length - 1) break;
+          if (idx2 < 0 || idx2 >= target2.points.length - 1) break;
+          const p1 = target.points[idx1]!;
+          const p2 = target.points[idx1 + 1]!;
+          const q1 = target2.points[idx2]!;
+          const q2 = target2.points[idx2 + 1]!;
+          const a: Point = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+          const dx = q2.x - q1.x;
+          const dy = q2.y - q1.y;
+          const lenSq = dx * dx + dy * dy;
+          if (lenSq === 0) break;
+          const t = ((a.x - q1.x) * dx + (a.y - q1.y) * dy) / lenSq;
+          const b: Point = { x: q1.x + t * dx, y: q1.y + t * dy };
+          drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived);
+          break;
+        }
+
         if (target.type === 'circle') {
-          drawDiameterDimension(renderer, viewport, target.center, target.radius, entity.offset, lineStyle, textStyle, ctx.palette.background);
+          drawDiameterDimension(renderer, viewport, target.center, target.radius, entity.offset, lineStyle, textStyle, ctx.palette.background, isDerived);
           break;
         }
         if (target.type === 'rectangle') {
@@ -232,7 +260,7 @@ function renderActiveSketch(ctx: RenderContext) {
             a = { x: c.x + hw, y: c.y + hh };
             b = { x: c.x + hw, y: c.y - hh };
           }
-          drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background);
+          drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived);
           break;
         }
         if (target.type !== 'line') break;
@@ -243,14 +271,14 @@ function renderActiveSketch(ctx: RenderContext) {
             x: (target.points[0]!.x + target.points[1]!.x) / 2,
             y: (target.points[0]!.y + target.points[1]!.y) / 2,
           };
-          drawDimension(renderer, viewport, { a: center, b: midA, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background);
+          drawDimension(renderer, viewport, { a: center, b: midA, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived);
           break;
         }
         const idx = entity.segmentIndex;
         if (idx < 0 || idx >= target.points.length - 1) break;
         const a = target.points[idx]!;
         const b = target.points[idx + 1]!;
-        drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background);
+        drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived);
         break;
       }
     }
