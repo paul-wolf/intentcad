@@ -1,4 +1,4 @@
-import type { Entity, Constraint } from '@/types/document';
+import type { Entity, Constraint, LineEntity } from '@/types/document';
 
 /** Base degrees of freedom for each entity type. */
 function baseDoF(entity: Entity): number {
@@ -6,7 +6,10 @@ function baseDoF(entity: Entity): number {
     case 'point': return 2;
     case 'circle': return 3;
     case 'rectangle': return 4;
-    case 'line': return 2 * entity.points.length;
+    case 'line':
+      // Polygon is a rigid body: center (x,y) + rotation + scale = 4 DoF
+      if ((entity as LineEntity).polygonCenter) return 4;
+      return 2 * entity.points.length;
     case 'dimension': return 0;
   }
 }

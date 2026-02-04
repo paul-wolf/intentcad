@@ -3,6 +3,7 @@ import type { Document, Entity, LineEntity, Point } from '@/types/document';
 import type { Tool } from '@/tools/types';
 import type { ThemePalette } from '@/theme';
 import type { SelectedPoint } from '@/stores/editorStore';
+import type { SegmentHit } from '@/hittest/hitTest';
 import { GRID_SPACING_MM, GRID_MAJOR_EVERY, GHOSTED_OPACITY, ENDPOINT_RADIUS, SELECTED_POINT_RADIUS, ORIGIN_RADIUS, AXIS_OPACITY } from '@/config';
 import { getStyles } from './styles';
 import type { ThemeStyles } from './styles';
@@ -16,6 +17,7 @@ export interface RenderContext {
   document: Document;
   selectedEntityIds: Set<string>;
   selectedPoints: SelectedPoint[];
+  selectedSegments: SegmentHit[];
   activeTool: Tool | null;
   altKeyHeld: boolean;
   palette: ThemePalette;
@@ -164,7 +166,8 @@ function renderActiveSketch(ctx: RenderContext) {
   const dofMap = computeSketchDoF(activeSketch.entities, activeSketch.constraints);
 
   for (const entity of activeSketch.entities) {
-    const isSelected = selectedEntityIds.has(entity.id);
+    const isSelected = selectedEntityIds.has(entity.id) &&
+      !ctx.selectedSegments.some(s => s.entityId === entity.id);
     switch (entity.type) {
       case 'line': {
         const isConstrained = dofMap.get(entity.id) === 0;
@@ -298,6 +301,44 @@ function renderSelectedPoints(ctx: RenderContext) {
   }
 }
 
+/** Step 4d: Draw highlights on selected segments */
+function renderSelectedSegments(ctx: RenderContext) {
+  const { renderer, viewport, document: doc, selectedSegments } = ctx;
+  if (selectedSegments.length === 0) return;
+  const styles = getStyles(ctx.palette);
+  const activeSketch = doc.sketches.find((s) => s.id === doc.activeSketchId);
+  if (!activeSketch) return;
+
+  for (const seg of selectedSegments) {
+    const entity = activeSketch.entities.find((e) => e.id === seg.entityId);
+    if (!entity) continue;
+
+    if (entity.type === 'line') {
+      const idx = seg.segmentIndex;
+      if (idx < 0 || idx >= entity.points.length - 1) continue;
+      const a = viewport.worldToScreen(entity.points[idx]!);
+      const b = viewport.worldToScreen(entity.points[idx + 1]!);
+      renderer.drawLine(a, b, styles.segmentSelected);
+    } else if (entity.type === 'rectangle') {
+      const hw = entity.width / 2;
+      const hh = entity.height / 2;
+      const c = entity.center;
+      // 0=TL→TR, 1=TR→BR, 2=BR→BL, 3=BL→TL
+      const corners: Point[] = [
+        { x: c.x - hw, y: c.y + hh },
+        { x: c.x + hw, y: c.y + hh },
+        { x: c.x + hw, y: c.y - hh },
+        { x: c.x - hw, y: c.y - hh },
+      ];
+      const idx = seg.segmentIndex;
+      if (idx < 0 || idx >= 4) continue;
+      const a = viewport.worldToScreen(corners[idx]!);
+      const b = viewport.worldToScreen(corners[(idx + 1) % 4]!);
+      renderer.drawLine(a, b, styles.segmentSelected);
+    }
+  }
+}
+
 /** Step 5: Draw tool overlay (preview line, snap indicator, selection rect) */
 function renderToolOverlay(ctx: RenderContext) {
   if (ctx.activeTool?.renderOverlay) {
@@ -366,6 +407,7 @@ export function renderFrame(ctx: RenderContext): void {
   renderGhostedSketches(ctx);
   renderActiveSketch(ctx);
   renderDimensionOverlay(ctx);
+  renderSelectedSegments(ctx);
   renderSelectedPoints(ctx);
   renderToolOverlay(ctx);
 }

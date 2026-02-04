@@ -20,6 +20,7 @@ export interface ThemeStyles {
   lineConstrainedSelected: LineStyle;
   constructionConstrained: LineStyle;
   constructionConstrainedSelected: LineStyle;
+  segmentSelected: LineStyle;
 }
 
 export function getStyles(palette: ThemePalette): ThemeStyles {
@@ -41,5 +42,6 @@ export function getStyles(palette: ThemePalette): ThemeStyles {
     lineConstrainedSelected: { color: palette.constrained, width: STROKES.lineSelected },
     constructionConstrained: { color: palette.constrained, width: STROKES.line, dash: [6, 4] },
     constructionConstrainedSelected: { color: palette.constrained, width: STROKES.lineSelected, dash: [6, 4] },
+    segmentSelected: { color: palette.accent, width: 3 },
   };
 }

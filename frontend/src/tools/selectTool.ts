@@ -4,7 +4,7 @@ import type { Renderer, Viewport } from '@/types/renderer';
 import { useEditorStore } from '@/stores/editorStore';
 import type { SelectedPoint } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
-import { hitTestEntities, hitTestPoint } from '@/hittest/hitTest';
+import { hitTestEntities, hitTestPoint, hitTestSegment } from '@/hittest/hitTest';
 import type { PointHit } from '@/hittest/hitTest';
 import { segmentIntersectsRect, circleIntersectsRect, rectIntersectsRect } from '@/utils/geometry';
 import { getThemePalette } from '@/theme';
@@ -219,6 +219,7 @@ export function createSelectTool(): Tool {
               }
             }
           }
+          useEditorStore.getState().setSelectedSegments([]);
           useEditorStore.getState().setSelectedEntityIds(ids);
         }
       } else if (dragMode === null) {
@@ -234,8 +235,14 @@ export function createSelectTool(): Tool {
           const activeSketch = useDocumentStore.getState().getActiveSketch();
           if (activeSketch) {
             const hit = hitTestEntities(screenPos, activeSketch.entities, ctx.viewport, activeSketch.entities);
-            if (hit && hit.type === 'dimension') {
-              useEditorStore.getState().setEditingDimensionId(hit.id);
+            if (hit) {
+              if (hit.type === 'dimension') {
+                useEditorStore.getState().setEditingDimensionId(hit.id);
+              } else {
+                useEditorStore.getState().setSelectedPoints([]);
+                useEditorStore.getState().setSelectedSegments([]);
+                useEditorStore.getState().setSelectedEntityIds(new Set([hit.id]));
+              }
               resetDrag();
               return;
             }
@@ -253,28 +260,43 @@ export function createSelectTool(): Tool {
               useEditorStore.getState().toggleSelectedPoint(sp);
             } else {
               useEditorStore.getState().setSelectedEntityIds(new Set());
+              useEditorStore.getState().setSelectedSegments([]);
               useEditorStore.getState().setSelectedPoints([sp]);
             }
           } else {
-            // Fall back to entity hit
-            const hit = hitTestEntities(screenPos, activeSketch.entities, ctx.viewport, activeSketch.entities);
-            if (hit) {
+            // Try segment hit
+            const segHit = hitTestSegment(screenPos, activeSketch.entities, ctx.viewport);
+            if (segHit) {
               if (shiftOnDown) {
-                // Toggle entity in/out of selection
-                const current = new Set(useEditorStore.getState().selectedEntityIds);
-                if (current.has(hit.id)) {
-                  current.delete(hit.id);
-                } else {
-                  current.add(hit.id);
-                }
-                useEditorStore.getState().setSelectedEntityIds(current);
+                useEditorStore.getState().toggleSelectedSegment(segHit);
+                useEditorStore.getState().addToSelection([segHit.entityId]);
               } else {
                 useEditorStore.getState().setSelectedPoints([]);
-                useEditorStore.getState().setSelectedEntityIds(new Set([hit.id]));
+                useEditorStore.getState().setSelectedSegments([segHit]);
+                useEditorStore.getState().setSelectedEntityIds(new Set([segHit.entityId]));
               }
             } else {
-              if (!shiftOnDown) {
-                useEditorStore.getState().clearSelection();
+              // Fall back to entity hit
+              const hit = hitTestEntities(screenPos, activeSketch.entities, ctx.viewport, activeSketch.entities);
+              if (hit) {
+                if (shiftOnDown) {
+                  // Toggle entity in/out of selection
+                  const current = new Set(useEditorStore.getState().selectedEntityIds);
+                  if (current.has(hit.id)) {
+                    current.delete(hit.id);
+                  } else {
+                    current.add(hit.id);
+                  }
+                  useEditorStore.getState().setSelectedEntityIds(current);
+                } else {
+                  useEditorStore.getState().setSelectedPoints([]);
+                  useEditorStore.getState().setSelectedSegments([]);
+                  useEditorStore.getState().setSelectedEntityIds(new Set([hit.id]));
+                }
+              } else {
+                if (!shiftOnDown) {
+                  useEditorStore.getState().clearSelection();
+                }
               }
             }
           }
@@ -387,18 +409,26 @@ export function createSelectTool(): Tool {
         }
       }
       if (e.key === 'h' || e.key === 'H') {
-        const ids = useEditorStore.getState().selectedEntityIds;
+        const es = useEditorStore.getState();
+        const ids = es.selectedEntityIds;
         if (ids.size > 0) {
+          const segs = es.selectedSegments.length > 0
+            ? es.selectedSegments.map((s) => ({ entityId: s.entityId, segmentIndex: s.segmentIndex }))
+            : undefined;
           useDocumentStore.getState().beginTransaction();
-          useDocumentStore.getState().toggleHorizontal([...ids]);
+          useDocumentStore.getState().toggleHorizontal([...ids], segs);
           requestSave();
         }
       }
       if (e.key === 'v') {
-        const ids = useEditorStore.getState().selectedEntityIds;
+        const es = useEditorStore.getState();
+        const ids = es.selectedEntityIds;
         if (ids.size > 0) {
+          const segs = es.selectedSegments.length > 0
+            ? es.selectedSegments.map((s) => ({ entityId: s.entityId, segmentIndex: s.segmentIndex }))
+            : undefined;
           useDocumentStore.getState().beginTransaction();
-          useDocumentStore.getState().toggleVertical([...ids]);
+          useDocumentStore.getState().toggleVertical([...ids], segs);
           requestSave();
         }
       }

@@ -5,6 +5,7 @@ import type { Entity, Point } from '@/types/document';
  *
  * Rectangle indices: 0=center, 1=TL, 2=TR, 3=BR, 4=BL
  * Line indices: 0..N-1 = polyline vertices
+ * Polygon (line with polygonCenter): 0..N-1 = vertices, N = center
  * Circle: 0=center
  * Point: 0=position
  */
@@ -28,6 +29,9 @@ export function getEntityPoint(entity: Entity, pointIndex: number): Point | null
       }
     }
     case 'line':
+      if (entity.polygonCenter && pointIndex === entity.points.length) {
+        return entity.polygonCenter;
+      }
       return entity.points[pointIndex] ?? null;
     default:
       return null;
@@ -58,6 +62,24 @@ export function setEntityPoint(entity: Entity, pointIndex: number, pt: Point): E
       return { ...entity, center: { x: entity.center.x + dx, y: entity.center.y + dy } };
     }
     case 'line': {
+      // Polygon: translate the entire polygon rigidly to preserve regular shape
+      if (entity.polygonCenter) {
+        let current: Point | null;
+        if (pointIndex === entity.points.length) {
+          current = entity.polygonCenter;
+        } else {
+          current = entity.points[pointIndex] ?? null;
+        }
+        if (!current) return null;
+        const dx = pt.x - current.x;
+        const dy = pt.y - current.y;
+        return {
+          ...entity,
+          points: entity.points.map((p) => ({ x: p.x + dx, y: p.y + dy })),
+          polygonCenter: { x: entity.polygonCenter.x + dx, y: entity.polygonCenter.y + dy },
+        };
+      }
+      // Regular line: move individual vertex
       if (pointIndex < 0 || pointIndex >= entity.points.length) return null;
       const newPoints = [...entity.points];
       newPoints[pointIndex] = pt;
@@ -90,8 +112,13 @@ export function getEntityPoints(entity: Entity): [number, Point][] {
         [4, { x: c.x - hw, y: c.y - hh }],
       ];
     }
-    case 'line':
-      return entity.points.map((p, i) => [i, p]);
+    case 'line': {
+      const pts: [number, Point][] = entity.points.map((p, i) => [i, p]);
+      if (entity.polygonCenter) {
+        pts.push([entity.points.length, entity.polygonCenter]);
+      }
+      return pts;
+    }
     default:
       return [];
   }

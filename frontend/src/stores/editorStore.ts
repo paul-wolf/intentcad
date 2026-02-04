@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { Point } from '@/types/document';
 import type { ToolType, ToolState } from '@/types/editor';
+import type { SegmentHit } from '@/hittest/hitTest';
 
 export interface SelectedPoint {
   entityId: string;
@@ -11,6 +12,7 @@ interface EditorStore {
   activeTool: ToolType;
   selectedEntityIds: Set<string>;
   selectedPoints: SelectedPoint[];
+  selectedSegments: SegmentHit[];
   toolState: ToolState;
   cursorWorld: Point | null;
   altKeyHeld: boolean;
@@ -29,6 +31,8 @@ interface EditorStore {
   addToSelection(ids: string[]): void;
   setSelectedPoints(pts: SelectedPoint[]): void;
   toggleSelectedPoint(pt: SelectedPoint): void;
+  setSelectedSegments(segs: SegmentHit[]): void;
+  toggleSelectedSegment(seg: SegmentHit): void;
   clearSelection(): void;
   setToolState(state: ToolState): void;
   setCursorWorld(p: Point | null): void;
@@ -67,6 +71,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
   activeTool: 'line',
   selectedEntityIds: new Set(),
   selectedPoints: [],
+  selectedSegments: [],
   toolState: { type: 'line', firstPoint: null, activePolylineId: null, activeEnd: null },
   cursorWorld: null,
   altKeyHeld: false,
@@ -81,7 +86,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
   viewportCommand: null,
 
   setActiveTool(tool) {
-    set({ activeTool: tool, toolState: defaultToolState(tool), selectedEntityIds: new Set(), selectedPoints: [] });
+    set({ activeTool: tool, toolState: defaultToolState(tool), selectedEntityIds: new Set(), selectedPoints: [], selectedSegments: [] });
   },
 
   setSelectedEntityIds(ids) {
@@ -112,8 +117,24 @@ export const useEditorStore = create<EditorStore>((set) => ({
     });
   },
 
+  setSelectedSegments(segs) {
+    set({ selectedSegments: segs });
+  },
+
+  toggleSelectedSegment(seg) {
+    set((s) => {
+      const idx = s.selectedSegments.findIndex(
+        (ss) => ss.entityId === seg.entityId && ss.segmentIndex === seg.segmentIndex,
+      );
+      if (idx >= 0) {
+        return { selectedSegments: s.selectedSegments.filter((_, i) => i !== idx) };
+      }
+      return { selectedSegments: [...s.selectedSegments, seg] };
+    });
+  },
+
   clearSelection() {
-    set({ selectedEntityIds: new Set(), selectedPoints: [] });
+    set({ selectedEntityIds: new Set(), selectedPoints: [], selectedSegments: [] });
   },
 
   setToolState(state) {

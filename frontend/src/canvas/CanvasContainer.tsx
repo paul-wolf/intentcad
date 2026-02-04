@@ -175,6 +175,7 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
       getDocument: () => useDocumentStore.getState().document,
       getSelectedEntityIds: () => useEditorStore.getState().selectedEntityIds,
       getSelectedPoints: () => useEditorStore.getState().selectedPoints,
+      getSelectedSegments: () => useEditorStore.getState().selectedSegments,
       getActiveTool,
       getAltKeyHeld: () => useEditorStore.getState().altKeyHeld,
       initialViewport,

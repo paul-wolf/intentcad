@@ -6,12 +6,14 @@ import type { RenderContext } from '@/rendering/pipeline';
 import type { Tool } from '@/tools/types';
 import type { Document } from '@/types/document';
 import type { SelectedPoint } from '@/stores/editorStore';
+import type { SegmentHit } from '@/hittest/hitTest';
 import { useThemeStore } from '@/theme';
 
 interface UseCanvasRendererOpts {
   getDocument: () => Document;
   getSelectedEntityIds: () => Set<string>;
   getSelectedPoints: () => SelectedPoint[];
+  getSelectedSegments: () => SegmentHit[];
   getActiveTool: () => Tool | null;
   getAltKeyHeld: () => boolean;
   initialViewport?: { offset: { x: number; y: number }; scale: number };
@@ -46,6 +48,7 @@ export function useCanvasRenderer(opts: UseCanvasRendererOpts) {
           document: opts.getDocument(),
           selectedEntityIds: opts.getSelectedEntityIds(),
           selectedPoints: opts.getSelectedPoints(),
+          selectedSegments: opts.getSelectedSegments(),
           activeTool: opts.getActiveTool(),
           altKeyHeld: opts.getAltKeyHeld(),
           palette: useThemeStore.getState().palette,

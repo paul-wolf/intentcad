@@ -165,10 +165,14 @@ export function Toolbar() {
       </button>
       <button
         onClick={() => {
-          const ids = useEditorStore.getState().selectedEntityIds;
+          const es = useEditorStore.getState();
+          const ids = es.selectedEntityIds;
           if (ids.size === 0) return;
+          const segs = es.selectedSegments.length > 0
+            ? es.selectedSegments.map((s) => ({ entityId: s.entityId, segmentIndex: s.segmentIndex }))
+            : undefined;
           useDocumentStore.getState().beginTransaction();
-          useDocumentStore.getState().toggleHorizontal([...ids]);
+          useDocumentStore.getState().toggleHorizontal([...ids], segs);
           requestSave();
         }}
         style={{
@@ -186,10 +190,14 @@ export function Toolbar() {
       </button>
       <button
         onClick={() => {
-          const ids = useEditorStore.getState().selectedEntityIds;
+          const es = useEditorStore.getState();
+          const ids = es.selectedEntityIds;
           if (ids.size === 0) return;
+          const segs = es.selectedSegments.length > 0
+            ? es.selectedSegments.map((s) => ({ entityId: s.entityId, segmentIndex: s.segmentIndex }))
+            : undefined;
           useDocumentStore.getState().beginTransaction();
-          useDocumentStore.getState().toggleVertical([...ids]);
+          useDocumentStore.getState().toggleVertical([...ids], segs);
           requestSave();
         }}
         style={{

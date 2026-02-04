@@ -254,6 +254,26 @@ export function hitTestSegment(
           best = { entityId: entity.id, segmentIndex: i };
         }
       }
+    } else if (entity.type === 'rectangle') {
+      const hw = entity.width / 2;
+      const hh = entity.height / 2;
+      const c = entity.center;
+      // 0=TL→TR, 1=TR→BR, 2=BR→BL, 3=BL→TL
+      const corners: Point[] = [
+        { x: c.x - hw, y: c.y + hh }, // TL
+        { x: c.x + hw, y: c.y + hh }, // TR
+        { x: c.x + hw, y: c.y - hh }, // BR
+        { x: c.x - hw, y: c.y - hh }, // BL
+      ];
+      for (let i = 0; i < 4; i++) {
+        const a = viewport.worldToScreen(corners[i]!);
+        const b = viewport.worldToScreen(corners[(i + 1) % 4]!);
+        const d = pointToSegmentDist(screenPos, a, b);
+        if (d < bestDist) {
+          bestDist = d;
+          best = { entityId: entity.id, segmentIndex: i };
+        }
+      }
     }
   }
 
