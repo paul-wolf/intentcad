@@ -1,5 +1,7 @@
+import { useMemo } from 'react';
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
+import { useEditorStore } from '@/stores/editorStore';
 import { requestSave } from '@/api/autoSave';
 import { NumberInput } from './NumberInput';
 import type { Entity } from '@/types/document';
@@ -32,16 +34,6 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
     const sketch = doc.sketches.find((sk) => sk.id === doc.activeSketchId);
     return sketch?.constraints.some((c) => c.type === 'fixed' && c.entityId === entity.id) ?? false;
   });
-  const isEqual = useDocumentStore((s) => {
-    const doc = s.document;
-    const sketch = doc.sketches.find((sk) => sk.id === doc.activeSketchId);
-    return sketch?.constraints.some((c) => c.type === 'equal' && (c.entityId === entity.id || c.targetEntityId === entity.id)) ?? false;
-  });
-  const isCoincident = useDocumentStore((s) => {
-    const doc = s.document;
-    const sketch = doc.sketches.find((sk) => sk.id === doc.activeSketchId);
-    return sketch?.constraints.some((c) => c.type === 'coincident' && (c.entityId === entity.id || c.targetEntityId === entity.id)) ?? false;
-  });
   const isHorizontal = useDocumentStore((s) => {
     const doc = s.document;
     const sketch = doc.sketches.find((sk) => sk.id === doc.activeSketchId);
@@ -52,6 +44,55 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
     const sketch = doc.sketches.find((sk) => sk.id === doc.activeSketchId);
     return sketch?.constraints.some((c) => c.type === 'vertical' && c.entityId === entity.id) ?? false;
   });
+  const isParallel = useDocumentStore((s) => {
+    const doc = s.document;
+    const sketch = doc.sketches.find((sk) => sk.id === doc.activeSketchId);
+    return sketch?.constraints.some((c) => c.type === 'parallel' && (c.entityId === entity.id || c.targetEntityId === entity.id)) ?? false;
+  });
+  const isPerpendicular = useDocumentStore((s) => {
+    const doc = s.document;
+    const sketch = doc.sketches.find((sk) => sk.id === doc.activeSketchId);
+    return sketch?.constraints.some((c) => c.type === 'perpendicular' && (c.entityId === entity.id || c.targetEntityId === entity.id)) ?? false;
+  });
+  const isTangent = useDocumentStore((s) => {
+    const doc = s.document;
+    const sketch = doc.sketches.find((sk) => sk.id === doc.activeSketchId);
+    return sketch?.constraints.some((c) => c.type === 'tangent' && (c.entityId === entity.id || c.targetEntityId === entity.id)) ?? false;
+  });
+  const isMidpoint = useDocumentStore((s) => {
+    const doc = s.document;
+    const sketch = doc.sketches.find((sk) => sk.id === doc.activeSketchId);
+    return sketch?.constraints.some((c) => c.type === 'midpoint' && (c.entityId === entity.id || c.targetEntityId === entity.id)) ?? false;
+  });
+  const isBisect = useDocumentStore((s) => {
+    const doc = s.document;
+    const sketch = doc.sketches.find((sk) => sk.id === doc.activeSketchId);
+    return sketch?.constraints.some((c) => c.type === 'bisect' && (c.entityId === entity.id || c.targetEntityId === entity.id)) ?? false;
+  });
+  const constraintPartnersJson = useDocumentStore((s) => {
+    const doc = s.document;
+    const sketch = doc.sketches.find((sk) => sk.id === doc.activeSketchId);
+    if (!sketch) return '[]';
+    const results: { type: string; partnerId: string; partnerLabel: string }[] = [];
+    for (const c of sketch.constraints) {
+      if (c.type === 'fixed' || c.type === 'horizontal' || c.type === 'vertical') continue;
+      let partnerId: string | null = null;
+      if (c.entityId === entity.id) partnerId = c.targetEntityId;
+      else if (c.targetEntityId === entity.id) partnerId = c.entityId;
+      if (!partnerId) continue;
+      const partner = sketch.entities.find((e) => e.id === partnerId);
+      if (!partner) continue;
+      const partnerLabel = partner.type === 'line' && 'polygonCenter' in partner && partner.polygonCenter
+        ? 'Polygon'
+        : partner.type.charAt(0).toUpperCase() + partner.type.slice(1);
+      results.push({ type: c.type, partnerId, partnerLabel });
+    }
+    return JSON.stringify(results);
+  });
+  const constraintPartners: { type: string; partnerId: string; partnerLabel: string }[] = useMemo(
+    () => JSON.parse(constraintPartnersJson),
+    [constraintPartnersJson],
+  );
 
   const isDerived = 'sourceId' in entity && !!entity.sourceId;
 
@@ -81,16 +122,6 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
             (Fixed)
           </span>
         )}
-        {isEqual && (
-          <span style={{ fontSize: '10px', color: palette.constrained, fontStyle: 'italic' }}>
-            (Equal)
-          </span>
-        )}
-        {isCoincident && (
-          <span style={{ fontSize: '10px', color: palette.constrained, fontStyle: 'italic' }}>
-            (Coincident)
-          </span>
-        )}
         {isHorizontal && (
           <span style={{ fontSize: '10px', color: palette.constrained, fontStyle: 'italic' }}>
             (Horizontal)
@@ -101,6 +132,49 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
             (Vertical)
           </span>
         )}
+        {isParallel && !constraintPartners.some((cp) => cp.type === 'parallel') && (
+          <span style={{ fontSize: '10px', color: palette.constrained, fontStyle: 'italic' }}>
+            (Parallel)
+          </span>
+        )}
+        {isPerpendicular && !constraintPartners.some((cp) => cp.type === 'perpendicular') && (
+          <span style={{ fontSize: '10px', color: palette.constrained, fontStyle: 'italic' }}>
+            (Perpendicular)
+          </span>
+        )}
+        {isTangent && !constraintPartners.some((cp) => cp.type === 'tangent') && (
+          <span style={{ fontSize: '10px', color: palette.constrained, fontStyle: 'italic' }}>
+            (Tangent)
+          </span>
+        )}
+        {isMidpoint && !constraintPartners.some((cp) => cp.type === 'midpoint') && (
+          <span style={{ fontSize: '10px', color: palette.constrained, fontStyle: 'italic' }}>
+            (Midpoint)
+          </span>
+        )}
+        {isBisect && !constraintPartners.some((cp) => cp.type === 'bisect') && (
+          <span style={{ fontSize: '10px', color: palette.constrained, fontStyle: 'italic' }}>
+            (Bisect)
+          </span>
+        )}
+        {constraintPartners.map((cp, i) => (
+          <span
+            key={i}
+            style={{
+              fontSize: '10px',
+              color: palette.constraintLink,
+              fontStyle: 'italic',
+              cursor: 'pointer',
+              textDecoration: 'underline',
+              textDecorationStyle: 'dotted',
+            }}
+            onClick={() => {
+              useEditorStore.getState().setSelectedEntityIds(new Set([cp.partnerId]));
+            }}
+          >
+            ({cp.type.charAt(0).toUpperCase() + cp.type.slice(1)} → {cp.partnerLabel})
+          </span>
+        ))}
       </div>
 
       {entity.type === 'point' && (

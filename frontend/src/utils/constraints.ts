@@ -1,0 +1,94 @@
+import type { Constraint, Entity, Point } from '@/types/document';
+
+export interface ConstraintLink {
+  constraintId: string;
+  constraintType: Constraint['type'];
+  entityId: string;
+  targetEntityId: string;
+}
+
+export interface ConstraintPartnersResult {
+  relatedIds: Set<string>;
+  links: ConstraintLink[];
+}
+
+/** Unicode symbols for each two-entity constraint type. */
+export const CONSTRAINT_SYMBOLS: Record<string, string> = {
+  parallel: '\u2225',      // ∥
+  perpendicular: '\u22A5', // ⊥
+  tangent: '\u22A4',       // ⊤
+  equal: '=',
+  coincident: '\u2022',    // •
+  midpoint: '\u25C6',      // ◆
+  bisect: '\u2020',        // †
+};
+
+/**
+ * Given a set of selected entity IDs and the full constraint list,
+ * return the set of partner entity IDs and the link descriptors.
+ * Single-entity constraints (fixed, horizontal, vertical) produce no partners.
+ */
+export function getConstraintPartners(
+  selectedIds: Set<string>,
+  constraints: Constraint[],
+): ConstraintPartnersResult {
+  const relatedIds = new Set<string>();
+  const links: ConstraintLink[] = [];
+
+  for (const c of constraints) {
+    // Skip single-entity constraints
+    if (c.type === 'fixed' || c.type === 'horizontal' || c.type === 'vertical') continue;
+
+    const hasEntity = selectedIds.has(c.entityId);
+    const hasTarget = selectedIds.has(c.targetEntityId);
+
+    if (hasEntity && !hasTarget) {
+      relatedIds.add(c.targetEntityId);
+      links.push({
+        constraintId: c.id,
+        constraintType: c.type,
+        entityId: c.entityId,
+        targetEntityId: c.targetEntityId,
+      });
+    } else if (hasTarget && !hasEntity) {
+      relatedIds.add(c.entityId);
+      links.push({
+        constraintId: c.id,
+        constraintType: c.type,
+        entityId: c.targetEntityId,
+        targetEntityId: c.entityId,
+      });
+    }
+  }
+
+  return { relatedIds, links };
+}
+
+/**
+ * Returns a representative point (centroid / center) for any entity type.
+ * Useful for drawing constraint connection lines.
+ */
+export function getEntityRepresentativePoint(entity: Entity): Point | null {
+  switch (entity.type) {
+    case 'circle':
+      return entity.center;
+    case 'rectangle':
+      return entity.center;
+    case 'point':
+      return entity.position;
+    case 'line': {
+      if (entity.polygonCenter) return entity.polygonCenter;
+      // Vertex centroid
+      if (entity.points.length === 0) return null;
+      let sx = 0;
+      let sy = 0;
+      for (const p of entity.points) {
+        sx += p.x;
+        sy += p.y;
+      }
+      return { x: sx / entity.points.length, y: sy / entity.points.length };
+    }
+    case 'dimension':
+      return null;
+  }
+}

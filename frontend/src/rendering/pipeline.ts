@@ -10,6 +10,7 @@ import type { ThemeStyles } from './styles';
 import { drawDimension, drawDiameterDimension, drawSegmentLabel, drawDiameterLabel } from './dimensionRenderer';
 import { computeSketchDoF } from '@/utils/dof';
 import { getEntityPoint } from '@/utils/entityPoints';
+import { getConstraintPartners, getEntityRepresentativePoint, CONSTRAINT_SYMBOLS } from '@/utils/constraints';
 
 export interface RenderContext {
   renderer: Renderer;
@@ -137,23 +138,32 @@ function renderGhostedSketches(ctx: RenderContext) {
   }
 }
 
-/** Pick the right line style based on selection, construction, and constraint status. */
+/** Pick the right line style based on selection, construction, constraint, and related status. */
 function pickStyle(
   styles: ThemeStyles,
   isSelected: boolean,
   isConstruction: boolean,
   isConstrained: boolean,
+  isRelated: boolean = false,
 ): LineStyle {
-  if (isConstrained && isConstruction) {
-    return isSelected ? styles.constructionConstrainedSelected : styles.constructionConstrained;
+  // Selected (blue) wins
+  if (isSelected) {
+    if (isConstrained && isConstruction) return styles.constructionConstrainedSelected;
+    if (isConstrained) return styles.lineConstrainedSelected;
+    if (isConstruction) return styles.constructionSelected;
+    return styles.lineSelected;
   }
-  if (isConstrained) {
-    return isSelected ? styles.lineConstrainedSelected : styles.lineConstrained;
+  // Related (amber) — partner of a selected entity
+  if (isRelated) {
+    const base = isConstrained ? styles.lineRelatedConstrained : styles.lineRelated;
+    return isConstruction ? { ...base, dash: [6, 4] } : base;
   }
-  if (isConstruction) {
-    return isSelected ? styles.constructionSelected : styles.construction;
-  }
-  return isSelected ? styles.lineSelected : styles.line;
+  // Constrained (green)
+  if (isConstrained && isConstruction) return styles.constructionConstrained;
+  if (isConstrained) return styles.lineConstrained;
+  // Normal
+  if (isConstruction) return styles.construction;
+  return styles.line;
 }
 
 /** Step 4: Draw active sketch entities */
@@ -164,20 +174,22 @@ function renderActiveSketch(ctx: RenderContext) {
   if (!activeSketch || activeSketch.suppressed) return;
 
   const dofMap = computeSketchDoF(activeSketch.entities, activeSketch.constraints);
+  const { relatedIds } = getConstraintPartners(selectedEntityIds, activeSketch.constraints);
 
   for (const entity of activeSketch.entities) {
     const isSelected = selectedEntityIds.has(entity.id) &&
       !ctx.selectedSegments.some(s => s.entityId === entity.id);
+    const isRelated = !isSelected && relatedIds.has(entity.id);
     switch (entity.type) {
       case 'line': {
         const isConstrained = dofMap.get(entity.id) === 0;
-        const style = pickStyle(styles, isSelected, !!entity.construction, isConstrained);
+        const style = pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
         renderEntity(renderer, viewport, entity, style);
         break;
       }
       case 'circle': {
         const isConstrained = dofMap.get(entity.id) === 0;
-        const style = pickStyle(styles, isSelected, !!entity.construction, isConstrained);
+        const style = pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
         const screenCenter = viewport.worldToScreen(entity.center);
         const screenRadius = entity.radius * viewport.scale;
         renderer.drawCircle(screenCenter, screenRadius, style);
@@ -186,13 +198,13 @@ function renderActiveSketch(ctx: RenderContext) {
       }
       case 'rectangle': {
         const isConstrained = dofMap.get(entity.id) === 0;
-        const style = pickStyle(styles, isSelected, !!entity.construction, isConstrained);
+        const style = pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
         renderEntity(renderer, viewport, entity, style);
         break;
       }
       case 'point': {
         const isConstrained = dofMap.get(entity.id) === 0;
-        const style = pickStyle(styles, isSelected, !!entity.construction, isConstrained);
+        const style = pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
         const sp = viewport.worldToScreen(entity.position);
         renderer.fillCircle(sp, ENDPOINT_RADIUS + 1, style.color);
         break;
@@ -399,6 +411,61 @@ function renderEntity(
   }
 }
 
+/** Step 4a: Draw dashed connection lines between selected entities and their constraint partners */
+function renderConstraintLinks(ctx: RenderContext) {
+  const { renderer, viewport, document: doc, selectedEntityIds } = ctx;
+  if (selectedEntityIds.size === 0) return;
+
+  const activeSketch = doc.sketches.find((s) => s.id === doc.activeSketchId);
+  if (!activeSketch || activeSketch.suppressed) return;
+
+  const styles = getStyles(ctx.palette);
+  const { links } = getConstraintPartners(selectedEntityIds, activeSketch.constraints);
+
+  const entityMap = new Map(activeSketch.entities.map((e) => [e.id, e]));
+
+  for (const link of links) {
+    // Skip coincident — points overlap, line would be zero-length noise
+    if (link.constraintType === 'coincident') continue;
+
+    const srcEntity = entityMap.get(link.entityId);
+    const tgtEntity = entityMap.get(link.targetEntityId);
+    if (!srcEntity || !tgtEntity) continue;
+
+    const srcPt = getEntityRepresentativePoint(srcEntity);
+    const tgtPt = getEntityRepresentativePoint(tgtEntity);
+    if (!srcPt || !tgtPt) continue;
+
+    const screenA = viewport.worldToScreen(srcPt);
+    const screenB = viewport.worldToScreen(tgtPt);
+
+    // Draw dashed connection line
+    renderer.drawLine(screenA, screenB, styles.constraintLinkLine);
+
+    // Draw constraint symbol at midpoint
+    const mid = { x: (screenA.x + screenB.x) / 2, y: (screenA.y + screenB.y) / 2 };
+    const symbol = CONSTRAINT_SYMBOLS[link.constraintType] ?? '?';
+    const textStyle = styles.constraintLinkText;
+    const measured = renderer.measureText(symbol, textStyle);
+    const padX = 4;
+    const padY = 2;
+
+    // Background pill
+    renderer.drawRect(
+      { x: mid.x - measured.width / 2 - padX, y: mid.y - measured.height / 2 - padY },
+      { x: measured.width + padX * 2, y: measured.height + padY * 2 },
+      ctx.palette.background,
+    );
+
+    // Symbol text
+    renderer.drawText(symbol, mid, {
+      ...textStyle,
+      textAlign: 'center',
+      textBaseline: 'middle',
+    });
+  }
+}
+
 /** Render pipeline */
 export function renderFrame(ctx: RenderContext): void {
   renderBackground(ctx);
@@ -406,6 +473,7 @@ export function renderFrame(ctx: RenderContext): void {
   renderOrigin(ctx);
   renderGhostedSketches(ctx);
   renderActiveSketch(ctx);
+  renderConstraintLinks(ctx);
   renderDimensionOverlay(ctx);
   renderSelectedSegments(ctx);
   renderSelectedPoints(ctx);

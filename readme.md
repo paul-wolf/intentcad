@@ -5,7 +5,7 @@ A CAD sketching tool with basic capabilities to draw 2D sketches exportable as D
 TODO:
 
 * Selection mode, intersect or surround
-* Command click de/select individual entities
+
 * AI chat
 * AI file ingest
 * Hover vertices
@@ -14,7 +14,7 @@ TODO:
 * Dragging circle center point
 * Dragging rect center point
 
-* Constraints, equals, midpoint, tangent
+
 * Cut line segment
 * Named parameters
 
@@ -123,11 +123,12 @@ Why this format:
 * Features (mirror/pattern/fillet)
 * Annotation intent
 * Units & grid
+* Active sketch (UI state, managed by the editor)
+
 
 **Does NOT belong in the document file:**
 * Viewport zoom/pan
 * Current selection
-* Active sketch (UI state, managed by the editor)
 * Tool state
 * Temporary previews
 
@@ -178,7 +179,7 @@ All documents are stored as a single **versioned JSON** blob. Backend stores it 
 ```
 
 Notes:
-* `active_sketch_id` is **not** stored in the document — it is editor UI state
+
 * `constraints` and `annotations` arrays are reserved but empty in iteration 1
 * `parameters` array is reserved but empty in iteration 1
 * Inactive sketch opacity is computed by the renderer (active = 1.0, inactive = 0.35), not stored in the file
@@ -237,7 +238,7 @@ This makes it obvious which sketch is being edited.
 
 Snap to **grid + visible sketches** (but still not selectable). This feels immediately CAD-like without adding selection complexity.
 
----
+quit---
 
 ## 5) Backend (Django + django-ninja + Postgres)
 

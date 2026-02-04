@@ -51,3 +51,9 @@ export const ORIGIN_RADIUS = 4;
 
 /** Axis / origin line opacity */
 export const AXIS_OPACITY = 0.35;
+
+/** Constraint link line dash pattern */
+export const CONSTRAINT_LINK_DASH: readonly number[] = [4, 4];
+
+/** Constraint link label font size */
+export const CONSTRAINT_LINK_FONT_SIZE = 11;

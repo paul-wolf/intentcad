@@ -10,7 +10,7 @@ import { requestSave } from '@/api/autoSave';
 import type { ToolType } from '@/types/editor';
 
 const TOOLS: { type: ToolType; label: string; shortcut: string }[] = [
-  { type: 'select', label: 'Select', shortcut: 'V — X construction, K fix, = equal, J coincident, H horiz, V vert, I midpoint, N parallel, T perpendicular, Y tangent, M mirror, A circular, G grid' },
+  { type: 'select', label: 'Select', shortcut: 'V — X construction, K fix, = equal, J coincident, H horiz, V vert, I midpoint, N parallel, T perpendicular, Y tangent, B bisect, M mirror, A circular, G grid' },
   { type: 'line', label: 'Line', shortcut: 'l' },
   { type: 'point', label: 'Point', shortcut: '.' },
   { type: 'circle', label: 'Circle', shortcut: 'c' },
@@ -62,11 +62,12 @@ export function Toolbar() {
           onClick={() => setActiveTool(t.type)}
           style={{
             padding: '4px 12px',
-            border: `1px solid ${palette.inputBorder}`,
+            borderWidth: '1px',
+            borderStyle: 'solid',
+            borderColor: activeTool === t.type ? palette.accent : palette.inputBorder,
             borderRadius: '4px',
             background: activeTool === t.type ? palette.activeItemBg : palette.buttonBg,
             color: activeTool === t.type ? palette.accent : palette.text,
-            borderColor: activeTool === t.type ? palette.accent : palette.inputBorder,
             cursor: 'pointer',
             fontSize: '13px',
           }}
@@ -81,6 +82,7 @@ export function Toolbar() {
           if (ids.size === 0) return;
           useDocumentStore.getState().beginTransaction();
           useDocumentStore.getState().toggleFixed([...ids]);
+          requestSave();
         }}
         style={{
           padding: '4px 12px',
@@ -102,6 +104,7 @@ export function Toolbar() {
           if (ids.size !== 2) return;
           useDocumentStore.getState().beginTransaction();
           useDocumentStore.getState().toggleEqual([...ids]);
+          requestSave();
         }}
         style={{
           padding: '4px 12px',
@@ -125,6 +128,7 @@ export function Toolbar() {
           if (selPts.length === 2) {
             useDocumentStore.getState().beginTransaction();
             useDocumentStore.getState().toggleCoincidentWithPoints(selPts[0]!, selPts[1]!);
+            requestSave();
           } else if (selPts.length === 1 && ids.size === 1) {
             const entityId = [...ids][0]!;
             const activeSketch = useDocumentStore.getState().getActiveSketch();
@@ -143,9 +147,11 @@ export function Toolbar() {
             }
             useDocumentStore.getState().beginTransaction();
             useDocumentStore.getState().toggleCoincidentWithPoints(selPts[0]!, { entityId, pointIndex: bestIdx });
+            requestSave();
           } else if (ids.size === 2) {
             useDocumentStore.getState().beginTransaction();
             useDocumentStore.getState().toggleCoincident([...ids]);
+            requestSave();
           } else {
             return;
           }
@@ -295,6 +301,7 @@ export function Toolbar() {
               if (otherEntity && otherEntity.type === 'circle') {
                 useDocumentStore.getState().beginTransaction();
                 useDocumentStore.getState().toggleTangent(segEntityId, selSegs[0]!.segmentIndex, otherIds[0]!, -1);
+                requestSave();
               }
             }
           } else if (ids.size === 2 && selSegs.length === 0) {
@@ -304,6 +311,7 @@ export function Toolbar() {
             if (e1 && e2 && e1.type === 'circle' && e2.type === 'circle') {
               useDocumentStore.getState().beginTransaction();
               useDocumentStore.getState().toggleTangent(idArr[0]!, -1, idArr[1]!, -1);
+              requestSave();
             }
           }
         }}
@@ -319,6 +327,28 @@ export function Toolbar() {
         title="Tangent constraint — force line/circle tangency (Y)"
       >
         Tangent
+      </button>
+      <button
+        onClick={() => {
+          const es = useEditorStore.getState();
+          const selSegs = es.selectedSegments;
+          if (selSegs.length !== 2) return;
+          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().toggleBisect(selSegs[0]!, selSegs[1]!);
+          requestSave();
+        }}
+        style={{
+          padding: '4px 12px',
+          border: `1px solid ${palette.inputBorder}`,
+          borderRadius: '4px',
+          background: palette.buttonBg,
+          color: palette.text,
+          cursor: 'pointer',
+          fontSize: '13px',
+        }}
+        title="Bisect constraint — first segment passes through midpoint of second (B)"
+      >
+        Bisect
       </button>
       <button
         onClick={() => {

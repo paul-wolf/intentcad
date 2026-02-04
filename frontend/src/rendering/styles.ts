@@ -1,4 +1,4 @@
-import { STROKES, DIMENSION_FONT_SIZE } from '@/config';
+import { STROKES, DIMENSION_FONT_SIZE, CONSTRAINT_LINK_DASH, CONSTRAINT_LINK_FONT_SIZE } from '@/config';
 import type { ThemePalette } from '@/theme';
 import type { LineStyle, TextStyle } from '@/types/renderer';
 
@@ -21,6 +21,10 @@ export interface ThemeStyles {
   constructionConstrained: LineStyle;
   constructionConstrainedSelected: LineStyle;
   segmentSelected: LineStyle;
+  lineRelated: LineStyle;
+  lineRelatedConstrained: LineStyle;
+  constraintLinkLine: LineStyle;
+  constraintLinkText: TextStyle;
 }
 
 export function getStyles(palette: ThemePalette): ThemeStyles {
@@ -43,5 +47,9 @@ export function getStyles(palette: ThemePalette): ThemeStyles {
     constructionConstrained: { color: palette.constrained, width: STROKES.line, dash: [6, 4] },
     constructionConstrainedSelected: { color: palette.constrained, width: STROKES.lineSelected, dash: [6, 4] },
     segmentSelected: { color: palette.accent, width: 3 },
+    lineRelated: { color: palette.constraintLink, width: STROKES.line },
+    lineRelatedConstrained: { color: palette.constraintLink, width: STROKES.line },
+    constraintLinkLine: { color: palette.constraintLink, width: 0.75, dash: [...CONSTRAINT_LINK_DASH], opacity: 0.6 },
+    constraintLinkText: { color: palette.constraintLink, fontSize: CONSTRAINT_LINK_FONT_SIZE },
   };
 }

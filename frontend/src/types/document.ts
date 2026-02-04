@@ -130,7 +130,16 @@ export interface TangentConstraint {
   targetSegmentIndex: number; // segment on target (-1 for circle)
 }
 
-export type Constraint = FixedConstraint | EqualConstraint | CoincidentConstraint | HorizontalConstraint | VerticalConstraint | MidpointConstraint | ParallelConstraint | PerpendicularConstraint | TangentConstraint;
+export interface BisectConstraint {
+  id: string;
+  type: 'bisect';
+  entityId: string;           // the bisecting line (passes through midpoint)
+  segmentIndex: number;       // which segment on the bisecting line
+  targetEntityId: string;     // the line being bisected
+  targetSegmentIndex: number; // which segment is bisected
+}
+
+export type Constraint = FixedConstraint | EqualConstraint | CoincidentConstraint | HorizontalConstraint | VerticalConstraint | MidpointConstraint | ParallelConstraint | PerpendicularConstraint | TangentConstraint | BisectConstraint;
 
 export interface Sketch {
   id: string;
