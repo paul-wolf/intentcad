@@ -123,6 +123,27 @@ export function rotatePoint(p: Point, center: Point, angle: number): Point {
   };
 }
 
+/** Intersection of infinite lines (a1→a2) and (b1→b2). Returns null if parallel. */
+export function lineLineIntersection(a1: Point, a2: Point, b1: Point, b2: Point): Point | null {
+  const d1x = a2.x - a1.x;
+  const d1y = a2.y - a1.y;
+  const d2x = b2.x - b1.x;
+  const d2y = b2.y - b1.y;
+  const denom = d1x * d2y - d1y * d2x;
+  if (Math.abs(denom) < 1e-10) return null;
+  const t = ((b1.x - a1.x) * d2y - (b1.y - a1.y) * d2x) / denom;
+  return { x: a1.x + t * d1x, y: a1.y + t * d1y };
+}
+
+/** Angle between two direction vectors, in [0, PI]. */
+export function angleBetweenVectors(d1x: number, d1y: number, d2x: number, d2y: number): number {
+  const len1 = Math.sqrt(d1x * d1x + d1y * d1y);
+  const len2 = Math.sqrt(d2x * d2x + d2y * d2y);
+  if (len1 === 0 || len2 === 0) return 0;
+  const dot = (d1x * d2x + d1y * d2y) / (len1 * len2);
+  return Math.acos(Math.max(-1, Math.min(1, dot)));
+}
+
 export function reflectPoint(p: Point, a: Point, b: Point): Point {
   const dx = b.x - a.x;
   const dy = b.y - a.y;

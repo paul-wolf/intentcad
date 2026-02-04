@@ -7,7 +7,7 @@ import type { SegmentHit } from '@/hittest/hitTest';
 import { GRID_SPACING_MM, GRID_MAJOR_EVERY, GHOSTED_OPACITY, ENDPOINT_RADIUS, SELECTED_POINT_RADIUS, ORIGIN_RADIUS, AXIS_OPACITY } from '@/config';
 import { getStyles } from './styles';
 import type { ThemeStyles } from './styles';
-import { drawDimension, drawDiameterDimension, drawSegmentLabel, drawDiameterLabel } from './dimensionRenderer';
+import { drawDimension, drawDiameterDimension, drawSegmentLabel, drawDiameterLabel, computeAngleDimensionGeom, drawAngleDimension } from './dimensionRenderer';
 import { computeSketchDoF, computeDerivedDimensionIds } from '@/utils/dof';
 import { getEntityPoint } from '@/utils/entityPoints';
 import { getConstraintPartners, getEntityRepresentativePoint, CONSTRAINT_SYMBOLS } from '@/utils/constraints';
@@ -219,7 +219,7 @@ function renderActiveSketch(ctx: RenderContext) {
         const lineStyle = isSelected ? styles.dimensionSelected : styles.dimensionLine;
         const textStyle = styles.dimensionText;
 
-        // Two-segment distance dimension
+        // Two-segment dimension (distance or angle)
         if (entity.targetEntityId2 != null) {
           const target2 = activeSketch.entities.find(
             (e) => e.id === entity.targetEntityId2,
@@ -233,6 +233,15 @@ function renderActiveSketch(ctx: RenderContext) {
           const p2 = target.points[idx1 + 1]!;
           const q1 = target2.points[idx2]!;
           const q2 = target2.points[idx2 + 1]!;
+
+          if (entity.angleMode) {
+            const angleGeom = computeAngleDimensionGeom(p1, p2, q1, q2, entity.offset);
+            if (angleGeom) {
+              drawAngleDimension(renderer, viewport, angleGeom, lineStyle, textStyle, ctx.palette.background, isDerived);
+            }
+            break;
+          }
+
           const a: Point = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
           const dx = q2.x - q1.x;
           const dy = q2.y - q1.y;

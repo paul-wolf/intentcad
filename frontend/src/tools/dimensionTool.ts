@@ -5,10 +5,23 @@ import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
 import { hitTestSegment } from '@/hittest/hitTest';
 import type { SegmentHit } from '@/hittest/hitTest';
-import { drawDimension } from '@/rendering/dimensionRenderer';
-import { DIMENSION_OFFSET_MM } from '@/config';
+import { drawDimension, computeAngleDimensionGeom, drawAngleDimension } from '@/rendering/dimensionRenderer';
+import { DIMENSION_OFFSET_MM, PARALLEL_DOT_THRESHOLD, ANGLE_DIMENSION_ARC_RADIUS_MM } from '@/config';
 import { getStyles } from '@/rendering/styles';
 import { getThemePalette } from '@/theme';
+
+/** Check if two segments are approximately parallel (within ~5 degrees). */
+function areSegmentsParallel(p1: Point, p2: Point, q1: Point, q2: Point): boolean {
+  const d1x = p2.x - p1.x;
+  const d1y = p2.y - p1.y;
+  const d2x = q2.x - q1.x;
+  const d2y = q2.y - q1.y;
+  const len1 = Math.sqrt(d1x * d1x + d1y * d1y);
+  const len2 = Math.sqrt(d2x * d2x + d2y * d2y);
+  if (len1 === 0 || len2 === 0) return true;
+  const dot = (d1x * d2x + d1y * d2y) / (len1 * len2);
+  return Math.abs(dot) > PARALLEL_DOT_THRESHOLD;
+}
 
 /** Compute the two-segment distance dimension geometry: a = midpoint of S1, b = perpendicular projection of a onto the line through S2. */
 function twoSegmentGeom(
@@ -114,7 +127,7 @@ export function createDimensionTool(): Tool {
         return;
       }
 
-      // Second click on a different segment: create two-segment distance dimension
+      // Second click on a different segment: create two-segment dimension (distance or angle)
       const target1 = activeSketch.entities.find((e) => e.id === firstSegment!.entityId);
       if (!target1 || target1.type !== 'line') {
         firstSegment = null;
@@ -140,6 +153,30 @@ export function createDimensionTool(): Tool {
         return;
       }
 
+      const seg1p1 = target1.points[firstSegment.segmentIndex]!;
+      const seg1p2 = target1.points[firstSegment.segmentIndex + 1]!;
+      const seg2p1 = targetEntity.points[hit.segmentIndex]!;
+      const seg2p2 = targetEntity.points[hit.segmentIndex + 1]!;
+      const parallel = areSegmentsParallel(seg1p1, seg1p2, seg2p1, seg2p2);
+
+      if (!parallel) {
+        // Angle dimension
+        useDocumentStore.getState().beginTransaction();
+        useDocumentStore.getState().addEntity({
+          id: crypto.randomUUID(),
+          type: 'dimension',
+          targetEntityId: firstSegment.entityId,
+          segmentIndex: firstSegment.segmentIndex,
+          offset: ANGLE_DIMENSION_ARC_RADIUS_MM,
+          targetEntityId2: hit.entityId,
+          segmentIndex2: hit.segmentIndex,
+          angleMode: true,
+        } as DimensionEntity);
+        firstSegment = null;
+        return;
+      }
+
+      // Parallel: distance dimension
       const geom = twoSegmentGeom(
         target1.points,
         firstSegment.segmentIndex,
@@ -249,6 +286,30 @@ export function createDimensionTool(): Tool {
 
         const entity1 = activeSketch.entities.find((e) => e.id === firstSegment!.entityId);
         if (!entity1 || entity1.type !== 'line') return;
+
+        const seg1p1 = entity1.points[firstSegment.segmentIndex]!;
+        const seg1p2 = entity1.points[firstSegment.segmentIndex + 1]!;
+        const seg2p1 = targetEntity.points[hoverSegment.segmentIndex]!;
+        const seg2p2 = targetEntity.points[hoverSegment.segmentIndex + 1]!;
+        const parallel = areSegmentsParallel(seg1p1, seg1p2, seg2p1, seg2p2);
+
+        if (!parallel) {
+          // Angle preview
+          const angleGeom = computeAngleDimensionGeom(seg1p1, seg1p2, seg2p1, seg2p2, ANGLE_DIMENSION_ARC_RADIUS_MM);
+          if (angleGeom) {
+            renderer.setGlobalAlpha(0.4);
+            drawAngleDimension(
+              renderer,
+              viewport,
+              angleGeom,
+              styles.dimensionLine,
+              styles.dimensionText,
+              palette.background,
+            );
+            renderer.resetGlobalAlpha();
+          }
+          return;
+        }
 
         const geom = twoSegmentGeom(
           entity1.points,

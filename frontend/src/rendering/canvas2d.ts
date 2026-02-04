@@ -44,6 +44,24 @@ export class Canvas2DRenderer implements Renderer {
     if (style.dash) ctx.setLineDash([]);
   }
 
+  drawArc(center: Point, radius: number, startAngle: number, endAngle: number, counterClockwise: boolean, style: LineStyle): void {
+    const { ctx } = this;
+    if (style.dash) ctx.setLineDash(style.dash);
+    ctx.beginPath();
+    ctx.arc(center.x, center.y, radius, startAngle, endAngle, counterClockwise);
+    ctx.strokeStyle = style.color;
+    ctx.lineWidth = style.width;
+    if (style.opacity !== undefined) {
+      const prev = ctx.globalAlpha;
+      ctx.globalAlpha = style.opacity;
+      ctx.stroke();
+      ctx.globalAlpha = prev;
+    } else {
+      ctx.stroke();
+    }
+    if (style.dash) ctx.setLineDash([]);
+  }
+
   fillCircle(center: Point, radius: number, color: string): void {
     const { ctx } = this;
     ctx.beginPath();

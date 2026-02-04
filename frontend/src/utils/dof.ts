@@ -34,6 +34,9 @@ export function computeSketchDoF(entities: Entity[], constraints: Constraint[] =
   for (const e of entities) {
     if (e.type === 'dimension') {
       dimCount.set(e.targetEntityId, (dimCount.get(e.targetEntityId) ?? 0) + 1);
+      if (e.targetEntityId2) {
+        dimCount.set(e.targetEntityId2, (dimCount.get(e.targetEntityId2) ?? 0) + 1);
+      }
     }
   }
 

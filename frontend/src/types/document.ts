@@ -57,6 +57,8 @@ export interface DimensionEntity {
   // Two-segment distance dimension (perpendicular distance between segments):
   targetEntityId2?: string;
   segmentIndex2?: number;
+  // Angle dimension between two non-parallel segments:
+  angleMode?: boolean;
 }
 
 export type Entity = LineEntity | CircleEntity | RectangleEntity | PointEntity | DimensionEntity;

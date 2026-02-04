@@ -43,6 +43,12 @@ export const DIMENSION_EXTENSION_GAP = 3;
 export const DIMENSION_EXTENSION_OVERSHOOT = 3;
 export const DIMENSION_TEXT_PAD = 2;
 
+/** Angle dimension arc radius in mm (world units) */
+export const ANGLE_DIMENSION_ARC_RADIUS_MM = 12;
+
+/** Dot-product threshold for parallel detection (~5 degrees) */
+export const PARALLEL_DOT_THRESHOLD = Math.cos(5 * Math.PI / 180);
+
 /** Ghosted sketch opacity */
 export const GHOSTED_OPACITY = 0.35;
 

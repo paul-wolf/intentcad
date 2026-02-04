@@ -1,6 +1,7 @@
 import type { Point, Entity, LineEntity } from '@/types/document';
 import type { Viewport } from '@/types/renderer';
 import { distance, pointToSegmentDist } from '@/utils/geometry';
+import { computeAngleDimensionGeom } from '@/rendering/dimensionRenderer';
 import { HIT_TOL } from '@/config';
 
 export interface PointHit {
@@ -151,7 +152,7 @@ export function hitTestEntities(
       );
       if (!target) continue;
 
-      // Two-segment distance dimension
+      // Two-segment dimension (distance or angle)
       if (entity.targetEntityId2 != null) {
         const target2 = allEntities.find((e) => e.id === entity.targetEntityId2);
         if (!target2 || target.type !== 'line' || target2.type !== 'line') continue;
@@ -163,6 +164,34 @@ export function hitTestEntities(
         const p2 = target.points[idx1 + 1]!;
         const q1 = target2.points[idx2]!;
         const q2 = target2.points[idx2 + 1]!;
+
+        if (entity.angleMode) {
+          const angleGeom = computeAngleDimensionGeom(p1, p2, q1, q2, entity.offset);
+          if (!angleGeom) continue;
+          const screenCenter = viewport.worldToScreen(angleGeom.intersection);
+          const screenArcRadius = angleGeom.arcRadius * viewport.scale;
+          const distToArc = Math.abs(distance(screenPos, screenCenter) - screenArcRadius);
+          if (distToArc < bestDist) {
+            // Also verify cursor angle falls within the arc sweep
+            // No Y-flip in worldToScreen, so screen angles = world angles
+            const cursorAngle = Math.atan2(screenPos.y - screenCenter.y, screenPos.x - screenCenter.x);
+            let sweep = angleGeom.endAngle - angleGeom.startAngle;
+            while (sweep > Math.PI) sweep -= 2 * Math.PI;
+            while (sweep < -Math.PI) sweep += 2 * Math.PI;
+            let cursorRel = cursorAngle - angleGeom.startAngle;
+            while (cursorRel > Math.PI) cursorRel -= 2 * Math.PI;
+            while (cursorRel < -Math.PI) cursorRel += 2 * Math.PI;
+            const inSweep = sweep >= 0
+              ? (cursorRel >= 0 && cursorRel <= sweep)
+              : (cursorRel <= 0 && cursorRel >= sweep);
+            if (inSweep) {
+              bestDist = distToArc;
+              best = entity;
+            }
+          }
+          continue;
+        }
+
         const a = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
         const dx2 = q2.x - q1.x;
         const dy2 = q2.y - q1.y;

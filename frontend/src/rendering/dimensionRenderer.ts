@@ -7,6 +7,7 @@ import {
   DIMENSION_EXTENSION_OVERSHOOT,
   DIMENSION_TEXT_PAD,
 } from '@/config';
+import { lineLineIntersection } from '@/utils/geometry';
 
 export interface DimensionGeom {
   a: Point;
@@ -252,6 +253,152 @@ export function drawSegmentLabel(
 
   const length = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
   const label = formatLength(length);
+
+  const metrics = renderer.measureText(label, textStyle);
+  const pad = DIMENSION_TEXT_PAD;
+  if (bgColor) {
+    renderer.drawRect(
+      { x: textPos.x - metrics.width / 2 - pad, y: textPos.y - metrics.height / 2 - pad },
+      { x: metrics.width + pad * 2, y: metrics.height + pad * 2 },
+      bgColor,
+    );
+  }
+  renderer.drawText(label, textPos, textStyle);
+}
+
+// ── Angle dimension ──────────────────────────────────────────────────
+
+export interface AngleDimensionGeom {
+  intersection: Point;
+  startAngle: number;
+  endAngle: number;
+  arcRadius: number;
+}
+
+export function computeAngleDimensionGeom(
+  p1: Point,
+  p2: Point,
+  q1: Point,
+  q2: Point,
+  arcRadius: number,
+): AngleDimensionGeom | null {
+  const ix = lineLineIntersection(p1, p2, q1, q2);
+  if (!ix) return null;
+
+  // Direction vectors oriented toward each segment's midpoint (away from intersection)
+  const mid1x = (p1.x + p2.x) / 2 - ix.x;
+  const mid1y = (p1.y + p2.y) / 2 - ix.y;
+  const mid2x = (q1.x + q2.x) / 2 - ix.x;
+  const mid2y = (q1.y + q2.y) / 2 - ix.y;
+
+  const startAngle = Math.atan2(mid1y, mid1x);
+  const endAngle = Math.atan2(mid2y, mid2x);
+
+  return { intersection: ix, startAngle, endAngle, arcRadius };
+}
+
+function normalizeAngle(a: number): number {
+  while (a > Math.PI) a -= 2 * Math.PI;
+  while (a < -Math.PI) a += 2 * Math.PI;
+  return a;
+}
+
+export function getAngleDimensionTextScreenPos(
+  viewport: Viewport,
+  geom: AngleDimensionGeom,
+): Point {
+  const midAngle = (geom.startAngle + geom.endAngle) / 2;
+  // Choose the arc side that gives the smaller sweep
+  let sweep = normalizeAngle(geom.endAngle - geom.startAngle);
+  let actualMid = midAngle;
+  if (Math.abs(sweep) > Math.PI) {
+    actualMid = midAngle + Math.PI;
+  }
+  const worldPt: Point = {
+    x: geom.intersection.x + Math.cos(actualMid) * geom.arcRadius,
+    y: geom.intersection.y + Math.sin(actualMid) * geom.arcRadius,
+  };
+  return viewport.worldToScreen(worldPt);
+}
+
+export function drawAngleDimension(
+  renderer: Renderer,
+  viewport: Viewport,
+  geom: AngleDimensionGeom,
+  lineStyle: LineStyle,
+  textStyle: TextStyle,
+  bgColor?: string,
+  derived?: boolean,
+): void {
+  const screenCenter = viewport.worldToScreen(geom.intersection);
+  const screenRadius = geom.arcRadius * viewport.scale;
+
+  // Compute sweep (no Y-flip in worldToScreen, so world angles = screen angles)
+  let sweep = normalizeAngle(geom.endAngle - geom.startAngle);
+  const counterClockwise = sweep < 0;
+  const absSweep = Math.abs(sweep);
+
+  // Draw arc (world angles used directly as screen angles)
+  renderer.drawArc(screenCenter, screenRadius, geom.startAngle, geom.endAngle, counterClockwise, lineStyle);
+
+  // Extension lines from intersection outward along each segment direction
+  const extLen = geom.arcRadius * 1.15;
+  const ext1World: Point = {
+    x: geom.intersection.x + Math.cos(geom.startAngle) * extLen,
+    y: geom.intersection.y + Math.sin(geom.startAngle) * extLen,
+  };
+  const ext2World: Point = {
+    x: geom.intersection.x + Math.cos(geom.endAngle) * extLen,
+    y: geom.intersection.y + Math.sin(geom.endAngle) * extLen,
+  };
+  const gapFraction = 0.3;
+  const gap1World: Point = {
+    x: geom.intersection.x + Math.cos(geom.startAngle) * geom.arcRadius * gapFraction,
+    y: geom.intersection.y + Math.sin(geom.startAngle) * geom.arcRadius * gapFraction,
+  };
+  const gap2World: Point = {
+    x: geom.intersection.x + Math.cos(geom.endAngle) * geom.arcRadius * gapFraction,
+    y: geom.intersection.y + Math.sin(geom.endAngle) * geom.arcRadius * gapFraction,
+  };
+  renderer.drawLine(viewport.worldToScreen(gap1World), viewport.worldToScreen(ext1World), lineStyle);
+  renderer.drawLine(viewport.worldToScreen(gap2World), viewport.worldToScreen(ext2World), lineStyle);
+
+  // V-shaped arrowheads at arc endpoints (tangent direction)
+  const aLen = DIMENSION_ARROW_LENGTH;
+  const aHalf = DIMENSION_ARROW_HALF_WIDTH;
+
+  // Arrow at start angle point
+  const arcPt1 = viewport.worldToScreen({
+    x: geom.intersection.x + Math.cos(geom.startAngle) * geom.arcRadius,
+    y: geom.intersection.y + Math.sin(geom.startAngle) * geom.arcRadius,
+  });
+  // Tangent at start: perpendicular to radius, in direction of sweep
+  const tangentSign1 = counterClockwise ? -1 : 1;
+  const st1x = -Math.sin(geom.startAngle) * tangentSign1;
+  const st1y = Math.cos(geom.startAngle) * tangentSign1;
+  // Perpendicular to tangent
+  const sn1x = -st1y;
+  const sn1y = st1x;
+  renderer.drawLine(arcPt1, { x: arcPt1.x + st1x * aLen + sn1x * aHalf, y: arcPt1.y + st1y * aLen + sn1y * aHalf }, lineStyle);
+  renderer.drawLine(arcPt1, { x: arcPt1.x + st1x * aLen - sn1x * aHalf, y: arcPt1.y + st1y * aLen - sn1y * aHalf }, lineStyle);
+
+  // Arrow at end angle point
+  const arcPt2 = viewport.worldToScreen({
+    x: geom.intersection.x + Math.cos(geom.endAngle) * geom.arcRadius,
+    y: geom.intersection.y + Math.sin(geom.endAngle) * geom.arcRadius,
+  });
+  const tangentSign2 = counterClockwise ? 1 : -1;
+  const st2x = -Math.sin(geom.endAngle) * tangentSign2;
+  const st2y = Math.cos(geom.endAngle) * tangentSign2;
+  const sn2x = -st2y;
+  const sn2y = st2x;
+  renderer.drawLine(arcPt2, { x: arcPt2.x + st2x * aLen + sn2x * aHalf, y: arcPt2.y + st2y * aLen + sn2y * aHalf }, lineStyle);
+  renderer.drawLine(arcPt2, { x: arcPt2.x + st2x * aLen - sn2x * aHalf, y: arcPt2.y + st2y * aLen - sn2y * aHalf }, lineStyle);
+
+  // Text label at arc midpoint
+  const angleDeg = absSweep * 180 / Math.PI;
+  const label = derived ? `(${angleDeg.toFixed(1)}°)` : `${angleDeg.toFixed(1)}°`;
+  const textPos = getAngleDimensionTextScreenPos(viewport, geom);
 
   const metrics = renderer.measureText(label, textStyle);
   const pad = DIMENSION_TEXT_PAD;

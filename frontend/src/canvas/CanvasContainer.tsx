@@ -5,7 +5,7 @@ import { useUIStateStore } from '@/stores/uiStateStore';
 import { useThemeStore } from '@/theme';
 import { useCanvasRenderer } from './useCanvasRenderer';
 import { useMouseHandlers } from './useMouseHandlers';
-import { getDimensionTextScreenPos, getDiameterTextScreenPos } from '@/rendering/dimensionRenderer';
+import { getDimensionTextScreenPos, getDiameterTextScreenPos, computeAngleDimensionGeom, getAngleDimensionTextScreenPos } from '@/rendering/dimensionRenderer';
 import { MirrorDialog } from '@/components/MirrorDialog';
 import { CircularCopyDialog } from '@/components/CircularCopyDialog';
 import { GridCopyDialog } from '@/components/GridCopyDialog';
@@ -93,10 +93,12 @@ function DimensionEditInput({
   dimensionId,
   pos,
   value,
+  isAngle,
 }: {
   dimensionId: string;
   pos: Point;
   value: number;
+  isAngle?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -110,7 +112,11 @@ function DimensionEditInput({
 
   const commit = (input: string) => {
     const v = parseFloat(input);
-    if (isNaN(v) || v <= 0) return false;
+    if (isAngle) {
+      if (isNaN(v) || v <= 0 || v >= 180) return false;
+    } else {
+      if (isNaN(v) || v <= 0) return false;
+    }
     useDocumentStore.getState().applyDimensionValue(dimensionId, v);
     useEditorStore.getState().setEditingDimensionId(null);
     return true;
@@ -123,7 +129,7 @@ function DimensionEditInput({
   return (
     <input
       ref={inputRef}
-      defaultValue={value >= 10 ? value.toFixed(1) : value.toFixed(2)}
+      defaultValue={isAngle ? value.toFixed(1) : (value >= 10 ? value.toFixed(1) : value.toFixed(2))}
       style={{
         position: 'absolute',
         left: pos.x - 30,
@@ -342,7 +348,7 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
 
   const editingDimensionId = useEditorStore((s) => s.editingDimensionId);
 
-  const dimensionEditPos = useMemo((): { pos: Point; value: number } | null => {
+  const dimensionEditPos = useMemo((): { pos: Point; value: number; isAngle?: boolean } | null => {
     if (!editingDimensionId) return null;
     const vp = viewportRef.current;
     if (!vp) return null;
@@ -361,7 +367,7 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
     const target = sketch.entities.find((e) => e.id === dim.targetEntityId);
     if (!target) return null;
 
-    // Two-segment distance dimension
+    // Two-segment dimension (distance or angle)
     if (dim.targetEntityId2 != null) {
       const target2 = sketch.entities.find((e) => e.id === dim.targetEntityId2);
       if (!target2 || target.type !== 'line' || target2.type !== 'line') return null;
@@ -373,6 +379,18 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
       const p2 = target.points[idx1 + 1]!;
       const q1 = target2.points[idx2]!;
       const q2 = target2.points[idx2 + 1]!;
+
+      if (dim.angleMode) {
+        const angleGeom = computeAngleDimensionGeom(p1, p2, q1, q2, dim.offset);
+        if (!angleGeom) return null;
+        const pos = getAngleDimensionTextScreenPos(vp, angleGeom);
+        let sweep = angleGeom.endAngle - angleGeom.startAngle;
+        while (sweep > Math.PI) sweep -= 2 * Math.PI;
+        while (sweep < -Math.PI) sweep += 2 * Math.PI;
+        const value = Math.abs(sweep) * 180 / Math.PI;
+        return { pos, value, isAngle: true };
+      }
+
       const a: Point = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
       const dx = q2.x - q1.x;
       const dy = q2.y - q1.y;
@@ -451,6 +469,7 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
           dimensionId={editingDimensionId}
           pos={dimensionEditPos.pos}
           value={dimensionEditPos.value}
+          isAngle={dimensionEditPos.isAngle}
         />
       )}
       <MirrorDialog />

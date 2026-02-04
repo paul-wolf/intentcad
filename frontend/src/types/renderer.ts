@@ -28,6 +28,7 @@ export interface Renderer {
   clear(color: string): void;
   drawLine(a: Point, b: Point, style: LineStyle): void;
   drawCircle(center: Point, radius: number, style: LineStyle): void;
+  drawArc(center: Point, radius: number, startAngle: number, endAngle: number, counterClockwise: boolean, style: LineStyle): void;
   fillCircle(center: Point, radius: number, color: string): void;
   drawRect(topLeft: Point, size: Point, fillColor: string, strokeStyle?: LineStyle): void;
   drawText(text: string, position: Point, style: TextStyle): void;

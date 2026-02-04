@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import type { Document, Entity, Point, Sketch, Constraint, HorizontalConstraint, VerticalConstraint } from '@/types/document';
 import { createEmptyDocument, createEmptySketch } from '@/utils/document';
 import { createMirroredEntity, createRotatedEntity, createTranslatedEntity, propagateDerived } from '@/utils/propagate';
-import { rotatePoint } from '@/utils/geometry';
+import { rotatePoint, lineLineIntersection } from '@/utils/geometry';
 import { getEntityPoint, setEntityPoint, getEntityPoints } from '@/utils/entityPoints';
 import { solveConstraints, validateConstraint } from '@/utils/constraintSolver';
 import { computeDerivedDimensionIds } from '@/utils/dof';
@@ -1207,7 +1207,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     const target = sketch.entities.find((e) => e.id === dim.targetEntityId);
     if (!target) return;
 
-    // Two-segment distance dimension
+    // Two-segment dimension (distance or angle)
     if (dim.targetEntityId2 != null) {
       const target2 = sketch.entities.find((e) => e.id === dim.targetEntityId2);
       if (!target2 || target.type !== 'line' || target2.type !== 'line') return;
@@ -1219,6 +1219,73 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
       const p2 = target.points[idx1 + 1]!;
       const q1 = target2.points[idx2]!;
       const q2 = target2.points[idx2 + 1]!;
+
+      // Angle dimension: rotate segments to match new angle
+      if (dim.angleMode) {
+        const ix = lineLineIntersection(p1, p2, q1, q2);
+        if (!ix) return;
+
+        // Direction vectors oriented toward each segment's midpoint (away from intersection)
+        const mid1x = (p1.x + p2.x) / 2 - ix.x;
+        const mid1y = (p1.y + p2.y) / 2 - ix.y;
+        const mid2x = (q1.x + q2.x) / 2 - ix.x;
+        const mid2y = (q1.y + q2.y) / 2 - ix.y;
+        const startAngle = Math.atan2(mid1y, mid1x);
+        const endAngle = Math.atan2(mid2y, mid2x);
+        let sweep = endAngle - startAngle;
+        while (sweep > Math.PI) sweep -= 2 * Math.PI;
+        while (sweep < -Math.PI) sweep += 2 * Math.PI;
+        const currentAngleDeg = Math.abs(sweep) * 180 / Math.PI;
+        const deltaRad = (newValue - currentAngleDeg) * Math.PI / 180;
+        // Preserve the sign of sweep for rotation direction
+        const signedDelta = sweep >= 0 ? deltaRad : -deltaRad;
+
+        const target1Fixed = sketch.constraints.some((c) => c.type === 'fixed' && c.entityId === target.id);
+        const target2Fixed = sketch.constraints.some((c) => c.type === 'fixed' && c.entityId === target2.id);
+        if (target1Fixed && target2Fixed) return;
+
+        // Symmetric rotation: each segment rotates half the delta around intersection
+        let rot1 = -signedDelta / 2;
+        let rot2 = signedDelta / 2;
+        if (target1Fixed) { rot1 = 0; rot2 = signedDelta; }
+        if (target2Fixed) { rot2 = 0; rot1 = -signedDelta; }
+
+        get().beginTransaction();
+
+        const movedIds = new Set<string>();
+        const updatedEntities = sketch.entities.map((e) => {
+          if (e.type !== 'line') return e;
+          if ('sourceId' in e && e.sourceId) return e;
+
+          if (e.id === target.id && rot1 !== 0) {
+            movedIds.add(e.id);
+            return {
+              ...e,
+              points: e.points.map((pt, i) =>
+                (i === idx1 || i === idx1 + 1) ? rotatePoint(pt, ix, rot1) : pt,
+              ),
+            };
+          }
+          if (e.id === target2.id && rot2 !== 0) {
+            movedIds.add(e.id);
+            return {
+              ...e,
+              points: e.points.map((pt, i) =>
+                (i === idx2 || i === idx2 + 1) ? rotatePoint(pt, ix, rot2) : pt,
+              ),
+            };
+          }
+          return e;
+        });
+        const solved = solveConstraints(updatedEntities, sketch.constraints, { movedIds });
+        set({
+          document: updateActiveSketch(document, () => ({
+            entities: solved.entities,
+          })),
+        });
+        return;
+      }
+
       const a = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
       const dx = q2.x - q1.x;
       const dy = q2.y - q1.y;
