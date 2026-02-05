@@ -99,6 +99,37 @@ export function Toolbar() {
         {'\u2261'}
       </button>
       <Sep color={palette.border} />
+      <button
+        onClick={() => { useDocumentStore.getState().undo(); requestSave(); }}
+        style={{
+          padding: '4px 12px',
+          border: `1px solid ${palette.inputBorder}`,
+          borderRadius: '4px',
+          background: palette.buttonBg,
+          color: palette.text,
+          cursor: 'pointer',
+          fontSize: '13px',
+        }}
+        title="Undo (Ctrl+Z)"
+      >
+        <ToolIcon><path d="M4 7h7a4 4 0 0 1 0 8H9" /><path d="M7 4L4 7l3 3" /></ToolIcon>
+      </button>
+      <button
+        onClick={() => { useDocumentStore.getState().redo(); requestSave(); }}
+        style={{
+          padding: '4px 12px',
+          border: `1px solid ${palette.inputBorder}`,
+          borderRadius: '4px',
+          background: palette.buttonBg,
+          color: palette.text,
+          cursor: 'pointer',
+          fontSize: '13px',
+        }}
+        title="Redo (Ctrl+Shift+Z)"
+      >
+        <ToolIcon><path d="M12 7H5a4 4 0 0 0 0 8h2" /><path d="M9 4l3 3-3 3" /></ToolIcon>
+      </button>
+      <Sep color={palette.border} />
       <ToolButtons tools={ENTITY_TOOLS} activeTool={activeTool} setActiveTool={setActiveTool} palette={palette} />
       <Sep color={palette.border} />
       <ToolButtons tools={MEASURE_TOOLS} activeTool={activeTool} setActiveTool={setActiveTool} palette={palette} />
