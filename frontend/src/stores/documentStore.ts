@@ -1469,12 +1469,24 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
 
         get().beginTransaction('Edit dimension');
 
+        const sameEntityAngle = target.id === target2.id;
         const movedIds = new Set<string>();
         const updatedEntities = sketch.entities.map((e) => {
           if (e.type !== 'line') return e;
           if ('sourceId' in e && e.sourceId) return e;
 
-          if (e.id === target.id && rot1 !== 0) {
+          if (sameEntityAngle && e.id === target.id && (rot1 !== 0 || rot2 !== 0)) {
+            movedIds.add(e.id);
+            return {
+              ...e,
+              points: e.points.map((pt, i) => {
+                if ((i === pi1 || i === pi2) && rot1 !== 0) return rotatePoint(pt, ix, rot1);
+                if ((i === qi1 || i === qi2) && rot2 !== 0) return rotatePoint(pt, ix, rot2);
+                return pt;
+              }),
+            };
+          }
+          if (!sameEntityAngle && e.id === target.id && rot1 !== 0) {
             movedIds.add(e.id);
             return {
               ...e,
@@ -1483,7 +1495,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
               ),
             };
           }
-          if (e.id === target2.id && rot2 !== 0) {
+          if (!sameEntityAngle && e.id === target2.id && rot2 !== 0) {
             movedIds.add(e.id);
             return {
               ...e,
@@ -1530,13 +1542,29 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
 
       get().beginTransaction('Edit dimension');
 
+      const sameEntity = target.id === target2.id;
       const movedIds = new Set<string>();
       const updatedEntities = sketch.entities.map((e) => {
         if (e.type !== 'line') return e;
         if ('sourceId' in e && e.sourceId) return e;
 
-        // Only move the referenced segment's endpoints, not the whole entity
-        if (e.id === target.id && move1 !== 0) {
+        // Same entity: apply both segment movements in one pass
+        if (sameEntity && e.id === target.id && (move1 !== 0 || move2 !== 0)) {
+          movedIds.add(e.id);
+          return {
+            ...e,
+            points: e.points.map((pt, i) => {
+              if ((i === pi1 || i === pi2) && move1 !== 0)
+                return { x: pt.x + nx * move1, y: pt.y + ny * move1 };
+              if ((i === qi1 || i === qi2) && move2 !== 0)
+                return { x: pt.x + nx * move2, y: pt.y + ny * move2 };
+              return pt;
+            }),
+          };
+        }
+
+        // Different entities: move each separately
+        if (!sameEntity && e.id === target.id && move1 !== 0) {
           movedIds.add(e.id);
           return {
             ...e,
@@ -1547,7 +1575,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
             ),
           };
         }
-        if (e.id === target2.id && move2 !== 0) {
+        if (!sameEntity && e.id === target2.id && move2 !== 0) {
           movedIds.add(e.id);
           return {
             ...e,
@@ -1573,81 +1601,122 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
 
     get().beginTransaction('Edit dimension');
 
-    const updatedEntities = sketch.entities.map((e) => {
-      if (e.id !== target.id) return e;
-      if (e.type === 'line') {
-        // Polygon apothem dimension
-        if (dim.segmentIndex === -1 && e.polygonCenter) {
-          const center = e.polygonCenter;
-          const midA = {
-            x: (e.points[0]!.x + e.points[1]!.x) / 2,
-            y: (e.points[0]!.y + e.points[1]!.y) / 2,
-          };
-          const curApothem = Math.sqrt((midA.x - center.x) ** 2 + (midA.y - center.y) ** 2);
-          if (curApothem === 0) return e;
-          const scale = newValue / curApothem;
-          return {
-            ...e,
-            points: e.points.map((p) => ({
-              x: center.x + (p.x - center.x) * scale,
-              y: center.y + (p.y - center.y) * scale,
-            })),
-          };
-        }
-        // Polygon segment dimension: scale uniformly to preserve regularity
-        if (e.polygonCenter) {
+    // Helper: adjust a single segment's length on a line entity
+    const adjustSegLen = (entities: Entity[], targetValue: number): Entity[] =>
+      entities.map((e) => {
+        if (e.id !== target.id) return e;
+        if (e.type === 'line') {
+          // Polygon apothem dimension
+          if (dim.segmentIndex === -1 && e.polygonCenter) {
+            const center = e.polygonCenter;
+            const midA = {
+              x: (e.points[0]!.x + e.points[1]!.x) / 2,
+              y: (e.points[0]!.y + e.points[1]!.y) / 2,
+            };
+            const curApothem = Math.sqrt((midA.x - center.x) ** 2 + (midA.y - center.y) ** 2);
+            if (curApothem === 0) return e;
+            const scale = targetValue / curApothem;
+            return {
+              ...e,
+              points: e.points.map((p) => ({
+                x: center.x + (p.x - center.x) * scale,
+                y: center.y + (p.y - center.y) * scale,
+              })),
+            };
+          }
+          // Polygon segment dimension: scale uniformly to preserve regularity
+          if (e.polygonCenter) {
+            const idx = dim.segmentIndex;
+            if (idx < 0 || idx >= getSegmentCount(e)) return e;
+            const [pdi1, pdi2] = getSegmentPointIndices(e, idx);
+            const pa = e.points[pdi1]!;
+            const pb = e.points[pdi2]!;
+            const curLen = Math.sqrt((pb.x - pa.x) ** 2 + (pb.y - pa.y) ** 2);
+            if (curLen === 0) return e;
+            const scale = targetValue / curLen;
+            const center = e.polygonCenter;
+            return {
+              ...e,
+              points: e.points.map((p) => ({
+                x: center.x + (p.x - center.x) * scale,
+                y: center.y + (p.y - center.y) * scale,
+              })),
+            };
+          }
           const idx = dim.segmentIndex;
           if (idx < 0 || idx >= getSegmentCount(e)) return e;
-          const [pdi1, pdi2] = getSegmentPointIndices(e, idx);
-          const pa = e.points[pdi1]!;
-          const pb = e.points[pdi2]!;
-          const curLen = Math.sqrt((pb.x - pa.x) ** 2 + (pb.y - pa.y) ** 2);
-          if (curLen === 0) return e;
-          const scale = newValue / curLen;
-          const center = e.polygonCenter;
-          return {
-            ...e,
-            points: e.points.map((p) => ({
-              x: center.x + (p.x - center.x) * scale,
-              y: center.y + (p.y - center.y) * scale,
-            })),
-          };
+          const [dsi1, dsi2] = getSegmentPointIndices(e, idx);
+          const pa = e.points[dsi1]!;
+          const pb = e.points[dsi2]!;
+          const dx = pb.x - pa.x;
+          const dy = pb.y - pa.y;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          if (len === 0) return e;
+          const dirX = dx / len;
+          const dirY = dy / len;
+          const newPoints = [...e.points];
+          if (getSegmentCount(e) === 1) {
+            newPoints[dsi2] = {
+              x: pa.x + dirX * targetValue,
+              y: pa.y + dirY * targetValue,
+            };
+          } else {
+            const midX = (pa.x + pb.x) / 2;
+            const midY = (pa.y + pb.y) / 2;
+            const half = targetValue / 2;
+            newPoints[dsi1] = { x: midX - dirX * half, y: midY - dirY * half };
+            newPoints[dsi2] = { x: midX + dirX * half, y: midY + dirY * half };
+          }
+          return { ...e, points: newPoints };
         }
-        const idx = dim.segmentIndex;
-        if (idx < 0 || idx >= getSegmentCount(e)) return e;
-        const [dsi1, dsi2] = getSegmentPointIndices(e, idx);
-        const pa = e.points[dsi1]!;
-        const pb = e.points[dsi2]!;
-        const dx = pb.x - pa.x;
-        const dy = pb.y - pa.y;
-        const len = Math.sqrt(dx * dx + dy * dy);
-        if (len === 0) return e;
-        const dirX = dx / len;
-        const dirY = dy / len;
-        const newPoints = [...e.points];
-        newPoints[dsi2] = {
-          x: pa.x + dirX * newValue,
-          y: pa.y + dirY * newValue,
-        };
-        return { ...e, points: newPoints };
-      }
-      if (e.type === 'circle') {
-        return { ...e, radius: newValue / 2 };
-      }
-      if (e.type === 'rectangle') {
-        if (dim.segmentIndex === 0) {
-          return { ...e, width: newValue };
-        } else {
-          return { ...e, height: newValue };
+        if (e.type === 'circle') {
+          return { ...e, radius: targetValue / 2 };
         }
-      }
-      return e;
-    });
+        if (e.type === 'rectangle') {
+          if (dim.segmentIndex === 0) {
+            return { ...e, width: targetValue };
+          } else {
+            return { ...e, height: targetValue };
+          }
+        }
+        return e;
+      });
 
-    const solved = solveConstraints(updatedEntities, sketch.constraints, { movedIds: new Set([target.id]) });
+    // Helper: measure the current segment length after solver
+    const measureSegLen = (entities: Entity[]): number | null => {
+      const e = entities.find((ent) => ent.id === target.id);
+      if (!e || e.type === 'circle') return e ? (e as import('@/types/document').CircleEntity).radius * 2 : null;
+      if (e.type === 'rectangle') return dim.segmentIndex === 0 ? e.width : e.height;
+      if (e.type !== 'line') return null;
+      if (dim.segmentIndex === -1 && e.polygonCenter) {
+        const midA = { x: (e.points[0]!.x + e.points[1]!.x) / 2, y: (e.points[0]!.y + e.points[1]!.y) / 2 };
+        return Math.sqrt((midA.x - e.polygonCenter.x) ** 2 + (midA.y - e.polygonCenter.y) ** 2);
+      }
+      const idx = dim.segmentIndex;
+      if (idx < 0 || idx >= getSegmentCount(e)) return null;
+      const [i1, i2] = getSegmentPointIndices(e, idx);
+      const a = e.points[i1]!;
+      const b = e.points[i2]!;
+      return Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
+    };
+
+    // Iterative correction: adjust, solve, measure, overshoot to compensate
+    let aim = newValue;
+    let currentEntities = sketch.entities;
+    for (let iter = 0; iter < 5; iter++) {
+      const adjusted = adjustSegLen(currentEntities, aim);
+      const solved = solveConstraints(adjusted, sketch.constraints, { movedIds: new Set([target.id]) });
+      currentEntities = solved.entities;
+      const achieved = measureSegLen(currentEntities);
+      if (achieved == null) break;
+      const error = newValue - achieved;
+      if (Math.abs(error) < 0.01) break;
+      aim += error; // overshoot next iteration to compensate
+    }
+
     set({
       document: updateActiveSketch(document, () => ({
-        entities: solved.entities,
+        entities: currentEntities,
       })),
     });
   },
