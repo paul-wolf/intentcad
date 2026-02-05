@@ -8,16 +8,58 @@ import { downloadTextFile, downloadBlob } from '@/export/download';
 import { getEntityPoint, getEntityPoints } from '@/utils/entityPoints';
 import { requestSave } from '@/api/autoSave';
 import type { ToolType } from '@/types/editor';
+import type { ThemePalette } from '@/theme';
+import type { ReactNode } from 'react';
 
-const TOOLS: { type: ToolType; label: string; shortcut: string }[] = [
-  { type: 'select', label: 'Select', shortcut: 'Esc — X construction, K fix, = equal, J coincident, H horiz, V vert, I midpoint, N parallel, T perpendicular, Y tangent, B bisect, M mirror, A circular, G grid' },
-  { type: 'line', label: 'Line', shortcut: 'l' },
-  { type: 'point', label: 'Point', shortcut: '.' },
-  { type: 'circle', label: 'Circle', shortcut: 'c' },
-  { type: 'rectangle', label: 'Rect', shortcut: 'r' },
-  { type: 'polygon', label: 'Polygon', shortcut: 'P — ↑↓ sides' },
-  { type: 'dimension', label: 'Dimension', shortcut: 'D' },
+function ToolIcon({ children }: { children: ReactNode }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      {children}
+    </svg>
+  );
+}
+
+const ENTITY_TOOLS: { type: ToolType; label: string; icon?: ReactNode; shortcut: string }[] = [
+  { type: 'select', label: 'Select', icon: <ToolIcon><path d="M3 1l0 12 3.5-3.5 3 5.5 2-1-3-5.5H13L3 1z" fill="currentColor" stroke="none" /></ToolIcon>, shortcut: 'Esc — X construction, K fix, = equal, J coincident, H horiz, V vert, I midpoint, N parallel, T perpendicular, Y tangent, B bisect, M mirror, A circular, G grid' },
+  { type: 'line', label: 'Line', icon: <ToolIcon><line x1="3" y1="13" x2="13" y2="3" /></ToolIcon>, shortcut: 'l' },
+  { type: 'point', label: 'Point', icon: <ToolIcon><circle cx="8" cy="8" r="2.5" fill="currentColor" stroke="none" /><circle cx="8" cy="8" r="5" /></ToolIcon>, shortcut: '.' },
+  { type: 'circle', label: 'Circle', icon: <ToolIcon><circle cx="8" cy="8" r="6" /></ToolIcon>, shortcut: 'c' },
+  { type: 'rectangle', label: 'Rect', icon: <ToolIcon><rect x="2.5" y="4" width="11" height="8" /></ToolIcon>, shortcut: 'r' },
+  { type: 'polygon', label: 'Polygon', icon: <ToolIcon><polygon points="8,1.5 13.6,5 12.5,11.5 3.5,11.5 2.4,5" /></ToolIcon>, shortcut: 'P — ↑↓ sides' },
 ];
+
+const MEASURE_TOOLS: { type: ToolType; label: string; icon?: ReactNode; shortcut: string }[] = [
+  { type: 'dimension', label: 'Dimension', icon: <ToolIcon><line x1="2" y1="4" x2="2" y2="12" /><line x1="14" y1="4" x2="14" y2="12" /><line x1="2" y1="8" x2="5" y2="8" /><line x1="11" y1="8" x2="14" y2="8" /><path d="M5 6l-3 2 3 2" fill="none" /><path d="M11 6l3 2-3 2" fill="none" /></ToolIcon>, shortcut: 'D' },
+];
+
+function Sep({ color }: { color: string }) {
+  return <div style={{ width: '1px', background: color, margin: '2px 4px', alignSelf: 'stretch' }} />;
+}
+
+function ToolButtons({ tools, activeTool, setActiveTool, palette }: { tools: typeof ENTITY_TOOLS; activeTool: ToolType; setActiveTool: (t: ToolType) => void; palette: ThemePalette }) {
+  return <>
+    {tools.map((t) => (
+      <button
+        key={t.type}
+        onClick={() => setActiveTool(t.type)}
+        style={{
+          padding: '4px 12px',
+          borderWidth: '1px',
+          borderStyle: 'solid',
+          borderColor: activeTool === t.type ? palette.accent : palette.inputBorder,
+          borderRadius: '4px',
+          background: activeTool === t.type ? palette.activeItemBg : palette.buttonBg,
+          color: activeTool === t.type ? palette.accent : palette.text,
+          cursor: 'pointer',
+          fontSize: '13px',
+        }}
+        title={`${t.label} (${t.shortcut})`}
+      >
+        {t.icon ?? t.label}
+      </button>
+    ))}
+  </>;
+}
 
 export function Toolbar() {
   const activeTool = useEditorStore((s) => s.activeTool);
@@ -49,33 +91,17 @@ export function Toolbar() {
           color: drawerOpen ? palette.accent : palette.text,
           cursor: 'pointer',
           fontSize: '16px',
-          marginRight: '8px',
           lineHeight: 1,
         }}
         title="Toggle document drawer"
       >
         {'\u2261'}
       </button>
-      {TOOLS.map((t) => (
-        <button
-          key={t.type}
-          onClick={() => setActiveTool(t.type)}
-          style={{
-            padding: '4px 12px',
-            borderWidth: '1px',
-            borderStyle: 'solid',
-            borderColor: activeTool === t.type ? palette.accent : palette.inputBorder,
-            borderRadius: '4px',
-            background: activeTool === t.type ? palette.activeItemBg : palette.buttonBg,
-            color: activeTool === t.type ? palette.accent : palette.text,
-            cursor: 'pointer',
-            fontSize: '13px',
-          }}
-          title={`${t.label} (${t.shortcut})`}
-        >
-          {t.label}
-        </button>
-      ))}
+      <Sep color={palette.border} />
+      <ToolButtons tools={ENTITY_TOOLS} activeTool={activeTool} setActiveTool={setActiveTool} palette={palette} />
+      <Sep color={palette.border} />
+      <ToolButtons tools={MEASURE_TOOLS} activeTool={activeTool} setActiveTool={setActiveTool} palette={palette} />
+      <Sep color={palette.border} />
       <button
         onClick={() => {
           const ids = useEditorStore.getState().selectedEntityIds;
@@ -92,11 +118,10 @@ export function Toolbar() {
           color: palette.text,
           cursor: 'pointer',
           fontSize: '13px',
-          marginLeft: '4px',
         }}
         title="Fix selected entities in place (K)"
       >
-        Fix
+        <ToolIcon><rect x="3" y="7" width="10" height="8" rx="1" /><path d="M5 7V5a3 3 0 0 1 6 0v2" /></ToolIcon>
       </button>
       <button
         onClick={() => {
@@ -117,7 +142,7 @@ export function Toolbar() {
         }}
         title="Equal size constraint between two entities (=)"
       >
-        Equal
+        <ToolIcon><line x1="2" y1="6" x2="14" y2="6" /><line x1="2" y1="10" x2="14" y2="10" /></ToolIcon>
       </button>
       <button
         onClick={() => {
@@ -167,7 +192,7 @@ export function Toolbar() {
         }}
         title="Coincident constraint — join closest points (J)"
       >
-        Coincident
+        <ToolIcon><circle cx="8" cy="8" r="3" /><circle cx="8" cy="8" r="1" fill="currentColor" stroke="none" /></ToolIcon>
       </button>
       <button
         onClick={() => {
@@ -192,7 +217,7 @@ export function Toolbar() {
         }}
         title="Horizontal constraint — force segment endpoints to same Y (H)"
       >
-        Horiz
+        <ToolIcon><line x1="2" y1="8" x2="14" y2="8" /></ToolIcon>
       </button>
       <button
         onClick={() => {
@@ -217,7 +242,7 @@ export function Toolbar() {
         }}
         title="Vertical constraint — force segment endpoints to same X (V)"
       >
-        Vert
+        <ToolIcon><line x1="8" y1="2" x2="8" y2="14" /></ToolIcon>
       </button>
       <button
         onClick={() => {
@@ -240,7 +265,7 @@ export function Toolbar() {
         }}
         title="Midpoint constraint — pin point to segment midpoint (I)"
       >
-        Midpoint
+        <ToolIcon><line x1="2" y1="8" x2="14" y2="8" /><line x1="8" y1="5" x2="8" y2="11" /><circle cx="8" cy="8" r="1.5" fill="currentColor" stroke="none" /></ToolIcon>
       </button>
       <button
         onClick={() => {
@@ -262,7 +287,7 @@ export function Toolbar() {
         }}
         title="Parallel constraint — force two segments parallel (N)"
       >
-        Parallel
+        <ToolIcon><line x1="4" y1="2" x2="4" y2="14" /><line x1="12" y1="2" x2="12" y2="14" /></ToolIcon>
       </button>
       <button
         onClick={() => {
@@ -284,7 +309,7 @@ export function Toolbar() {
         }}
         title="Perpendicular constraint — force two segments perpendicular (T)"
       >
-        Perp
+        <ToolIcon><line x1="3" y1="13" x2="3" y2="3" /><line x1="3" y1="13" x2="13" y2="13" /><rect x="3" y="9" width="4" height="4" fill="none" /></ToolIcon>
       </button>
       <button
         onClick={() => {
@@ -326,7 +351,7 @@ export function Toolbar() {
         }}
         title="Tangent constraint — force line/circle tangency (Y)"
       >
-        Tangent
+        <ToolIcon><circle cx="8" cy="6" r="4.5" /><line x1="2" y1="10.5" x2="14" y2="10.5" /></ToolIcon>
       </button>
       <button
         onClick={() => {
@@ -348,8 +373,9 @@ export function Toolbar() {
         }}
         title="Bisect constraint — first segment passes through midpoint of second (B)"
       >
-        Bisect
+        <ToolIcon><line x1="2" y1="13" x2="14" y2="3" /><line x1="8" y1="2" x2="8" y2="14" strokeDasharray="2 2" /></ToolIcon>
       </button>
+      <Sep color={palette.border} />
       <button
         onClick={() => {
           const ids = useEditorStore.getState().selectedEntityIds;
@@ -365,11 +391,10 @@ export function Toolbar() {
           color: palette.text,
           cursor: 'pointer',
           fontSize: '13px',
-          marginLeft: '4px',
         }}
         title="Mirror selected entities (M)"
       >
-        Mirror
+        <ToolIcon><polygon points="5,3 1,8 5,13" /><line x1="8" y1="1" x2="8" y2="15" /><polygon points="11,3 15,8 11,13" /></ToolIcon>
       </button>
       <button
         onClick={() => {
@@ -389,7 +414,7 @@ export function Toolbar() {
         }}
         title="Circular copy selected entities (A)"
       >
-        Circular
+        <ToolIcon><circle cx="8" cy="8" r="6" strokeDasharray="3 2" /><circle cx="8" cy="2" r="1.5" fill="currentColor" stroke="none" /><circle cx="13.2" cy="11" r="1.5" fill="currentColor" stroke="none" /><circle cx="2.8" cy="11" r="1.5" fill="currentColor" stroke="none" /></ToolIcon>
       </button>
       <button
         onClick={() => {
@@ -409,8 +434,9 @@ export function Toolbar() {
         }}
         title="Grid copy selected entities (G)"
       >
-        Grid
+        <ToolIcon><rect x="1.5" y="1.5" width="4" height="4" /><rect x="6" y="1.5" width="4" height="4" strokeDasharray="1.5 1" /><rect x="10.5" y="1.5" width="4" height="4" strokeDasharray="1.5 1" /><rect x="1.5" y="6" width="4" height="4" strokeDasharray="1.5 1" /><rect x="1.5" y="10.5" width="4" height="4" strokeDasharray="1.5 1" /></ToolIcon>
       </button>
+      <Sep color={palette.border} />
       <button
         onClick={() => useEditorStore.getState().setViewportCommand('center-origin')}
         style={{
@@ -421,7 +447,6 @@ export function Toolbar() {
           color: palette.text,
           cursor: 'pointer',
           fontSize: '13px',
-          marginLeft: '4px',
         }}
         title="Center origin in viewport (Home)"
       >
