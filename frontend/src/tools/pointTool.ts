@@ -18,7 +18,7 @@ export function createPointTool(): Tool {
       const doc = useDocumentStore.getState().document;
       const snap = snapPosition(worldPos, ctx.viewport, doc);
 
-      useDocumentStore.getState().beginTransaction();
+      useDocumentStore.getState().beginTransaction('Add point');
       useDocumentStore.getState().addEntity({
         id: generateId('pt'),
         type: 'point',

@@ -38,7 +38,7 @@ export function createRectangleTool(): Tool {
         const width = halfW * 2;
         const height = halfH * 2;
 
-        useDocumentStore.getState().beginTransaction();
+        useDocumentStore.getState().beginTransaction('Add rectangle');
         const rectId = generateId('rec');
         useDocumentStore.getState().addEntity({
           id: rectId,

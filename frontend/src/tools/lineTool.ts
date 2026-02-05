@@ -87,7 +87,7 @@ export function createLineTool(): Tool {
 
       if (activePolylineId) {
         // Already extending a polyline — append/prepend the new point
-        useDocumentStore.getState().beginTransaction();
+        useDocumentStore.getState().beginTransaction('Extend line');
         useDocumentStore.getState().extendPolyline(activePolylineId, snap.point, ts.activeEnd!);
         requestSave();
         // activeEnd stays the same, polyline keeps growing from that end
@@ -96,7 +96,7 @@ export function createLineTool(): Tool {
 
       if (firstPoint) {
         // Have a firstPoint but no active polyline — create new entity
-        useDocumentStore.getState().beginTransaction();
+        useDocumentStore.getState().beginTransaction('Create line');
         const id = generateId('ln');
         useDocumentStore.getState().addEntity({
           id,

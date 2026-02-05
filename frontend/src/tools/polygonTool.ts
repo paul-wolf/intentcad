@@ -46,7 +46,7 @@ export function createPolygonTool(): Tool {
 
         const points = computePolygonPoints(ts.center, radius, ts.sides);
 
-        useDocumentStore.getState().beginTransaction();
+        useDocumentStore.getState().beginTransaction('Add polygon');
         useDocumentStore.getState().addEntity({
           id: generateId('lin'),
           type: 'line',

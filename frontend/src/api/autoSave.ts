@@ -6,6 +6,7 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 let backendId: string | null = null;
 let pendingId: string | null = null;
 let pendingDoc: Record<string, unknown> | null = null;
+let pendingHistory: unknown = null;
 
 const DEBOUNCE_MS = 1500;
 
@@ -21,13 +22,15 @@ export function setBackendId(id: string | null) {
   }
   pendingId = null;
   pendingDoc = null;
+  pendingHistory = null;
   backendId = id;
 }
 
-function doSave(id: string, doc: Record<string, unknown>) {
+function doSave(id: string, doc: Record<string, unknown>, history?: unknown) {
   api.updateDocument(id, {
     name: (doc as { name: string }).name,
     data: doc,
+    history,
   }).then(() => {
     addLog('info', 'Document saved');
   }).catch((err) => {
@@ -38,8 +41,10 @@ function doSave(id: string, doc: Record<string, unknown>) {
 
 /** Schedule a debounced save of the current document state. */
 export function requestSave() {
-  const doc = useDocumentStore.getState().document;
-  scheduleSave(doc as unknown as Record<string, unknown>);
+  const state = useDocumentStore.getState();
+  const doc = state.document;
+  const history = { undo: state.undoStack, redo: state.redoStack };
+  scheduleSave(doc as unknown as Record<string, unknown>, history);
 }
 
 /** Immediately persist any pending debounced save. */
@@ -49,23 +54,26 @@ export function flushSave() {
     timer = null;
   }
   if (pendingId && pendingDoc) {
-    doSave(pendingId, pendingDoc);
+    doSave(pendingId, pendingDoc, pendingHistory ?? undefined);
     pendingId = null;
     pendingDoc = null;
+    pendingHistory = null;
   }
 }
 
-function scheduleSave(doc: Record<string, unknown>) {
+function scheduleSave(doc: Record<string, unknown>, history?: unknown) {
   if (!backendId) return;
   pendingId = backendId;
   pendingDoc = doc;
+  pendingHistory = history ?? null;
   if (timer) clearTimeout(timer);
   timer = setTimeout(() => {
     timer = null;
     if (pendingId && pendingDoc) {
-      doSave(pendingId, pendingDoc);
+      doSave(pendingId, pendingDoc, pendingHistory ?? undefined);
       pendingId = null;
       pendingDoc = null;
+      pendingHistory = null;
     }
   }, DEBOUNCE_MS);
 }
@@ -74,7 +82,8 @@ export function startAutoSave() {
   // Fire once immediately for the current state (covers migration on load)
   const current = useDocumentStore.getState();
   if (backendId) {
-    scheduleSave(current.document as unknown as Record<string, unknown>);
+    const history = { undo: current.undoStack, redo: current.redoStack };
+    scheduleSave(current.document as unknown as Record<string, unknown>, history);
   }
 
   const handleBeforeUnload = () => flushSave();
@@ -82,7 +91,8 @@ export function startAutoSave() {
 
   const unsub = useDocumentStore.subscribe((state) => {
     if (!backendId) return;
-    scheduleSave(state.document as unknown as Record<string, unknown>);
+    const history = { undo: state.undoStack, redo: state.redoStack };
+    scheduleSave(state.document as unknown as Record<string, unknown>, history);
   });
 
   return () => {

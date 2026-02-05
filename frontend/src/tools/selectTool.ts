@@ -111,7 +111,7 @@ export function createSelectTool(): Tool {
           if (hit && hit.type === 'line' && hit.points.length >= 2) {
             const lineA = hit.points[0]!;
             const lineB = hit.points[hit.points.length - 1]!;
-            useDocumentStore.getState().beginTransaction();
+            useDocumentStore.getState().beginTransaction('Mirror');
             const newIds = useDocumentStore.getState().mirrorEntities(
               editorState.mirrorEntityIds,
               lineA,
@@ -159,10 +159,10 @@ export function createSelectTool(): Tool {
 
         if (hitPointOnDown) {
           dragMode = 'move-point';
-          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().beginTransaction('Move point');
         } else if (hitEntityOnDown) {
           dragMode = 'move';
-          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().beginTransaction('Move entities');
           const selectedIds = useEditorStore.getState().selectedEntityIds;
           if (!selectedIds.has(hitEntityOnDown.id)) {
             useEditorStore.getState().setSelectedEntityIds(new Set([hitEntityOnDown.id]));
@@ -415,7 +415,7 @@ export function createSelectTool(): Tool {
       if (e.key === 'k' || e.key === 'K') {
         const ids = useEditorStore.getState().selectedEntityIds;
         if (ids.size > 0) {
-          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().beginTransaction('Toggle fixed');
           useDocumentStore.getState().toggleFixed([...ids]);
           requestSave();
         }
@@ -423,7 +423,7 @@ export function createSelectTool(): Tool {
       if (e.key === '=') {
         const ids = useEditorStore.getState().selectedEntityIds;
         if (ids.size === 2) {
-          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().beginTransaction('Toggle equal');
           useDocumentStore.getState().toggleEqual([...ids]);
           requestSave();
         }
@@ -435,7 +435,7 @@ export function createSelectTool(): Tool {
 
         if (selPts.length === 2) {
           // Case 1: two selected points → coincident with explicit indices
-          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().beginTransaction('Toggle coincident');
           useDocumentStore.getState().toggleCoincidentWithPoints(selPts[0]!, selPts[1]!);
           requestSave();
         } else if (selPts.length === 1 && ids.size === 1) {
@@ -458,7 +458,7 @@ export function createSelectTool(): Tool {
                     bestIdx = idx;
                   }
                 }
-                useDocumentStore.getState().beginTransaction();
+                useDocumentStore.getState().beginTransaction('Toggle coincident');
                 useDocumentStore.getState().toggleCoincidentWithPoints(
                   selPts[0]!,
                   { entityId, pointIndex: bestIdx },
@@ -469,7 +469,7 @@ export function createSelectTool(): Tool {
           }
         } else if (ids.size === 2) {
           // Case 3: two selected entities → existing auto-closest-pair
-          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().beginTransaction('Toggle coincident');
           useDocumentStore.getState().toggleCoincident([...ids]);
           requestSave();
         }
@@ -481,7 +481,7 @@ export function createSelectTool(): Tool {
           const segs = es.selectedSegments.length > 0
             ? es.selectedSegments.map((s) => ({ entityId: s.entityId, segmentIndex: s.segmentIndex }))
             : undefined;
-          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().beginTransaction('Toggle horizontal');
           useDocumentStore.getState().toggleHorizontal([...ids], segs);
           requestSave();
         }
@@ -493,7 +493,7 @@ export function createSelectTool(): Tool {
           const segs = es.selectedSegments.length > 0
             ? es.selectedSegments.map((s) => ({ entityId: s.entityId, segmentIndex: s.segmentIndex }))
             : undefined;
-          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().beginTransaction('Toggle vertical');
           useDocumentStore.getState().toggleVertical([...ids], segs);
           requestSave();
         }
@@ -502,7 +502,7 @@ export function createSelectTool(): Tool {
         const es = useEditorStore.getState();
         const selSegs = es.selectedSegments;
         if (selSegs.length === 2) {
-          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().beginTransaction('Toggle parallel');
           useDocumentStore.getState().toggleParallel(selSegs[0]!, selSegs[1]!);
           requestSave();
         }
@@ -511,7 +511,7 @@ export function createSelectTool(): Tool {
         const es = useEditorStore.getState();
         const selSegs = es.selectedSegments;
         if (selSegs.length === 2) {
-          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().beginTransaction('Toggle perpendicular');
           useDocumentStore.getState().togglePerpendicular(selSegs[0]!, selSegs[1]!);
           requestSave();
         }
@@ -520,7 +520,7 @@ export function createSelectTool(): Tool {
         const es = useEditorStore.getState();
         const selSegs = es.selectedSegments;
         if (selSegs.length === 2) {
-          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().beginTransaction('Toggle bisect');
           useDocumentStore.getState().toggleBisect(selSegs[0]!, selSegs[1]!);
           requestSave();
         }
@@ -530,7 +530,7 @@ export function createSelectTool(): Tool {
         const selPts = es.selectedPoints;
         const selSegs = es.selectedSegments;
         if (selPts.length === 1 && selSegs.length === 1) {
-          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().beginTransaction('Toggle midpoint');
           useDocumentStore.getState().toggleMidpoint(selPts[0]!, selSegs[0]!);
           requestSave();
         }
@@ -548,7 +548,7 @@ export function createSelectTool(): Tool {
             if (otherIds.length === 1) {
               const otherEntity = activeSketch.entities.find((ent) => ent.id === otherIds[0]!);
               if (otherEntity && otherEntity.type === 'circle') {
-                useDocumentStore.getState().beginTransaction();
+                useDocumentStore.getState().beginTransaction('Toggle tangent');
                 useDocumentStore.getState().toggleTangent(segEntityId, selSegs[0]!.segmentIndex, otherIds[0]!, -1);
                 requestSave();
               }
@@ -559,7 +559,7 @@ export function createSelectTool(): Tool {
             const e1 = activeSketch.entities.find((ent) => ent.id === idArr[0]!);
             const e2 = activeSketch.entities.find((ent) => ent.id === idArr[1]!);
             if (e1 && e2 && e1.type === 'circle' && e2.type === 'circle') {
-              useDocumentStore.getState().beginTransaction();
+              useDocumentStore.getState().beginTransaction('Toggle tangent');
               useDocumentStore.getState().toggleTangent(idArr[0]!, -1, idArr[1]!, -1);
               requestSave();
             }
@@ -569,15 +569,27 @@ export function createSelectTool(): Tool {
       if (e.key === 'x' || e.key === 'X') {
         const ids = useEditorStore.getState().selectedEntityIds;
         if (ids.size > 0) {
-          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().beginTransaction('Toggle construction');
           useDocumentStore.getState().toggleConstruction([...ids]);
           requestSave();
+        }
+      }
+      if (e.key === 'q' || e.key === 'Q') {
+        const ids = useEditorStore.getState().selectedEntityIds;
+        if (ids.size > 0) {
+          const activeSketch = useDocumentStore.getState().getActiveSketch();
+          if (activeSketch) {
+            const selected = activeSketch.entities.filter((ent) => ids.has(ent.id));
+            const json = JSON.stringify(selected, null, 2);
+            navigator.clipboard.writeText(json);
+            addLog('info', `Copied ${selected.length} entities to clipboard`);
+          }
         }
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
         const ids = useEditorStore.getState().selectedEntityIds;
         if (ids.size > 0) {
-          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().beginTransaction('Delete entities');
           useDocumentStore.getState().removeEntities([...ids]);
           useEditorStore.getState().clearSelection();
           requestSave();

@@ -11,6 +11,12 @@ import type { SelectedPoint } from '@/stores/editorStore';
 
 const UNDO_STACK_LIMIT = 100;
 
+export interface HistoryEntry {
+  label: string;
+  doc: Document;
+  timestamp: number;
+}
+
 /** Check if a constraint references any of the given entity IDs. */
 function constraintReferencesAny(c: Constraint, idSet: Set<string>): boolean {
   if (idSet.has(c.entityId)) return true;
@@ -20,17 +26,19 @@ function constraintReferencesAny(c: Constraint, idSet: Set<string>): boolean {
 
 interface DocumentStore {
   document: Document;
-  undoStack: Document[];
-  redoStack: Document[];
+  undoStack: HistoryEntry[];
+  redoStack: HistoryEntry[];
 
   // Document actions
   setDocument(doc: Document): void;
   setDocumentName(name: string): void;
 
   // Undo/Redo
-  beginTransaction(): void;
+  beginTransaction(label: string): void;
   undo(): void;
   redo(): void;
+  jumpToHistory(index: number): void;
+  restoreHistory(persisted: { undo: HistoryEntry[]; redo: HistoryEntry[] }): void;
 
   // Sketch actions
   addSketch(name: string): void;
@@ -107,22 +115,23 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   redoStack: [],
 
   setDocument(doc) {
-    set({ document: doc });
+    set({ document: doc, undoStack: [], redoStack: [] });
   },
 
   setDocumentName(name) {
     set((s) => ({ document: { ...s.document, name } }));
   },
 
-  beginTransaction() {
+  beginTransaction(label: string) {
     const { document, undoStack } = get();
-    let newStack: Document[];
+    const entry: HistoryEntry = { label, doc: structuredClone(document), timestamp: Date.now() };
+    let newStack: HistoryEntry[];
     if (_lastTransactionDocRef !== null && document === _lastTransactionDocRef && undoStack.length > 0) {
       // Document unchanged since last beginTransaction — previous was a no-op.
       // Replace the stale entry instead of pushing a duplicate.
-      newStack = [...undoStack.slice(0, -1), structuredClone(document)];
+      newStack = [...undoStack.slice(0, -1), entry];
     } else {
-      newStack = [...undoStack, structuredClone(document)];
+      newStack = [...undoStack, entry];
     }
     if (newStack.length > UNDO_STACK_LIMIT) {
       newStack.splice(0, newStack.length - UNDO_STACK_LIMIT);
@@ -134,27 +143,53 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   undo() {
     const { undoStack, redoStack, document } = get();
     if (undoStack.length === 0) return;
-    const prev = undoStack[undoStack.length - 1]!;
+    const entry = undoStack[undoStack.length - 1]!;
     set({
-      document: prev,
+      document: entry.doc,
       undoStack: undoStack.slice(0, -1),
-      redoStack: [...redoStack, structuredClone(document)],
+      redoStack: [...redoStack, { label: 'Current', doc: structuredClone(document), timestamp: Date.now() }],
     });
     _lastTransactionDocRef = null;
-    addLog('info', 'Undo');
+    addLog('info', `Undo: ${entry.label}`);
   },
 
   redo() {
     const { undoStack, redoStack, document } = get();
     if (redoStack.length === 0) return;
-    const next = redoStack[redoStack.length - 1]!;
+    const entry = redoStack[redoStack.length - 1]!;
     set({
-      document: next,
-      undoStack: [...undoStack, structuredClone(document)],
+      document: entry.doc,
+      undoStack: [...undoStack, { label: 'Current', doc: structuredClone(document), timestamp: Date.now() }],
       redoStack: redoStack.slice(0, -1),
     });
     _lastTransactionDocRef = null;
-    addLog('info', 'Redo');
+    addLog('info', `Redo: ${entry.label}`);
+  },
+
+  jumpToHistory(index: number) {
+    const { undoStack, redoStack, document } = get();
+    if (index < 0 || index >= undoStack.length) return;
+    const entry = undoStack[index]!;
+    // Everything above the target becomes redo entries; push current state onto redo too
+    const newRedo = [
+      ...redoStack,
+      { label: 'Current', doc: structuredClone(document), timestamp: Date.now() },
+      ...undoStack.slice(index + 1).reverse(),
+    ];
+    set({
+      document: entry.doc,
+      undoStack: undoStack.slice(0, index),
+      redoStack: newRedo,
+    });
+    _lastTransactionDocRef = null;
+    addLog('info', `Jump to: ${entry.label}`);
+  },
+
+  restoreHistory(persisted: { undo: HistoryEntry[]; redo: HistoryEntry[] }) {
+    set({
+      undoStack: persisted.undo ?? [],
+      redoStack: persisted.redo ?? [],
+    });
   },
 
   addSketch(name) {
@@ -1352,7 +1387,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
         if (target1Fixed) { rot1 = 0; rot2 = signedDelta; }
         if (target2Fixed) { rot2 = 0; rot1 = -signedDelta; }
 
-        get().beginTransaction();
+        get().beginTransaction('Edit dimension');
 
         const movedIds = new Set<string>();
         const updatedEntities = sketch.entities.map((e) => {
@@ -1413,7 +1448,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
       if (target1Fixed) { move1 = 0; move2 = delta; }
       if (target2Fixed) { move2 = 0; move1 = -delta; }
 
-      get().beginTransaction();
+      get().beginTransaction('Edit dimension');
 
       const movedIds = new Set<string>();
       const updatedEntities = sketch.entities.map((e) => {
@@ -1456,7 +1491,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
 
     if ('sourceId' in target && target.sourceId) return; // locked
 
-    get().beginTransaction();
+    get().beginTransaction('Edit dimension');
 
     const updatedEntities = sketch.entities.map((e) => {
       if (e.id !== target.id) return e;

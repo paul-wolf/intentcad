@@ -5,6 +5,7 @@ import { StatusBar } from './StatusBar';
 import { RightPanel } from './RightPanel';
 import { DocumentDrawer } from './DocumentDrawer';
 import { LogPanel } from './LogPanel';
+import { HistoryPanel } from './HistoryPanel';
 import { CanvasContainer } from '@/canvas/CanvasContainer';
 import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
@@ -41,6 +42,10 @@ export function EditorPage() {
         useDocumentStore.getState().setDocument(
           migrateDocument(full.data as unknown as Document),
         );
+        const h = full.history as { undo?: unknown[]; redo?: unknown[] } | null;
+        if (h && typeof h === 'object' && !Array.isArray(h) && h.undo) {
+          useDocumentStore.getState().restoreHistory(h as never);
+        }
         setBackendId(full.id);
       } catch (err) {
         console.error('Failed to load document:', err);
@@ -125,6 +130,7 @@ export function EditorPage() {
         <RightPanel />
       </div>
       <LogPanel />
+      <HistoryPanel />
       <StatusBar />
     </div>
   );

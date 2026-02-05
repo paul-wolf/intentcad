@@ -22,7 +22,7 @@ export function GridCopyDialog() {
   const apply = () => {
     const validCountX = Math.max(1, Math.round(countX));
     const validCountY = Math.max(1, Math.round(countY));
-    useDocumentStore.getState().beginTransaction();
+    useDocumentStore.getState().beginTransaction('Grid copy');
     const newIds = useDocumentStore.getState().gridCopyEntities(
       gridCopyEntityIds,
       validCountX,

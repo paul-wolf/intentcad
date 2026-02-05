@@ -75,7 +75,7 @@ export function createDimensionTool(): Tool {
         );
         if (exists) return;
 
-        useDocumentStore.getState().beginTransaction();
+        useDocumentStore.getState().beginTransaction('Add dimension');
         useDocumentStore.getState().addEntity({
           id: crypto.randomUUID(),
           type: 'dimension',
@@ -115,7 +115,7 @@ export function createDimensionTool(): Tool {
         const cross = dx * (worldPos.y - a.y) - dy * (worldPos.x - a.x);
         const sign = cross >= 0 ? 1 : -1;
 
-        useDocumentStore.getState().beginTransaction();
+        useDocumentStore.getState().beginTransaction('Add dimension');
         useDocumentStore.getState().addEntity({
           id: crypto.randomUUID(),
           type: 'dimension',
@@ -161,7 +161,7 @@ export function createDimensionTool(): Tool {
 
       if (!parallel) {
         // Angle dimension
-        useDocumentStore.getState().beginTransaction();
+        useDocumentStore.getState().beginTransaction('Add dimension');
         useDocumentStore.getState().addEntity({
           id: crypto.randomUUID(),
           type: 'dimension',
@@ -194,7 +194,7 @@ export function createDimensionTool(): Tool {
       const cross = abDx * (worldPos.y - geom.a.y) - abDy * (worldPos.x - geom.a.x);
       const sign = cross >= 0 ? 1 : -1;
 
-      useDocumentStore.getState().beginTransaction();
+      useDocumentStore.getState().beginTransaction('Add dimension');
       useDocumentStore.getState().addEntity({
         id: crypto.randomUUID(),
         type: 'dimension',

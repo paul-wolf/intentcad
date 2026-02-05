@@ -107,7 +107,7 @@ export function Toolbar() {
         onClick={() => {
           const ids = useEditorStore.getState().selectedEntityIds;
           if (ids.size === 0) return;
-          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().beginTransaction('Toggle fixed');
           useDocumentStore.getState().toggleFixed([...ids]);
           requestSave();
         }}
@@ -128,7 +128,7 @@ export function Toolbar() {
         onClick={() => {
           const ids = useEditorStore.getState().selectedEntityIds;
           if (ids.size !== 2) return;
-          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().beginTransaction('Toggle equal');
           useDocumentStore.getState().toggleEqual([...ids]);
           requestSave();
         }}
@@ -152,7 +152,7 @@ export function Toolbar() {
           const ids = es.selectedEntityIds;
 
           if (selPts.length === 2) {
-            useDocumentStore.getState().beginTransaction();
+            useDocumentStore.getState().beginTransaction('Toggle coincident');
             useDocumentStore.getState().toggleCoincidentWithPoints(selPts[0]!, selPts[1]!);
             requestSave();
           } else if (selPts.length === 1 && ids.size === 1) {
@@ -171,11 +171,11 @@ export function Toolbar() {
               const d = (p.x - srcPt.x) ** 2 + (p.y - srcPt.y) ** 2;
               if (d < bestDist) { bestDist = d; bestIdx = idx; }
             }
-            useDocumentStore.getState().beginTransaction();
+            useDocumentStore.getState().beginTransaction('Toggle coincident');
             useDocumentStore.getState().toggleCoincidentWithPoints(selPts[0]!, { entityId, pointIndex: bestIdx });
             requestSave();
           } else if (ids.size === 2) {
-            useDocumentStore.getState().beginTransaction();
+            useDocumentStore.getState().beginTransaction('Toggle coincident');
             useDocumentStore.getState().toggleCoincident([...ids]);
             requestSave();
           } else {
@@ -203,7 +203,7 @@ export function Toolbar() {
           const segs = es.selectedSegments.length > 0
             ? es.selectedSegments.map((s) => ({ entityId: s.entityId, segmentIndex: s.segmentIndex }))
             : undefined;
-          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().beginTransaction('Toggle horizontal');
           useDocumentStore.getState().toggleHorizontal([...ids], segs);
           requestSave();
         }}
@@ -228,7 +228,7 @@ export function Toolbar() {
           const segs = es.selectedSegments.length > 0
             ? es.selectedSegments.map((s) => ({ entityId: s.entityId, segmentIndex: s.segmentIndex }))
             : undefined;
-          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().beginTransaction('Toggle vertical');
           useDocumentStore.getState().toggleVertical([...ids], segs);
           requestSave();
         }}
@@ -251,7 +251,7 @@ export function Toolbar() {
           const selPts = es.selectedPoints;
           const selSegs = es.selectedSegments;
           if (selPts.length !== 1 || selSegs.length !== 1) return;
-          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().beginTransaction('Toggle midpoint');
           useDocumentStore.getState().toggleMidpoint(selPts[0]!, selSegs[0]!);
           requestSave();
         }}
@@ -273,7 +273,7 @@ export function Toolbar() {
           const es = useEditorStore.getState();
           const selSegs = es.selectedSegments;
           if (selSegs.length !== 2) return;
-          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().beginTransaction('Toggle parallel');
           useDocumentStore.getState().toggleParallel(selSegs[0]!, selSegs[1]!);
           requestSave();
         }}
@@ -295,7 +295,7 @@ export function Toolbar() {
           const es = useEditorStore.getState();
           const selSegs = es.selectedSegments;
           if (selSegs.length !== 2) return;
-          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().beginTransaction('Toggle perpendicular');
           useDocumentStore.getState().togglePerpendicular(selSegs[0]!, selSegs[1]!);
           requestSave();
         }}
@@ -325,7 +325,7 @@ export function Toolbar() {
             if (otherIds.length === 1) {
               const otherEntity = activeSketch.entities.find((ent) => ent.id === otherIds[0]!);
               if (otherEntity && otherEntity.type === 'circle') {
-                useDocumentStore.getState().beginTransaction();
+                useDocumentStore.getState().beginTransaction('Toggle tangent');
                 useDocumentStore.getState().toggleTangent(segEntityId, selSegs[0]!.segmentIndex, otherIds[0]!, -1);
                 requestSave();
               }
@@ -335,7 +335,7 @@ export function Toolbar() {
             const e1 = activeSketch.entities.find((ent) => ent.id === idArr[0]!);
             const e2 = activeSketch.entities.find((ent) => ent.id === idArr[1]!);
             if (e1 && e2 && e1.type === 'circle' && e2.type === 'circle') {
-              useDocumentStore.getState().beginTransaction();
+              useDocumentStore.getState().beginTransaction('Toggle tangent');
               useDocumentStore.getState().toggleTangent(idArr[0]!, -1, idArr[1]!, -1);
               requestSave();
             }
@@ -359,7 +359,7 @@ export function Toolbar() {
           const es = useEditorStore.getState();
           const selSegs = es.selectedSegments;
           if (selSegs.length !== 2) return;
-          useDocumentStore.getState().beginTransaction();
+          useDocumentStore.getState().beginTransaction('Toggle bisect');
           useDocumentStore.getState().toggleBisect(selSegs[0]!, selSegs[1]!);
           requestSave();
         }}

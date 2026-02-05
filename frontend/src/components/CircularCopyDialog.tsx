@@ -34,7 +34,7 @@ export function CircularCopyDialog() {
   const apply = () => {
     if (!circularCopyCenter) return;
     const validCount = Math.max(2, Math.round(count));
-    useDocumentStore.getState().beginTransaction();
+    useDocumentStore.getState().beginTransaction('Circular copy');
     const newIds = useDocumentStore.getState().circularCopyEntities(
       circularCopyEntityIds,
       circularCopyCenter,

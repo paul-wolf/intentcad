@@ -27,6 +27,7 @@ export interface DocumentFull {
   id: string;
   name: string;
   data: Record<string, unknown>;
+  history: unknown;
   created_at: string;
   updated_at: string;
 }
@@ -47,7 +48,7 @@ export const api = {
     });
   },
 
-  updateDocument(id: string, payload: { name?: string; data?: Record<string, unknown> }): Promise<DocumentFull> {
+  updateDocument(id: string, payload: { name?: string; data?: Record<string, unknown>; history?: unknown }): Promise<DocumentFull> {
     return request(`/documents/${id}`, {
       method: 'PUT',
       body: JSON.stringify(payload),

@@ -33,7 +33,7 @@ export function createCircleTool(): Tool {
         const radius = snapToGrid(rawRadius, GRID_SPACING_MM);
         if (radius <= 0) return;
 
-        useDocumentStore.getState().beginTransaction();
+        useDocumentStore.getState().beginTransaction('Add circle');
         const circleId = generateId('cir');
         useDocumentStore.getState().addEntity({
           id: circleId,

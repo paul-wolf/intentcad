@@ -41,6 +41,8 @@ def update_document(request, doc_id: UUID, payload: DocumentUpdateIn):
         if errors:
             return JsonResponse({"errors": errors}, status=422)
         doc.data = payload.data
+    if payload.history is not None:
+        doc.history = payload.history
     doc.save()
     print(json.dumps(doc.data, indent=2))
     return doc

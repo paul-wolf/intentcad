@@ -97,7 +97,7 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
   const isDerived = 'sourceId' in entity && !!entity.sourceId;
 
   const update = (updated: Entity) => {
-    beginTransaction();
+    beginTransaction('Edit property');
     updateEntity(entity.id, updated);
     requestSave();
   };
@@ -259,7 +259,7 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
             checked={!!entity.construction}
             disabled={isDerived}
             onChange={() => {
-              beginTransaction();
+              beginTransaction('Toggle construction');
               toggleConstruction([entity.id]);
               requestSave();
             }}

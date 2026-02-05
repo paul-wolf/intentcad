@@ -11,7 +11,7 @@ export function MirrorDialog() {
   if (!mirrorEntityIds || mirrorPickingLine) return null;
 
   const mirrorAxis = (lineA: { x: number; y: number }, lineB: { x: number; y: number }) => {
-    useDocumentStore.getState().beginTransaction();
+    useDocumentStore.getState().beginTransaction('Mirror');
     const newIds = useDocumentStore.getState().mirrorEntities(mirrorEntityIds, lineA, lineB);
     useEditorStore.getState().setMirrorEntityIds(null);
     if (newIds.length > 0) {

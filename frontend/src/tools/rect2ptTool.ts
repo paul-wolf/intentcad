@@ -42,7 +42,7 @@ export function createRect2ptTool(): Tool {
           y: (c1.y + c2.y) / 2,
         };
 
-        useDocumentStore.getState().beginTransaction();
+        useDocumentStore.getState().beginTransaction('Add rectangle');
         const rectId = generateId('rec');
         useDocumentStore.getState().addEntity({
           id: rectId,
