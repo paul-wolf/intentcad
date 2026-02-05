@@ -84,6 +84,10 @@ interface DocumentStore {
   toggleHorizontal(entityIds: string[], segments?: {entityId: string, segmentIndex: number}[]): void;
   toggleVertical(entityIds: string[], segments?: {entityId: string, segmentIndex: number}[]): void;
 
+  // Arc segments
+  toggleArc(entityId: string, segmentIndex: number): void;
+  setArcBulge(entityId: string, segmentIndex: number, bulge: number): void;
+
   // Closed path
   toggleClosed(entityIds: string[]): void;
   setClosed(entityId: string, closed: boolean): void;
@@ -496,12 +500,16 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                   if (e.sourceId) return e; // locked
                   if (e.polygonCenter) return e; // polygon: cannot extend
                   if (e.closed) return e; // closed: cannot extend
+                  const newBulge = e.bulge
+                    ? (end === 'start' ? [0, ...e.bulge] : [...e.bulge, 0])
+                    : undefined;
                   return {
                     ...e,
                     points:
                       end === 'start'
                         ? [point, ...e.points]
                         : [...e.points, point],
+                    ...(newBulge ? { bulge: newBulge } : {}),
                   };
                 })),
               }
@@ -1341,6 +1349,69 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
         addLog('info', `Vertical constraint ON ${eid}`);
       }
     }
+  },
+
+  toggleArc(entityId, segmentIndex) {
+    const { document } = get();
+    const DEFAULT_BULGE = 0.4142; // tan(π/8) → 45° arc
+    set({
+      document: {
+        ...document,
+        sketches: document.sketches.map((sk) =>
+          sk.id === document.activeSketchId
+            ? {
+                ...sk,
+                entities: sk.entities.map((e) => {
+                  if (e.id !== entityId || e.type !== 'line') return e;
+                  if (e.sourceId) return e; // locked
+                  const segCount = getSegmentCount(e);
+                  if (segmentIndex < 0 || segmentIndex >= segCount) return e;
+                  const bulge = e.bulge ? [...e.bulge] : new Array(segCount).fill(0);
+                  // Pad if needed
+                  while (bulge.length < segCount) bulge.push(0);
+                  const wasArc = bulge[segmentIndex] !== 0;
+                  bulge[segmentIndex] = wasArc ? 0 : DEFAULT_BULGE;
+                  // If all zero, omit bulge array
+                  const allZero = bulge.every((b: number) => b === 0);
+                  const result = { ...e, bulge: allZero ? undefined : bulge };
+                  if (allZero) delete result.bulge;
+                  addLog('info', wasArc ? 'Arc OFF' : 'Arc ON');
+                  return result;
+                }),
+              }
+            : sk,
+        ),
+      },
+    });
+  },
+
+  setArcBulge(entityId, segmentIndex, bulge) {
+    const { document } = get();
+    set({
+      document: {
+        ...document,
+        sketches: document.sketches.map((sk) =>
+          sk.id === document.activeSketchId
+            ? {
+                ...sk,
+                entities: sk.entities.map((e) => {
+                  if (e.id !== entityId || e.type !== 'line') return e;
+                  if (e.sourceId) return e; // locked
+                  const segCount = getSegmentCount(e);
+                  if (segmentIndex < 0 || segmentIndex >= segCount) return e;
+                  const bulgeArr = e.bulge ? [...e.bulge] : new Array(segCount).fill(0);
+                  while (bulgeArr.length < segCount) bulgeArr.push(0);
+                  bulgeArr[segmentIndex] = bulge;
+                  const allZero = bulgeArr.every((b: number) => b === 0);
+                  const result = { ...e, bulge: allZero ? undefined : bulgeArr };
+                  if (allZero) delete result.bulge;
+                  return result;
+                }),
+              }
+            : sk,
+        ),
+      },
+    });
   },
 
   toggleClosed(entityIds) {

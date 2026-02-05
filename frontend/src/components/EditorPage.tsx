@@ -104,7 +104,7 @@ export function EditorPage() {
         useEditorStore.getState().setViewportCommand('center-origin');
         return;
       }
-      if (e.key === 'f' || e.key === 'F') {
+      if (e.key === 'F' && e.shiftKey) {
         useEditorStore.getState().setViewportCommand('fit-entities');
         return;
       }

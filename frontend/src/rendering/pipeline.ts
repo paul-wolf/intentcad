@@ -11,7 +11,8 @@ import { drawDimension, drawDiameterDimension, drawSegmentLabel, drawDiameterLab
 import { computeSketchDoF, computeDerivedDimensionIds } from '@/utils/dof';
 import { getEntityPoint } from '@/utils/entityPoints';
 import { getConstraintPartners, getEntityRepresentativePoint, CONSTRAINT_SYMBOLS } from '@/utils/constraints';
-import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
+import { getSegmentCount, getSegmentPointIndices, getSegmentBulge } from '@/utils/lineSegments';
+import { arcFromBulge, arcMidpoint } from '@/utils/arcGeometry';
 
 export interface RenderContext {
   renderer: Renderer;
@@ -323,6 +324,7 @@ function renderDimensionOverlay(ctx: RenderContext) {
         const segCnt = getSegmentCount(entity);
         for (let i = 0; i < segCnt; i++) {
           const [si1, si2] = getSegmentPointIndices(entity, i);
+          // For arc segments, still measure chord length but position at arc midpoint
           drawSegmentLabel(renderer, viewport, entity.points[si1]!, entity.points[si2]!, styles.dimensionOverlayText, ctx.palette.background);
         }
       }
@@ -375,9 +377,17 @@ function renderSelectedSegments(ctx: RenderContext) {
       const idx = seg.segmentIndex;
       if (idx < 0 || idx >= getSegmentCount(entity)) continue;
       const [ssi1, ssi2] = getSegmentPointIndices(entity, idx);
-      const a = viewport.worldToScreen(entity.points[ssi1]!);
-      const b = viewport.worldToScreen(entity.points[ssi2]!);
-      renderer.drawLine(a, b, styles.segmentSelected);
+      const bulge = getSegmentBulge(entity, idx);
+      if (bulge !== 0) {
+        const arc = arcFromBulge(entity.points[ssi1]!, entity.points[ssi2]!, bulge);
+        const screenCenter = viewport.worldToScreen(arc.center);
+        const screenRadius = arc.radius * viewport.scale;
+        renderer.drawArc(screenCenter, screenRadius, arc.startAngle, arc.endAngle, arc.counterClockwise, styles.segmentSelected);
+      } else {
+        const a = viewport.worldToScreen(entity.points[ssi1]!);
+        const b = viewport.worldToScreen(entity.points[ssi2]!);
+        renderer.drawLine(a, b, styles.segmentSelected);
+      }
     } else if (entity.type === 'rectangle') {
       const hw = entity.width / 2;
       const hh = entity.height / 2;
@@ -394,6 +404,53 @@ function renderSelectedSegments(ctx: RenderContext) {
       const a = viewport.worldToScreen(corners[idx]!);
       const b = viewport.worldToScreen(corners[(idx + 1) % 4]!);
       renderer.drawLine(a, b, styles.segmentSelected);
+    }
+  }
+}
+
+/** Step 4e: Draw arc midpoint handles for selected entities/segments */
+function renderArcMidpointHandles(ctx: RenderContext) {
+  const { renderer, viewport, document: doc, selectedSegments, selectedEntityIds, palette } = ctx;
+  const activeSketch = doc.sketches.find((s) => s.id === doc.activeSketchId);
+  if (!activeSketch) return;
+
+  // Collect arc segments to show handles for: from explicit segment selections + entity selections
+  const drawn = new Set<string>(); // "entityId:segIdx" to avoid duplicates
+
+  // From selected segments
+  for (const seg of selectedSegments) {
+    const entity = activeSketch.entities.find((e) => e.id === seg.entityId);
+    if (!entity || entity.type !== 'line') continue;
+    const idx = seg.segmentIndex;
+    if (idx < 0 || idx >= getSegmentCount(entity)) continue;
+    const bulge = getSegmentBulge(entity, idx);
+    if (bulge === 0) continue;
+    const key = `${entity.id}:${idx}`;
+    if (drawn.has(key)) continue;
+    drawn.add(key);
+    const [i1, i2] = getSegmentPointIndices(entity, idx);
+    const mid = arcMidpoint(entity.points[i1]!, entity.points[i2]!, bulge);
+    const screenMid = viewport.worldToScreen(mid);
+    renderer.fillCircle(screenMid, SELECTED_POINT_RADIUS, palette.accent);
+    renderer.drawCircle(screenMid, SELECTED_POINT_RADIUS + 1, { color: palette.accent, width: 1 });
+  }
+
+  // From selected entities (show handles on all their arc segments)
+  for (const entityId of selectedEntityIds) {
+    const entity = activeSketch.entities.find((e) => e.id === entityId);
+    if (!entity || entity.type !== 'line') continue;
+    const segCount = getSegmentCount(entity);
+    for (let i = 0; i < segCount; i++) {
+      const bulge = getSegmentBulge(entity, i);
+      if (bulge === 0) continue;
+      const key = `${entity.id}:${i}`;
+      if (drawn.has(key)) continue;
+      drawn.add(key);
+      const [i1, i2] = getSegmentPointIndices(entity, i);
+      const mid = arcMidpoint(entity.points[i1]!, entity.points[i2]!, bulge);
+      const screenMid = viewport.worldToScreen(mid);
+      renderer.fillCircle(screenMid, SELECTED_POINT_RADIUS, palette.accent);
+      renderer.drawCircle(screenMid, SELECTED_POINT_RADIUS + 1, { color: palette.accent, width: 1 });
     }
   }
 }
@@ -416,9 +473,17 @@ function renderEntity(
       const segCount = getSegmentCount(entity);
       for (let i = 0; i < segCount; i++) {
         const [i1, i2] = getSegmentPointIndices(entity, i);
-        const a = viewport.worldToScreen(entity.points[i1]!);
-        const b = viewport.worldToScreen(entity.points[i2]!);
-        renderer.drawLine(a, b, style);
+        const bulge = getSegmentBulge(entity, i);
+        if (bulge !== 0) {
+          const arc = arcFromBulge(entity.points[i1]!, entity.points[i2]!, bulge);
+          const screenCenter = viewport.worldToScreen(arc.center);
+          const screenRadius = arc.radius * viewport.scale;
+          renderer.drawArc(screenCenter, screenRadius, arc.startAngle, arc.endAngle, arc.counterClockwise, style);
+        } else {
+          const a = viewport.worldToScreen(entity.points[i1]!);
+          const b = viewport.worldToScreen(entity.points[i2]!);
+          renderer.drawLine(a, b, style);
+        }
       }
       for (const pt of entity.points) {
         renderer.fillCircle(viewport.worldToScreen(pt), ENDPOINT_RADIUS, style.color);
@@ -525,6 +590,7 @@ export function renderFrame(ctx: RenderContext): void {
   renderConstraintLinks(ctx);
   renderDimensionOverlay(ctx);
   renderSelectedSegments(ctx);
+  renderArcMidpointHandles(ctx);
   renderSelectedPoints(ctx);
   renderToolOverlay(ctx);
 }

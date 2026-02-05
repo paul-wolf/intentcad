@@ -15,6 +15,7 @@ export function createMirroredEntity(
       ...source,
       id,
       points: source.points.map((p) => reflectPoint(p, lineA, lineB)),
+      ...(source.bulge ? { bulge: source.bulge.map((b) => -b) } : {}),
       ...(source.polygonCenter ? { polygonCenter: reflectPoint(source.polygonCenter, lineA, lineB) } : {}),
       sourceId: source.id,
       sourceTransform: transform,

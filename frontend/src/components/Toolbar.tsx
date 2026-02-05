@@ -457,6 +457,31 @@ export function Toolbar() {
       >
         <ToolIcon><polygon points="3,12 8,3 13,12" fill="none" /><circle cx="3" cy="12" r="1.5" /><circle cx="8" cy="3" r="1.5" /><circle cx="13" cy="12" r="1.5" /></ToolIcon>
       </button>
+      <button
+        onClick={() => {
+          const es = useEditorStore.getState();
+          const selSegs = es.selectedSegments;
+          if (selSegs.length > 0) {
+            useDocumentStore.getState().beginTransaction('Toggle arc');
+            for (const seg of selSegs) {
+              useDocumentStore.getState().toggleArc(seg.entityId, seg.segmentIndex);
+            }
+            requestSave();
+          }
+        }}
+        style={{
+          padding: '4px 12px',
+          border: `1px solid ${palette.inputBorder}`,
+          borderRadius: '4px',
+          background: palette.buttonBg,
+          color: palette.text,
+          cursor: 'pointer',
+          fontSize: '13px',
+        }}
+        title="Toggle arc on selected segments (F)"
+      >
+        <ToolIcon><path d="M3 12 Q8 2 13 12" fill="none" /></ToolIcon>
+      </button>
       <Sep color={palette.border} />
       <button
         onClick={() => {
@@ -545,7 +570,7 @@ export function Toolbar() {
           cursor: 'pointer',
           fontSize: '13px',
         }}
-        title="Fit all entities in viewport (F)"
+        title="Fit all entities in viewport (Shift+F)"
       >
         Fit All
       </button>

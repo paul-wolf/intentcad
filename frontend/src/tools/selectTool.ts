@@ -12,7 +12,8 @@ import { getThemePalette } from '@/theme';
 import { distance } from '@/utils/geometry';
 import { requestSave } from '@/api/autoSave';
 import { getEntityPoint, getEntityPoints } from '@/utils/entityPoints';
-import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
+import { getSegmentCount, getSegmentPointIndices, getSegmentBulge } from '@/utils/lineSegments';
+import { bulgeFromMidpoint, arcIntersectsRect } from '@/utils/arcGeometry';
 
 const DRAG_THRESHOLD = 4; // screen pixels before starting drag
 
@@ -201,6 +202,20 @@ export function createSelectTool(): Tool {
           lastMoveWorld = worldPos;
           return;
         }
+        // Arc midpoint handle drag: negative pointIndex = -(segmentIndex + 1)
+        if (hitPointOnDown.pointIndex < 0) {
+          const segIdx = -(hitPointOnDown.pointIndex + 1);
+          const entity = activeSketch?.entities.find((e) => e.id === hitPointOnDown!.entityId);
+          if (entity && entity.type === 'line') {
+            const [i1, i2] = getSegmentPointIndices(entity, segIdx);
+            const p1 = entity.points[i1]!;
+            const p2 = entity.points[i2]!;
+            const newBulge = bulgeFromMidpoint(p1, p2, worldPos);
+            useDocumentStore.getState().setArcBulge(hitPointOnDown.entityId, segIdx, newBulge);
+          }
+          lastMoveWorld = worldPos;
+          return;
+        }
         const entity = activeSketch?.entities.find((e) => e.id === hitPointOnDown!.entityId);
         if (entity && entity.type === 'line' && (entity as LineEntity).polygonCenter) {
           const center = (entity as LineEntity).polygonCenter!;
@@ -260,14 +275,22 @@ export function createSelectTool(): Tool {
               const segCount = getSegmentCount(entity);
               for (let i = 0; i < segCount; i++) {
                 const [i1, i2] = getSegmentPointIndices(entity, i);
-                if (
-                  segmentIntersectsRect(
-                    entity.points[i1]!,
-                    entity.points[i2]!,
-                    { x: minX, y: minY },
-                    { x: maxX, y: maxY },
-                  )
-                ) {
+                const bulge = getSegmentBulge(entity, i);
+                const intersects = bulge !== 0
+                  ? arcIntersectsRect(
+                      entity.points[i1]!,
+                      entity.points[i2]!,
+                      bulge,
+                      { x: minX, y: minY },
+                      { x: maxX, y: maxY },
+                    )
+                  : segmentIntersectsRect(
+                      entity.points[i1]!,
+                      entity.points[i2]!,
+                      { x: minX, y: minY },
+                      { x: maxX, y: maxY },
+                    );
+                if (intersects) {
                   ids.add(entity.id);
                   break;
                 }
@@ -603,6 +626,17 @@ export function createSelectTool(): Tool {
         if (ids.size > 0) {
           useDocumentStore.getState().beginTransaction('Toggle closed');
           useDocumentStore.getState().toggleClosed([...ids]);
+          requestSave();
+        }
+      }
+      if (e.key === 'f' && !e.shiftKey) {
+        const es = useEditorStore.getState();
+        const selSegs = es.selectedSegments;
+        if (selSegs.length > 0) {
+          useDocumentStore.getState().beginTransaction('Toggle arc');
+          for (const seg of selSegs) {
+            useDocumentStore.getState().toggleArc(seg.entityId, seg.segmentIndex);
+          }
           requestSave();
         }
       }

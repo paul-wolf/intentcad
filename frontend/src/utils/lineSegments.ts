@@ -8,3 +8,11 @@ export function getSegmentCount(entity: LineEntity): number {
 export function getSegmentPointIndices(entity: LineEntity, segmentIndex: number): [number, number] {
   return [segmentIndex, (segmentIndex + 1) % entity.points.length];
 }
+
+export function getSegmentBulge(entity: LineEntity, segIdx: number): number {
+  return entity.bulge?.[segIdx] ?? 0;
+}
+
+export function isArcSegment(entity: LineEntity, segIdx: number): boolean {
+  return getSegmentBulge(entity, segIdx) !== 0;
+}

@@ -1,5 +1,5 @@
 import type { Document } from '@/types/document';
-import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
+import { getSegmentCount, getSegmentPointIndices, getSegmentBulge } from '@/utils/lineSegments';
 
 export function exportDocumentToDxf(doc: Document): string {
   const visibleSketches = doc.sketches.filter((sk) => !sk.suppressed);
@@ -89,26 +89,51 @@ export function exportDocumentToDxf(doc: Document): string {
       if ('construction' in entity && entity.construction) continue;
       if (entity.type === 'line') {
         const segCount = getSegmentCount(entity);
-        for (let i = 0; i < segCount; i++) {
-          const [i1, i2] = getSegmentPointIndices(entity, i);
-          const p1 = entity.points[i1]!;
-          const p2 = entity.points[i2]!;
+        const hasArc = entity.bulge?.some((b) => b !== 0);
+        if (hasArc || entity.closed) {
+          // Export as LWPOLYLINE with per-vertex bulge
           w('0');
-          w('LINE');
+          w('LWPOLYLINE');
           w('8');
           w(sketch.name);
-          w('10');
-          w(String(p1.x));
-          w('20');
-          w(String(p1.y));
-          w('30');
-          w('0.0');
-          w('11');
-          w(String(p2.x));
-          w('21');
-          w(String(p2.y));
-          w('31');
-          w('0.0');
+          w('90');
+          w(String(entity.points.length));
+          w('70');
+          w(entity.closed ? '1' : '0');
+          for (let i = 0; i < entity.points.length; i++) {
+            const pt = entity.points[i]!;
+            w('10');
+            w(String(pt.x));
+            w('20');
+            w(String(pt.y));
+            const bulge = getSegmentBulge(entity, i);
+            if (bulge !== 0) {
+              w('42');
+              w(String(bulge));
+            }
+          }
+        } else {
+          for (let i = 0; i < segCount; i++) {
+            const [i1, i2] = getSegmentPointIndices(entity, i);
+            const p1 = entity.points[i1]!;
+            const p2 = entity.points[i2]!;
+            w('0');
+            w('LINE');
+            w('8');
+            w(sketch.name);
+            w('10');
+            w(String(p1.x));
+            w('20');
+            w(String(p1.y));
+            w('30');
+            w('0.0');
+            w('11');
+            w(String(p2.x));
+            w('21');
+            w(String(p2.y));
+            w('31');
+            w('0.0');
+          }
         }
       } else if (entity.type === 'circle') {
         w('0');

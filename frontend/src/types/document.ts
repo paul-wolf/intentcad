@@ -13,6 +13,7 @@ export interface LineEntity {
   type: 'line';
   points: Point[];
   closed?: boolean;
+  bulge?: number[];
   polygonCenter?: Point;
   construction?: boolean;
   sourceId?: string;

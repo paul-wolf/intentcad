@@ -3,7 +3,8 @@ import type { Viewport } from '@/types/renderer';
 import { distance, pointToSegmentDist } from '@/utils/geometry';
 import { computeAngleDimensionGeom } from '@/rendering/dimensionRenderer';
 import { HIT_TOL } from '@/config';
-import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
+import { getSegmentCount, getSegmentPointIndices, getSegmentBulge } from '@/utils/lineSegments';
+import { arcFromBulge, pointToArcDist, arcMidpoint } from '@/utils/arcGeometry';
 
 export interface PointHit {
   entityId: string;
@@ -51,6 +52,21 @@ export function hitTestPoint(
         if (d < bestDist) {
           bestDist = d;
           best = { entityId: entity.id, pointIndex: 0, isCenter: true };
+        }
+      }
+      // Arc midpoint handles (virtual points)
+      const segCountPt = getSegmentCount(entity);
+      for (let i = 0; i < segCountPt; i++) {
+        const bulge = getSegmentBulge(entity, i);
+        if (bulge === 0) continue;
+        const [ai, bi] = getSegmentPointIndices(entity, i);
+        const mid = arcMidpoint(entity.points[ai]!, entity.points[bi]!, bulge);
+        const sp = viewport.worldToScreen(mid);
+        const d = distance(screenPos, sp);
+        if (d < bestDist) {
+          bestDist = d;
+          // Encode arc midpoint as pointIndex = -(segmentIndex + 1) to distinguish from real points
+          best = { entityId: entity.id, pointIndex: -(i + 1) };
         }
       }
     } else if (entity.type === 'circle') {
@@ -112,9 +128,20 @@ export function hitTestEntities(
       const segCount = getSegmentCount(entity);
       for (let i = 0; i < segCount; i++) {
         const [i1, i2] = getSegmentPointIndices(entity, i);
-        const a = viewport.worldToScreen(entity.points[i1]!);
-        const b = viewport.worldToScreen(entity.points[i2]!);
-        const d = pointToSegmentDist(screenPos, a, b);
+        const bulge = getSegmentBulge(entity, i);
+        let d: number;
+        if (bulge !== 0) {
+          const arc = arcFromBulge(entity.points[i1]!, entity.points[i2]!, bulge);
+          const screenCenter = viewport.worldToScreen(arc.center);
+          const screenRadius = arc.radius * viewport.scale;
+          const sa = viewport.worldToScreen(entity.points[i1]!);
+          const sb = viewport.worldToScreen(entity.points[i2]!);
+          d = pointToArcDist(screenPos, screenCenter, screenRadius, arc.startAngle, arc.endAngle, arc.counterClockwise, sa, sb);
+        } else {
+          const a = viewport.worldToScreen(entity.points[i1]!);
+          const b = viewport.worldToScreen(entity.points[i2]!);
+          d = pointToSegmentDist(screenPos, a, b);
+        }
         if (d < bestDist) {
           bestDist = d;
           best = entity;
@@ -321,9 +348,20 @@ export function hitTestSegment(
       const segCount = getSegmentCount(entity);
       for (let i = 0; i < segCount; i++) {
         const [i1, i2] = getSegmentPointIndices(entity, i);
-        const a = viewport.worldToScreen(entity.points[i1]!);
-        const b = viewport.worldToScreen(entity.points[i2]!);
-        const d = pointToSegmentDist(screenPos, a, b);
+        const bulge = getSegmentBulge(entity, i);
+        let d: number;
+        if (bulge !== 0) {
+          const arc = arcFromBulge(entity.points[i1]!, entity.points[i2]!, bulge);
+          const screenCenter = viewport.worldToScreen(arc.center);
+          const screenRadius = arc.radius * viewport.scale;
+          const sa = viewport.worldToScreen(entity.points[i1]!);
+          const sb = viewport.worldToScreen(entity.points[i2]!);
+          d = pointToArcDist(screenPos, screenCenter, screenRadius, arc.startAngle, arc.endAngle, arc.counterClockwise, sa, sb);
+        } else {
+          const a = viewport.worldToScreen(entity.points[i1]!);
+          const b = viewport.worldToScreen(entity.points[i2]!);
+          d = pointToSegmentDist(screenPos, a, b);
+        }
         if (d < bestDist) {
           bestDist = d;
           best = { entityId: entity.id, segmentIndex: i };
@@ -389,6 +427,20 @@ export function hitTestAllCandidates(
           bestPointHit = { entityId: entity.id, pointIndex: 0, isCenter: true };
         }
       }
+      // Arc midpoint handles
+      const segCountPtAll = getSegmentCount(entity);
+      for (let i = 0; i < segCountPtAll; i++) {
+        const bulge = getSegmentBulge(entity, i);
+        if (bulge === 0) continue;
+        const [ai, bi] = getSegmentPointIndices(entity, i);
+        const mid = arcMidpoint(entity.points[ai]!, entity.points[bi]!, bulge);
+        const sp = viewport.worldToScreen(mid);
+        const d = distance(screenPos, sp);
+        if (d < bestPointDist) {
+          bestPointDist = d;
+          bestPointHit = { entityId: entity.id, pointIndex: -(i + 1) };
+        }
+      }
     } else if (entity.type === 'circle') {
       const sp = viewport.worldToScreen(entity.center);
       const d = distance(screenPos, sp);
@@ -430,9 +482,20 @@ export function hitTestAllCandidates(
       const segCount2 = getSegmentCount(entity);
       for (let i = 0; i < segCount2; i++) {
         const [i1, i2] = getSegmentPointIndices(entity, i);
-        const a = viewport.worldToScreen(entity.points[i1]!);
-        const b = viewport.worldToScreen(entity.points[i2]!);
-        const d = pointToSegmentDist(screenPos, a, b);
+        const bulge = getSegmentBulge(entity, i);
+        let d: number;
+        if (bulge !== 0) {
+          const arc = arcFromBulge(entity.points[i1]!, entity.points[i2]!, bulge);
+          const screenCenter = viewport.worldToScreen(arc.center);
+          const screenRadius = arc.radius * viewport.scale;
+          const sa = viewport.worldToScreen(entity.points[i1]!);
+          const sb = viewport.worldToScreen(entity.points[i2]!);
+          d = pointToArcDist(screenPos, screenCenter, screenRadius, arc.startAngle, arc.endAngle, arc.counterClockwise, sa, sb);
+        } else {
+          const a = viewport.worldToScreen(entity.points[i1]!);
+          const b = viewport.worldToScreen(entity.points[i2]!);
+          d = pointToSegmentDist(screenPos, a, b);
+        }
         if (d < bestSegDist) {
           bestSegDist = d;
           bestSegHit = { entityId: entity.id, segmentIndex: i };
@@ -466,9 +529,20 @@ export function hitTestAllCandidates(
       const segCount3 = getSegmentCount(entity);
       for (let i = 0; i < segCount3; i++) {
         const [i1, i2] = getSegmentPointIndices(entity, i);
-        const a = viewport.worldToScreen(entity.points[i1]!);
-        const b = viewport.worldToScreen(entity.points[i2]!);
-        const d = pointToSegmentDist(screenPos, a, b);
+        const bulge = getSegmentBulge(entity, i);
+        let d: number;
+        if (bulge !== 0) {
+          const arc = arcFromBulge(entity.points[i1]!, entity.points[i2]!, bulge);
+          const screenCenter = viewport.worldToScreen(arc.center);
+          const screenRadius = arc.radius * viewport.scale;
+          const sa = viewport.worldToScreen(entity.points[i1]!);
+          const sb = viewport.worldToScreen(entity.points[i2]!);
+          d = pointToArcDist(screenPos, screenCenter, screenRadius, arc.startAngle, arc.endAngle, arc.counterClockwise, sa, sb);
+        } else {
+          const a = viewport.worldToScreen(entity.points[i1]!);
+          const b = viewport.worldToScreen(entity.points[i2]!);
+          d = pointToSegmentDist(screenPos, a, b);
+        }
         if (d < bodyDist) bodyDist = d;
       }
     } else if (entity.type === 'circle') {
