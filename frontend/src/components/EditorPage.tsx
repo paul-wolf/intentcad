@@ -106,7 +106,6 @@ export function EditorPage() {
       if (e.key === 'c' || e.key === 'C') setActiveTool('circle');
       if (e.key === 'r' || e.key === 'R') setActiveTool('rectangle');
       if (e.key === 'p' || e.key === 'P') setActiveTool('polygon');
-      if (e.key === 'v' || e.key === 'V') setActiveTool('select');
       if (e.key === 'd' || e.key === 'D') setActiveTool('dimension');
     };
     window.addEventListener('keydown', handler);

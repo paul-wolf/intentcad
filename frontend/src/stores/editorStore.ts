@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Point } from '@/types/document';
 import type { ToolType, ToolState } from '@/types/editor';
 import type { SegmentHit } from '@/hittest/hitTest';
+import { addLog } from '@/stores/logStore';
 
 export interface SelectedPoint {
   entityId: string;
@@ -86,6 +87,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
   viewportCommand: null,
 
   setActiveTool(tool) {
+    addLog('info', `Tool: ${tool}`);
     set({ activeTool: tool, toolState: defaultToolState(tool), selectedEntityIds: new Set(), selectedPoints: [], selectedSegments: [] });
   },
 

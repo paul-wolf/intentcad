@@ -996,11 +996,12 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   },
 
   toggleHorizontal(entityIds, segments) {
-    const { document } = get();
-    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
-    if (!sketch) return;
-
     for (const entityId of entityIds) {
+      const { document } = get();
+      const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+      if (!sketch) return;
+      const eid = entityId.slice(0, 8);
+
       const entity = sketch.entities.find((e) => e.id === entityId);
       if (!entity || entity.type !== 'line') continue;
 
@@ -1025,7 +1026,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
               constraints: sk2.constraints.filter((c) => !removeIds.has(c.id)),
             })),
           }));
-          addLog('info', 'Horizontal constraint removed');
+          addLog('info', `Horizontal constraint removed ${eid}`);
         } else {
           const constrainedSegs = new Set(existing.map((c) => (c as HorizontalConstraint).segmentIndex));
           const newConstraints: Constraint[] = [];
@@ -1045,7 +1046,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
             if (validation.supersedes) supersededIds.push(...validation.supersedes);
           }
           if (newConstraints.length === 0) {
-            addLog('warn', 'Horizontal constraint denied: no valid segments');
+            addLog('warn', `Horizontal constraint denied ${eid}: no valid segments`);
             continue;
           }
 
@@ -1061,7 +1062,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
               entities: solved.entities,
             })),
           }));
-          addLog('info', 'Horizontal constraint applied');
+          addLog('info', `Horizontal constraint applied ${eid}`);
         }
       } else if (existing.length > 0) {
         // Toggle off: remove all horizontal constraints for this entity
@@ -1070,7 +1071,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
             constraints: sk2.constraints.filter((c) => !(c.type === 'horizontal' && c.entityId === entityId)),
           })),
         }));
-        addLog('info', 'Horizontal constraint removed');
+        addLog('info', `Horizontal constraint removed ${eid}`);
       } else {
         // Add horizontal constraints for all eligible segments
         const newConstraints: Constraint[] = [];
@@ -1088,7 +1089,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           if (validation.supersedes) supersededIds.push(...validation.supersedes);
         }
         if (newConstraints.length === 0) {
-          addLog('warn', 'Horizontal constraint denied: no valid segments');
+          addLog('warn', `Horizontal constraint denied ${eid}: no valid segments`);
           continue;
         }
 
@@ -1104,17 +1105,18 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
             entities: solved.entities,
           })),
         }));
-        addLog('info', 'Horizontal constraint applied');
+        addLog('info', `Horizontal constraint applied ${eid}`);
       }
     }
   },
 
   toggleVertical(entityIds, segments) {
-    const { document } = get();
-    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
-    if (!sketch) return;
-
     for (const entityId of entityIds) {
+      const { document } = get();
+      const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+      if (!sketch) return;
+      const eid = entityId.slice(0, 8);
+
       const entity = sketch.entities.find((e) => e.id === entityId);
       if (!entity || entity.type !== 'line') continue;
 
@@ -1139,7 +1141,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
               constraints: sk2.constraints.filter((c) => !removeIds.has(c.id)),
             })),
           }));
-          addLog('info', 'Vertical constraint removed');
+          addLog('info', `Vertical constraint removed ${eid}`);
         } else {
           const constrainedSegs = new Set(existing.map((c) => (c as VerticalConstraint).segmentIndex));
           const newConstraints: Constraint[] = [];
@@ -1159,7 +1161,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
             if (validation.supersedes) supersededIds.push(...validation.supersedes);
           }
           if (newConstraints.length === 0) {
-            addLog('warn', 'Vertical constraint denied: no valid segments');
+            addLog('warn', `Vertical constraint denied ${eid}: no valid segments`);
             continue;
           }
 
@@ -1175,7 +1177,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
               entities: solved.entities,
             })),
           }));
-          addLog('info', 'Vertical constraint applied');
+          addLog('info', `Vertical constraint applied ${eid}`);
         }
       } else if (existing.length > 0) {
         // Toggle off: remove all vertical constraints for this entity
@@ -1184,7 +1186,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
             constraints: sk2.constraints.filter((c) => !(c.type === 'vertical' && c.entityId === entityId)),
           })),
         }));
-        addLog('info', 'Vertical constraint removed');
+        addLog('info', `Vertical constraint removed ${eid}`);
       } else {
         // Add vertical constraints for all eligible segments
         const newConstraints: Constraint[] = [];
@@ -1202,7 +1204,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           if (validation.supersedes) supersededIds.push(...validation.supersedes);
         }
         if (newConstraints.length === 0) {
-          addLog('warn', 'Vertical constraint denied: no valid segments');
+          addLog('warn', `Vertical constraint denied ${eid}: no valid segments`);
           continue;
         }
 
@@ -1218,7 +1220,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
             entities: solved.entities,
           })),
         }));
-        addLog('info', 'Vertical constraint applied');
+        addLog('info', `Vertical constraint applied ${eid}`);
       }
     }
   },

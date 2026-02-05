@@ -10,7 +10,7 @@ import { requestSave } from '@/api/autoSave';
 import type { ToolType } from '@/types/editor';
 
 const TOOLS: { type: ToolType; label: string; shortcut: string }[] = [
-  { type: 'select', label: 'Select', shortcut: 'V — X construction, K fix, = equal, J coincident, H horiz, V vert, I midpoint, N parallel, T perpendicular, Y tangent, B bisect, M mirror, A circular, G grid' },
+  { type: 'select', label: 'Select', shortcut: 'Esc — X construction, K fix, = equal, J coincident, H horiz, V vert, I midpoint, N parallel, T perpendicular, Y tangent, B bisect, M mirror, A circular, G grid' },
   { type: 'line', label: 'Line', shortcut: 'l' },
   { type: 'point', label: 'Point', shortcut: '.' },
   { type: 'circle', label: 'Circle', shortcut: 'c' },
