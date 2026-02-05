@@ -49,10 +49,23 @@ export function validateConstraint(
   // Duplicate check for two-entity constraints
   if ('targetEntityId' in proposed) {
     const p = proposed as Constraint & { targetEntityId: string };
+    const pSeg = 'segmentIndex' in p ? (p as any).segmentIndex as number | undefined : undefined;
+    const pTargetSeg = 'targetSegmentIndex' in p ? (p as any).targetSegmentIndex as number | undefined : undefined;
     const isDuplicate = existing.some((c) => {
       if (c.type !== proposed.type) return false;
       if (!('targetEntityId' in c)) return false;
       const ec = c as Constraint & { targetEntityId: string };
+      const ecSeg = 'segmentIndex' in ec ? (ec as any).segmentIndex as number | undefined : undefined;
+      const ecTargetSeg = 'targetSegmentIndex' in ec ? (ec as any).targetSegmentIndex as number | undefined : undefined;
+      // For segment-based constraints, also compare segment indices
+      if (pSeg !== undefined && pTargetSeg !== undefined) {
+        return (
+          (ec.entityId === p.entityId && ecSeg === pSeg &&
+           ec.targetEntityId === p.targetEntityId && ecTargetSeg === pTargetSeg) ||
+          (ec.entityId === p.targetEntityId && ecSeg === pTargetSeg &&
+           ec.targetEntityId === p.entityId && ecTargetSeg === pSeg)
+        );
+      }
       return (
         (ec.entityId === p.entityId && ec.targetEntityId === p.targetEntityId) ||
         (ec.entityId === p.targetEntityId && ec.targetEntityId === p.entityId)
@@ -472,10 +485,57 @@ function enforceEqual(
   const equalConstraints = constraints.filter((c): c is EqualConstraint => c.type === 'equal');
   if (equalConstraints.length === 0) return;
 
-  // BFS from all entities (since we don't track a single modified source in the iterative loop)
+  // --- Segment-based equal: make two specific segments equal length ---
+  for (const c of equalConstraints) {
+    if (c.segmentIndex === undefined || c.targetSegmentIndex === undefined) continue;
+
+    const entity1 = entityMap.get(c.entityId);
+    const entity2 = entityMap.get(c.targetEntityId);
+    if (!entity1 || !entity2) continue;
+
+    const ep1 = getSegmentEndpoints(entity1, c.segmentIndex);
+    const ep2 = getSegmentEndpoints(entity2, c.targetSegmentIndex);
+    if (!ep1 || !ep2) continue;
+
+    const len1 = Math.sqrt((ep1[1].x - ep1[0].x) ** 2 + (ep1[1].y - ep1[0].y) ** 2);
+    const len2 = Math.sqrt((ep2[1].x - ep2[0].x) ** 2 + (ep2[1].y - ep2[0].y) ** 2);
+    if (Math.abs(len1 - len2) < 1e-9) continue;
+
+    const targetLen = (len1 + len2) / 2;
+
+    // Helper: scale a segment's endpoints around their midpoint to targetLen
+    const scaleSegment = (entity: Entity, segIdx: number, ep: [Point, Point]) => {
+      if (entity.type !== 'line') return;
+      const le = entity as LineEntity;
+      const [i1, i2] = getSegmentPointIndices(le, segIdx);
+      const curLen = Math.sqrt((ep[1].x - ep[0].x) ** 2 + (ep[1].y - ep[0].y) ** 2);
+      if (curLen < 1e-9) return;
+      const mid = { x: (ep[0].x + ep[1].x) / 2, y: (ep[0].y + ep[1].y) / 2 };
+      const scale = targetLen / curLen;
+      const newPoints = [...le.points];
+      newPoints[i1] = { x: mid.x + (ep[0].x - mid.x) * scale, y: mid.y + (ep[0].y - mid.y) * scale };
+      newPoints[i2] = { x: mid.x + (ep[1].x - mid.x) * scale, y: mid.y + (ep[1].y - mid.y) * scale };
+      entityMap.set(entity.id, { ...le, points: newPoints });
+    };
+
+    if (c.entityId === c.targetEntityId) {
+      // Same entity: adjust both segments
+      // Read fresh endpoints after first adjustment
+      scaleSegment(entityMap.get(c.entityId)!, c.segmentIndex, ep1);
+      const freshEntity = entityMap.get(c.targetEntityId)!;
+      const freshEp2 = getSegmentEndpoints(freshEntity, c.targetSegmentIndex);
+      if (freshEp2) scaleSegment(freshEntity, c.targetSegmentIndex, freshEp2);
+    } else {
+      // Different entities: adjust entity2's segment to match entity1's
+      scaleSegment(entity2, c.targetSegmentIndex, ep2);
+    }
+  }
+
+  // --- Whole-entity equal: BFS from all entities ---
   const visited = new Set<string>();
 
   for (const c of equalConstraints) {
+    if (c.segmentIndex !== undefined && c.targetSegmentIndex !== undefined) continue;
     if (visited.has(c.entityId) && visited.has(c.targetEntityId)) continue;
 
     // Start BFS from the first entity we haven't visited
@@ -491,6 +551,7 @@ function enforceEqual(
       if (!current) continue;
 
       for (const ec of equalConstraints) {
+        if (ec.segmentIndex !== undefined && ec.targetSegmentIndex !== undefined) continue;
         let otherId: string | null = null;
         if (ec.entityId === currentId) otherId = ec.targetEntityId;
         else if (ec.targetEntityId === currentId) otherId = ec.entityId;

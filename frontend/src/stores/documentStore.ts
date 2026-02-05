@@ -73,7 +73,7 @@ interface DocumentStore {
   addConstraint(constraint: Constraint): void;
   removeConstraints(entityIds: string[]): void;
   toggleFixed(entityIds: string[]): void;
-  toggleEqual(entityIds: string[]): void;
+  toggleEqual(entityIds: string[], segments?: {entityId: string, segmentIndex: number}[]): void;
   toggleCoincident(entityIds: string[]): void;
   toggleCoincidentWithPoints(pt1: SelectedPoint, pt2: SelectedPoint): void;
   toggleMidpoint(point: SelectedPoint, segment: {entityId: string, segmentIndex: number}): void;
@@ -676,7 +676,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           ),
         },
       });
-      addLog('info', 'Fixed constraint removed');
+      addLog('info', 'Fixed constraint OFF');
     } else {
       // Add fixed constraints for entities that aren't already fixed
       const newConstraints = entityIds
@@ -692,23 +692,37 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           ),
         },
       });
-      addLog('info', 'Fixed constraint applied');
+      addLog('info', 'Fixed constraint ON');
     }
   },
 
-  toggleEqual(entityIds) {
+  toggleEqual(entityIds, segments) {
     if (entityIds.length !== 2) return;
     const { document } = get();
     const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
     if (!sketch) return;
 
     const [id1, id2] = entityIds as [string, string];
+    const seg1 = segments?.[0];
+    const seg2 = segments?.[1];
 
-    // Check if constraint already exists between these two
-    const existing = sketch.constraints.find((c) =>
-      c.type === 'equal' &&
-      ((c.entityId === id1 && c.targetEntityId === id2) || (c.entityId === id2 && c.targetEntityId === id1)),
-    );
+    // Check if constraint already exists between these two (with matching segments if applicable)
+    const existing = sketch.constraints.find((c) => {
+      if (c.type !== 'equal') return false;
+      const ec = c as import('@/types/document').EqualConstraint;
+      if (seg1 && seg2) {
+        return (
+          (ec.entityId === seg1.entityId && ec.segmentIndex === seg1.segmentIndex &&
+           ec.targetEntityId === seg2.entityId && ec.targetSegmentIndex === seg2.segmentIndex) ||
+          (ec.entityId === seg2.entityId && ec.segmentIndex === seg2.segmentIndex &&
+           ec.targetEntityId === seg1.entityId && ec.targetSegmentIndex === seg1.segmentIndex)
+        );
+      }
+      return (
+        (ec.entityId === id1 && ec.targetEntityId === id2) ||
+        (ec.entityId === id2 && ec.targetEntityId === id1)
+      );
+    });
 
     if (existing) {
       set({
@@ -716,9 +730,16 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           constraints: sketch.constraints.filter((c) => c.id !== existing.id),
         })),
       });
-      addLog('info', 'Equal constraint removed');
+      addLog('info', 'Equal constraint OFF');
     } else {
-      const proposed: Constraint = { id: crypto.randomUUID(), type: 'equal', entityId: id1, targetEntityId: id2 };
+      const proposed: Constraint = {
+        id: crypto.randomUUID(),
+        type: 'equal',
+        entityId: seg1?.entityId ?? id1,
+        targetEntityId: seg2?.entityId ?? id2,
+        ...(seg1 ? { segmentIndex: seg1.segmentIndex } : {}),
+        ...(seg2 ? { targetSegmentIndex: seg2.segmentIndex } : {}),
+      };
       const validation = validateConstraint(proposed, sketch.constraints, sketch.entities);
       if (!validation.valid) {
         addLog('warn', `Equal constraint denied: ${validation.reason}`);
@@ -733,7 +754,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           entities: solved.entities,
         })),
       });
-      addLog('info', 'Equal constraint applied');
+      addLog('info', 'Equal constraint ON');
     }
   },
 
@@ -761,7 +782,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           constraints: sketch.constraints.filter((c) => c.id !== existing.id),
         })),
       });
-      addLog('info', 'Coincident constraint removed');
+      addLog('info', 'Coincident constraint OFF');
     } else {
       // Find closest pair of characteristic points
       const pts1 = getEntityPoints(e1);
@@ -799,7 +820,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           entities: solved.entities,
         })),
       });
-      addLog('info', 'Coincident constraint applied');
+      addLog('info', 'Coincident constraint ON');
     }
   },
 
@@ -826,7 +847,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           constraints: sketch.constraints.filter((c) => c.id !== existing.id),
         })),
       });
-      addLog('info', 'Coincident constraint removed');
+      addLog('info', 'Coincident constraint OFF');
     } else {
       const proposed: Constraint = {
         id: crypto.randomUUID(),
@@ -845,7 +866,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           entities: solved.entities,
         })),
       });
-      addLog('info', 'Coincident constraint applied');
+      addLog('info', 'Coincident constraint ON');
     }
   },
 
@@ -868,7 +889,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           constraints: sketch.constraints.filter((c) => c.id !== existing.id),
         })),
       });
-      addLog('info', 'Midpoint constraint removed');
+      addLog('info', 'Midpoint constraint OFF');
     } else {
       const proposed: Constraint = {
         id: crypto.randomUUID(),
@@ -887,7 +908,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           entities: solved.entities,
         })),
       });
-      addLog('info', 'Midpoint constraint applied');
+      addLog('info', 'Midpoint constraint ON');
     }
   },
 
@@ -910,7 +931,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           constraints: sketch.constraints.filter((c) => c.id !== existing.id),
         })),
       });
-      addLog('info', 'Parallel constraint removed');
+      addLog('info', 'Parallel constraint OFF');
     } else {
       const proposed: Constraint = {
         id: crypto.randomUUID(),
@@ -938,7 +959,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           entities: solved.entities,
         })),
       });
-      addLog('info', 'Parallel constraint applied');
+      addLog('info', 'Parallel constraint ON');
     }
   },
 
@@ -961,7 +982,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           constraints: sketch.constraints.filter((c) => c.id !== existing.id),
         })),
       });
-      addLog('info', 'Perpendicular constraint removed');
+      addLog('info', 'Perpendicular constraint OFF');
     } else {
       const proposed: Constraint = {
         id: crypto.randomUUID(),
@@ -989,7 +1010,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           entities: solved.entities,
         })),
       });
-      addLog('info', 'Perpendicular constraint applied');
+      addLog('info', 'Perpendicular constraint ON');
     }
   },
 
@@ -1012,7 +1033,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           constraints: sketch.constraints.filter((c) => c.id !== existing.id),
         })),
       });
-      addLog('info', 'Tangent constraint removed');
+      addLog('info', 'Tangent constraint OFF');
     } else {
       const proposed: Constraint = {
         id: crypto.randomUUID(),
@@ -1031,7 +1052,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           entities: solved.entities,
         })),
       });
-      addLog('info', 'Tangent constraint applied');
+      addLog('info', 'Tangent constraint ON');
     }
   },
 
@@ -1054,16 +1075,21 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           constraints: sketch.constraints.filter((c) => c.id !== existing.id),
         })),
       });
-      addLog('info', 'Bisect constraint removed');
+      addLog('info', 'Bisect constraint OFF');
     } else {
-      // seg1 = bisecting line, seg2 = line being bisected
+      // Auto-detect bisector vs bisected: prefer fixed entity as bisector
+      const seg1Fixed = sketch.constraints.some((c) => c.type === 'fixed' && c.entityId === seg1.entityId);
+      const seg2Fixed = sketch.constraints.some((c) => c.type === 'fixed' && c.entityId === seg2.entityId);
+      const bisectorSeg = (seg2Fixed && !seg1Fixed) ? seg2 : seg1;
+      const bisectedSeg = bisectorSeg === seg1 ? seg2 : seg1;
+
       const proposed: Constraint = {
         id: crypto.randomUUID(),
         type: 'bisect',
-        entityId: seg1.entityId,
-        segmentIndex: seg1.segmentIndex,
-        targetEntityId: seg2.entityId,
-        targetSegmentIndex: seg2.segmentIndex,
+        entityId: bisectorSeg.entityId,
+        segmentIndex: bisectorSeg.segmentIndex,
+        targetEntityId: bisectedSeg.entityId,
+        targetSegmentIndex: bisectedSeg.segmentIndex,
       };
 
       const validation = validateConstraint(proposed, sketch.constraints, sketch.entities);
@@ -1083,7 +1109,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           entities: solved.entities,
         })),
       });
-      addLog('info', 'Bisect constraint applied');
+      addLog('info', 'Bisect constraint ON');
     }
   },
 
@@ -1118,7 +1144,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
               constraints: sk2.constraints.filter((c) => !removeIds.has(c.id)),
             })),
           }));
-          addLog('info', `Horizontal constraint removed ${eid}`);
+          addLog('info', `Horizontal constraint OFF ${eid}`);
         } else {
           const constrainedSegs = new Set(existing.map((c) => (c as HorizontalConstraint).segmentIndex));
           const newConstraints: Constraint[] = [];
@@ -1154,7 +1180,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
               entities: solved.entities,
             })),
           }));
-          addLog('info', `Horizontal constraint applied ${eid}`);
+          addLog('info', `Horizontal constraint ON ${eid}`);
         }
       } else if (existing.length > 0) {
         // Toggle off: remove all horizontal constraints for this entity
@@ -1163,7 +1189,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
             constraints: sk2.constraints.filter((c) => !(c.type === 'horizontal' && c.entityId === entityId)),
           })),
         }));
-        addLog('info', `Horizontal constraint removed ${eid}`);
+        addLog('info', `Horizontal constraint OFF ${eid}`);
       } else {
         // Add horizontal constraints for all eligible segments
         const newConstraints: Constraint[] = [];
@@ -1197,7 +1223,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
             entities: solved.entities,
           })),
         }));
-        addLog('info', `Horizontal constraint applied ${eid}`);
+        addLog('info', `Horizontal constraint ON ${eid}`);
       }
     }
   },
@@ -1233,7 +1259,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
               constraints: sk2.constraints.filter((c) => !removeIds.has(c.id)),
             })),
           }));
-          addLog('info', `Vertical constraint removed ${eid}`);
+          addLog('info', `Vertical constraint OFF ${eid}`);
         } else {
           const constrainedSegs = new Set(existing.map((c) => (c as VerticalConstraint).segmentIndex));
           const newConstraints: Constraint[] = [];
@@ -1269,7 +1295,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
               entities: solved.entities,
             })),
           }));
-          addLog('info', `Vertical constraint applied ${eid}`);
+          addLog('info', `Vertical constraint ON ${eid}`);
         }
       } else if (existing.length > 0) {
         // Toggle off: remove all vertical constraints for this entity
@@ -1278,7 +1304,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
             constraints: sk2.constraints.filter((c) => !(c.type === 'vertical' && c.entityId === entityId)),
           })),
         }));
-        addLog('info', `Vertical constraint removed ${eid}`);
+        addLog('info', `Vertical constraint OFF ${eid}`);
       } else {
         // Add vertical constraints for all eligible segments
         const newConstraints: Constraint[] = [];
@@ -1312,7 +1338,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
             entities: solved.entities,
           })),
         }));
-        addLog('info', `Vertical constraint applied ${eid}`);
+        addLog('info', `Vertical constraint ON ${eid}`);
       }
     }
   },

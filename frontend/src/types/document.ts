@@ -76,6 +76,8 @@ export interface EqualConstraint {
   type: 'equal';
   entityId: string;
   targetEntityId: string;
+  segmentIndex?: number;
+  targetSegmentIndex?: number;
 }
 
 export interface CoincidentConstraint {

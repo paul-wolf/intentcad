@@ -6,10 +6,31 @@ import { exportDocumentToDxf } from '@/export/dxf';
 import { exportDocumentToPdf } from '@/export/pdf';
 import { downloadTextFile, downloadBlob } from '@/export/download';
 import { getEntityPoint, getEntityPoints } from '@/utils/entityPoints';
+import { getSegmentCount } from '@/utils/lineSegments';
 import { requestSave } from '@/api/autoSave';
 import type { ToolType } from '@/types/editor';
 import type { ThemePalette } from '@/theme';
 import type { ReactNode } from 'react';
+
+/** Resolve two segments: prefer explicit segment selection, fall back to entity selection for single-segment lines. */
+function resolveTwoSegments(): { entityId: string; segmentIndex: number }[] | null {
+  const es = useEditorStore.getState();
+  if (es.selectedSegments.length === 2) return es.selectedSegments;
+  if (es.selectedEntityIds.size === 2) {
+    const sketch = useDocumentStore.getState().getActiveSketch();
+    if (!sketch) return null;
+    const ids = [...es.selectedEntityIds];
+    const segs: { entityId: string; segmentIndex: number }[] = [];
+    for (const id of ids) {
+      const entity = sketch.entities.find((e) => e.id === id);
+      if (!entity || entity.type !== 'line') return null;
+      if (getSegmentCount(entity) !== 1) return null;
+      segs.push({ entityId: id, segmentIndex: 0 });
+    }
+    return segs;
+  }
+  return null;
+}
 
 function ToolIcon({ children }: { children: ReactNode }) {
   return (
@@ -157,7 +178,18 @@ export function Toolbar() {
       </button>
       <button
         onClick={() => {
-          const ids = useEditorStore.getState().selectedEntityIds;
+          const es = useEditorStore.getState();
+          const selSegs = es.selectedSegments;
+          if (selSegs.length === 2) {
+            useDocumentStore.getState().beginTransaction('Toggle equal');
+            useDocumentStore.getState().toggleEqual(
+              [selSegs[0]!.entityId, selSegs[1]!.entityId],
+              [selSegs[0]!, selSegs[1]!],
+            );
+            requestSave();
+            return;
+          }
+          const ids = es.selectedEntityIds;
           if (ids.size !== 2) return;
           useDocumentStore.getState().beginTransaction('Toggle equal');
           useDocumentStore.getState().toggleEqual([...ids]);
@@ -301,11 +333,10 @@ export function Toolbar() {
       </button>
       <button
         onClick={() => {
-          const es = useEditorStore.getState();
-          const selSegs = es.selectedSegments;
-          if (selSegs.length !== 2) return;
+          const segs = resolveTwoSegments();
+          if (!segs) return;
           useDocumentStore.getState().beginTransaction('Toggle parallel');
-          useDocumentStore.getState().toggleParallel(selSegs[0]!, selSegs[1]!);
+          useDocumentStore.getState().toggleParallel(segs[0]!, segs[1]!);
           requestSave();
         }}
         style={{
@@ -323,11 +354,10 @@ export function Toolbar() {
       </button>
       <button
         onClick={() => {
-          const es = useEditorStore.getState();
-          const selSegs = es.selectedSegments;
-          if (selSegs.length !== 2) return;
+          const segs = resolveTwoSegments();
+          if (!segs) return;
           useDocumentStore.getState().beginTransaction('Toggle perpendicular');
-          useDocumentStore.getState().togglePerpendicular(selSegs[0]!, selSegs[1]!);
+          useDocumentStore.getState().togglePerpendicular(segs[0]!, segs[1]!);
           requestSave();
         }}
         style={{
@@ -387,11 +417,10 @@ export function Toolbar() {
       </button>
       <button
         onClick={() => {
-          const es = useEditorStore.getState();
-          const selSegs = es.selectedSegments;
-          if (selSegs.length !== 2) return;
+          const segs = resolveTwoSegments();
+          if (!segs) return;
           useDocumentStore.getState().beginTransaction('Toggle bisect');
-          useDocumentStore.getState().toggleBisect(selSegs[0]!, selSegs[1]!);
+          useDocumentStore.getState().toggleBisect(segs[0]!, segs[1]!);
           requestSave();
         }}
         style={{

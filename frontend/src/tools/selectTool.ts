@@ -16,6 +16,27 @@ import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
 
 const DRAG_THRESHOLD = 4; // screen pixels before starting drag
 
+/** Resolve two segments: prefer explicit segment selection, fall back to entity selection for single-segment lines. */
+function resolveTwoSegments(): { entityId: string; segmentIndex: number }[] | null {
+  const es = useEditorStore.getState();
+  if (es.selectedSegments.length === 2) return es.selectedSegments;
+  // Fall back: if exactly 2 entities are selected and each has exactly 1 segment, use segment 0
+  if (es.selectedEntityIds.size === 2) {
+    const sketch = useDocumentStore.getState().getActiveSketch();
+    if (!sketch) return null;
+    const ids = [...es.selectedEntityIds];
+    const segs: { entityId: string; segmentIndex: number }[] = [];
+    for (const id of ids) {
+      const entity = sketch.entities.find((e) => e.id === id);
+      if (!entity || entity.type !== 'line') return null;
+      if (getSegmentCount(entity) !== 1) return null;
+      segs.push({ entityId: id, segmentIndex: 0 });
+    }
+    return segs;
+  }
+  return null;
+}
+
 export function createSelectTool(): Tool {
   let mouseDownScreen: Point | null = null;
   let dragStartWorld: Point | null = null;
@@ -424,11 +445,22 @@ export function createSelectTool(): Tool {
         }
       }
       if (e.key === '=') {
-        const ids = useEditorStore.getState().selectedEntityIds;
-        if (ids.size === 2) {
+        const es = useEditorStore.getState();
+        const selSegs = es.selectedSegments;
+        if (selSegs.length === 2) {
           useDocumentStore.getState().beginTransaction('Toggle equal');
-          useDocumentStore.getState().toggleEqual([...ids]);
+          useDocumentStore.getState().toggleEqual(
+            [selSegs[0]!.entityId, selSegs[1]!.entityId],
+            [selSegs[0]!, selSegs[1]!],
+          );
           requestSave();
+        } else {
+          const ids = es.selectedEntityIds;
+          if (ids.size === 2) {
+            useDocumentStore.getState().beginTransaction('Toggle equal');
+            useDocumentStore.getState().toggleEqual([...ids]);
+            requestSave();
+          }
         }
       }
       if (e.key === 'j' || e.key === 'J') {
@@ -502,29 +534,26 @@ export function createSelectTool(): Tool {
         }
       }
       if (e.key === 'n' || e.key === 'N') {
-        const es = useEditorStore.getState();
-        const selSegs = es.selectedSegments;
-        if (selSegs.length === 2) {
+        const segs = resolveTwoSegments();
+        if (segs) {
           useDocumentStore.getState().beginTransaction('Toggle parallel');
-          useDocumentStore.getState().toggleParallel(selSegs[0]!, selSegs[1]!);
+          useDocumentStore.getState().toggleParallel(segs[0]!, segs[1]!);
           requestSave();
         }
       }
       if (e.key === 't' || e.key === 'T') {
-        const es = useEditorStore.getState();
-        const selSegs = es.selectedSegments;
-        if (selSegs.length === 2) {
+        const segs = resolveTwoSegments();
+        if (segs) {
           useDocumentStore.getState().beginTransaction('Toggle perpendicular');
-          useDocumentStore.getState().togglePerpendicular(selSegs[0]!, selSegs[1]!);
+          useDocumentStore.getState().togglePerpendicular(segs[0]!, segs[1]!);
           requestSave();
         }
       }
       if (e.key === 'b' || e.key === 'B') {
-        const es = useEditorStore.getState();
-        const selSegs = es.selectedSegments;
-        if (selSegs.length === 2) {
+        const segs = resolveTwoSegments();
+        if (segs) {
           useDocumentStore.getState().beginTransaction('Toggle bisect');
-          useDocumentStore.getState().toggleBisect(selSegs[0]!, selSegs[1]!);
+          useDocumentStore.getState().toggleBisect(segs[0]!, segs[1]!);
           requestSave();
         }
       }
@@ -585,7 +614,12 @@ export function createSelectTool(): Tool {
           requestSave();
         }
       }
-      if (e.key === 'q' || e.key === 'Q') {
+      if (e.key === 'Q' && e.shiftKey) {
+        const doc = useDocumentStore.getState().document;
+        const json = JSON.stringify(doc, null, 2);
+        navigator.clipboard.writeText(json);
+        addLog('info', 'Copied document to clipboard');
+      } else if (e.key === 'q') {
         const ids = useEditorStore.getState().selectedEntityIds;
         if (ids.size > 0) {
           const activeSketch = useDocumentStore.getState().getActiveSketch();
