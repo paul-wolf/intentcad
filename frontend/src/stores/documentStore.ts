@@ -98,6 +98,9 @@ function updateActiveSketch(
   };
 }
 
+// Track document reference at last beginTransaction to detect no-op transactions
+let _lastTransactionDocRef: Document | null = null;
+
 export const useDocumentStore = create<DocumentStore>((set, get) => ({
   document: createEmptyDocument('Untitled'),
   undoStack: [],
@@ -113,11 +116,19 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
 
   beginTransaction() {
     const { document, undoStack } = get();
-    const newStack = [...undoStack, structuredClone(document)];
+    let newStack: Document[];
+    if (_lastTransactionDocRef !== null && document === _lastTransactionDocRef && undoStack.length > 0) {
+      // Document unchanged since last beginTransaction — previous was a no-op.
+      // Replace the stale entry instead of pushing a duplicate.
+      newStack = [...undoStack.slice(0, -1), structuredClone(document)];
+    } else {
+      newStack = [...undoStack, structuredClone(document)];
+    }
     if (newStack.length > UNDO_STACK_LIMIT) {
       newStack.splice(0, newStack.length - UNDO_STACK_LIMIT);
     }
     set({ undoStack: newStack, redoStack: [] });
+    _lastTransactionDocRef = document;
   },
 
   undo() {
@@ -129,6 +140,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
       undoStack: undoStack.slice(0, -1),
       redoStack: [...redoStack, structuredClone(document)],
     });
+    _lastTransactionDocRef = null;
     addLog('info', 'Undo');
   },
 
@@ -141,6 +153,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
       undoStack: [...undoStack, structuredClone(document)],
       redoStack: redoStack.slice(0, -1),
     });
+    _lastTransactionDocRef = null;
     addLog('info', 'Redo');
   },
 

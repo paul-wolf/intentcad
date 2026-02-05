@@ -208,6 +208,9 @@ function renderActiveSketch(ctx: RenderContext) {
         const style = pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
         const sp = viewport.worldToScreen(entity.position);
         renderer.fillCircle(sp, ENDPOINT_RADIUS + 1, style.color);
+        if (isSelected) {
+          renderer.drawCircle(sp, SELECTED_POINT_RADIUS + 3, { color: style.color, width: 1.5 });
+        }
         break;
       }
       case 'dimension': {
