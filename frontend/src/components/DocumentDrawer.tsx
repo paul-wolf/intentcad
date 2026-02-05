@@ -13,6 +13,7 @@ export function DocumentDrawer() {
   const setDocument = useDocumentStore((s) => s.setDocument);
   const setDocumentName = useDocumentStore((s) => s.setDocumentName);
   const drawerOpen = useUIStateStore((s) => s.drawerOpen);
+  const toggleDrawer = useUIStateStore((s) => s.toggleDrawer);
   const palette = useThemeStore((s) => s.palette);
 
   const [docs, setDocs] = useState<DocumentListItem[]>([]);
@@ -42,6 +43,7 @@ export function DocumentDrawer() {
       setDocument(migrateDocument(full.data as unknown as Document));
       setBackendId(full.id);
       navigate(`/edit/${id}`);
+      toggleDrawer(); // Close drawer after opening
     } catch (err) {
       console.error('Failed to load document:', err);
     }
@@ -56,9 +58,11 @@ export function DocumentDrawer() {
       setBackendId(saved.id);
       setDocs((prev) => [{ id: saved.id, name: saved.name, created_at: saved.created_at, updated_at: saved.updated_at }, ...prev]);
       navigate(`/edit/${saved.id}`);
+      toggleDrawer(); // Close drawer after creating
     } catch {
       setBackendId(null);
       navigate(`/edit/${doc.id}`);
+      toggleDrawer();
     }
   };
 
@@ -99,141 +103,185 @@ export function DocumentDrawer() {
     setEditingId(null);
   };
 
+  if (!drawerOpen) return null;
+
   return (
-    <div
-      style={{
-        width: '220px',
-        flexShrink: 0,
-        background: palette.panelBg,
-        borderRight: `1px solid ${palette.border}`,
-        display: 'flex',
-        flexDirection: 'column' as const,
-      }}
-    >
+    <>
+      {/* Backdrop */}
       <div
         style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.4)',
+          zIndex: 100,
+        }}
+        onClick={toggleDrawer}
+      />
+      {/* Drawer panel */}
+      <div
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          bottom: 0,
+          width: '280px',
+          background: palette.panelBg,
+          borderRight: `1px solid ${palette.border}`,
           display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          padding: '8px 10px',
-          borderBottom: `1px solid ${palette.border}`,
+          flexDirection: 'column' as const,
+          zIndex: 101,
+          boxShadow: '4px 0 16px rgba(0, 0, 0, 0.3)',
         }}
       >
-        <span
+        <div
           style={{
-            fontSize: '12px',
-            fontWeight: 600,
-            textTransform: 'uppercase' as const,
-            letterSpacing: '0.5px',
-            color: palette.textMuted,
-          }}
-        >
-          Documents
-        </span>
-        <button
-          style={{
-            background: 'none',
-            border: `1px solid ${palette.inputBorder}`,
-            borderRadius: '3px',
-            color: palette.textMuted,
-            cursor: 'pointer',
-            fontSize: '14px',
-            width: '22px',
-            height: '22px',
             display: 'flex',
+            justifyContent: 'space-between',
             alignItems: 'center',
-            justifyContent: 'center',
+            padding: '12px 14px',
+            borderBottom: `1px solid ${palette.border}`,
           }}
-          onClick={handleNew}
-          title="New document"
         >
-          +
-        </button>
-      </div>
-      <div style={{ flex: 1, overflowY: 'auto' as const }}>
-        {docs.map((d) => {
-          const isActive = d.id === currentBackendId;
-          return (
-            <div
-              key={d.id}
+          <span
+            style={{
+              fontSize: '14px',
+              fontWeight: 600,
+              textTransform: 'uppercase' as const,
+              letterSpacing: '0.5px',
+              color: palette.textMuted,
+            }}
+          >
+            Documents
+          </span>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
               style={{
+                background: 'none',
+                border: `1px solid ${palette.inputBorder}`,
+                borderRadius: '3px',
+                color: palette.textMuted,
+                cursor: 'pointer',
+                fontSize: '14px',
+                width: '26px',
+                height: '26px',
                 display: 'flex',
                 alignItems: 'center',
-                gap: '6px',
-                padding: '5px 10px',
-                cursor: 'pointer',
-                fontSize: '13px',
-                borderLeft: '2px solid transparent',
-                ...(isActive
-                  ? { background: palette.activeItemBg, borderLeftColor: palette.accent }
-                  : {}),
+                justifyContent: 'center',
               }}
-              onClick={() => handleOpen(d.id)}
+              onClick={handleNew}
+              title="New document"
             >
-              {editingId === d.id ? (
-                <input
-                  style={{
-                    flex: 1,
-                    background: palette.inputBg,
-                    border: `1px solid ${palette.inputBorder}`,
-                    borderRadius: '2px',
-                    color: palette.text,
-                    fontSize: '13px',
-                    padding: '1px 4px',
-                    outline: 'none',
-                  }}
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  onBlur={commitRename}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') commitRename();
-                    if (e.key === 'Escape') setEditingId(null);
-                  }}
-                  onClick={(e) => e.stopPropagation()}
-                  autoFocus
-                />
-              ) : (
-                <span
-                  style={{
-                    flex: 1,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap' as const,
-                    color: palette.text,
-                  }}
-                  onDoubleClick={(e) => {
-                    e.stopPropagation();
-                    startRename(d.id, d.name);
-                  }}
-                >
-                  {d.name}
-                </span>
-              )}
-              <span style={{ fontSize: '10px', color: palette.textSecondary, flexShrink: 0 }}>
-                {new Date(d.updated_at).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })}
-              </span>
-              <button
+              +
+            </button>
+            <button
+              style={{
+                background: 'none',
+                border: `1px solid ${palette.inputBorder}`,
+                borderRadius: '3px',
+                color: palette.textMuted,
+                cursor: 'pointer',
+                fontSize: '12px',
+                width: '26px',
+                height: '26px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+              onClick={toggleDrawer}
+              title="Close"
+            >
+              x
+            </button>
+          </div>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto' as const }}>
+          {docs.map((d) => {
+            const isActive = d.id === currentBackendId;
+            return (
+              <div
+                key={d.id}
                 style={{
-                  background: 'none',
-                  border: 'none',
-                  color: palette.danger,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '8px 14px',
                   cursor: 'pointer',
                   fontSize: '13px',
-                  padding: '0 2px',
-                  flexShrink: 0,
+                  borderLeft: '3px solid transparent',
+                  ...(isActive
+                    ? { background: palette.activeItemBg, borderLeftColor: palette.accent }
+                    : {}),
                 }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDelete(d.id);
-                }}
-                title="Delete document"
+                onClick={() => handleOpen(d.id)}
               >
-                x
-              </button>
-            </div>
-          );
-        })}
+                {editingId === d.id ? (
+                  <input
+                    style={{
+                      flex: 1,
+                      background: palette.inputBg,
+                      border: `1px solid ${palette.inputBorder}`,
+                      borderRadius: '2px',
+                      color: palette.text,
+                      fontSize: '13px',
+                      padding: '2px 6px',
+                      outline: 'none',
+                    }}
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    onBlur={commitRename}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') commitRename();
+                      if (e.key === 'Escape') setEditingId(null);
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    autoFocus
+                  />
+                ) : (
+                  <span
+                    style={{
+                      flex: 1,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap' as const,
+                      color: palette.text,
+                    }}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      startRename(d.id, d.name);
+                    }}
+                  >
+                    {d.name}
+                  </span>
+                )}
+                <span style={{ fontSize: '10px', color: palette.textSecondary, flexShrink: 0 }}>
+                  {new Date(d.updated_at).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })}
+                </span>
+                <button
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: palette.danger,
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                    padding: '0 2px',
+                    flexShrink: 0,
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDelete(d.id);
+                  }}
+                  title="Delete document"
+                >
+                  x
+                </button>
+              </div>
+            );
+          })}
+        </div>
       </div>
-    </div>
+    </>
   );
 }

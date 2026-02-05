@@ -15,6 +15,7 @@ import type { ViewportImpl } from '@/rendering/viewport';
 import type { Point, LineEntity } from '@/types/document';
 import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
 import { computeDerivedDimensionIds } from '@/utils/dof';
+import { isExpression, evaluateExpression } from '@/utils/expression';
 
 function usePanZoom(
   canvasRef: RefObject<HTMLCanvasElement | null>,
@@ -95,11 +96,13 @@ function DimensionEditInput({
   pos,
   value,
   isAngle,
+  expression,
 }: {
   dimensionId: string;
   pos: Point;
   value: number;
   isAngle?: boolean;
+  expression?: string;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
 
@@ -112,13 +115,30 @@ function DimensionEditInput({
   }, []);
 
   const commit = (input: string) => {
-    const v = parseFloat(input);
-    if (isAngle) {
-      if (isNaN(v) || v <= 0 || v >= 180) return false;
+    const store = useDocumentStore.getState();
+    if (isExpression(input)) {
+      // Expression input: evaluate against document parameters
+      const params = store.document.parameters ?? {};
+      try {
+        const v = evaluateExpression(input, params);
+        if (!isFinite(v) || v <= 0) return false;
+        if (isAngle && v >= 180) return false;
+        store.setDimensionExpression(dimensionId, input);
+        store.applyDimensionValue(dimensionId, v);
+      } catch {
+        return false;
+      }
     } else {
-      if (isNaN(v) || v <= 0) return false;
+      // Plain number input
+      const v = parseFloat(input);
+      if (isAngle) {
+        if (isNaN(v) || v <= 0 || v >= 180) return false;
+      } else {
+        if (isNaN(v) || v <= 0) return false;
+      }
+      store.setDimensionExpression(dimensionId, undefined);
+      store.applyDimensionValue(dimensionId, v);
     }
-    useDocumentStore.getState().applyDimensionValue(dimensionId, v);
     useEditorStore.getState().setEditingDimensionId(null);
     return true;
   };
@@ -127,25 +147,29 @@ function DimensionEditInput({
     useEditorStore.getState().setEditingDimensionId(null);
   };
 
+  const defaultVal = expression ?? (isAngle ? value.toFixed(1) : (value >= 10 ? value.toFixed(1) : value.toFixed(2)));
+
   return (
     <input
       ref={inputRef}
-      defaultValue={isAngle ? value.toFixed(1) : (value >= 10 ? value.toFixed(1) : value.toFixed(2))}
+      defaultValue={defaultVal}
       style={{
         position: 'absolute',
-        left: pos.x - 30,
-        top: pos.y - 9,
-        width: 60,
-        height: 18,
-        background: 'transparent',
-        border: 'none',
+        left: pos.x - 50,
+        top: pos.y - 12,
+        width: 100,
+        height: 24,
+        background: '#1e293b',
+        border: '1px solid #3b82f6',
+        borderRadius: 4,
         outline: 'none',
-        color: '#94a3b8',
-        fontSize: 11,
+        color: '#f1f5f9',
+        fontSize: 14,
         fontFamily: 'monospace',
         textAlign: 'center',
-        padding: 0,
+        padding: '0 4px',
         zIndex: 10,
+        boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)',
       }}
       onKeyDown={(e) => {
         if (e.key === 'Enter') {
@@ -349,7 +373,7 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
 
   const editingDimensionId = useEditorStore((s) => s.editingDimensionId);
 
-  const dimensionEditPos = useMemo((): { pos: Point; value: number; isAngle?: boolean } | null => {
+  const dimensionEditPos = useMemo((): { pos: Point; value: number; isAngle?: boolean; expression?: string } | null => {
     if (!editingDimensionId) return null;
     const vp = viewportRef.current;
     if (!vp) return null;
@@ -391,7 +415,7 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
         while (sweep > Math.PI) sweep -= 2 * Math.PI;
         while (sweep < -Math.PI) sweep += 2 * Math.PI;
         const value = Math.abs(sweep) * 180 / Math.PI;
-        return { pos, value, isAngle: true };
+        return { pos, value, isAngle: true, expression: dim.expression };
       }
 
       const a: Point = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
@@ -404,13 +428,13 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
       const geom: DimensionGeom = { a, b, offset: dim.offset };
       const pos = getDimensionTextScreenPos(vp, geom);
       const value = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
-      return { pos, value };
+      return { pos, value, expression: dim.expression };
     }
 
     if (target.type === 'circle') {
       const diameter = target.radius * 2;
       const pos = getDiameterTextScreenPos(vp, target.center, target.radius, dim.offset);
-      return { pos, value: diameter };
+      return { pos, value: diameter, expression: dim.expression };
     }
     if (target.type === 'rectangle') {
       const hw = target.width / 2;
@@ -427,7 +451,7 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
       const geom: DimensionGeom = { a, b, offset: dim.offset };
       const pos = getDimensionTextScreenPos(vp, geom);
       const value = dim.segmentIndex === 0 ? target.width : target.height;
-      return { pos, value };
+      return { pos, value, expression: dim.expression };
     }
     if (target.type === 'line') {
       // Polygon radius (apothem) dimension
@@ -440,7 +464,7 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
         const geom: DimensionGeom = { a: center, b: midA, offset: dim.offset };
         const pos = getDimensionTextScreenPos(vp, geom);
         const value = Math.sqrt((midA.x - center.x) ** 2 + (midA.y - center.y) ** 2);
-        return { pos, value };
+        return { pos, value, expression: dim.expression };
       }
       const idx = dim.segmentIndex;
       if (idx < 0 || idx >= getSegmentCount(target)) return null;
@@ -450,7 +474,7 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
       const geom: DimensionGeom = { a, b, offset: dim.offset };
       const pos = getDimensionTextScreenPos(vp, geom);
       const value = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
-      return { pos, value };
+      return { pos, value, expression: dim.expression };
     }
     return null;
   }, [editingDimensionId, viewportRef]);
@@ -474,6 +498,7 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
           pos={dimensionEditPos.pos}
           value={dimensionEditPos.value}
           isAngle={dimensionEditPos.isAngle}
+          expression={dimensionEditPos.expression}
         />
       )}
       <MirrorDialog />

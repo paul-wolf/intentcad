@@ -32,13 +32,12 @@ export function SketchPanel() {
   return (
     <div
       style={{
-        width: '180px',
-        background: palette.panelBg,
-        borderLeft: `1px solid ${palette.border}`,
         display: 'flex',
-        flexDirection: 'column' as const,
+        flexDirection: 'column',
+        borderBottom: `1px solid ${palette.border}`,
       }}
     >
+      {/* Header */}
       <div
         style={{
           display: 'flex',
@@ -52,7 +51,7 @@ export function SketchPanel() {
           style={{
             fontSize: '12px',
             fontWeight: 600,
-            textTransform: 'uppercase' as const,
+            textTransform: 'uppercase',
             letterSpacing: '0.5px',
             color: palette.textMuted,
           }}
@@ -79,7 +78,9 @@ export function SketchPanel() {
           +
         </button>
       </div>
-      <div style={{ flex: 1, overflowY: 'auto' as const }}>
+
+      {/* Sketch list */}
+      <div style={{ overflowY: 'auto', maxHeight: '200px' }}>
         {sketches.map((sk, idx) => (
           <div
             key={sk.id}
@@ -167,7 +168,7 @@ export function SketchPanel() {
                   minWidth: 0,
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap' as const,
+                  whiteSpace: 'nowrap',
                   ...(sk.suppressed
                     ? { textDecoration: 'line-through', opacity: 0.5 }
                     : {}),

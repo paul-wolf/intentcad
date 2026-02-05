@@ -15,6 +15,7 @@ export function createEmptySketch(name: string): Sketch {
 export function migrateDocument(doc: Document): Document {
   return {
     ...doc,
+    parameters: doc.parameters ?? {},
     sketches: doc.sketches.map((sk) => ({
       ...sk,
       constraints: (sk as unknown as { constraints?: Constraint[] }).constraints ?? [],
@@ -36,5 +37,6 @@ export function createEmptyDocument(name: string): Document {
     name,
     sketches: [sketch],
     activeSketchId: sketch.id,
+    parameters: {},
   };
 }

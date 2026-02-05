@@ -101,6 +101,7 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
   const isDerived = 'sourceId' in entity && !!entity.sourceId;
 
   const applyDimensionValue = useDocumentStore((s) => s.applyDimensionValue);
+  const setDimensionExpression = useDocumentStore((s) => s.setDimensionExpression);
 
   const isDimensionDerived = useDocumentStore((s) => {
     if (entity.type !== 'dimension') return false;
@@ -158,11 +159,35 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
     : entity.type.charAt(0).toUpperCase() + entity.type.slice(1);
 
   return (
-    <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', borderBottom: `1px solid ${palette.border}`, paddingBottom: '6px' }}>
-        <span style={{ fontSize: '12px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', color: palette.textMuted }}>
-          {typeName}
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      {/* Header */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          padding: '8px 10px',
+          borderBottom: `1px solid ${palette.border}`,
+        }}
+      >
+        <span
+          style={{
+            fontSize: '12px',
+            fontWeight: 600,
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px',
+            color: palette.textMuted,
+          }}
+        >
+          Properties
         </span>
+      </div>
+
+      {/* Content */}
+      <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '11px', fontWeight: 600, color: palette.text }}>
+            {typeName}
+          </span>
         {isDerived && (
           <span style={{ fontSize: '10px', color: palette.warning, fontStyle: 'italic' }}>
             (Derived)
@@ -241,8 +266,8 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
             <NumberInput label="X" value={entity.center.x} disabled={isDerived} onChange={(x) => update({ ...entity, center: { ...entity.center, x } })} />
             <NumberInput label="Y" value={entity.center.y} disabled={isDerived} onChange={(y) => update({ ...entity, center: { ...entity.center, y } })} />
           </FieldGroup>
-          <FieldGroup label="Radius">
-            <NumberInput value={entity.radius} disabled={isDerived} onChange={(radius) => update({ ...entity, radius })} />
+          <FieldGroup label="Diameter">
+            <NumberInput value={entity.radius * 2} disabled={isDerived} onChange={(diameter) => update({ ...entity, radius: diameter / 2 })} />
           </FieldGroup>
         </>
       )}
@@ -300,6 +325,10 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
                 <span style={{ fontSize: '12px', color: palette.text }}>
                   ({entity.angleMode ? `${dimensionValue.toFixed(1)}°` : dimensionValue.toFixed(2)})
                 </span>
+              ) : entity.expression ? (
+                <span style={{ fontSize: '12px', color: palette.text }}>
+                  {entity.angleMode ? `${dimensionValue.toFixed(1)}°` : dimensionValue.toFixed(2)}
+                </span>
               ) : (
                 <NumberInput
                   value={dimensionValue}
@@ -310,6 +339,33 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
                   }}
                 />
               )}
+            </FieldGroup>
+          )}
+          {entity.expression && !isDimensionDerived && (
+            <FieldGroup label="Expression">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <span style={{ fontSize: '12px', color: palette.text, fontFamily: 'monospace', flex: 1 }}>
+                  {entity.expression}
+                </span>
+                <button
+                  style={{
+                    background: 'none',
+                    border: `1px solid ${palette.inputBorder}`,
+                    borderRadius: '2px',
+                    color: palette.textMuted,
+                    cursor: 'pointer',
+                    fontSize: '10px',
+                    padding: '1px 4px',
+                  }}
+                  onClick={() => {
+                    beginTransaction('Clear expression');
+                    setDimensionExpression(entity.id, undefined);
+                    requestSave();
+                  }}
+                >
+                  Clear
+                </button>
+              </div>
             </FieldGroup>
           )}
           <FieldGroup label="Offset">
@@ -336,6 +392,7 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
           <span style={{ fontSize: '12px', color: palette.text }}>Construction</span>
         </div>
       )}
+      </div>
     </div>
   );
 }

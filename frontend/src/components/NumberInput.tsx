@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useThemeStore } from '@/theme';
+import { useDocumentStore } from '@/stores/documentStore';
+import { isExpression, evaluateExpression } from '@/utils/expression';
 
 interface NumberInputProps {
   value: number;
@@ -11,6 +13,7 @@ interface NumberInputProps {
 
 export function NumberInput({ value, onChange, disabled, label, precision = 2 }: NumberInputProps) {
   const palette = useThemeStore((s) => s.palette);
+  const parameters = useDocumentStore((s) => s.document.parameters ?? {});
   const [text, setText] = useState(() => value.toFixed(precision));
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -21,6 +24,22 @@ export function NumberInput({ value, onChange, disabled, label, precision = 2 }:
   }, [value, precision]);
 
   const commit = () => {
+    // Try to evaluate as expression if it contains letters
+    if (isExpression(text)) {
+      try {
+        const evaluated = evaluateExpression(text, parameters);
+        if (isFinite(evaluated)) {
+          onChange(evaluated);
+          return;
+        }
+      } catch {
+        // Fall through to revert
+      }
+      setText(value.toFixed(precision));
+      return;
+    }
+
+    // Plain number
     const parsed = parseFloat(text);
     if (!isNaN(parsed) && isFinite(parsed)) {
       onChange(parsed);

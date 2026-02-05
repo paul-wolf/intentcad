@@ -244,7 +244,7 @@ function renderActiveSketch(ctx: RenderContext) {
           if (entity.angleMode) {
             const angleGeom = computeAngleDimensionGeom(p1, p2, q1, q2, entity.offset);
             if (angleGeom) {
-              drawAngleDimension(renderer, viewport, angleGeom, lineStyle, textStyle, ctx.palette.background, isDerived);
+              drawAngleDimension(renderer, viewport, angleGeom, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression);
             }
             break;
           }
@@ -256,12 +256,12 @@ function renderActiveSketch(ctx: RenderContext) {
           if (lenSq === 0) break;
           const t = ((a.x - q1.x) * dx + (a.y - q1.y) * dy) / lenSq;
           const b: Point = { x: q1.x + t * dx, y: q1.y + t * dy };
-          drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived);
+          drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression);
           break;
         }
 
         if (target.type === 'circle') {
-          drawDiameterDimension(renderer, viewport, target.center, target.radius, entity.offset, lineStyle, textStyle, ctx.palette.background, isDerived);
+          drawDiameterDimension(renderer, viewport, target.center, target.radius, entity.offset, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression);
           break;
         }
         if (target.type === 'rectangle') {
@@ -276,7 +276,7 @@ function renderActiveSketch(ctx: RenderContext) {
             a = { x: c.x + hw, y: c.y + hh };
             b = { x: c.x + hw, y: c.y - hh };
           }
-          drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived);
+          drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression);
           break;
         }
         if (target.type !== 'line') break;
@@ -287,7 +287,7 @@ function renderActiveSketch(ctx: RenderContext) {
             x: (target.points[0]!.x + target.points[1]!.x) / 2,
             y: (target.points[0]!.y + target.points[1]!.y) / 2,
           };
-          drawDimension(renderer, viewport, { a: center, b: midA, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived);
+          drawDimension(renderer, viewport, { a: center, b: midA, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression);
           break;
         }
         const idx = entity.segmentIndex;
@@ -295,7 +295,7 @@ function renderActiveSketch(ctx: RenderContext) {
         const [ai, bi] = getSegmentPointIndices(target, idx);
         const a = target.points[ai]!;
         const b = target.points[bi]!;
-        drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived);
+        drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression);
         break;
       }
     }

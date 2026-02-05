@@ -9,6 +9,7 @@ import { computeDerivedDimensionIds } from '@/utils/dof';
 import { addLog } from '@/stores/logStore';
 import type { SelectedPoint } from '@/stores/editorStore';
 import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
+import { evaluateExpression } from '@/utils/expression';
 
 const UNDO_STACK_LIMIT = 100;
 
@@ -96,7 +97,14 @@ interface DocumentStore {
   updateEntity(entityId: string, updatedEntity: Entity): void;
 
   // Dimension editing
-  applyDimensionValue(dimensionId: string, newValue: number): void;
+  applyDimensionValue(dimensionId: string, newValue: number, skipTransaction?: boolean): void;
+
+  // Parameters & expressions
+  setParameter(name: string, value: number): void;
+  removeParameter(name: string): void;
+  renameParameter(oldName: string, newName: string): void;
+  setDimensionExpression(dimensionId: string, expression: string | undefined): void;
+  reapplyExpressionDimensions(): void;
 
   // Helpers
   getActiveSketch(): Sketch | undefined;
@@ -1476,7 +1484,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     });
   },
 
-  applyDimensionValue(dimensionId, newValue) {
+  applyDimensionValue(dimensionId, newValue, skipTransaction) {
     const { document } = get();
     const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
     if (!sketch) return;
@@ -1538,7 +1546,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
         if (target1Fixed) { rot1 = 0; rot2 = signedDelta; }
         if (target2Fixed) { rot2 = 0; rot1 = -signedDelta; }
 
-        get().beginTransaction('Edit dimension');
+        if (!skipTransaction) get().beginTransaction('Edit dimension');
 
         const sameEntityAngle = target.id === target2.id;
         const movedIds = new Set<string>();
@@ -1611,7 +1619,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
       if (target1Fixed) { move1 = 0; move2 = delta; }
       if (target2Fixed) { move2 = 0; move1 = -delta; }
 
-      get().beginTransaction('Edit dimension');
+      if (!skipTransaction) get().beginTransaction('Edit dimension');
 
       const sameEntity = target.id === target2.id;
       const movedIds = new Set<string>();
@@ -1670,7 +1678,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
 
     if ('sourceId' in target && target.sourceId) return; // locked
 
-    get().beginTransaction('Edit dimension');
+    if (!skipTransaction) get().beginTransaction('Edit dimension');
 
     // Helper: adjust a single segment's length on a line entity
     const adjustSegLen = (entities: Entity[], targetValue: number): Entity[] =>
@@ -1790,6 +1798,92 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
         entities: currentEntities,
       })),
     });
+  },
+
+  setParameter(name, value) {
+    const { document } = get();
+    const params = { ...(document.parameters ?? {}), [name]: value };
+    set({ document: { ...document, parameters: params } });
+    get().reapplyExpressionDimensions();
+  },
+
+  removeParameter(name) {
+    const { document } = get();
+    const params = { ...(document.parameters ?? {}) };
+    delete params[name];
+    // Clear expressions that can no longer evaluate
+    const updatedDoc: Document = {
+      ...document,
+      parameters: params,
+      sketches: document.sketches.map((sk) => ({
+        ...sk,
+        entities: sk.entities.map((e) => {
+          if (e.type !== 'dimension' || !e.expression) return e;
+          try {
+            evaluateExpression(e.expression, params);
+            return e;
+          } catch {
+            return { ...e, expression: undefined };
+          }
+        }),
+      })),
+    };
+    set({ document: updatedDoc });
+  },
+
+  renameParameter(oldName, newName) {
+    const { document } = get();
+    const params = { ...(document.parameters ?? {}) };
+    if (!(oldName in params)) return;
+    params[newName] = params[oldName]!;
+    delete params[oldName];
+    // Regex-replace old name in all dimension expressions
+    const re = new RegExp(`\\b${oldName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'g');
+    const updatedDoc: Document = {
+      ...document,
+      parameters: params,
+      sketches: document.sketches.map((sk) => ({
+        ...sk,
+        entities: sk.entities.map((e) => {
+          if (e.type !== 'dimension' || !e.expression) return e;
+          return { ...e, expression: e.expression.replace(re, newName) };
+        }),
+      })),
+    };
+    set({ document: updatedDoc });
+  },
+
+  setDimensionExpression(dimensionId, expression) {
+    const { document } = get();
+    set({
+      document: updateActiveSketch(document, (sk) => ({
+        entities: sk.entities.map((e) => {
+          if (e.id !== dimensionId || e.type !== 'dimension') return e;
+          if (expression === undefined) {
+            const { expression: _, ...rest } = e;
+            return rest as typeof e;
+          }
+          return { ...e, expression };
+        }),
+      })),
+    });
+  },
+
+  reapplyExpressionDimensions() {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return;
+    const params = document.parameters ?? {};
+    for (const entity of sketch.entities) {
+      if (entity.type !== 'dimension' || !entity.expression) continue;
+      try {
+        const v = evaluateExpression(entity.expression, params);
+        if (!isFinite(v) || v <= 0) continue;
+        get().applyDimensionValue(entity.id, v, true);
+      } catch {
+        // Skip dimensions with invalid expressions
+      }
+    }
   },
 
   getActiveSketch() {

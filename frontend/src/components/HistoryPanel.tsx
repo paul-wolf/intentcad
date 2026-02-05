@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect } from 'react';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useThemeStore } from '@/theme';
 
@@ -16,7 +16,6 @@ export function HistoryPanel() {
   const jumpToHistory = useDocumentStore((s) => s.jumpToHistory);
   const redo = useDocumentStore((s) => s.redo);
   const palette = useThemeStore((s) => s.palette);
-  const [collapsed, setCollapsed] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to keep current state visible
@@ -47,101 +46,130 @@ export function HistoryPanel() {
   };
 
   return (
-    <div style={{ borderTop: `1px solid ${palette.border}`, background: palette.panelBg }}>
+    <div
+      style={{
+        width: '160px',
+        flexShrink: 0,
+        background: palette.panelBg,
+        borderRight: `1px solid ${palette.border}`,
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
       {/* Header */}
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: '8px',
-          padding: '2px 10px',
-          fontSize: '11px',
-          fontFamily: 'monospace',
-          color: palette.textMuted,
-          cursor: 'pointer',
-          userSelect: 'none',
+          justifyContent: 'space-between',
+          padding: '8px 10px',
+          borderBottom: `1px solid ${palette.border}`,
         }}
-        onClick={() => setCollapsed((c) => !c)}
       >
-        <span style={{ fontSize: '9px' }}>{collapsed ? '\u25b6' : '\u25bc'}</span>
-        <span>History</span>
-        <span style={{ flex: 1 }} />
-        {!collapsed && (
-          <span style={{ color: palette.textMuted, fontSize: '11px' }}>
-            {undoStack.length} undo{redoStack.length > 0 ? `, ${redoStack.length} redo` : ''}
-          </span>
-        )}
+        <span
+          style={{
+            fontSize: '12px',
+            fontWeight: 600,
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px',
+            color: palette.textMuted,
+          }}
+        >
+          History
+        </span>
+        <span style={{ color: palette.textMuted, fontSize: '10px' }}>
+          {undoStack.length}
+          {redoStack.length > 0 ? `/${redoStack.length}` : ''}
+        </span>
       </div>
 
       {/* History list */}
-      {!collapsed && (
+      <div
+        ref={listRef}
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          padding: '4px 0',
+          fontSize: '11px',
+          fontFamily: 'monospace',
+        }}
+      >
+        {/* Undo entries: oldest first */}
+        {undoStack.map((entry, i) => (
+          <div
+            key={`u-${i}`}
+            style={{
+              cursor: 'pointer',
+              padding: '3px 10px',
+              color: palette.text,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '1px',
+            }}
+            onClick={() => handleClickUndo(i)}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = palette.activeItemBg; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+          >
+            <span
+              style={{
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {entry.label}
+            </span>
+            <span style={{ color: palette.textMuted, fontSize: '9px' }}>
+              {relativeTime(entry.timestamp)}
+            </span>
+          </div>
+        ))}
+
+        {/* Current state marker */}
         <div
-          ref={listRef}
           style={{
-            height: '108px',
-            overflowY: 'auto',
-            padding: '0 10px 4px',
-            fontSize: '11px',
-            fontFamily: 'monospace',
-            lineHeight: '18px',
+            padding: '3px 10px',
+            color: palette.accent,
+            fontWeight: 600,
+            borderLeft: `2px solid ${palette.accent}`,
+            marginLeft: '0',
           }}
         >
-          {/* Undo entries: oldest first */}
-          {undoStack.map((entry, i) => (
-            <div
-              key={`u-${i}`}
-              style={{
-                cursor: 'pointer',
-                padding: '0 4px',
-                borderRadius: '2px',
-                color: palette.text,
-                display: 'flex',
-                justifyContent: 'space-between',
-              }}
-              onClick={() => handleClickUndo(i)}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = palette.activeItemBg; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-            >
-              <span>{entry.label}</span>
-              <span style={{ color: palette.textMuted }}>{relativeTime(entry.timestamp)}</span>
-            </div>
-          ))}
-
-          {/* Current state marker */}
-          <div
-            style={{
-              padding: '0 4px',
-              borderRadius: '2px',
-              color: palette.accent,
-              fontWeight: 600,
-            }}
-          >
-            Current
-          </div>
-
-          {/* Redo entries: shown after current, dimmed, in reverse order (next redo first) */}
-          {[...redoStack].reverse().map((entry, i) => (
-            <div
-              key={`r-${i}`}
-              style={{
-                cursor: 'pointer',
-                padding: '0 4px',
-                borderRadius: '2px',
-                color: palette.textMuted,
-                opacity: 0.5,
-                display: 'flex',
-                justifyContent: 'space-between',
-              }}
-              onClick={() => handleClickRedo(i)}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = palette.activeItemBg; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-            >
-              <span>{entry.label}</span>
-              <span>{relativeTime(entry.timestamp)}</span>
-            </div>
-          ))}
+          Current
         </div>
-      )}
+
+        {/* Redo entries: shown after current, dimmed, in reverse order (next redo first) */}
+        {[...redoStack].reverse().map((entry, i) => (
+          <div
+            key={`r-${i}`}
+            style={{
+              cursor: 'pointer',
+              padding: '3px 10px',
+              color: palette.textMuted,
+              opacity: 0.5,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '1px',
+            }}
+            onClick={() => handleClickRedo(i)}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = palette.activeItemBg; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+          >
+            <span
+              style={{
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {entry.label}
+            </span>
+            <span style={{ fontSize: '9px' }}>
+              {relativeTime(entry.timestamp)}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

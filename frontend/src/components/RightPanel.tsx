@@ -3,6 +3,7 @@ import { useDocumentStore } from '@/stores/documentStore';
 import { useThemeStore } from '@/theme';
 import { PropertiesPanel } from './PropertiesPanel';
 import { SketchPanel } from './SketchPanel';
+import { ParametersPanel } from './ParametersPanel';
 
 export function RightPanel() {
   const selectedEntityIds = useEditorStore((s) => s.selectedEntityIds);
@@ -15,22 +16,20 @@ export function RightPanel() {
     singleEntity = sketch.entities.find((e) => e.id === id);
   }
 
-  if (singleEntity) {
-    return (
-      <div
-        style={{
-          width: '180px',
-          background: palette.panelBg,
-          borderLeft: `1px solid ${palette.border}`,
-          display: 'flex',
-          flexDirection: 'column',
-          overflowY: 'auto',
-        }}
-      >
-        <PropertiesPanel entity={singleEntity} />
-      </div>
-    );
-  }
-
-  return <SketchPanel />;
+  return (
+    <div
+      style={{
+        width: '180px',
+        background: palette.panelBg,
+        borderLeft: `1px solid ${palette.border}`,
+        display: 'flex',
+        flexDirection: 'column',
+        overflowY: 'auto',
+      }}
+    >
+      <SketchPanel />
+      <ParametersPanel />
+      {singleEntity && <PropertiesPanel entity={singleEntity} />}
+    </div>
+  );
 }

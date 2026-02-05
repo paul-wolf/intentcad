@@ -63,6 +63,7 @@ export function drawDimension(
   textStyle: TextStyle,
   bgColor?: string,
   derived?: boolean,
+  label?: string,
 ): void {
   const { a, b, offset } = geom;
 
@@ -125,10 +126,10 @@ export function drawDimension(
 
   // Text label
   const length = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
-  const label = derived ? `(${formatLength(length)})` : formatLength(length);
+  const displayLabel = label ?? (derived ? `(${formatLength(length)})` : formatLength(length));
   const mid: Point = { x: (soa.x + sob.x) / 2, y: (soa.y + sob.y) / 2 };
 
-  const metrics = renderer.measureText(label, textStyle);
+  const metrics = renderer.measureText(displayLabel, textStyle);
   const pad = DIMENSION_TEXT_PAD;
   if (bgColor) {
     renderer.drawRect(
@@ -137,7 +138,7 @@ export function drawDimension(
       bgColor,
     );
   }
-  renderer.drawText(label, mid, textStyle);
+  renderer.drawText(displayLabel, mid, textStyle);
 }
 
 export function drawDiameterDimension(
@@ -150,6 +151,7 @@ export function drawDiameterDimension(
   textStyle: TextStyle,
   bgColor?: string,
   derived?: boolean,
+  label?: string,
 ): void {
   // Horizontal diameter endpoints in world space
   const a: Point = { x: center.x - radius, y: center.y };
@@ -213,10 +215,10 @@ export function drawDiameterDimension(
 
   // Text label with diameter symbol
   const diameter = radius * 2;
-  const label = derived ? `(\u2300${formatLength(diameter)})` : `\u2300${formatLength(diameter)}`;
+  const displayLabel = label ?? (derived ? `(\u2300${formatLength(diameter)})` : `\u2300${formatLength(diameter)}`);
   const mid: Point = { x: (soa.x + sob.x) / 2, y: (soa.y + sob.y) / 2 };
 
-  const metrics = renderer.measureText(label, textStyle);
+  const metrics = renderer.measureText(displayLabel, textStyle);
   const pad = DIMENSION_TEXT_PAD;
   if (bgColor) {
     renderer.drawRect(
@@ -225,7 +227,7 @@ export function drawDiameterDimension(
       bgColor,
     );
   }
-  renderer.drawText(label, mid, textStyle);
+  renderer.drawText(displayLabel, mid, textStyle);
 }
 
 export function drawSegmentLabel(
@@ -329,6 +331,7 @@ export function drawAngleDimension(
   textStyle: TextStyle,
   bgColor?: string,
   derived?: boolean,
+  label?: string,
 ): void {
   const screenCenter = viewport.worldToScreen(geom.intersection);
   const screenRadius = geom.arcRadius * viewport.scale;
@@ -397,10 +400,10 @@ export function drawAngleDimension(
 
   // Text label at arc midpoint
   const angleDeg = absSweep * 180 / Math.PI;
-  const label = derived ? `(${angleDeg.toFixed(1)}°)` : `${angleDeg.toFixed(1)}°`;
+  const displayLabel = label ?? (derived ? `(${angleDeg.toFixed(1)}°)` : `${angleDeg.toFixed(1)}°`);
   const textPos = getAngleDimensionTextScreenPos(viewport, geom);
 
-  const metrics = renderer.measureText(label, textStyle);
+  const metrics = renderer.measureText(displayLabel, textStyle);
   const pad = DIMENSION_TEXT_PAD;
   if (bgColor) {
     renderer.drawRect(
@@ -409,7 +412,7 @@ export function drawAngleDimension(
       bgColor,
     );
   }
-  renderer.drawText(label, textPos, textStyle);
+  renderer.drawText(displayLabel, textPos, textStyle);
 }
 
 export function drawDiameterLabel(

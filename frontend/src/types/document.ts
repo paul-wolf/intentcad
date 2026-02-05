@@ -62,6 +62,8 @@ export interface DimensionEntity {
   segmentIndex2?: number;
   // Angle dimension between two non-parallel segments:
   angleMode?: boolean;
+  // Expression that drives this dimension's value (e.g. "bolt_hole / 2"):
+  expression?: string;
 }
 
 export type Entity = LineEntity | CircleEntity | RectangleEntity | PointEntity | DimensionEntity;
@@ -165,4 +167,5 @@ export interface Document {
   name: string;
   sketches: Sketch[];
   activeSketchId: string;
+  parameters?: Record<string, number>;
 }

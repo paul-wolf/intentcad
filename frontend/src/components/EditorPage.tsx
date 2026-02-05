@@ -9,7 +9,6 @@ import { HistoryPanel } from './HistoryPanel';
 import { CanvasContainer } from '@/canvas/CanvasContainer';
 import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
-import { useUIStateStore } from '@/stores/uiStateStore';
 import { createLineTool } from '@/tools/lineTool';
 import { createSelectTool } from '@/tools/selectTool';
 import { createCircleTool } from '@/tools/circleTool';
@@ -28,7 +27,6 @@ export function EditorPage() {
   const { id } = useParams<{ id: string }>();
   const activeTool = useEditorStore((s) => s.activeTool);
   const setActiveTool = useEditorStore((s) => s.setActiveTool);
-  const drawerOpen = useUIStateStore((s) => s.drawerOpen);
 
   // Load document from backend if navigated directly and backendId not set
   useEffect(() => {
@@ -125,13 +123,13 @@ export function EditorPage() {
     <div style={styles.container}>
       <Toolbar />
       <div style={styles.middle}>
-        {drawerOpen && <DocumentDrawer />}
+        <HistoryPanel />
         <CanvasContainer activeTool={toolInstance} docId={id} />
         <RightPanel />
       </div>
       <LogPanel />
-      <HistoryPanel />
       <StatusBar />
+      <DocumentDrawer />
     </div>
   );
 }
