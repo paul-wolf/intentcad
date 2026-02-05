@@ -35,6 +35,7 @@ export function createCircleTool(): Tool {
 
         useDocumentStore.getState().beginTransaction('Add circle');
         const circleId = generateId('cir');
+        const dimId = generateId('dim');
         useDocumentStore.getState().addEntity({
           id: circleId,
           type: 'circle',
@@ -43,14 +44,19 @@ export function createCircleTool(): Tool {
         });
         // Auto-create diameter dimension
         useDocumentStore.getState().addEntity({
-          id: generateId('dim'),
+          id: dimId,
           type: 'dimension',
           targetEntityId: circleId,
           segmentIndex: 0,
           offset: DIMENSION_OFFSET_MM,
         });
-        // Switch to select tool
+        // Switch to select tool and enter dimension edit mode
         useEditorStore.getState().setActiveTool('select');
+        useEditorStore.getState().setSelectedEntityIds(new Set([circleId]));
+        // Delay opening editor to ensure entities are rendered
+        setTimeout(() => {
+          useEditorStore.getState().setEditingDimensionId(dimId);
+        }, 0);
         requestSave();
       } else {
         // First click: set center
