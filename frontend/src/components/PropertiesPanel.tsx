@@ -4,7 +4,11 @@ import { useDocumentStore } from '@/stores/documentStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { requestSave } from '@/api/autoSave';
 import { NumberInput } from './NumberInput';
-import type { Entity } from '@/types/document';
+import type { Entity, DimensionEntity } from '@/types/document';
+import { resolveDimensionEndpoints } from '@/utils/dimensionGeom';
+import { computeAngleDimensionGeom } from '@/rendering/dimensionRenderer';
+import { computeDerivedDimensionIds } from '@/utils/dof';
+import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
 
 interface PropertiesPanelProps {
   entity: Entity;
@@ -95,6 +99,53 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
   );
 
   const isDerived = 'sourceId' in entity && !!entity.sourceId;
+
+  const applyDimensionValue = useDocumentStore((s) => s.applyDimensionValue);
+
+  const isDimensionDerived = useDocumentStore((s) => {
+    if (entity.type !== 'dimension') return false;
+    const doc = s.document;
+    const sketch = doc.sketches.find((sk) => sk.id === doc.activeSketchId);
+    if (!sketch) return false;
+    return computeDerivedDimensionIds(sketch.entities, sketch.constraints).has(entity.id);
+  });
+
+  const dimensionValue = useDocumentStore((s) => {
+    if (entity.type !== 'dimension') return null;
+    const doc = s.document;
+    const sketch = doc.sketches.find((sk) => sk.id === doc.activeSketchId);
+    if (!sketch) return null;
+    const dim = entity as DimensionEntity;
+
+    // Angle dimension
+    if (dim.angleMode && dim.targetEntityId2 != null) {
+      const target = sketch.entities.find((e) => e.id === dim.targetEntityId);
+      const target2 = sketch.entities.find((e) => e.id === dim.targetEntityId2);
+      if (!target || !target2 || target.type !== 'line' || target2.type !== 'line') return null;
+      const idx1 = dim.segmentIndex;
+      const idx2 = dim.segmentIndex2!;
+      if (idx1 < 0 || idx1 >= getSegmentCount(target)) return null;
+      if (idx2 < 0 || idx2 >= getSegmentCount(target2)) return null;
+      const [pi1, pi2] = getSegmentPointIndices(target, idx1);
+      const [qi1, qi2] = getSegmentPointIndices(target2, idx2);
+      const geom = computeAngleDimensionGeom(
+        target.points[pi1]!, target.points[pi2]!,
+        target2.points[qi1]!, target2.points[qi2]!,
+        dim.offset,
+      );
+      if (!geom) return null;
+      let sweep = geom.endAngle - geom.startAngle;
+      while (sweep > Math.PI) sweep -= 2 * Math.PI;
+      while (sweep < -Math.PI) sweep += 2 * Math.PI;
+      return Math.abs(sweep) * 180 / Math.PI;
+    }
+
+    // Non-angle dimensions
+    const endpoints = resolveDimensionEndpoints(dim, sketch.entities);
+    if (!endpoints) return null;
+    const { a, b } = endpoints;
+    return Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
+  });
 
   const update = (updated: Entity) => {
     beginTransaction('Edit property');
@@ -243,6 +294,24 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
 
       {entity.type === 'dimension' && (
         <>
+          {dimensionValue != null && (
+            <FieldGroup label={entity.angleMode ? 'Angle' : 'Value'}>
+              {isDimensionDerived ? (
+                <span style={{ fontSize: '12px', color: palette.text }}>
+                  ({entity.angleMode ? `${dimensionValue.toFixed(1)}°` : dimensionValue.toFixed(2)})
+                </span>
+              ) : (
+                <NumberInput
+                  value={dimensionValue}
+                  onChange={(v) => {
+                    beginTransaction('Edit dimension');
+                    applyDimensionValue(entity.id, v);
+                    requestSave();
+                  }}
+                />
+              )}
+            </FieldGroup>
+          )}
           <FieldGroup label="Offset">
             <NumberInput value={entity.offset} onChange={(offset) => update({ ...entity, offset })} />
           </FieldGroup>

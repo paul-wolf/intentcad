@@ -14,6 +14,8 @@ import { requestSave } from '@/api/autoSave';
 import { getEntityPoint, getEntityPoints } from '@/utils/entityPoints';
 import { getSegmentCount, getSegmentPointIndices, getSegmentBulge } from '@/utils/lineSegments';
 import { bulgeFromMidpoint, arcIntersectsRect } from '@/utils/arcGeometry';
+import { resolveDimensionEndpoints, resolveDimensionAngleIntersection } from '@/utils/dimensionGeom';
+import type { DimensionEntity } from '@/types/document';
 
 const DRAG_THRESHOLD = 4; // screen pixels before starting drag
 
@@ -45,7 +47,7 @@ export function createSelectTool(): Tool {
 
   let hitEntityOnDown: Entity | null = null;
   let hitPointOnDown: PointHit | null = null;
-  let dragMode: 'box-select' | 'move' | 'move-point' | null = null;
+  let dragMode: 'box-select' | 'move' | 'move-point' | 'move-dimension' | null = null;
   let lastMoveWorld: Point | null = null;
 
   let lastClickTime = 0;
@@ -184,8 +186,13 @@ export function createSelectTool(): Tool {
           dragMode = 'move-point';
           useDocumentStore.getState().beginTransaction('Move point');
         } else if (hitEntityOnDown) {
-          dragMode = 'move';
-          useDocumentStore.getState().beginTransaction('Move entities');
+          if (hitEntityOnDown.type === 'dimension') {
+            dragMode = 'move-dimension';
+            useDocumentStore.getState().beginTransaction('Move dimension');
+          } else {
+            dragMode = 'move';
+            useDocumentStore.getState().beginTransaction('Move entities');
+          }
           const selectedIds = useEditorStore.getState().selectedEntityIds;
           if (!selectedIds.has(hitEntityOnDown.id)) {
             useEditorStore.getState().setSelectedEntityIds(new Set([hitEntityOnDown.id]));
@@ -247,6 +254,39 @@ export function createSelectTool(): Tool {
           }
         }
         lastMoveWorld = worldPos;
+      }
+
+      if (dragMode === 'move-dimension' && hitEntityOnDown && hitEntityOnDown.type === 'dimension') {
+        const activeSketch = useDocumentStore.getState().getActiveSketch();
+        if (activeSketch) {
+          const dim = activeSketch.entities.find((e) => e.id === hitEntityOnDown!.id) as DimensionEntity | undefined;
+          if (dim) {
+            const intersection = resolveDimensionAngleIntersection(dim, activeSketch.entities);
+            if (intersection) {
+              // Angle dimension: offset = distance from intersection to cursor
+              const dx = worldPos.x - intersection.x;
+              const dy = worldPos.y - intersection.y;
+              const newOffset = Math.sqrt(dx * dx + dy * dy);
+              useDocumentStore.getState().updateEntity(dim.id, { ...dim, offset: newOffset });
+            } else {
+              const endpoints = resolveDimensionEndpoints(dim, activeSketch.entities);
+              if (endpoints) {
+                const { a, b } = endpoints;
+                const dx = b.x - a.x;
+                const dy = b.y - a.y;
+                const len = Math.sqrt(dx * dx + dy * dy);
+                if (len > 0) {
+                  // perpendicular direction
+                  const px = -dy / len;
+                  const py = dx / len;
+                  // project (worldPos - a) onto perp
+                  const newOffset = (worldPos.x - a.x) * px + (worldPos.y - a.y) * py;
+                  useDocumentStore.getState().updateEntity(dim.id, { ...dim, offset: newOffset });
+                }
+              }
+            }
+          }
+        }
       }
 
       if (dragMode === 'box-select') {
@@ -416,7 +456,7 @@ export function createSelectTool(): Tool {
         }
       }
       // dragMode === 'move' or 'move-point' → positions already applied incrementally, save
-      if (dragMode === 'move' || dragMode === 'move-point') {
+      if (dragMode === 'move' || dragMode === 'move-point' || dragMode === 'move-dimension') {
         requestSave();
       }
       resetDrag();
