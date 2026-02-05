@@ -34,6 +34,7 @@ export interface RectangleEntity {
   center: Point;
   width: number;
   height: number;
+  anchor?: 'center' | 'corner';
   construction?: boolean;
   sourceId?: string;
   sourceTransform?: SourceTransform;

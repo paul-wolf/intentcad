@@ -24,7 +24,8 @@ const ENTITY_TOOLS: { type: ToolType; label: string; icon?: ReactNode; shortcut:
   { type: 'line', label: 'Line', icon: <ToolIcon><line x1="3" y1="13" x2="13" y2="3" /></ToolIcon>, shortcut: 'l' },
   { type: 'point', label: 'Point', icon: <ToolIcon><circle cx="8" cy="8" r="2.5" fill="currentColor" stroke="none" /><circle cx="8" cy="8" r="5" /></ToolIcon>, shortcut: '.' },
   { type: 'circle', label: 'Circle', icon: <ToolIcon><circle cx="8" cy="8" r="6" /></ToolIcon>, shortcut: 'c' },
-  { type: 'rectangle', label: 'Rect', icon: <ToolIcon><rect x="2.5" y="4" width="11" height="8" /></ToolIcon>, shortcut: 'r' },
+  { type: 'rectangle', label: 'Rect', icon: <ToolIcon><rect x="2.5" y="4" width="11" height="8" /><circle cx="8" cy="8" r="1.5" fill="currentColor" stroke="none" /></ToolIcon>, shortcut: 'r' },
+  { type: 'rect2pt', label: '2pt Rect', icon: <ToolIcon><rect x="2.5" y="4" width="11" height="8" /><circle cx="2.5" cy="4" r="1.5" fill="currentColor" stroke="none" /><circle cx="13.5" cy="12" r="1.5" fill="currentColor" stroke="none" /></ToolIcon>, shortcut: 'Shift+R' },
   { type: 'polygon', label: 'Polygon', icon: <ToolIcon><polygon points="8,1.5 13.6,5 12.5,11.5 3.5,11.5 2.4,5" /></ToolIcon>, shortcut: 'P — ↑↓ sides' },
 ];
 

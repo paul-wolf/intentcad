@@ -46,6 +46,7 @@ export function createRectangleTool(): Tool {
           center: ts.center,
           width,
           height,
+          anchor: 'center',
         });
         // Auto-create width dimension (top edge)
         useDocumentStore.getState().addEntity({

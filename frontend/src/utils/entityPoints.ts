@@ -41,8 +41,8 @@ export function getEntityPoint(entity: Entity, pointIndex: number): Point | null
 /**
  * Set a characteristic point on an entity by index. Returns new entity or null.
  *
- * For rectangle corners (1-4), translates the whole rectangle so the corner
- * lands on the target point.
+ * For rectangle corners (1-4): anchor='corner' keeps the opposite corner fixed,
+ * anchor='center' (default) resizes symmetrically around center.
  */
 export function setEntityPoint(entity: Entity, pointIndex: number, pt: Point): Entity | null {
   switch (entity.type) {
@@ -54,12 +54,33 @@ export function setEntityPoint(entity: Entity, pointIndex: number, pt: Point): E
       if (pointIndex === 0) {
         return { ...entity, center: pt };
       }
-      // For corners, translate the whole rectangle so the corner lands on pt
+      if (entity.anchor === 'corner') {
+        // Two-point rect: resize keeping opposite corner fixed
+        const oppositeIndex = ({ 1: 3, 2: 4, 3: 1, 4: 2 } as Record<number, number>)[pointIndex];
+        if (!oppositeIndex) return null;
+        const opposite = getEntityPoint(entity, oppositeIndex);
+        if (!opposite) return null;
+        const newWidth = Math.abs(pt.x - opposite.x);
+        const newHeight = Math.abs(pt.y - opposite.y);
+        if (newWidth <= 0 || newHeight <= 0) return null;
+        return {
+          ...entity,
+          center: { x: (pt.x + opposite.x) / 2, y: (pt.y + opposite.y) / 2 },
+          width: newWidth,
+          height: newHeight,
+        };
+      }
+      // Center-defined rect: resize symmetrically around center
       const current = getEntityPoint(entity, pointIndex);
       if (!current) return null;
       const dx = pt.x - current.x;
       const dy = pt.y - current.y;
-      return { ...entity, center: { x: entity.center.x + dx, y: entity.center.y + dy } };
+      const hw = entity.width / 2;
+      const hh = entity.height / 2;
+      const newWidth = Math.abs(hw + (pointIndex === 2 || pointIndex === 3 ? dx : -dx)) * 2;
+      const newHeight = Math.abs(hh + (pointIndex === 1 || pointIndex === 2 ? dy : -dy)) * 2;
+      if (newWidth <= 0 || newHeight <= 0) return null;
+      return { ...entity, width: newWidth, height: newHeight };
     }
     case 'line': {
       // Polygon: translate the entire polygon rigidly to preserve regular shape

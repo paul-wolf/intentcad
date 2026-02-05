@@ -333,7 +333,45 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
             ? {
                 ...sk,
                 entities: solveConstraints(sk.entities.map((e) => {
-                  if (e.id !== entityId || e.type !== 'line') return e;
+                  if (e.id !== entityId) return e;
+                  if (e.type === 'rectangle') {
+                    if (e.sourceId) return e; // locked
+                    if (pointIndex === 0) {
+                      return { ...e, center: { x: e.center.x + delta.x, y: e.center.y + delta.y } };
+                    }
+                    const hw = e.width / 2;
+                    const hh = e.height / 2;
+                    if (e.anchor === 'corner') {
+                      // Two-point rect: resize keeping opposite corner fixed
+                      const oppositeIndex = ({ 1: 3, 2: 4, 3: 1, 4: 2 } as Record<number, number>)[pointIndex];
+                      if (!oppositeIndex) return e;
+                      const corners: Record<number, { x: number; y: number }> = {
+                        1: { x: e.center.x - hw, y: e.center.y + hh },
+                        2: { x: e.center.x + hw, y: e.center.y + hh },
+                        3: { x: e.center.x + hw, y: e.center.y - hh },
+                        4: { x: e.center.x - hw, y: e.center.y - hh },
+                      };
+                      const current = corners[pointIndex];
+                      const opposite = corners[oppositeIndex];
+                      if (!current || !opposite) return e;
+                      const newCorner = { x: current.x + delta.x, y: current.y + delta.y };
+                      const newWidth = Math.abs(newCorner.x - opposite.x);
+                      const newHeight = Math.abs(newCorner.y - opposite.y);
+                      if (newWidth <= 0 || newHeight <= 0) return e;
+                      return {
+                        ...e,
+                        center: { x: (newCorner.x + opposite.x) / 2, y: (newCorner.y + opposite.y) / 2 },
+                        width: newWidth,
+                        height: newHeight,
+                      };
+                    }
+                    // Center-defined rect: resize symmetrically around center
+                    const newWidth = Math.abs(hw + (pointIndex === 2 || pointIndex === 3 ? delta.x : -delta.x)) * 2;
+                    const newHeight = Math.abs(hh + (pointIndex === 1 || pointIndex === 2 ? delta.y : -delta.y)) * 2;
+                    if (newWidth <= 0 || newHeight <= 0) return e;
+                    return { ...e, width: newWidth, height: newHeight };
+                  }
+                  if (e.type !== 'line') return e;
                   if (e.sourceId) return e; // locked
                   // Polygon: translate rigidly to preserve regular shape
                   if (e.polygonCenter) {

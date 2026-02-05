@@ -59,6 +59,8 @@ function defaultToolState(tool: ToolType): ToolState {
       return { type: 'circle', center: null };
     case 'rectangle':
       return { type: 'rectangle', center: null };
+    case 'rect2pt':
+      return { type: 'rect2pt', corner: null };
     case 'polygon':
       return { type: 'polygon', center: null, sides: 6 };
     case 'point':

@@ -16,6 +16,7 @@ import { createRectangleTool } from '@/tools/rectangleTool';
 import { createPolygonTool } from '@/tools/polygonTool';
 import { createPointTool } from '@/tools/pointTool';
 import { createDimensionTool } from '@/tools/dimensionTool';
+import { createRect2ptTool } from '@/tools/rect2ptTool';
 import { startAutoSave, setBackendId, getBackendId } from '@/api/autoSave';
 import { api } from '@/api/client';
 import { migrateDocument } from '@/utils/document';
@@ -64,6 +65,8 @@ export function EditorPage() {
         return createCircleTool();
       case 'rectangle':
         return createRectangleTool();
+      case 'rect2pt':
+        return createRect2ptTool();
       case 'polygon':
         return createPolygonTool();
       case 'select':
@@ -104,7 +107,8 @@ export function EditorPage() {
       if (e.key === '.') setActiveTool('point');
       if (e.key === 'l' || e.key === 'L') setActiveTool('line');
       if (e.key === 'c' || e.key === 'C') setActiveTool('circle');
-      if (e.key === 'r' || e.key === 'R') setActiveTool('rectangle');
+      if (e.key === 'r') setActiveTool('rectangle');
+      if (e.key === 'R') setActiveTool('rect2pt');
       if (e.key === 'p' || e.key === 'P') setActiveTool('polygon');
       if (e.key === 'd' || e.key === 'D') setActiveTool('dimension');
     };
