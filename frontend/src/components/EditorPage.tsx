@@ -4,6 +4,7 @@ import { Toolbar } from './Toolbar';
 import { StatusBar } from './StatusBar';
 import { RightPanel } from './RightPanel';
 import { DocumentDrawer } from './DocumentDrawer';
+import { LogPanel } from './LogPanel';
 import { CanvasContainer } from '@/canvas/CanvasContainer';
 import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
@@ -120,6 +121,7 @@ export function EditorPage() {
         <CanvasContainer activeTool={toolInstance} docId={id} />
         <RightPanel />
       </div>
+      <LogPanel />
       <StatusBar />
     </div>
   );

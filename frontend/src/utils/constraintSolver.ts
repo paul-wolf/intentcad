@@ -773,11 +773,16 @@ function enforceHorizontalVertical(
     } else {
       const pa = entity.points[idx]!;
       const pb = entity.points[idx + 1]!;
+      const dx = pb.x - pa.x;
+      const dy = pb.y - pa.y;
+      const len = Math.sqrt(dx * dx + dy * dy);
       const newPoints = [...entity.points];
       if (c.type === 'horizontal') {
-        newPoints[idx + 1] = { x: pb.x, y: pa.y };
+        const dir = dx !== 0 ? Math.sign(dx) : 1;
+        newPoints[idx + 1] = { x: pa.x + len * dir, y: pa.y };
       } else {
-        newPoints[idx + 1] = { x: pa.x, y: pb.y };
+        const dir = dy !== 0 ? Math.sign(dy) : 1;
+        newPoints[idx + 1] = { x: pa.x, y: pa.y + len * dir };
       }
       entityMap.set(c.entityId, { ...entity, points: newPoints } as LineEntity);
     }

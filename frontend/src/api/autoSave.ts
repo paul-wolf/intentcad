@@ -1,4 +1,5 @@
 import { useDocumentStore } from '@/stores/documentStore';
+import { addLog } from '@/stores/logStore';
 import { api } from './client';
 
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -27,8 +28,11 @@ function doSave(id: string, doc: Record<string, unknown>) {
   api.updateDocument(id, {
     name: (doc as { name: string }).name,
     data: doc,
+  }).then(() => {
+    addLog('info', 'Document saved');
   }).catch((err) => {
     console.error('[autoSave] PUT failed:', err);
+    addLog('error', `Save failed: ${err}`);
   });
 }
 
