@@ -63,6 +63,9 @@ export function DocumentDrawer() {
   };
 
   const handleDelete = async (id: string) => {
+    const doc = docs.find((d) => d.id === id);
+    const name = doc?.name ?? 'this document';
+    if (!window.confirm(`Delete "${name}"?`)) return;
     try {
       await api.deleteDocument(id);
       setDocs((prev) => prev.filter((d) => d.id !== id));

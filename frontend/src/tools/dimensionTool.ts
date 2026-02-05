@@ -65,37 +65,37 @@ export function createDimensionTool(): Tool {
       const targetEntity = activeSketch.entities.find((e) => e.id === hit.entityId);
       if (!targetEntity || targetEntity.type !== 'line') return;
 
-      // Polygon: create a radius dimension (segmentIndex -1) — single-click, no two-click state
-      if ((targetEntity as LineEntity).polygonCenter) {
-        firstSegment = null; // reset any pending first segment
-        const exists = activeSketch.entities.some(
-          (e) =>
-            e.type === 'dimension' &&
-            e.targetEntityId === hit.entityId &&
-            e.segmentIndex === -1,
-        );
-        if (exists) return;
-
-        useDocumentStore.getState().beginTransaction('Add dimension');
-        useDocumentStore.getState().addEntity({
-          id: crypto.randomUUID(),
-          type: 'dimension',
-          targetEntityId: hit.entityId,
-          segmentIndex: -1,
-          offset: DIMENSION_OFFSET_MM,
-        });
-        return;
-      }
-
-      // Two-click workflow for line segments
+      // Two-click workflow for all line segments (including polygons)
       if (!firstSegment) {
         // First click: store the segment
         firstSegment = hit;
         return;
       }
 
-      // Second click: if same entity+segment, fall through to single-segment dimension
+      // Second click: if same entity+segment, create single-segment or polygon apothem dimension
       if (firstSegment.entityId === hit.entityId && firstSegment.segmentIndex === hit.segmentIndex) {
+        // Polygon: create apothem dimension (segmentIndex -1)
+        if ((targetEntity as LineEntity).polygonCenter) {
+          const exists = activeSketch.entities.some(
+            (e) =>
+              e.type === 'dimension' &&
+              e.targetEntityId === hit.entityId &&
+              e.segmentIndex === -1,
+          );
+          if (!exists) {
+            useDocumentStore.getState().beginTransaction('Add dimension');
+            useDocumentStore.getState().addEntity({
+              id: crypto.randomUUID(),
+              type: 'dimension',
+              targetEntityId: hit.entityId,
+              segmentIndex: -1,
+              offset: DIMENSION_OFFSET_MM,
+            });
+          }
+          firstSegment = null;
+          return;
+        }
+
         // Create single-segment dimension (same as original behavior)
         const exists = activeSketch.entities.some(
           (e) =>

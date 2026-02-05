@@ -1,11 +1,12 @@
 import type { Point, Document } from '@/types/document';
 import { GRID_SPACING_MM, SNAP_RADIUS } from '@/config';
-import { distance, snapToGrid } from '@/utils/geometry';
+import { distance, snapToGrid, segmentSegmentIntersection } from '@/utils/geometry';
+import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
 import type { Viewport } from '@/types/renderer';
 
 export interface SnapResult {
   point: Point;
-  type: 'endpoint' | 'grid';
+  type: 'endpoint' | 'intersection' | 'grid';
   entityId?: string;
   pointIndex?: number;
 }
@@ -87,8 +88,43 @@ export function snapPosition(
     }
   }
 
+  let bestType: 'endpoint' | 'intersection' = 'endpoint';
+
+  // Check all segment-segment intersections
+  const segments: { p1: Point; p2: Point }[] = [];
+  for (const sketch of document.sketches) {
+    if (!sketch.visible || sketch.suppressed) continue;
+    for (const entity of sketch.entities) {
+      if (entity.type === 'line') {
+        const count = getSegmentCount(entity);
+        for (let s = 0; s < count; s++) {
+          const [i0, i1] = getSegmentPointIndices(entity, s);
+          segments.push({ p1: entity.points[i0]!, p2: entity.points[i1]! });
+        }
+      }
+    }
+  }
+  for (let i = 0; i < segments.length; i++) {
+    for (let j = i + 1; j < segments.length; j++) {
+      const ix = segmentSegmentIntersection(
+        segments[i]!.p1, segments[i]!.p2,
+        segments[j]!.p1, segments[j]!.p2,
+      );
+      if (!ix) continue;
+      const sp = viewport.worldToScreen(ix);
+      const d = distance(sp, screenPos);
+      if (d < bestDist) {
+        bestDist = d;
+        bestEndpoint = ix;
+        bestEntityId = undefined;
+        bestPointIndex = undefined;
+        bestType = 'intersection';
+      }
+    }
+  }
+
   if (bestEndpoint) {
-    return { point: bestEndpoint, type: 'endpoint', entityId: bestEntityId, pointIndex: bestPointIndex };
+    return { point: bestEndpoint, type: bestType, entityId: bestEntityId, pointIndex: bestPointIndex };
   }
 
   // Fall back to grid snap

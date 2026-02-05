@@ -144,6 +144,21 @@ export function angleBetweenVectors(d1x: number, d1y: number, d2x: number, d2y: 
   return Math.acos(Math.max(-1, Math.min(1, dot)));
 }
 
+/** Intersection of finite segments (a1→a2) and (b1→b2). Returns null if parallel or outside segments. */
+export function segmentSegmentIntersection(a1: Point, a2: Point, b1: Point, b2: Point): Point | null {
+  const d1x = a2.x - a1.x;
+  const d1y = a2.y - a1.y;
+  const d2x = b2.x - b1.x;
+  const d2y = b2.y - b1.y;
+  const denom = d1x * d2y - d1y * d2x;
+  if (Math.abs(denom) < 1e-10) return null;
+  const t = ((b1.x - a1.x) * d2y - (b1.y - a1.y) * d2x) / denom;
+  if (t < 0 || t > 1) return null;
+  const u = ((b1.x - a1.x) * d1y - (b1.y - a1.y) * d1x) / denom;
+  if (u < 0 || u > 1) return null;
+  return { x: a1.x + t * d1x, y: a1.y + t * d1y };
+}
+
 export function reflectPoint(p: Point, a: Point, b: Point): Point {
   const dx = b.x - a.x;
   const dy = b.y - a.y;
