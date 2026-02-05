@@ -11,6 +11,7 @@ import { drawDimension, drawDiameterDimension, drawSegmentLabel, drawDiameterLab
 import { computeSketchDoF, computeDerivedDimensionIds } from '@/utils/dof';
 import { getEntityPoint } from '@/utils/entityPoints';
 import { getConstraintPartners, getEntityRepresentativePoint, CONSTRAINT_SYMBOLS } from '@/utils/constraints';
+import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
 
 export interface RenderContext {
   renderer: Renderer;
@@ -230,12 +231,14 @@ function renderActiveSketch(ctx: RenderContext) {
           if (!target2 || target.type !== 'line' || target2.type !== 'line') break;
           const idx1 = entity.segmentIndex;
           const idx2 = entity.segmentIndex2!;
-          if (idx1 < 0 || idx1 >= target.points.length - 1) break;
-          if (idx2 < 0 || idx2 >= target2.points.length - 1) break;
-          const p1 = target.points[idx1]!;
-          const p2 = target.points[idx1 + 1]!;
-          const q1 = target2.points[idx2]!;
-          const q2 = target2.points[idx2 + 1]!;
+          if (idx1 < 0 || idx1 >= getSegmentCount(target)) break;
+          if (idx2 < 0 || idx2 >= getSegmentCount(target2)) break;
+          const [pi1, pi2] = getSegmentPointIndices(target, idx1);
+          const [qi1, qi2] = getSegmentPointIndices(target2, idx2);
+          const p1 = target.points[pi1]!;
+          const p2 = target.points[pi2]!;
+          const q1 = target2.points[qi1]!;
+          const q2 = target2.points[qi2]!;
 
           if (entity.angleMode) {
             const angleGeom = computeAngleDimensionGeom(p1, p2, q1, q2, entity.offset);
@@ -287,9 +290,10 @@ function renderActiveSketch(ctx: RenderContext) {
           break;
         }
         const idx = entity.segmentIndex;
-        if (idx < 0 || idx >= target.points.length - 1) break;
-        const a = target.points[idx]!;
-        const b = target.points[idx + 1]!;
+        if (idx < 0 || idx >= getSegmentCount(target)) break;
+        const [ai, bi] = getSegmentPointIndices(target, idx);
+        const a = target.points[ai]!;
+        const b = target.points[bi]!;
         drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived);
         break;
       }
@@ -316,8 +320,10 @@ function renderDimensionOverlay(ctx: RenderContext) {
         };
         drawSegmentLabel(renderer, viewport, center, midA, styles.dimensionOverlayText, ctx.palette.background);
       } else {
-        for (let i = 0; i < entity.points.length - 1; i++) {
-          drawSegmentLabel(renderer, viewport, entity.points[i]!, entity.points[i + 1]!, styles.dimensionOverlayText, ctx.palette.background);
+        const segCnt = getSegmentCount(entity);
+        for (let i = 0; i < segCnt; i++) {
+          const [si1, si2] = getSegmentPointIndices(entity, i);
+          drawSegmentLabel(renderer, viewport, entity.points[si1]!, entity.points[si2]!, styles.dimensionOverlayText, ctx.palette.background);
         }
       }
     }
@@ -367,9 +373,10 @@ function renderSelectedSegments(ctx: RenderContext) {
 
     if (entity.type === 'line') {
       const idx = seg.segmentIndex;
-      if (idx < 0 || idx >= entity.points.length - 1) continue;
-      const a = viewport.worldToScreen(entity.points[idx]!);
-      const b = viewport.worldToScreen(entity.points[idx + 1]!);
+      if (idx < 0 || idx >= getSegmentCount(entity)) continue;
+      const [ssi1, ssi2] = getSegmentPointIndices(entity, idx);
+      const a = viewport.worldToScreen(entity.points[ssi1]!);
+      const b = viewport.worldToScreen(entity.points[ssi2]!);
       renderer.drawLine(a, b, styles.segmentSelected);
     } else if (entity.type === 'rectangle') {
       const hw = entity.width / 2;
@@ -406,9 +413,11 @@ function renderEntity(
 ) {
   switch (entity.type) {
     case 'line': {
-      for (let i = 0; i < entity.points.length - 1; i++) {
-        const a = viewport.worldToScreen(entity.points[i]!);
-        const b = viewport.worldToScreen(entity.points[i + 1]!);
+      const segCount = getSegmentCount(entity);
+      for (let i = 0; i < segCount; i++) {
+        const [i1, i2] = getSegmentPointIndices(entity, i);
+        const a = viewport.worldToScreen(entity.points[i1]!);
+        const b = viewport.worldToScreen(entity.points[i2]!);
         renderer.drawLine(a, b, style);
       }
       for (const pt of entity.points) {

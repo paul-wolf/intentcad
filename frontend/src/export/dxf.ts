@@ -1,4 +1,5 @@
 import type { Document } from '@/types/document';
+import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
 
 export function exportDocumentToDxf(doc: Document): string {
   const visibleSketches = doc.sketches.filter((sk) => !sk.suppressed);
@@ -87,9 +88,11 @@ export function exportDocumentToDxf(doc: Document): string {
     for (const entity of sketch.entities) {
       if ('construction' in entity && entity.construction) continue;
       if (entity.type === 'line') {
-        for (let i = 0; i < entity.points.length - 1; i++) {
-          const p1 = entity.points[i]!;
-          const p2 = entity.points[i + 1]!;
+        const segCount = getSegmentCount(entity);
+        for (let i = 0; i < segCount; i++) {
+          const [i1, i2] = getSegmentPointIndices(entity, i);
+          const p1 = entity.points[i1]!;
+          const p2 = entity.points[i2]!;
           w('0');
           w('LINE');
           w('8');

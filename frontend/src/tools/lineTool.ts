@@ -22,6 +22,7 @@ function getTerminalSnap(snap: SnapResult): { entityId: string; end: 'start' | '
 
   const entity = sketch.entities.find((e) => e.id === snap.entityId);
   if (!entity || entity.type !== 'line') return null;
+  if (entity.closed) return null; // closed polylines cannot be extended
 
   if (snap.pointIndex === 0) return { entityId: entity.id, end: 'start' };
   if (snap.pointIndex === entity.points.length - 1) return { entityId: entity.id, end: 'end' };
@@ -86,6 +87,22 @@ export function createLineTool(): Tool {
       const { firstPoint, activePolylineId } = ts;
 
       if (activePolylineId) {
+        // Check for auto-close: clicking on the start point of current polyline
+        const sketch = useDocumentStore.getState().getActiveSketch();
+        const activeEntity = sketch?.entities.find((e) => e.id === activePolylineId);
+        if (activeEntity && activeEntity.type === 'line' && activeEntity.points.length >= 3) {
+          // Determine the "other end" index (the end we're NOT drawing from)
+          const closePointIndex = ts.activeEnd === 'end' ? 0 : activeEntity.points.length - 1;
+          if (snap.type === 'endpoint' && snap.entityId === activePolylineId && snap.pointIndex === closePointIndex) {
+            // Auto-close the polyline
+            useDocumentStore.getState().beginTransaction('Close path');
+            useDocumentStore.getState().setClosed(activePolylineId, true);
+            resetState();
+            requestSave();
+            return;
+          }
+        }
+
         // Already extending a polyline — append/prepend the new point
         useDocumentStore.getState().beginTransaction('Extend line');
         useDocumentStore.getState().extendPolyline(activePolylineId, snap.point, ts.activeEnd!);

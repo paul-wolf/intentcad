@@ -13,6 +13,7 @@ import type { DimensionGeom } from '@/rendering/dimensionRenderer';
 import type { Tool } from '@/tools/types';
 import type { ViewportImpl } from '@/rendering/viewport';
 import type { Point, LineEntity } from '@/types/document';
+import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
 import { computeDerivedDimensionIds } from '@/utils/dof';
 
 function usePanZoom(
@@ -373,12 +374,14 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
       if (!target2 || target.type !== 'line' || target2.type !== 'line') return null;
       const idx1 = dim.segmentIndex;
       const idx2 = dim.segmentIndex2!;
-      if (idx1 < 0 || idx1 >= target.points.length - 1) return null;
-      if (idx2 < 0 || idx2 >= target2.points.length - 1) return null;
-      const p1 = target.points[idx1]!;
-      const p2 = target.points[idx1 + 1]!;
-      const q1 = target2.points[idx2]!;
-      const q2 = target2.points[idx2 + 1]!;
+      if (idx1 < 0 || idx1 >= getSegmentCount(target)) return null;
+      if (idx2 < 0 || idx2 >= getSegmentCount(target2)) return null;
+      const [cpi1, cpi2] = getSegmentPointIndices(target, idx1);
+      const [cqi1, cqi2] = getSegmentPointIndices(target2, idx2);
+      const p1 = target.points[cpi1]!;
+      const p2 = target.points[cpi2]!;
+      const q1 = target2.points[cqi1]!;
+      const q2 = target2.points[cqi2]!;
 
       if (dim.angleMode) {
         const angleGeom = computeAngleDimensionGeom(p1, p2, q1, q2, dim.offset);
@@ -440,9 +443,10 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
         return { pos, value };
       }
       const idx = dim.segmentIndex;
-      if (idx < 0 || idx >= target.points.length - 1) return null;
-      const a = target.points[idx]!;
-      const b = target.points[idx + 1]!;
+      if (idx < 0 || idx >= getSegmentCount(target)) return null;
+      const [cai, cbi] = getSegmentPointIndices(target, idx);
+      const a = target.points[cai]!;
+      const b = target.points[cbi]!;
       const geom: DimensionGeom = { a, b, offset: dim.offset };
       const pos = getDimensionTextScreenPos(vp, geom);
       const value = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);

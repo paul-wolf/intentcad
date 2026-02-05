@@ -2,6 +2,7 @@ import type { Constraint, Entity, Point, EqualConstraint, CoincidentConstraint, 
 import { propagateDerived } from '@/utils/propagate';
 import { rotatePoint } from '@/utils/geometry';
 import { getEntityPoint, setEntityPoint } from '@/utils/entityPoints';
+import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
 
 // --- Validation API ---
 
@@ -262,12 +263,16 @@ function matchEntitySize(target: Entity, source: Entity): Entity | null {
 
     // Regular lines: scale total length around centroid
     let srcLen = 0;
-    for (let i = 0; i < source.points.length - 1; i++) {
-      srcLen += Math.sqrt((source.points[i + 1]!.x - source.points[i]!.x) ** 2 + (source.points[i + 1]!.y - source.points[i]!.y) ** 2);
+    const srcSegCount = getSegmentCount(source);
+    for (let i = 0; i < srcSegCount; i++) {
+      const [si1, si2] = getSegmentPointIndices(source, i);
+      srcLen += Math.sqrt((source.points[si2]!.x - source.points[si1]!.x) ** 2 + (source.points[si2]!.y - source.points[si1]!.y) ** 2);
     }
     let tgtLen = 0;
-    for (let i = 0; i < target.points.length - 1; i++) {
-      tgtLen += Math.sqrt((target.points[i + 1]!.x - target.points[i]!.x) ** 2 + (target.points[i + 1]!.y - target.points[i]!.y) ** 2);
+    const tgtSegCount = getSegmentCount(target);
+    for (let i = 0; i < tgtSegCount; i++) {
+      const [ti1, ti2] = getSegmentPointIndices(target, i);
+      tgtLen += Math.sqrt((target.points[ti2]!.x - target.points[ti1]!.x) ** 2 + (target.points[ti2]!.y - target.points[ti1]!.y) ** 2);
     }
     if (tgtLen === 0) return null;
     const scale = srcLen / tgtLen;
@@ -282,8 +287,9 @@ function matchEntitySize(target: Entity, source: Entity): Entity | null {
 /** Get the two endpoints of a segment on an entity. */
 function getSegmentEndpoints(entity: Entity, segmentIndex: number): [Point, Point] | null {
   if (entity.type === 'line') {
-    const a = entity.points[segmentIndex];
-    const b = entity.points[segmentIndex + 1];
+    const [i1, i2] = getSegmentPointIndices(entity, segmentIndex);
+    const a = entity.points[i1];
+    const b = entity.points[i2];
     if (!a || !b) return null;
     return [a, b];
   }
@@ -330,8 +336,9 @@ function translateEntity(entity: Entity, dx: number, dy: number): Entity | null 
 /** Rotate a polygon so that the segment at segmentIndex becomes horizontal or vertical. */
 function snapPolygonForHV(entity: LineEntity, segmentIndex: number, type: 'horizontal' | 'vertical'): LineEntity {
   if (!entity.polygonCenter) return entity;
-  const pa = entity.points[segmentIndex]!;
-  const pb = entity.points[segmentIndex + 1]!;
+  const [si1, si2] = getSegmentPointIndices(entity, segmentIndex);
+  const pa = entity.points[si1]!;
+  const pb = entity.points[si2]!;
   const dx = pb.x - pa.x;
   const dy = pb.y - pa.y;
   const currentAngle = Math.atan2(dy, dx);
@@ -552,7 +559,7 @@ function enforceParallel(
       const newAngle = modAngle + delta;
       const newB = { x: mA.x + Math.cos(newAngle) * len, y: mA.y + Math.sin(newAngle) * len };
       const newPoints = [...(modEntity as LineEntity).points];
-      newPoints[modSegIdx + 1] = newB;
+      newPoints[(modSegIdx + 1) % (modEntity as LineEntity).points.length] = newB;
       entityMap.set(modId, { ...modEntity, points: newPoints } as LineEntity);
     }
   }
@@ -608,7 +615,7 @@ function enforcePerpendicular(
       const newAngle = modAngle + delta;
       const newB = { x: mA.x + Math.cos(newAngle) * len, y: mA.y + Math.sin(newAngle) * len };
       const newPoints = [...(modEntity as LineEntity).points];
-      newPoints[modSegIdx + 1] = newB;
+      newPoints[(modSegIdx + 1) % (modEntity as LineEntity).points.length] = newB;
       entityMap.set(modId, { ...modEntity, points: newPoints } as LineEntity);
     }
   }
@@ -766,23 +773,24 @@ function enforceHorizontalVertical(
     const entity = entityMap.get(c.entityId);
     if (!entity || entity.type !== 'line') continue;
     const idx = c.segmentIndex;
-    if (idx < 0 || idx >= entity.points.length - 1) continue;
+    if (idx < 0 || idx >= getSegmentCount(entity as LineEntity)) continue;
 
     if ((entity as LineEntity).polygonCenter) {
       entityMap.set(c.entityId, snapPolygonForHV(entity as LineEntity, idx, c.type));
     } else {
-      const pa = entity.points[idx]!;
-      const pb = entity.points[idx + 1]!;
+      const [hi1, hi2] = getSegmentPointIndices(entity as LineEntity, idx);
+      const pa = entity.points[hi1]!;
+      const pb = entity.points[hi2]!;
       const dx = pb.x - pa.x;
       const dy = pb.y - pa.y;
       const len = Math.sqrt(dx * dx + dy * dy);
       const newPoints = [...entity.points];
       if (c.type === 'horizontal') {
         const dir = dx !== 0 ? Math.sign(dx) : 1;
-        newPoints[idx + 1] = { x: pa.x + len * dir, y: pa.y };
+        newPoints[hi2] = { x: pa.x + len * dir, y: pa.y };
       } else {
         const dir = dy !== 0 ? Math.sign(dy) : 1;
-        newPoints[idx + 1] = { x: pa.x, y: pa.y + len * dir };
+        newPoints[hi2] = { x: pa.x, y: pa.y + len * dir };
       }
       entityMap.set(c.entityId, { ...entity, points: newPoints } as LineEntity);
     }

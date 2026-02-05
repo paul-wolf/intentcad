@@ -8,6 +8,7 @@ import { solveConstraints, validateConstraint } from '@/utils/constraintSolver';
 import { computeDerivedDimensionIds } from '@/utils/dof';
 import { addLog } from '@/stores/logStore';
 import type { SelectedPoint } from '@/stores/editorStore';
+import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
 
 const UNDO_STACK_LIMIT = 100;
 
@@ -82,6 +83,10 @@ interface DocumentStore {
   toggleBisect(seg1: {entityId: string, segmentIndex: number}, seg2: {entityId: string, segmentIndex: number}): void;
   toggleHorizontal(entityIds: string[], segments?: {entityId: string, segmentIndex: number}[]): void;
   toggleVertical(entityIds: string[], segments?: {entityId: string, segmentIndex: number}[]): void;
+
+  // Closed path
+  toggleClosed(entityIds: string[]): void;
+  setClosed(entityId: string, closed: boolean): void;
 
   // Entity replacement
   updateEntity(entityId: string, updatedEntity: Entity): void;
@@ -490,6 +495,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                   if (e.id !== entityId || e.type !== 'line') return e;
                   if (e.sourceId) return e; // locked
                   if (e.polygonCenter) return e; // polygon: cannot extend
+                  if (e.closed) return e; // closed: cannot extend
                   return {
                     ...e,
                     points:
@@ -1095,7 +1101,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
         ? segments.filter((s) => s.entityId === entityId).map((s) => s.segmentIndex)
         : undefined;
 
-      const segCount = entity.points.length - 1;
+      const segCount = getSegmentCount(entity);
       const existing = sketch.constraints.filter(
         (c) => c.type === 'horizontal' && c.entityId === entityId,
       );
@@ -1210,7 +1216,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
         ? segments.filter((s) => s.entityId === entityId).map((s) => s.segmentIndex)
         : undefined;
 
-      const segCount = entity.points.length - 1;
+      const segCount = getSegmentCount(entity);
       const existing = sketch.constraints.filter(
         (c) => c.type === 'vertical' && c.entityId === entityId,
       );
@@ -1311,6 +1317,52 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     }
   },
 
+  toggleClosed(entityIds) {
+    const idSet = new Set(entityIds);
+    const { document } = get();
+    set({
+      document: {
+        ...document,
+        sketches: document.sketches.map((sk) =>
+          sk.id === document.activeSketchId
+            ? {
+                ...sk,
+                entities: sk.entities.map((e) => {
+                  if (!idSet.has(e.id)) return e;
+                  if (e.type !== 'line') return e;
+                  if (e.polygonCenter) return e; // polygons not togglable
+                  if (e.points.length < 3) return e;
+                  return { ...e, closed: !e.closed };
+                }),
+              }
+            : sk,
+        ),
+      },
+    });
+    addLog('info', 'Toggled closed path');
+  },
+
+  setClosed(entityId, closed) {
+    const { document } = get();
+    set({
+      document: {
+        ...document,
+        sketches: document.sketches.map((sk) =>
+          sk.id === document.activeSketchId
+            ? {
+                ...sk,
+                entities: sk.entities.map((e) => {
+                  if (e.id !== entityId) return e;
+                  if (e.type !== 'line') return e;
+                  return { ...e, closed };
+                }),
+              }
+            : sk,
+        ),
+      },
+    });
+  },
+
   updateEntity(entityId, updatedEntity) {
     const { document } = get();
     const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
@@ -1350,12 +1402,14 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
       if (!target2 || target.type !== 'line' || target2.type !== 'line') return;
       const idx1 = dim.segmentIndex;
       const idx2 = dim.segmentIndex2!;
-      if (idx1 < 0 || idx1 >= target.points.length - 1) return;
-      if (idx2 < 0 || idx2 >= target2.points.length - 1) return;
-      const p1 = target.points[idx1]!;
-      const p2 = target.points[idx1 + 1]!;
-      const q1 = target2.points[idx2]!;
-      const q2 = target2.points[idx2 + 1]!;
+      if (idx1 < 0 || idx1 >= getSegmentCount(target)) return;
+      if (idx2 < 0 || idx2 >= getSegmentCount(target2)) return;
+      const [pi1, pi2] = getSegmentPointIndices(target, idx1);
+      const [qi1, qi2] = getSegmentPointIndices(target2, idx2);
+      const p1 = target.points[pi1]!;
+      const p2 = target.points[pi2]!;
+      const q1 = target2.points[qi1]!;
+      const q2 = target2.points[qi2]!;
 
       // Angle dimension: rotate segments to match new angle
       if (dim.angleMode) {
@@ -1399,7 +1453,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
             return {
               ...e,
               points: e.points.map((pt, i) =>
-                (i === idx1 || i === idx1 + 1) ? rotatePoint(pt, ix, rot1) : pt,
+                (i === pi1 || i === pi2) ? rotatePoint(pt, ix, rot1) : pt,
               ),
             };
           }
@@ -1408,7 +1462,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
             return {
               ...e,
               points: e.points.map((pt, i) =>
-                (i === idx2 || i === idx2 + 1) ? rotatePoint(pt, ix, rot2) : pt,
+                (i === qi1 || i === qi2) ? rotatePoint(pt, ix, rot2) : pt,
               ),
             };
           }
@@ -1461,7 +1515,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           return {
             ...e,
             points: e.points.map((pt, i) =>
-              (i === idx1 || i === idx1 + 1)
+              (i === pi1 || i === pi2)
                 ? { x: pt.x + nx * move1, y: pt.y + ny * move1 }
                 : pt,
             ),
@@ -1472,7 +1526,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           return {
             ...e,
             points: e.points.map((pt, i) =>
-              (i === idx2 || i === idx2 + 1)
+              (i === qi1 || i === qi2)
                 ? { x: pt.x + nx * move2, y: pt.y + ny * move2 }
                 : pt,
             ),
@@ -1517,9 +1571,10 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
         // Polygon segment dimension: scale uniformly to preserve regularity
         if (e.polygonCenter) {
           const idx = dim.segmentIndex;
-          if (idx < 0 || idx >= e.points.length - 1) return e;
-          const pa = e.points[idx]!;
-          const pb = e.points[idx + 1]!;
+          if (idx < 0 || idx >= getSegmentCount(e)) return e;
+          const [pdi1, pdi2] = getSegmentPointIndices(e, idx);
+          const pa = e.points[pdi1]!;
+          const pb = e.points[pdi2]!;
           const curLen = Math.sqrt((pb.x - pa.x) ** 2 + (pb.y - pa.y) ** 2);
           if (curLen === 0) return e;
           const scale = newValue / curLen;
@@ -1533,9 +1588,10 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
           };
         }
         const idx = dim.segmentIndex;
-        if (idx < 0 || idx >= e.points.length - 1) return e;
-        const pa = e.points[idx]!;
-        const pb = e.points[idx + 1]!;
+        if (idx < 0 || idx >= getSegmentCount(e)) return e;
+        const [dsi1, dsi2] = getSegmentPointIndices(e, idx);
+        const pa = e.points[dsi1]!;
+        const pb = e.points[dsi2]!;
         const dx = pb.x - pa.x;
         const dy = pb.y - pa.y;
         const len = Math.sqrt(dx * dx + dy * dy);
@@ -1543,7 +1599,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
         const dirX = dx / len;
         const dirY = dy / len;
         const newPoints = [...e.points];
-        newPoints[idx + 1] = {
+        newPoints[dsi2] = {
           x: pa.x + dirX * newValue,
           y: pa.y + dirY * newValue,
         };

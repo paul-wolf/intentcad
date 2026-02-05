@@ -407,6 +407,27 @@ export function Toolbar() {
       >
         <ToolIcon><line x1="2" y1="13" x2="14" y2="3" /><line x1="8" y1="2" x2="8" y2="14" strokeDasharray="2 2" /></ToolIcon>
       </button>
+      <button
+        onClick={() => {
+          const ids = useEditorStore.getState().selectedEntityIds;
+          if (ids.size === 0) return;
+          useDocumentStore.getState().beginTransaction('Toggle closed');
+          useDocumentStore.getState().toggleClosed([...ids]);
+          requestSave();
+        }}
+        style={{
+          padding: '4px 12px',
+          border: `1px solid ${palette.inputBorder}`,
+          borderRadius: '4px',
+          background: palette.buttonBg,
+          color: palette.text,
+          cursor: 'pointer',
+          fontSize: '13px',
+        }}
+        title="Close/open path — connect last point to first (W)"
+      >
+        <ToolIcon><polygon points="3,12 8,3 13,12" fill="none" /><circle cx="3" cy="12" r="1.5" /><circle cx="8" cy="3" r="1.5" /><circle cx="13" cy="12" r="1.5" /></ToolIcon>
+      </button>
       <Sep color={palette.border} />
       <button
         onClick={() => {

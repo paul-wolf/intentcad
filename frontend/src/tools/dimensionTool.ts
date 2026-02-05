@@ -9,6 +9,7 @@ import { drawDimension, computeAngleDimensionGeom, drawAngleDimension } from '@/
 import { DIMENSION_OFFSET_MM, PARALLEL_DOT_THRESHOLD, ANGLE_DIMENSION_ARC_RADIUS_MM } from '@/config';
 import { getStyles } from '@/rendering/styles';
 import { getThemePalette } from '@/theme';
+import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
 
 /** Check if two segments are approximately parallel (within ~5 degrees). */
 function areSegmentsParallel(p1: Point, p2: Point, q1: Point, q2: Point): boolean {
@@ -108,8 +109,9 @@ export function createDimensionTool(): Tool {
           return;
         }
 
-        const a = targetEntity.points[hit.segmentIndex]!;
-        const b = targetEntity.points[hit.segmentIndex + 1]!;
+        const [hsi1, hsi2] = getSegmentPointIndices(targetEntity, hit.segmentIndex);
+        const a = targetEntity.points[hsi1]!;
+        const b = targetEntity.points[hsi2]!;
         const dx = b.x - a.x;
         const dy = b.y - a.y;
         const cross = dx * (worldPos.y - a.y) - dy * (worldPos.x - a.x);
@@ -153,10 +155,12 @@ export function createDimensionTool(): Tool {
         return;
       }
 
-      const seg1p1 = target1.points[firstSegment.segmentIndex]!;
-      const seg1p2 = target1.points[firstSegment.segmentIndex + 1]!;
-      const seg2p1 = targetEntity.points[hit.segmentIndex]!;
-      const seg2p2 = targetEntity.points[hit.segmentIndex + 1]!;
+      const [fs1, fs2] = getSegmentPointIndices(target1, firstSegment.segmentIndex);
+      const seg1p1 = target1.points[fs1]!;
+      const seg1p2 = target1.points[fs2]!;
+      const [hs1, hs2] = getSegmentPointIndices(targetEntity, hit.segmentIndex);
+      const seg2p1 = targetEntity.points[hs1]!;
+      const seg2p2 = targetEntity.points[hs2]!;
       const parallel = areSegmentsParallel(seg1p1, seg1p2, seg2p1, seg2p2);
 
       if (!parallel) {
@@ -238,9 +242,10 @@ export function createDimensionTool(): Tool {
         const entity1 = activeSketch.entities.find((e) => e.id === firstSegment!.entityId);
         if (entity1 && entity1.type === 'line') {
           const idx = firstSegment.segmentIndex;
-          if (idx >= 0 && idx < entity1.points.length - 1) {
-            const sa = viewport.worldToScreen(entity1.points[idx]!);
-            const sb = viewport.worldToScreen(entity1.points[idx + 1]!);
+          if (idx >= 0 && idx < getSegmentCount(entity1)) {
+            const [dti1, dti2] = getSegmentPointIndices(entity1, idx);
+            const sa = viewport.worldToScreen(entity1.points[dti1]!);
+            const sb = viewport.worldToScreen(entity1.points[dti2]!);
             renderer.drawLine(sa, sb, { color: palette.accent, width: 2.5 });
           }
         }
@@ -287,10 +292,12 @@ export function createDimensionTool(): Tool {
         const entity1 = activeSketch.entities.find((e) => e.id === firstSegment!.entityId);
         if (!entity1 || entity1.type !== 'line') return;
 
-        const seg1p1 = entity1.points[firstSegment.segmentIndex]!;
-        const seg1p2 = entity1.points[firstSegment.segmentIndex + 1]!;
-        const seg2p1 = targetEntity.points[hoverSegment.segmentIndex]!;
-        const seg2p2 = targetEntity.points[hoverSegment.segmentIndex + 1]!;
+        const [rfs1, rfs2] = getSegmentPointIndices(entity1, firstSegment.segmentIndex);
+        const seg1p1 = entity1.points[rfs1]!;
+        const seg1p2 = entity1.points[rfs2]!;
+        const [rhs1, rhs2] = getSegmentPointIndices(targetEntity, hoverSegment.segmentIndex);
+        const seg2p1 = targetEntity.points[rhs1]!;
+        const seg2p2 = targetEntity.points[rhs2]!;
         const parallel = areSegmentsParallel(seg1p1, seg1p2, seg2p1, seg2p2);
 
         if (!parallel) {
@@ -334,7 +341,7 @@ export function createDimensionTool(): Tool {
 
       // Single-segment preview (no firstSegment set yet)
       const idx = hoverSegment.segmentIndex;
-      if (idx < 0 || idx >= targetEntity.points.length - 1) return;
+      if (idx < 0 || idx >= getSegmentCount(targetEntity)) return;
 
       // Check if dimension already exists for this segment
       const exists = activeSketch.entities.some(
@@ -346,8 +353,9 @@ export function createDimensionTool(): Tool {
       );
       if (exists) return;
 
-      const a = targetEntity.points[idx]!;
-      const b = targetEntity.points[idx + 1]!;
+      const [dai, dbi] = getSegmentPointIndices(targetEntity, idx);
+      const a = targetEntity.points[dai]!;
+      const b = targetEntity.points[dbi]!;
 
       renderer.setGlobalAlpha(0.4);
       drawDimension(

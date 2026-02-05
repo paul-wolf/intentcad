@@ -3,6 +3,7 @@ import type { Viewport } from '@/types/renderer';
 import { distance, pointToSegmentDist } from '@/utils/geometry';
 import { computeAngleDimensionGeom } from '@/rendering/dimensionRenderer';
 import { HIT_TOL } from '@/config';
+import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
 
 export interface PointHit {
   entityId: string;
@@ -108,9 +109,11 @@ export function hitTestEntities(
 
   for (const entity of entities) {
     if (entity.type === 'line') {
-      for (let i = 0; i < entity.points.length - 1; i++) {
-        const a = viewport.worldToScreen(entity.points[i]!);
-        const b = viewport.worldToScreen(entity.points[i + 1]!);
+      const segCount = getSegmentCount(entity);
+      for (let i = 0; i < segCount; i++) {
+        const [i1, i2] = getSegmentPointIndices(entity, i);
+        const a = viewport.worldToScreen(entity.points[i1]!);
+        const b = viewport.worldToScreen(entity.points[i2]!);
         const d = pointToSegmentDist(screenPos, a, b);
         if (d < bestDist) {
           bestDist = d;
@@ -163,12 +166,14 @@ export function hitTestEntities(
         if (!target2 || target.type !== 'line' || target2.type !== 'line') continue;
         const idx1 = entity.segmentIndex;
         const idx2 = entity.segmentIndex2!;
-        if (idx1 < 0 || idx1 >= target.points.length - 1) continue;
-        if (idx2 < 0 || idx2 >= target2.points.length - 1) continue;
-        const p1 = target.points[idx1]!;
-        const p2 = target.points[idx1 + 1]!;
-        const q1 = target2.points[idx2]!;
-        const q2 = target2.points[idx2 + 1]!;
+        if (idx1 < 0 || idx1 >= getSegmentCount(target)) continue;
+        if (idx2 < 0 || idx2 >= getSegmentCount(target2)) continue;
+        const [pi1, pi2] = getSegmentPointIndices(target, idx1);
+        const [qi1, qi2] = getSegmentPointIndices(target2, idx2);
+        const p1 = target.points[pi1]!;
+        const p2 = target.points[pi2]!;
+        const q1 = target2.points[qi1]!;
+        const q2 = target2.points[qi2]!;
 
         if (entity.angleMode) {
           const angleGeom = computeAngleDimensionGeom(p1, p2, q1, q2, entity.offset);
@@ -279,9 +284,10 @@ export function hitTestEntities(
         continue;
       }
       const idx = entity.segmentIndex;
-      if (idx < 0 || idx >= target.points.length - 1) continue;
-      const pa = target.points[idx]!;
-      const pb = target.points[idx + 1]!;
+      if (idx < 0 || idx >= getSegmentCount(target)) continue;
+      const [pai, pbi] = getSegmentPointIndices(target, idx);
+      const pa = target.points[pai]!;
+      const pb = target.points[pbi]!;
       const perp = perpDir(pa, pb);
       const oa: Point = { x: pa.x + perp.x * entity.offset, y: pa.y + perp.y * entity.offset };
       const ob: Point = { x: pb.x + perp.x * entity.offset, y: pb.y + perp.y * entity.offset };
@@ -312,9 +318,11 @@ export function hitTestSegment(
 
   for (const entity of entities) {
     if (entity.type === 'line') {
-      for (let i = 0; i < entity.points.length - 1; i++) {
-        const a = viewport.worldToScreen(entity.points[i]!);
-        const b = viewport.worldToScreen(entity.points[i + 1]!);
+      const segCount = getSegmentCount(entity);
+      for (let i = 0; i < segCount; i++) {
+        const [i1, i2] = getSegmentPointIndices(entity, i);
+        const a = viewport.worldToScreen(entity.points[i1]!);
+        const b = viewport.worldToScreen(entity.points[i2]!);
         const d = pointToSegmentDist(screenPos, a, b);
         if (d < bestDist) {
           bestDist = d;
@@ -419,9 +427,11 @@ export function hitTestAllCandidates(
     let bestSegHit: SegmentHit | null = null;
 
     if (entity.type === 'line') {
-      for (let i = 0; i < entity.points.length - 1; i++) {
-        const a = viewport.worldToScreen(entity.points[i]!);
-        const b = viewport.worldToScreen(entity.points[i + 1]!);
+      const segCount2 = getSegmentCount(entity);
+      for (let i = 0; i < segCount2; i++) {
+        const [i1, i2] = getSegmentPointIndices(entity, i);
+        const a = viewport.worldToScreen(entity.points[i1]!);
+        const b = viewport.worldToScreen(entity.points[i2]!);
         const d = pointToSegmentDist(screenPos, a, b);
         if (d < bestSegDist) {
           bestSegDist = d;
@@ -453,9 +463,11 @@ export function hitTestAllCandidates(
     let bodyDist = Infinity;
 
     if (entity.type === 'line') {
-      for (let i = 0; i < entity.points.length - 1; i++) {
-        const a = viewport.worldToScreen(entity.points[i]!);
-        const b = viewport.worldToScreen(entity.points[i + 1]!);
+      const segCount3 = getSegmentCount(entity);
+      for (let i = 0; i < segCount3; i++) {
+        const [i1, i2] = getSegmentPointIndices(entity, i);
+        const a = viewport.worldToScreen(entity.points[i1]!);
+        const b = viewport.worldToScreen(entity.points[i2]!);
         const d = pointToSegmentDist(screenPos, a, b);
         if (d < bodyDist) bodyDist = d;
       }

@@ -12,6 +12,7 @@ import { getThemePalette } from '@/theme';
 import { distance } from '@/utils/geometry';
 import { requestSave } from '@/api/autoSave';
 import { getEntityPoint, getEntityPoints } from '@/utils/entityPoints';
+import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
 
 const DRAG_THRESHOLD = 4; // screen pixels before starting drag
 
@@ -235,11 +236,13 @@ export function createSelectTool(): Tool {
           const ids = new Set<string>();
           for (const entity of activeSketch.entities) {
             if (entity.type === 'line') {
-              for (let i = 0; i < entity.points.length - 1; i++) {
+              const segCount = getSegmentCount(entity);
+              for (let i = 0; i < segCount; i++) {
+                const [i1, i2] = getSegmentPointIndices(entity, i);
                 if (
                   segmentIntersectsRect(
-                    entity.points[i]!,
-                    entity.points[i + 1]!,
+                    entity.points[i1]!,
+                    entity.points[i2]!,
                     { x: minX, y: minY },
                     { x: maxX, y: maxY },
                   )
@@ -564,6 +567,14 @@ export function createSelectTool(): Tool {
               requestSave();
             }
           }
+        }
+      }
+      if (e.key === 'w' || e.key === 'W') {
+        const ids = useEditorStore.getState().selectedEntityIds;
+        if (ids.size > 0) {
+          useDocumentStore.getState().beginTransaction('Toggle closed');
+          useDocumentStore.getState().toggleClosed([...ids]);
+          requestSave();
         }
       }
       if (e.key === 'x' || e.key === 'X') {
