@@ -15,6 +15,11 @@ export interface SegmentHit {
   segmentIndex: number;
 }
 
+export type SelectionCandidate =
+  | { kind: 'point';   hit: PointHit;   entity: Entity; dist: number }
+  | { kind: 'segment'; hit: SegmentHit; entity: Entity; dist: number }
+  | { kind: 'entity';  entity: Entity;  dist: number };
+
 /**
  * Hit test entity endpoints at a screen position. Returns the closest
  * endpoint within HIT_TOL screen pixels, or null. Takes priority over
@@ -340,6 +345,164 @@ export function hitTestSegment(
   }
 
   return best;
+}
+
+/**
+ * Return all entities within HIT_TOL, one candidate per entity, using the
+ * most specific hit type (point > segment > body). Sorted by distance ascending.
+ */
+export function hitTestAllCandidates(
+  screenPos: Point,
+  entities: Entity[],
+  viewport: Viewport,
+  allEntities?: Entity[],
+): SelectionCandidate[] {
+  const candidates: SelectionCandidate[] = [];
+
+  for (const entity of entities) {
+    // --- 1. Check points ---
+    let bestPointDist = Infinity;
+    let bestPointHit: PointHit | null = null;
+
+    if (entity.type === 'line') {
+      for (let i = 0; i < entity.points.length; i++) {
+        const sp = viewport.worldToScreen(entity.points[i]!);
+        const d = distance(screenPos, sp);
+        if (d < bestPointDist) {
+          bestPointDist = d;
+          bestPointHit = { entityId: entity.id, pointIndex: i };
+        }
+      }
+      if ((entity as LineEntity).polygonCenter) {
+        const sp = viewport.worldToScreen((entity as LineEntity).polygonCenter!);
+        const d = distance(screenPos, sp);
+        if (d < bestPointDist) {
+          bestPointDist = d;
+          bestPointHit = { entityId: entity.id, pointIndex: 0, isCenter: true };
+        }
+      }
+    } else if (entity.type === 'circle') {
+      const sp = viewport.worldToScreen(entity.center);
+      const d = distance(screenPos, sp);
+      if (d < bestPointDist) {
+        bestPointDist = d;
+        bestPointHit = { entityId: entity.id, pointIndex: 0, isCenter: true };
+      }
+    } else if (entity.type === 'rectangle') {
+      const sp = viewport.worldToScreen(entity.center);
+      const d = distance(screenPos, sp);
+      if (d < bestPointDist) {
+        bestPointDist = d;
+        bestPointHit = { entityId: entity.id, pointIndex: 0, isCenter: true };
+      }
+      const hw = entity.width / 2;
+      const hh = entity.height / 2;
+      const c = entity.center;
+      const corners: [number, Point][] = [
+        [1, { x: c.x - hw, y: c.y + hh }],
+        [2, { x: c.x + hw, y: c.y + hh }],
+        [3, { x: c.x + hw, y: c.y - hh }],
+        [4, { x: c.x - hw, y: c.y - hh }],
+      ];
+      for (const [idx, corner] of corners) {
+        const spc = viewport.worldToScreen(corner);
+        const dc = distance(screenPos, spc);
+        if (dc < bestPointDist) {
+          bestPointDist = dc;
+          bestPointHit = { entityId: entity.id, pointIndex: idx };
+        }
+      }
+    }
+
+    // --- 2. Check segments ---
+    let bestSegDist = Infinity;
+    let bestSegHit: SegmentHit | null = null;
+
+    if (entity.type === 'line') {
+      for (let i = 0; i < entity.points.length - 1; i++) {
+        const a = viewport.worldToScreen(entity.points[i]!);
+        const b = viewport.worldToScreen(entity.points[i + 1]!);
+        const d = pointToSegmentDist(screenPos, a, b);
+        if (d < bestSegDist) {
+          bestSegDist = d;
+          bestSegHit = { entityId: entity.id, segmentIndex: i };
+        }
+      }
+    } else if (entity.type === 'rectangle') {
+      const hw = entity.width / 2;
+      const hh = entity.height / 2;
+      const c = entity.center;
+      const corners: Point[] = [
+        { x: c.x - hw, y: c.y + hh },
+        { x: c.x + hw, y: c.y + hh },
+        { x: c.x + hw, y: c.y - hh },
+        { x: c.x - hw, y: c.y - hh },
+      ];
+      for (let i = 0; i < 4; i++) {
+        const a = viewport.worldToScreen(corners[i]!);
+        const b = viewport.worldToScreen(corners[(i + 1) % 4]!);
+        const d = pointToSegmentDist(screenPos, a, b);
+        if (d < bestSegDist) {
+          bestSegDist = d;
+          bestSegHit = { entityId: entity.id, segmentIndex: i };
+        }
+      }
+    }
+
+    // --- 3. Check body (entity-level) distance ---
+    let bodyDist = Infinity;
+
+    if (entity.type === 'line') {
+      for (let i = 0; i < entity.points.length - 1; i++) {
+        const a = viewport.worldToScreen(entity.points[i]!);
+        const b = viewport.worldToScreen(entity.points[i + 1]!);
+        const d = pointToSegmentDist(screenPos, a, b);
+        if (d < bodyDist) bodyDist = d;
+      }
+    } else if (entity.type === 'circle') {
+      const screenCenter = viewport.worldToScreen(entity.center);
+      const screenRadius = entity.radius * viewport.scale;
+      bodyDist = Math.abs(distance(screenPos, screenCenter) - screenRadius);
+    } else if (entity.type === 'rectangle') {
+      const hw = entity.width / 2;
+      const hh = entity.height / 2;
+      const c = entity.center;
+      const corners: Point[] = [
+        { x: c.x - hw, y: c.y + hh },
+        { x: c.x + hw, y: c.y + hh },
+        { x: c.x + hw, y: c.y - hh },
+        { x: c.x - hw, y: c.y - hh },
+      ];
+      for (let i = 0; i < 4; i++) {
+        const a = viewport.worldToScreen(corners[i]!);
+        const b = viewport.worldToScreen(corners[(i + 1) % 4]!);
+        const d = pointToSegmentDist(screenPos, a, b);
+        if (d < bodyDist) bodyDist = d;
+      }
+    } else if (entity.type === 'point') {
+      const sp = viewport.worldToScreen(entity.position);
+      bodyDist = distance(screenPos, sp);
+    } else if (entity.type === 'dimension' && allEntities) {
+      // Use hitTestEntities logic for dimensions — just check if it would be hit
+      const dimHit = hitTestEntities(screenPos, [entity], viewport, allEntities);
+      if (dimHit) bodyDist = 0; // approximate: it's within tolerance
+    }
+
+    // --- 4. Pick best candidate ---
+    const minDist = Math.min(bestPointDist, bestSegDist, bodyDist);
+    if (minDist < HIT_TOL) {
+      if (bestPointDist <= bestSegDist && bestPointDist <= bodyDist && bestPointHit) {
+        candidates.push({ kind: 'point', hit: bestPointHit, entity, dist: bestPointDist });
+      } else if (bestSegDist <= bodyDist && bestSegHit) {
+        candidates.push({ kind: 'segment', hit: bestSegHit, entity, dist: bestSegDist });
+      } else {
+        candidates.push({ kind: 'entity', entity, dist: bodyDist });
+      }
+    }
+  }
+
+  candidates.sort((a, b) => a.dist - b.dist);
+  return candidates;
 }
 
 function perpDir(a: Point, b: Point): Point {

@@ -4,8 +4,9 @@ import type { Renderer, Viewport } from '@/types/renderer';
 import { useEditorStore } from '@/stores/editorStore';
 import type { SelectedPoint } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
-import { hitTestEntities, hitTestPoint, hitTestSegment } from '@/hittest/hitTest';
-import type { PointHit } from '@/hittest/hitTest';
+import { hitTestEntities, hitTestPoint, hitTestSegment, hitTestAllCandidates } from '@/hittest/hitTest';
+import type { PointHit, SelectionCandidate } from '@/hittest/hitTest';
+import { addLog } from '@/stores/logStore';
 import { segmentIntersectsRect, circleIntersectsRect, rectIntersectsRect } from '@/utils/geometry';
 import { getThemePalette } from '@/theme';
 import { distance } from '@/utils/geometry';
@@ -27,6 +28,55 @@ export function createSelectTool(): Tool {
   let lastClickTime = 0;
   let lastClickScreenPos: Point = { x: 0, y: 0 };
   let shiftOnDown = false;
+
+  let cycleScreenPos: Point | null = null;
+  let cycleCandidates: SelectionCandidate[] = [];
+  let cycleIndex = -1;
+
+  const applyCandidate = (c: SelectionCandidate) => {
+    const es = useEditorStore.getState();
+    if (c.kind === 'point') {
+      es.setSelectedPoints([{ entityId: c.hit.entityId, pointIndex: c.hit.pointIndex }]);
+      es.setSelectedSegments([]);
+      es.setSelectedEntityIds(new Set());
+    } else if (c.kind === 'segment') {
+      es.setSelectedPoints([]);
+      es.setSelectedSegments([c.hit]);
+      es.setSelectedEntityIds(new Set([c.hit.entityId]));
+    } else {
+      es.setSelectedPoints([]);
+      es.setSelectedSegments([]);
+      es.setSelectedEntityIds(new Set([c.entity.id]));
+    }
+  };
+
+  const logCandidate = (c: SelectionCandidate, index: number, total: number) => {
+    const tag = `[${index + 1}/${total}]`;
+    if (c.kind === 'point') {
+      addLog('info', `Select: point ${c.hit.pointIndex} on ${c.entity.type}_${c.entity.id.slice(0, 6)} ${tag}`);
+    } else if (c.kind === 'segment') {
+      addLog('info', `Select: segment ${c.hit.segmentIndex} on ${c.entity.type}_${c.entity.id.slice(0, 6)} ${tag}`);
+    } else {
+      addLog('info', `Select: ${c.entity.type} ${c.entity.type}_${c.entity.id.slice(0, 6)} ${tag}`);
+    }
+  };
+
+  const candidatesMatch = (a: SelectionCandidate[], b: SelectionCandidate[]): boolean => {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      const ca = a[i]!;
+      const cb = b[i]!;
+      if (ca.kind !== cb.kind) return false;
+      if (ca.entity.id !== cb.entity.id) return false;
+      if (ca.kind === 'point' && cb.kind === 'point') {
+        if (ca.hit.pointIndex !== cb.hit.pointIndex) return false;
+      }
+      if (ca.kind === 'segment' && cb.kind === 'segment') {
+        if (ca.hit.segmentIndex !== cb.hit.segmentIndex) return false;
+      }
+    }
+    return true;
+  };
 
   const resetDrag = () => {
     mouseDownScreen = null;
@@ -102,6 +152,11 @@ export function createSelectTool(): Tool {
 
       // Decide drag mode at threshold
       if (dragMode === null && distance(screenPos, mouseDownScreen) > DRAG_THRESHOLD) {
+        // Reset cycling state on drag
+        cycleScreenPos = null;
+        cycleCandidates = [];
+        cycleIndex = -1;
+
         if (hitPointOnDown) {
           dragMode = 'move-point';
           useDocumentStore.getState().beginTransaction();
@@ -221,6 +276,7 @@ export function createSelectTool(): Tool {
           }
           useEditorStore.getState().setSelectedSegments([]);
           useEditorStore.getState().setSelectedEntityIds(ids);
+          addLog('info', `Selected ${ids.size} entities`);
         }
       } else if (dragMode === null) {
         // Double-click detection
@@ -232,6 +288,9 @@ export function createSelectTool(): Tool {
         lastClickScreenPos = screenPos;
 
         if (isDoubleClick) {
+          cycleScreenPos = null;
+          cycleCandidates = [];
+          cycleIndex = -1;
           const activeSketch = useDocumentStore.getState().getActiveSketch();
           if (activeSketch) {
             const hit = hitTestEntities(screenPos, activeSketch.entities, ctx.viewport, activeSketch.entities);
@@ -252,35 +311,24 @@ export function createSelectTool(): Tool {
         // Click select (no drag occurred)
         const activeSketch = useDocumentStore.getState().getActiveSketch();
         if (activeSketch) {
-          // Try vertex hit first
-          const pointHit = hitTestPoint(screenPos, activeSketch.entities, ctx.viewport);
-          if (pointHit) {
-            const sp: SelectedPoint = { entityId: pointHit.entityId, pointIndex: pointHit.pointIndex };
-            if (shiftOnDown) {
+          const entities = activeSketch.entities;
+
+          if (shiftOnDown) {
+            // Shift-click toggle logic (unchanged behavior, with logging)
+            const pointHit = hitTestPoint(screenPos, entities, ctx.viewport);
+            if (pointHit) {
+              const sp: SelectedPoint = { entityId: pointHit.entityId, pointIndex: pointHit.pointIndex };
               useEditorStore.getState().toggleSelectedPoint(sp);
+              addLog('info', `Toggle point ${pointHit.pointIndex} on ${pointHit.entityId.slice(0, 6)}`);
             } else {
-              useEditorStore.getState().setSelectedEntityIds(new Set());
-              useEditorStore.getState().setSelectedSegments([]);
-              useEditorStore.getState().setSelectedPoints([sp]);
-            }
-          } else {
-            // Try segment hit
-            const segHit = hitTestSegment(screenPos, activeSketch.entities, ctx.viewport);
-            if (segHit) {
-              if (shiftOnDown) {
+              const segHit = hitTestSegment(screenPos, entities, ctx.viewport);
+              if (segHit) {
                 useEditorStore.getState().toggleSelectedSegment(segHit);
                 useEditorStore.getState().addToSelection([segHit.entityId]);
+                addLog('info', `Toggle segment ${segHit.segmentIndex} on ${segHit.entityId.slice(0, 6)}`);
               } else {
-                useEditorStore.getState().setSelectedPoints([]);
-                useEditorStore.getState().setSelectedSegments([segHit]);
-                useEditorStore.getState().setSelectedEntityIds(new Set([segHit.entityId]));
-              }
-            } else {
-              // Fall back to entity hit
-              const hit = hitTestEntities(screenPos, activeSketch.entities, ctx.viewport, activeSketch.entities);
-              if (hit) {
-                if (shiftOnDown) {
-                  // Toggle entity in/out of selection
+                const hit = hitTestEntities(screenPos, entities, ctx.viewport, entities);
+                if (hit) {
                   const current = new Set(useEditorStore.getState().selectedEntityIds);
                   if (current.has(hit.id)) {
                     current.delete(hit.id);
@@ -288,16 +336,34 @@ export function createSelectTool(): Tool {
                     current.add(hit.id);
                   }
                   useEditorStore.getState().setSelectedEntityIds(current);
-                } else {
-                  useEditorStore.getState().setSelectedPoints([]);
-                  useEditorStore.getState().setSelectedSegments([]);
-                  useEditorStore.getState().setSelectedEntityIds(new Set([hit.id]));
-                }
-              } else {
-                if (!shiftOnDown) {
-                  useEditorStore.getState().clearSelection();
+                  addLog('info', `Toggle entity ${hit.type}_${hit.id.slice(0, 6)}`);
                 }
               }
+            }
+          } else {
+            // Non-shift click: cycling selection
+            const isSamePos = cycleScreenPos && distance(screenPos, cycleScreenPos) < DRAG_THRESHOLD;
+
+            if (isSamePos) {
+              const fresh = hitTestAllCandidates(screenPos, entities, ctx.viewport, entities);
+              if (candidatesMatch(fresh, cycleCandidates)) {
+                cycleIndex = (cycleIndex + 1) % cycleCandidates.length;
+              } else {
+                cycleCandidates = fresh;
+                cycleIndex = 0;
+              }
+            } else {
+              cycleCandidates = hitTestAllCandidates(screenPos, entities, ctx.viewport, entities);
+              cycleIndex = 0;
+              cycleScreenPos = screenPos;
+            }
+
+            if (cycleCandidates.length === 0) {
+              useEditorStore.getState().clearSelection();
+              addLog('info', 'Deselected');
+            } else {
+              applyCandidate(cycleCandidates[cycleIndex]!);
+              logCandidate(cycleCandidates[cycleIndex]!, cycleIndex, cycleCandidates.length);
             }
           }
         }
