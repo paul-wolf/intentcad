@@ -16,6 +16,9 @@ import { getSegmentCount, getSegmentPointIndices, getSegmentBulge } from '@/util
 import { bulgeFromMidpoint, arcIntersectsRect } from '@/utils/arcGeometry';
 import { resolveDimensionEndpoints, resolveDimensionAngleIntersection } from '@/utils/dimensionGeom';
 import type { DimensionEntity } from '@/types/document';
+import { snapPosition, type SnapResult } from '@/snap/snap';
+import { getStyles } from '@/rendering/styles';
+import { SNAP_INDICATOR_RADIUS } from '@/config';
 
 const DRAG_THRESHOLD = 4; // screen pixels before starting drag
 
@@ -49,6 +52,10 @@ export function createSelectTool(): Tool {
   let hitPointOnDown: PointHit | null = null;
   let dragMode: 'box-select' | 'move' | 'move-point' | 'move-dimension' | null = null;
   let lastMoveWorld: Point | null = null;
+
+  // For snapping during entity move
+  let moveAnchorWorld: Point | null = null; // Reference point on entity when drag starts
+  let currentMoveSnap: SnapResult | null = null;
 
   let lastClickTime = 0;
   let lastClickScreenPos: Point = { x: 0, y: 0 };
@@ -111,6 +118,8 @@ export function createSelectTool(): Tool {
     hitPointOnDown = null;
     dragMode = null;
     lastMoveWorld = null;
+    moveAnchorWorld = null;
+    currentMoveSnap = null;
     useEditorStore.getState().setToolState({
       type: 'select',
       dragStart: null,
@@ -172,7 +181,7 @@ export function createSelectTool(): Tool {
       }
     },
 
-    onMouseMove(worldPos: Point, screenPos: Point, _ctx: ToolContext) {
+    onMouseMove(worldPos: Point, screenPos: Point, ctx: ToolContext) {
       if (!mouseDownScreen) return;
 
       // Decide drag mode at threshold
@@ -192,6 +201,16 @@ export function createSelectTool(): Tool {
           } else {
             dragMode = 'move';
             useDocumentStore.getState().beginTransaction('Move entities');
+            // Capture anchor point for snapping (use entity reference point)
+            if (hitEntityOnDown.type === 'circle') {
+              moveAnchorWorld = { ...hitEntityOnDown.center };
+            } else if (hitEntityOnDown.type === 'line' && hitEntityOnDown.points.length > 0) {
+              moveAnchorWorld = { ...hitEntityOnDown.points[0]! };
+            } else if (hitEntityOnDown.type === 'rectangle') {
+              moveAnchorWorld = { ...hitEntityOnDown.center };
+            } else if (hitEntityOnDown.type === 'point') {
+              moveAnchorWorld = { ...hitEntityOnDown.position };
+            }
           }
           const selectedIds = useEditorStore.getState().selectedEntityIds;
           if (!selectedIds.has(hitEntityOnDown.id)) {
@@ -237,12 +256,50 @@ export function createSelectTool(): Tool {
         lastMoveWorld = worldPos;
       }
 
-      if (dragMode === 'move' && lastMoveWorld) {
-        const delta = { x: worldPos.x - lastMoveWorld.x, y: worldPos.y - lastMoveWorld.y };
+      if (dragMode === 'move' && lastMoveWorld && dragStartWorld && moveAnchorWorld) {
+        const doc = useDocumentStore.getState().document;
         const selectedIds = useEditorStore.getState().selectedEntityIds;
-        if (selectedIds.size > 0) {
+        const activeSketchForMove = useDocumentStore.getState().getActiveSketch();
+
+        // Get current anchor position from the actual entity
+        let currentAnchor: Point | null = null;
+        if (hitEntityOnDown && activeSketchForMove) {
+          const entity = activeSketchForMove.entities.find((e) => e.id === hitEntityOnDown!.id);
+          if (entity) {
+            if (entity.type === 'circle') currentAnchor = entity.center;
+            else if (entity.type === 'line' && entity.points.length > 0) currentAnchor = entity.points[0]!;
+            else if (entity.type === 'rectangle') currentAnchor = entity.center;
+            else if (entity.type === 'point') currentAnchor = entity.position;
+          }
+        }
+
+        if (!currentAnchor) {
+          lastMoveWorld = worldPos;
+          return;
+        }
+
+        // Calculate where anchor should be based on total mouse movement from start, then snap
+        const totalMouseDelta = {
+          x: worldPos.x - dragStartWorld.x,
+          y: worldPos.y - dragStartWorld.y,
+        };
+        const targetAnchor = {
+          x: moveAnchorWorld.x + totalMouseDelta.x,
+          y: moveAnchorWorld.y + totalMouseDelta.y,
+        };
+
+        // Snap the target position (exclude selected entities from snap targets)
+        const snap = snapPosition(targetAnchor, ctx.viewport, doc, selectedIds);
+        currentMoveSnap = snap;
+
+        // Calculate delta from current position to snapped target
+        const delta = {
+          x: snap.point.x - currentAnchor.x,
+          y: snap.point.y - currentAnchor.y,
+        };
+
+        if (selectedIds.size > 0 && (delta.x !== 0 || delta.y !== 0)) {
           // Filter out fixed entities
-          const activeSketchForMove = useDocumentStore.getState().getActiveSketch();
           const fixedIds = new Set(
             activeSketchForMove?.constraints
               .filter((c) => c.type === 'fixed')
@@ -718,6 +775,16 @@ export function createSelectTool(): Tool {
 
     renderOverlay(renderer: Renderer, viewport: Viewport) {
       const ts = useEditorStore.getState().toolState;
+      const palette = getThemePalette();
+
+      // Snap indicator during entity move
+      if (dragMode === 'move' && currentMoveSnap) {
+        const snapScreen = viewport.worldToScreen(currentMoveSnap.point);
+        const styles = getStyles(palette);
+        renderer.drawCircle(snapScreen, SNAP_INDICATOR_RADIUS, styles.snap);
+      }
+
+      // Box selection rectangle
       if (ts.type !== 'select' || !ts.dragStart || !ts.dragEnd) return;
 
       const a = viewport.worldToScreen(ts.dragStart);
@@ -729,7 +796,6 @@ export function createSelectTool(): Tool {
         y: Math.abs(b.y - a.y),
       };
 
-      const palette = getThemePalette();
       renderer.drawRect(topLeft, size, palette.selectionRect, {
         color: palette.selectionRectBorder,
         width: 1,

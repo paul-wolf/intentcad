@@ -14,11 +14,13 @@ export interface SnapResult {
 /**
  * Snap position with priority: endpoint > grid.
  * Distances are compared in screen space.
+ * @param excludeEntityIds - Optional set of entity IDs to exclude from snap targets (e.g., when moving entities)
  */
 export function snapPosition(
   worldPos: Point,
   viewport: Viewport,
   document: Document,
+  excludeEntityIds?: Set<string>,
 ): SnapResult {
   const screenPos = viewport.worldToScreen(worldPos);
 
@@ -31,6 +33,8 @@ export function snapPosition(
   for (const sketch of document.sketches) {
     if (!sketch.visible || sketch.suppressed) continue;
     for (const entity of sketch.entities) {
+      // Skip excluded entities (e.g., entities being moved)
+      if (excludeEntityIds?.has(entity.id)) continue;
       if (entity.type === 'line') {
         for (let i = 0; i < entity.points.length; i++) {
           const pt = entity.points[i]!;
@@ -95,6 +99,8 @@ export function snapPosition(
   for (const sketch of document.sketches) {
     if (!sketch.visible || sketch.suppressed) continue;
     for (const entity of sketch.entities) {
+      // Skip excluded entities (e.g., entities being moved)
+      if (excludeEntityIds?.has(entity.id)) continue;
       if (entity.type === 'line') {
         const count = getSegmentCount(entity);
         for (let s = 0; s < count; s++) {
