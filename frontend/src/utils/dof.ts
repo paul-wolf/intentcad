@@ -10,6 +10,7 @@ function baseDoF(entity: Entity): number {
       // Polygon is a rigid body: center (x,y) + rotation + scale = 4 DoF
       if ((entity as LineEntity).polygonCenter) return 4;
       return 2 * entity.points.length;
+    case 'bezier': return 8; // 4 points x 2 coordinates
     case 'dimension': return 0;
   }
 }

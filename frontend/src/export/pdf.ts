@@ -47,6 +47,10 @@ function computeWorldBounds(doc: Document): { min: Point; max: Point } {
         case 'point':
           expandPoint(entity.position);
           break;
+        case 'bezier':
+          // Convex hull of control points contains the curve
+          for (const cp of entity.controlPoints) expandPoint(cp);
+          break;
         case 'dimension':
           // Dimensions extend outward by their offset; account for clearance
           // We can't resolve the exact geometry here cheaply, but the offset

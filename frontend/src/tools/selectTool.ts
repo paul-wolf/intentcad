@@ -8,6 +8,7 @@ import { hitTestEntities, hitTestPoint, hitTestSegment, hitTestAllCandidates } f
 import type { PointHit, SelectionCandidate } from '@/hittest/hitTest';
 import { addLog } from '@/stores/logStore';
 import { segmentIntersectsRect, circleIntersectsRect, rectIntersectsRect } from '@/utils/geometry';
+import { bezierIntersectsRect } from '@/utils/bezierGeometry';
 import { getThemePalette } from '@/theme';
 import { distance } from '@/utils/geometry';
 import { requestSave } from '@/api/autoSave';
@@ -210,6 +211,8 @@ export function createSelectTool(): Tool {
               moveAnchorWorld = { ...hitEntityOnDown.center };
             } else if (hitEntityOnDown.type === 'point') {
               moveAnchorWorld = { ...hitEntityOnDown.position };
+            } else if (hitEntityOnDown.type === 'bezier') {
+              moveAnchorWorld = { ...hitEntityOnDown.controlPoints[0] };
             }
           }
           const selectedIds = useEditorStore.getState().selectedEntityIds;
@@ -270,6 +273,7 @@ export function createSelectTool(): Tool {
             else if (entity.type === 'line' && entity.points.length > 0) currentAnchor = entity.points[0]!;
             else if (entity.type === 'rectangle') currentAnchor = entity.center;
             else if (entity.type === 'point') currentAnchor = entity.position;
+            else if (entity.type === 'bezier') currentAnchor = entity.controlPoints[0];
           }
         }
 
@@ -414,6 +418,18 @@ export function createSelectTool(): Tool {
               const px = entity.position.x;
               const py = entity.position.y;
               if (px >= minX && px <= maxX && py >= minY && py <= maxY) {
+                ids.add(entity.id);
+              }
+            }
+            if (entity.type === 'bezier') {
+              if (bezierIntersectsRect(
+                entity.controlPoints[0],
+                entity.controlPoints[1],
+                entity.controlPoints[2],
+                entity.controlPoints[3],
+                { x: minX, y: minY },
+                { x: maxX, y: maxY },
+              )) {
                 ids.add(entity.id);
               }
             }

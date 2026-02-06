@@ -42,6 +42,16 @@ export function createMirroredEntity(
     };
   }
 
+  if (source.type === 'bezier') {
+    return {
+      ...source,
+      id,
+      controlPoints: source.controlPoints.map((p) => reflectPoint(p, lineA, lineB)) as [Point, Point, Point, Point],
+      sourceId: source.id,
+      sourceTransform: transform,
+    };
+  }
+
   if (source.type === 'rectangle') {
     // Check if mirror axis is axis-aligned (horizontal or vertical)
     const isHorizontal = lineA.y === lineB.y;
@@ -116,6 +126,16 @@ export function createRotatedEntity(
       ...source,
       id,
       position: rotatePoint(source.position, center, angle),
+      sourceId: source.id,
+      sourceTransform: transform,
+    };
+  }
+
+  if (source.type === 'bezier') {
+    return {
+      ...source,
+      id,
+      controlPoints: source.controlPoints.map((p) => rotatePoint(p, center, angle)) as [Point, Point, Point, Point],
       sourceId: source.id,
       sourceTransform: transform,
     };
@@ -205,6 +225,16 @@ export function createTranslatedEntity(
       ...source,
       id,
       position: { x: source.position.x + dx, y: source.position.y + dy },
+      sourceId: source.id,
+      sourceTransform: transform,
+    };
+  }
+
+  if (source.type === 'bezier') {
+    return {
+      ...source,
+      id,
+      controlPoints: source.controlPoints.map((p) => ({ x: p.x + dx, y: p.y + dy })) as [Point, Point, Point, Point],
       sourceId: source.id,
       sourceTransform: transform,
     };

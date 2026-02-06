@@ -88,6 +88,14 @@ export function getEntityRepresentativePoint(entity: Entity): Point | null {
       }
       return { x: sx / entity.points.length, y: sy / entity.points.length };
     }
+    case 'bezier': {
+      // Evaluate at t=0.5: (1/8)P0 + (3/8)P1 + (3/8)P2 + (1/8)P3
+      const [cp0, cp1, cp2, cp3] = entity.controlPoints;
+      return {
+        x: cp0.x / 8 + 3 * cp1.x / 8 + 3 * cp2.x / 8 + cp3.x / 8,
+        y: cp0.y / 8 + 3 * cp1.y / 8 + 3 * cp2.y / 8 + cp3.y / 8,
+      };
+    }
     case 'dimension':
       return null;
   }

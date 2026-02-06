@@ -89,6 +89,21 @@ export function snapPosition(
           }
         }
       }
+      if (entity.type === 'bezier') {
+        // Snap to on-curve endpoints only (P0 and P3), not handles
+        const endpoints = [entity.controlPoints[0], entity.controlPoints[3]];
+        for (let i = 0; i < endpoints.length; i++) {
+          const pt = endpoints[i]!;
+          const sp = viewport.worldToScreen(pt);
+          const d = distance(sp, screenPos);
+          if (d < bestDist) {
+            bestDist = d;
+            bestEndpoint = pt;
+            bestEntityId = entity.id;
+            bestPointIndex = i === 0 ? 0 : 3;
+          }
+        }
+      }
     }
   }
 

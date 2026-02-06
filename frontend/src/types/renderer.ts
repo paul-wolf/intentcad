@@ -33,6 +33,7 @@ export interface Renderer {
   drawRect(topLeft: Point, size: Point, fillColor: string, strokeStyle?: LineStyle): void;
   drawText(text: string, position: Point, style: TextStyle): void;
   measureText(text: string, style: TextStyle): { width: number; height: number };
+  drawBezier(p0: Point, p1: Point, p2: Point, p3: Point, style: LineStyle): void;
   setGlobalAlpha(alpha: number): void;
   resetGlobalAlpha(): void;
 }

@@ -48,6 +48,7 @@ const ENTITY_TOOLS: { type: ToolType; label: string; icon?: ReactNode; shortcut:
   { type: 'rectangle', label: 'Rect', icon: <ToolIcon><rect x="2.5" y="4" width="11" height="8" /><circle cx="8" cy="8" r="1.5" fill="currentColor" stroke="none" /></ToolIcon>, shortcut: 'r' },
   { type: 'rect2pt', label: '2pt Rect', icon: <ToolIcon><rect x="2.5" y="4" width="11" height="8" /><circle cx="2.5" cy="4" r="1.5" fill="currentColor" stroke="none" /><circle cx="13.5" cy="12" r="1.5" fill="currentColor" stroke="none" /></ToolIcon>, shortcut: 'Shift+R' },
   { type: 'polygon', label: 'Polygon', icon: <ToolIcon><polygon points="8,1.5 13.6,5 12.5,11.5 3.5,11.5 2.4,5" /></ToolIcon>, shortcut: 'P — ↑↓ sides' },
+  { type: 'bezier', label: 'Bezier', icon: <ToolIcon><path d="M2 13 C5 1, 11 15, 14 3" fill="none" /><line x1="2" y1="13" x2="5" y2="1" strokeDasharray="1.5 1" strokeWidth="1" /><line x1="14" y1="3" x2="11" y2="15" strokeDasharray="1.5 1" strokeWidth="1" /><circle cx="5" cy="1" r="1.2" fill="currentColor" stroke="none" /><circle cx="11" cy="15" r="1.2" fill="currentColor" stroke="none" /></ToolIcon>, shortcut: 's' },
 ];
 
 const MEASURE_TOOLS: { type: ToolType; label: string; icon?: ReactNode; shortcut: string }[] = [

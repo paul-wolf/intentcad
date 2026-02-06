@@ -67,6 +67,8 @@ function defaultToolState(tool: ToolType): ToolState {
       return { type: 'point' };
     case 'dimension':
       return { type: 'dimension' };
+    case 'bezier':
+      return { type: 'bezier', points: [] };
   }
 }
 

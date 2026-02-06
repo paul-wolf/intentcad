@@ -66,7 +66,16 @@ export interface DimensionEntity {
   expression?: string;
 }
 
-export type Entity = LineEntity | CircleEntity | RectangleEntity | PointEntity | DimensionEntity;
+export interface BezierEntity {
+  id: string;
+  type: 'bezier';
+  controlPoints: [Point, Point, Point, Point];
+  construction?: boolean;
+  sourceId?: string;
+  sourceTransform?: SourceTransform;
+}
+
+export type Entity = LineEntity | CircleEntity | RectangleEntity | PointEntity | DimensionEntity | BezierEntity;
 
 export interface FixedConstraint {
   id: string;

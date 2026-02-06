@@ -317,6 +317,39 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
         </FieldGroup>
       )}
 
+      {entity.type === 'bezier' && (
+        <FieldGroup label="Control Points">
+          {(['P0 (start)', 'P1 (handle)', 'P2 (handle)', 'P3 (end)'] as const).map((label, i) => {
+            const pt = entity.controlPoints[i]!;
+            return (
+              <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginBottom: '4px' }}>
+                <span style={{ fontSize: '10px', color: palette.textSecondary }}>{label}</span>
+                <NumberInput
+                  label="X"
+                  value={pt.x}
+                  disabled={isDerived}
+                  onChange={(x) => {
+                    const newCPs = [...entity.controlPoints] as [import('@/types/document').Point, import('@/types/document').Point, import('@/types/document').Point, import('@/types/document').Point];
+                    newCPs[i] = { ...pt, x };
+                    update({ ...entity, controlPoints: newCPs });
+                  }}
+                />
+                <NumberInput
+                  label="Y"
+                  value={pt.y}
+                  disabled={isDerived}
+                  onChange={(y) => {
+                    const newCPs = [...entity.controlPoints] as [import('@/types/document').Point, import('@/types/document').Point, import('@/types/document').Point, import('@/types/document').Point];
+                    newCPs[i] = { ...pt, y };
+                    update({ ...entity, controlPoints: newCPs });
+                  }}
+                />
+              </div>
+            );
+          })}
+        </FieldGroup>
+      )}
+
       {entity.type === 'dimension' && (
         <>
           {dimensionValue != null && (

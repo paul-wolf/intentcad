@@ -99,6 +99,25 @@ export class Canvas2DRenderer implements Renderer {
     return { width: metrics.width, height: style.fontSize };
   }
 
+  drawBezier(p0: Point, p1: Point, p2: Point, p3: Point, style: LineStyle): void {
+    const { ctx } = this;
+    if (style.dash) ctx.setLineDash(style.dash);
+    ctx.beginPath();
+    ctx.moveTo(p0.x, p0.y);
+    ctx.bezierCurveTo(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y);
+    ctx.strokeStyle = style.color;
+    ctx.lineWidth = style.width;
+    if (style.opacity !== undefined) {
+      const prev = ctx.globalAlpha;
+      ctx.globalAlpha = style.opacity;
+      ctx.stroke();
+      ctx.globalAlpha = prev;
+    } else {
+      ctx.stroke();
+    }
+    if (style.dash) ctx.setLineDash([]);
+  }
+
   setGlobalAlpha(alpha: number): void {
     this.ctx.globalAlpha = alpha;
   }

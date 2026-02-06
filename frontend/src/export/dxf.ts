@@ -188,6 +188,32 @@ export function exportDocumentToDxf(doc: Document): string {
         w(String(entity.position.y));
         w('30');
         w('0.0');
+      } else if (entity.type === 'bezier') {
+        // DXF SPLINE: degree=3, clamped knot vector, 4 control points
+        w('0');
+        w('SPLINE');
+        w('8');
+        w(sketch.name);
+        w('70');
+        w('8'); // flag: planar
+        w('71');
+        w('3'); // degree
+        w('72');
+        w('8'); // number of knots
+        w('73');
+        w('4'); // number of control points
+        // Knot vector: clamped [0,0,0,0,1,1,1,1]
+        for (let k = 0; k < 4; k++) { w('40'); w('0.0'); }
+        for (let k = 0; k < 4; k++) { w('40'); w('1.0'); }
+        // Control points
+        for (const cp of entity.controlPoints) {
+          w('10');
+          w(String(cp.x));
+          w('20');
+          w(String(cp.y));
+          w('30');
+          w('0.0');
+        }
       }
       // Dimensions are not exported (annotations, not geometry)
     }

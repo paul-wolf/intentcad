@@ -234,6 +234,9 @@ function snapshotPositions(entityMap: Map<string, Entity>): Float64Array {
       case 'point':
         values.push(e.position.x, e.position.y);
         break;
+      case 'bezier':
+        for (const p of e.controlPoints) { values.push(p.x, p.y); }
+        break;
     }
   }
   return new Float64Array(values);
@@ -341,6 +344,11 @@ function translateEntity(entity: Entity, dx: number, dy: number): Entity | null 
       return { ...entity, center: { x: entity.center.x + dx, y: entity.center.y + dy } };
     case 'point':
       return { ...entity, position: { x: entity.position.x + dx, y: entity.position.y + dy } };
+    case 'bezier':
+      return {
+        ...entity,
+        controlPoints: entity.controlPoints.map((p) => ({ x: p.x + dx, y: p.y + dy })) as [import('@/types/document').Point, import('@/types/document').Point, import('@/types/document').Point, import('@/types/document').Point],
+      };
     default:
       return null;
   }

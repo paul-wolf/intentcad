@@ -33,6 +33,8 @@ export function getEntityPoint(entity: Entity, pointIndex: number): Point | null
         return entity.polygonCenter;
       }
       return entity.points[pointIndex] ?? null;
+    case 'bezier':
+      return (pointIndex >= 0 && pointIndex < 4) ? entity.controlPoints[pointIndex] ?? null : null;
     default:
       return null;
   }
@@ -81,6 +83,12 @@ export function setEntityPoint(entity: Entity, pointIndex: number, pt: Point): E
       const newHeight = Math.abs(hh + (pointIndex === 1 || pointIndex === 2 ? dy : -dy)) * 2;
       if (newWidth <= 0 || newHeight <= 0) return null;
       return { ...entity, width: newWidth, height: newHeight };
+    }
+    case 'bezier': {
+      if (pointIndex < 0 || pointIndex >= 4) return null;
+      const newCPs = [...entity.controlPoints] as [import('@/types/document').Point, import('@/types/document').Point, import('@/types/document').Point, import('@/types/document').Point];
+      newCPs[pointIndex] = pt;
+      return { ...entity, controlPoints: newCPs };
     }
     case 'line': {
       // Polygon: translate the entire polygon rigidly to preserve regular shape
@@ -140,6 +148,8 @@ export function getEntityPoints(entity: Entity): [number, Point][] {
       }
       return pts;
     }
+    case 'bezier':
+      return entity.controlPoints.map((p, i) => [i, p] as [number, Point]);
     default:
       return [];
   }

@@ -5,6 +5,7 @@ import { computeAngleDimensionGeom } from '@/rendering/dimensionRenderer';
 import { HIT_TOL } from '@/config';
 import { getSegmentCount, getSegmentPointIndices, getSegmentBulge } from '@/utils/lineSegments';
 import { arcFromBulge, pointToArcDist, arcMidpoint } from '@/utils/arcGeometry';
+import { pointToBezierDist } from '@/utils/bezierGeometry';
 
 export interface PointHit {
   entityId: string;
@@ -102,6 +103,16 @@ export function hitTestPoint(
           best = { entityId: entity.id, pointIndex: idx };
         }
       }
+    } else if (entity.type === 'bezier') {
+      // All 4 control points are hittable
+      for (let i = 0; i < 4; i++) {
+        const sp = viewport.worldToScreen(entity.controlPoints[i]!);
+        const d = distance(screenPos, sp);
+        if (d < bestDist) {
+          bestDist = d;
+          best = { entityId: entity.id, pointIndex: i };
+        }
+      }
     }
   }
 
@@ -177,6 +188,16 @@ export function hitTestEntities(
     } else if (entity.type === 'point') {
       const sp = viewport.worldToScreen(entity.position);
       const d = distance(screenPos, sp);
+      if (d < bestDist) {
+        bestDist = d;
+        best = entity;
+      }
+    } else if (entity.type === 'bezier') {
+      const sp0 = viewport.worldToScreen(entity.controlPoints[0]);
+      const sp1 = viewport.worldToScreen(entity.controlPoints[1]);
+      const sp2 = viewport.worldToScreen(entity.controlPoints[2]);
+      const sp3 = viewport.worldToScreen(entity.controlPoints[3]);
+      const d = pointToBezierDist(screenPos, sp0, sp1, sp2, sp3);
       if (d < bestDist) {
         bestDist = d;
         best = entity;
@@ -472,6 +493,15 @@ export function hitTestAllCandidates(
           bestPointHit = { entityId: entity.id, pointIndex: idx };
         }
       }
+    } else if (entity.type === 'bezier') {
+      for (let i = 0; i < 4; i++) {
+        const sp = viewport.worldToScreen(entity.controlPoints[i]!);
+        const d = distance(screenPos, sp);
+        if (d < bestPointDist) {
+          bestPointDist = d;
+          bestPointHit = { entityId: entity.id, pointIndex: i };
+        }
+      }
     }
 
     // --- 2. Check segments ---
@@ -568,6 +598,12 @@ export function hitTestAllCandidates(
     } else if (entity.type === 'point') {
       const sp = viewport.worldToScreen(entity.position);
       bodyDist = distance(screenPos, sp);
+    } else if (entity.type === 'bezier') {
+      const sp0 = viewport.worldToScreen(entity.controlPoints[0]);
+      const sp1 = viewport.worldToScreen(entity.controlPoints[1]);
+      const sp2 = viewport.worldToScreen(entity.controlPoints[2]);
+      const sp3 = viewport.worldToScreen(entity.controlPoints[3]);
+      bodyDist = pointToBezierDist(screenPos, sp0, sp1, sp2, sp3);
     } else if (entity.type === 'dimension' && allEntities) {
       // Use hitTestEntities logic for dimensions — just check if it would be hit
       const dimHit = hitTestEntities(screenPos, [entity], viewport, allEntities);

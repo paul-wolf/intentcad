@@ -49,6 +49,15 @@ def validate_entity(obj: object) -> list[str]:
             errors.append("Entity.position must be a Point object")
         else:
             errors.extend([f"Entity.position: {e}" for e in validate_point(position)])
+    elif obj.get("type") == "bezier":
+        control_points = obj.get("controlPoints")
+        if not isinstance(control_points, list) or len(control_points) != 4:
+            errors.append("Entity.controlPoints must be an array of exactly 4 points")
+        else:
+            for i, pt in enumerate(control_points):
+                errors.extend(
+                    [f"Entity.controlPoints[{i}]: {e}" for e in validate_point(pt)]
+                )
     elif obj.get("type") == "dimension":
         if "targetEntityId" not in obj or not isinstance(obj["targetEntityId"], str):
             errors.append("Entity.targetEntityId must be a string")

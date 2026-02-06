@@ -379,6 +379,15 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                       },
                     };
                   }
+                  if (e.type === 'bezier') {
+                    return {
+                      ...e,
+                      controlPoints: e.controlPoints.map((p) => ({
+                        x: p.x + delta.x,
+                        y: p.y + delta.y,
+                      })) as [import('@/types/document').Point, import('@/types/document').Point, import('@/types/document').Point, import('@/types/document').Point],
+                    };
+                  }
                   return e;
                 }), sk.constraints, { movedIds: idSet }).entities,
               }
@@ -435,6 +444,13 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                     const newHeight = Math.abs(hh + (pointIndex === 1 || pointIndex === 2 ? delta.y : -delta.y)) * 2;
                     if (newWidth <= 0 || newHeight <= 0) return e;
                     return { ...e, width: newWidth, height: newHeight };
+                  }
+                  if (e.type === 'bezier') {
+                    if (e.sourceId) return e; // locked
+                    if (pointIndex < 0 || pointIndex >= 4) return e;
+                    const newCPs = [...e.controlPoints] as [import('@/types/document').Point, import('@/types/document').Point, import('@/types/document').Point, import('@/types/document').Point];
+                    newCPs[pointIndex] = { x: newCPs[pointIndex]!.x + delta.x, y: newCPs[pointIndex]!.y + delta.y };
+                    return { ...e, controlPoints: newCPs };
                   }
                   if (e.type !== 'line') return e;
                   if (e.sourceId) return e; // locked
@@ -540,7 +556,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                 entities: sk.entities.map((e) => {
                   if (!idSet.has(e.id)) return e;
                   if ('sourceId' in e && e.sourceId) return e; // locked
-                  if (e.type === 'line' || e.type === 'circle' || e.type === 'rectangle' || e.type === 'point') {
+                  if (e.type === 'line' || e.type === 'circle' || e.type === 'rectangle' || e.type === 'point' || e.type === 'bezier') {
                     return { ...e, construction: !e.construction };
                   }
                   return e;

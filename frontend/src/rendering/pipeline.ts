@@ -215,6 +215,29 @@ function renderActiveSketch(ctx: RenderContext) {
         }
         break;
       }
+      case 'bezier': {
+        const isConstrained = dofMap.get(entity.id) === 0;
+        const style = pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
+        renderEntity(renderer, viewport, entity, style);
+        // When selected, show control handle lines and all 4 control points
+        if (isSelected) {
+          const [cp0, cp1, cp2, cp3] = entity.controlPoints;
+          const s0 = viewport.worldToScreen(cp0);
+          const s1 = viewport.worldToScreen(cp1);
+          const s2 = viewport.worldToScreen(cp2);
+          const s3 = viewport.worldToScreen(cp3);
+          // Dashed handle lines P0→P1 and P3→P2
+          const handleStyle: LineStyle = { ...style, dash: [4, 3] };
+          renderer.drawLine(s0, s1, handleStyle);
+          renderer.drawLine(s3, s2, handleStyle);
+          // All 4 control point dots
+          renderer.fillCircle(s0, ENDPOINT_RADIUS, style.color);
+          renderer.fillCircle(s1, ENDPOINT_RADIUS, style.color);
+          renderer.fillCircle(s2, ENDPOINT_RADIUS, style.color);
+          renderer.fillCircle(s3, ENDPOINT_RADIUS, style.color);
+        }
+        break;
+      }
       case 'dimension': {
         const target = activeSketch.entities.find(
           (e) => e.id === entity.targetEntityId,
@@ -340,6 +363,10 @@ function renderDimensionOverlay(ctx: RenderContext) {
       drawSegmentLabel(renderer, viewport, { x: c.x - hw, y: c.y + hh }, { x: c.x + hw, y: c.y + hh }, styles.dimensionOverlayText, ctx.palette.background);
       // Height label along right edge
       drawSegmentLabel(renderer, viewport, { x: c.x + hw, y: c.y + hh }, { x: c.x + hw, y: c.y - hh }, styles.dimensionOverlayText, ctx.palette.background);
+    }
+    if (entity.type === 'bezier') {
+      // Show chord length (P0 to P3)
+      drawSegmentLabel(renderer, viewport, entity.controlPoints[0], entity.controlPoints[3], styles.dimensionOverlayText, ctx.palette.background);
     }
   }
 }
@@ -520,6 +547,18 @@ function renderEntity(
     case 'point': {
       const sp = viewport.worldToScreen(entity.position);
       renderer.fillCircle(sp, ENDPOINT_RADIUS, style.color);
+      break;
+    }
+    case 'bezier': {
+      const [cp0, cp1, cp2, cp3] = entity.controlPoints;
+      const s0 = viewport.worldToScreen(cp0);
+      const s1 = viewport.worldToScreen(cp1);
+      const s2 = viewport.worldToScreen(cp2);
+      const s3 = viewport.worldToScreen(cp3);
+      renderer.drawBezier(s0, s1, s2, s3, style);
+      // Endpoint dots (P0 and P3)
+      renderer.fillCircle(s0, ENDPOINT_RADIUS, style.color);
+      renderer.fillCircle(s3, ENDPOINT_RADIUS, style.color);
       break;
     }
   }

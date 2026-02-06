@@ -17,6 +17,7 @@ import { createPolygonTool } from '@/tools/polygonTool';
 import { createPointTool } from '@/tools/pointTool';
 import { createDimensionTool } from '@/tools/dimensionTool';
 import { createRect2ptTool } from '@/tools/rect2ptTool';
+import { createBezierTool } from '@/tools/bezierTool';
 import { startAutoSave, setBackendId, getBackendId } from '@/api/autoSave';
 import { api } from '@/api/client';
 import { migrateDocument } from '@/utils/document';
@@ -76,6 +77,8 @@ export function EditorPage() {
         return createSelectTool();
       case 'dimension':
         return createDimensionTool();
+      case 'bezier':
+        return createBezierTool();
     }
   }, [activeTool]);
 
@@ -114,6 +117,7 @@ export function EditorPage() {
       if (e.key === 'R') setActiveTool('rect2pt');
       if (e.key === 'p' || e.key === 'P') setActiveTool('polygon');
       if (e.key === 'd' || e.key === 'D') setActiveTool('dimension');
+      if (e.key === 's' || e.key === 'S') setActiveTool('bezier');
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
