@@ -845,16 +845,24 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
     if (!sketch) return;
 
+    // Prevent self-referential constraint (same entity and same point)
+    if (pt1.entityId === pt2.entityId && pt1.pointIndex === pt2.pointIndex) {
+      addLog('warn', 'Cannot constrain a point to itself');
+      return;
+    }
+
     const e1 = sketch.entities.find((e) => e.id === pt1.entityId);
     const e2 = sketch.entities.find((e) => e.id === pt2.entityId);
     if (!e1 || !e2) return;
     if (e1.type === 'dimension' || e2.type === 'dimension') return;
 
-    // Check if a coincident constraint already exists between these two entities
+    // Check if a coincident constraint already exists between these exact points
     const existing = sketch.constraints.find((c) =>
       c.type === 'coincident' &&
-      ((c.entityId === pt1.entityId && c.targetEntityId === pt2.entityId) ||
-       (c.entityId === pt2.entityId && c.targetEntityId === pt1.entityId)),
+      ((c.entityId === pt1.entityId && c.pointIndex === pt1.pointIndex &&
+        c.targetEntityId === pt2.entityId && c.targetPointIndex === pt2.pointIndex) ||
+       (c.entityId === pt2.entityId && c.pointIndex === pt2.pointIndex &&
+        c.targetEntityId === pt1.entityId && c.targetPointIndex === pt1.pointIndex)),
     );
 
     if (existing) {
