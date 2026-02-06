@@ -1,3 +1,4 @@
+import { useNavigate } from 'react-router-dom';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useUIStateStore } from '@/stores/uiStateStore';
@@ -7,7 +8,8 @@ import { exportDocumentToPdf } from '@/export/pdf';
 import { downloadTextFile, downloadBlob } from '@/export/download';
 import { getEntityPoint, getEntityPoints } from '@/utils/entityPoints';
 import { getSegmentCount } from '@/utils/lineSegments';
-import { requestSave } from '@/api/autoSave';
+import { requestSave, getBackendId } from '@/api/autoSave';
+import { partApi } from '@/api/client';
 import type { ToolType } from '@/types/editor';
 import type { ThemePalette } from '@/theme';
 import type { ReactNode } from 'react';
@@ -85,6 +87,7 @@ function ToolButtons({ tools, activeTool, setActiveTool, palette }: { tools: typ
 }
 
 export function Toolbar() {
+  const navigate = useNavigate();
   const activeTool = useEditorStore((s) => s.activeTool);
   const setActiveTool = useEditorStore((s) => s.setActiveTool);
   const drawerOpen = useUIStateStore((s) => s.drawerOpen);
@@ -576,6 +579,36 @@ export function Toolbar() {
         Fit All
       </button>
       <div style={{ flex: 1 }} />
+      <button
+        onClick={async () => {
+          const backendId = getBackendId();
+          if (!backendId) return;
+          try {
+            const saved = await partApi.createPart(doc.name + ' Part', {
+              id: crypto.randomUUID(),
+              name: doc.name + ' Part',
+              documentId: backendId,
+              features: [],
+            });
+            navigate(`/part/${saved.id}`);
+          } catch (err) {
+            console.error('Failed to create part:', err);
+          }
+        }}
+        style={{
+          padding: '4px 12px',
+          border: `1px solid ${palette.inputBorder}`,
+          borderRadius: '4px',
+          background: palette.primaryBtn,
+          color: '#fff',
+          cursor: 'pointer',
+          fontSize: '13px',
+        }}
+        title="Create a new 3D Part from this sketch"
+      >
+        New Part
+      </button>
+      <Sep color={palette.border} />
       <button
         onClick={() => {
           const dxf = exportDocumentToDxf(doc);

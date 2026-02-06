@@ -134,7 +134,9 @@ export function createSelectTool(): Tool {
       // Pick-center mode for circular copy
       const editorState = useEditorStore.getState();
       if (editorState.circularCopyPickingCenter && editorState.circularCopyEntityIds) {
-        editorState.setCircularCopyCenter(worldPos);
+        const doc = useDocumentStore.getState().document;
+        const snap = snapPosition(worldPos, ctx.viewport, doc);
+        editorState.setCircularCopyCenter(snap.point);
         return;
       }
 
@@ -732,6 +734,17 @@ export function createSelectTool(): Tool {
               requestSave();
             }
           }
+        }
+      }
+      if (e.key === 'J' && e.shiftKey) {
+        const ids = useEditorStore.getState().selectedEntityIds;
+        if (ids.size >= 2) {
+          useDocumentStore.getState().beginTransaction('Join lines');
+          const newId = useDocumentStore.getState().joinEntities([...ids]);
+          if (newId) {
+            useEditorStore.getState().setSelectedEntityIds(new Set([newId]));
+          }
+          requestSave();
         }
       }
       if (e.key === 'w' || e.key === 'W') {

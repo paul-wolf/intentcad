@@ -59,3 +59,47 @@ export const api = {
     return request(`/documents/${id}`, { method: 'DELETE' });
   },
 };
+
+export interface PartListItem {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PartFull {
+  id: string;
+  name: string;
+  data: Record<string, unknown>;
+  history: unknown;
+  created_at: string;
+  updated_at: string;
+}
+
+export const partApi = {
+  listParts(): Promise<PartListItem[]> {
+    return request('/parts/');
+  },
+
+  getPart(id: string): Promise<PartFull> {
+    return request(`/parts/${id}`);
+  },
+
+  createPart(name: string, data: Record<string, unknown>): Promise<PartFull> {
+    return request('/parts/', {
+      method: 'POST',
+      body: JSON.stringify({ name, data }),
+    });
+  },
+
+  updatePart(id: string, payload: { name?: string; data?: Record<string, unknown>; history?: unknown }): Promise<PartFull> {
+    return request(`/parts/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  deletePart(id: string): Promise<void> {
+    return request(`/parts/${id}`, { method: 'DELETE' });
+  },
+};

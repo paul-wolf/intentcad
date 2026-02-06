@@ -77,6 +77,20 @@ export interface BezierEntity {
 
 export type Entity = LineEntity | CircleEntity | RectangleEntity | PointEntity | DimensionEntity | BezierEntity;
 
+/** Check if a line entity is a closed profile suitable for extrusion.
+ *  Handles both explicit `closed: true` and implicit closure (first == last point). */
+export function isClosedProfile(e: LineEntity): boolean {
+  if (e.construction) return false;
+  if (e.points.length < 3) return false;
+  if (e.closed) return true;
+  // Implicit closure: first point equals last point
+  const first = e.points[0]!;
+  const last = e.points[e.points.length - 1]!;
+  const dx = first.x - last.x;
+  const dy = first.y - last.y;
+  return dx * dx + dy * dy < 0.01;
+}
+
 export interface FixedConstraint {
   id: string;
   type: 'fixed';

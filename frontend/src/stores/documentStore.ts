@@ -93,6 +93,9 @@ interface DocumentStore {
   toggleClosed(entityIds: string[]): void;
   setClosed(entityId: string, closed: boolean): void;
 
+  // Join lines
+  joinEntities(entityIds: string[]): string | null;
+
   // Entity replacement
   updateEntity(entityId: string, updatedEntity: Entity): void;
 
@@ -1490,6 +1493,135 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
         ),
       },
     });
+  },
+
+  joinEntities(entityIds) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return null;
+
+    // Collect only non-construction line entities from the selection
+    const lineEntities = entityIds
+      .map((id) => sketch.entities.find((e) => e.id === id))
+      .filter((e): e is Entity & { type: 'line' } => !!e && e.type === 'line' && !e.construction);
+
+    if (lineEntities.length < 2) {
+      addLog('warn', 'Need at least 2 line entities to join');
+      return null;
+    }
+
+    // Each line entity contributes segments as [start, end] point pairs
+    // For multi-point lines, treat as one chain: first point is start, last is end
+    type Chain = { points: Point[]; used: boolean };
+    const chains: Chain[] = lineEntities.map((e) => ({
+      points: [...e.points],
+      used: false,
+    }));
+
+    const TOLERANCE = 1.0;
+    function ptsMatch(a: Point, b: Point): boolean {
+      const dx = a.x - b.x, dy = a.y - b.y;
+      return dx * dx + dy * dy < TOLERANCE * TOLERANCE;
+    }
+
+    // Start with the first chain
+    chains[0]!.used = true;
+    const result: Point[] = [...chains[0]!.points];
+
+    // Repeatedly find a chain that connects to the end or start of the result
+    let progress = true;
+    while (progress) {
+      progress = false;
+      for (const chain of chains) {
+        if (chain.used) continue;
+        const chainStart = chain.points[0]!;
+        const chainEnd = chain.points[chain.points.length - 1]!;
+        const resultStart = result[0]!;
+        const resultEnd = result[result.length - 1]!;
+
+        if (ptsMatch(resultEnd, chainStart)) {
+          // Append chain (skip first point, it's the shared endpoint)
+          result.push(...chain.points.slice(1));
+          chain.used = true;
+          progress = true;
+        } else if (ptsMatch(resultEnd, chainEnd)) {
+          // Append reversed chain
+          const reversed = [...chain.points].reverse();
+          result.push(...reversed.slice(1));
+          chain.used = true;
+          progress = true;
+        } else if (ptsMatch(resultStart, chainEnd)) {
+          // Prepend chain (skip last point)
+          result.unshift(...chain.points.slice(0, -1));
+          chain.used = true;
+          progress = true;
+        } else if (ptsMatch(resultStart, chainStart)) {
+          // Prepend reversed chain
+          const reversed = [...chain.points].reverse();
+          result.unshift(...reversed.slice(0, -1));
+          chain.used = true;
+          progress = true;
+        }
+      }
+    }
+
+    const unusedCount = chains.filter((c) => !c.used).length;
+    if (unusedCount > 0) {
+      addLog('warn', `${unusedCount} line(s) could not be joined (endpoints don't connect)`);
+    }
+
+    // Check if the result is closed (first ~= last)
+    const isClosed = result.length >= 3 && ptsMatch(result[0]!, result[result.length - 1]!);
+
+    // Create the joined entity
+    const newId = crypto.randomUUID();
+    const joinedEntity: Entity = {
+      id: newId,
+      type: 'line' as const,
+      points: result,
+      ...(isClosed ? { closed: true } : {}),
+    };
+
+    // Remove old entities and their constraints/dimensions, add joined one
+    const removeSet = new Set(lineEntities.map((e) => e.id));
+    // Also remove derived entities whose source is being removed
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const e of sketch.entities) {
+        if (removeSet.has(e.id)) continue;
+        if ('sourceId' in e && e.sourceId && removeSet.has(e.sourceId)) {
+          removeSet.add(e.id);
+          changed = true;
+        }
+      }
+    }
+
+    set({
+      document: {
+        ...document,
+        sketches: document.sketches.map((sk) =>
+          sk.id === document.activeSketchId
+            ? {
+                ...sk,
+                entities: [
+                  ...sk.entities.filter((e) => {
+                    if (removeSet.has(e.id)) return false;
+                    if (e.type === 'dimension' && removeSet.has(e.targetEntityId)) return false;
+                    if (e.type === 'dimension' && e.targetEntityId2 && removeSet.has(e.targetEntityId2)) return false;
+                    return true;
+                  }),
+                  joinedEntity,
+                ],
+                constraints: sk.constraints.filter((c) => !constraintReferencesAny(c, removeSet)),
+              }
+            : sk,
+        ),
+      },
+    });
+
+    addLog('info', `Joined ${lineEntities.length} lines into ${isClosed ? 'closed' : 'open'} polyline (${result.length} points)`);
+    return newId;
   },
 
   updateEntity(entityId, updatedEntity) {

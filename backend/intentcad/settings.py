@@ -14,6 +14,7 @@ INSTALLED_APPS = [
     "django.contrib.auth",
     "corsheaders",
     "documents",
+    "parts",
 ]
 
 MIDDLEWARE = [
