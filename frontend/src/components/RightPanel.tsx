@@ -20,7 +20,7 @@ export function RightPanel() {
   return (
     <div
       style={{
-        width: '180px',
+        width: '240px',
         background: palette.panelBg,
         borderLeft: `1px solid ${palette.border}`,
         display: 'flex',

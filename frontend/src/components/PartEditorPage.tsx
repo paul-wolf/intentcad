@@ -1,18 +1,23 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { usePartStore } from '@/stores/partStore';
+import { usePartEditorStore } from '@/stores/partEditorStore';
 import { useThemeStore } from '@/theme';
 import { partApi } from '@/api/client';
 import { api } from '@/api/client';
 import { setPartBackendId, startPartAutoSave } from '@/api/partAutoSave';
 import { PartViewport } from '@/part/PartViewport';
-import { evaluateFeatures } from '@/part/featureEngine';
+import { evaluateFeatures, exportFeaturesToSTEP } from '@/part/featureEngine';
 import { exportSTL } from '@/part/stlExport';
+import { buildSketchOverlay } from '@/part/sketchOverlay';
 import { PartToolbar } from './PartToolbar';
 import { FeaturePanel } from './FeaturePanel';
 import { SketchRolodex } from './SketchRolodex';
 import { ExtrudeForm } from './ExtrudeForm';
-import type { Part, Feature, ExtrudeFeature } from '@/types/part';
+import { RevolveForm } from './RevolveForm';
+import { ShellForm } from './ShellForm';
+import type { Part, Feature, ExtrudeFeature, RevolveFeature, Plane } from '@/types/part';
+import { DEFAULT_XY_PLANE } from '@/types/part';
 import type { Document } from '@/types/document';
 
 export function PartEditorPage() {
@@ -25,14 +30,24 @@ export function PartEditorPage() {
   const restoreHistory = usePartStore((s) => s.restoreHistory);
   const palette = useThemeStore((s) => s.palette);
 
+  const draftFeature = usePartEditorStore((s) => s.draftFeature);
+  const editingExistingId = usePartEditorStore((s) => s.editingExistingId);
+  const draftSketchDoc = usePartEditorStore((s) => s.draftSketchDoc);
+  const setDraftFeature = usePartEditorStore((s) => s.setDraftFeature);
+  const setDraftSketchDoc = usePartEditorStore((s) => s.setDraftSketchDoc);
+  const startCreating = usePartEditorStore((s) => s.startCreating);
+  const startEditing = usePartEditorStore((s) => s.startEditing);
+  const clearDraft = usePartEditorStore((s) => s.clearDraft);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<PartViewport | null>(null);
-  const [showExtrudeForm, setShowExtrudeForm] = useState(false);
-  const [editingFeature, setEditingFeature] = useState<ExtrudeFeature | null>(null);
+  const rolodexSketchIdRef = useRef<string>('');
+  const previewCounterRef = useRef(0);
 
   // Load part from backend
   useEffect(() => {
     if (!id) return;
+    setPart({ id, name: '', documentId: '', features: [] });
     partApi.getPart(id).then((full) => {
       const data = full.data as unknown as Part;
       if (data && data.features) {
@@ -77,59 +92,211 @@ export function PartEditorPage() {
     viewportRef.current?.setBackground(palette.background);
   }, [palette.background]);
 
-  // Re-evaluate meshes when features change
+  // Re-evaluate committed meshes when features change (only when not previewing)
   useEffect(() => {
+    if (draftFeature) return; // Skip — preview effect handles display while drafting
     const features = part.features;
     if (features.length === 0) {
       viewportRef.current?.setMeshes([]);
       return;
     }
 
-    // Fetch all referenced sketch documents
-    const docIds = [...new Set(features.map((f) => f.sketchDocumentId))];
+    const docIds = [...new Set(features.filter((f) => 'sketchDocumentId' in f).map((f) => (f as ExtrudeFeature | RevolveFeature).sketchDocumentId))];
     Promise.all(docIds.map((docId) => api.getDocument(docId).then((full) => [docId, full.data as unknown as Document] as const)))
-      .then((entries) => {
+      .then(async (entries) => {
         const docMap = new Map<string, Document>(entries);
-        const meshes = evaluateFeatures(features, docMap);
-        viewportRef.current?.setMeshes(meshes.map((m) => m.geometry));
+        const meshes = await evaluateFeatures(features, docMap);
+        // Only apply if we're still not drafting
+        if (!usePartEditorStore.getState().draftFeature) {
+          viewportRef.current?.setMeshes(meshes.map((m) => m.geometry));
+        }
       })
       .catch((err) => {
         console.error('Failed to evaluate features:', err);
       });
-  }, [part.features]);
+  }, [part.features, draftFeature]);
+
+  // Fetch sketch doc when draft feature changes sketch reference
+  useEffect(() => {
+    if (!draftFeature || !('sketchDocumentId' in draftFeature)) {
+      return;
+    }
+    const docId = draftFeature.sketchDocumentId;
+    if (!docId) return;
+    // Don't re-fetch if we already have it for the same doc
+    if (draftSketchDoc && draftSketchDoc.id === docId) return;
+
+    api.getDocument(docId)
+      .then((full) => {
+        setDraftSketchDoc(full.data as unknown as Document);
+      })
+      .catch(() => setDraftSketchDoc(null));
+  }, [draftFeature && 'sketchDocumentId' in draftFeature ? draftFeature.sketchDocumentId : null]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Debounced preview evaluation when draftFeature changes
+  useEffect(() => {
+    if (!draftFeature) {
+      viewportRef.current?.clearPreview();
+      return;
+    }
+
+    const counter = ++previewCounterRef.current;
+    const timer = setTimeout(() => {
+      runPreview(counter);
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [draftFeature]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function runPreview(counter: number) {
+    const draft = usePartEditorStore.getState().draftFeature;
+    if (!draft) return;
+
+    const committedFeatures = usePartStore.getState().part.features;
+    const existingId = usePartEditorStore.getState().editingExistingId;
+
+    // Build preview feature list
+    let previewFeatures: Feature[];
+    if (existingId) {
+      previewFeatures = committedFeatures.map((f) => f.id === existingId ? draft : f);
+    } else {
+      previewFeatures = [...committedFeatures, draft];
+    }
+
+    try {
+      // Gather all sketch doc IDs needed
+      const docIds = [...new Set(previewFeatures.filter((f) => 'sketchDocumentId' in f).map((f) => (f as ExtrudeFeature | RevolveFeature).sketchDocumentId))];
+      const entries = await Promise.all(
+        docIds.map(async (docId) => {
+          // Use cached draftSketchDoc if available
+          const cached = usePartEditorStore.getState().draftSketchDoc;
+          if (cached && cached.id === docId) return [docId, cached] as const;
+          const full = await api.getDocument(docId);
+          return [docId, full.data as unknown as Document] as const;
+        }),
+      );
+
+      if (previewCounterRef.current !== counter) return; // Stale
+
+      const docMap = new Map<string, Document>(entries);
+      const meshes = await evaluateFeatures(previewFeatures, docMap);
+
+      if (previewCounterRef.current !== counter) return; // Stale
+
+      const vp = viewportRef.current;
+      if (!vp) return;
+
+      // Hide committed meshes, show preview
+      vp.setMeshes([]);
+      vp.setPreviewMesh(meshes.length > 0 ? meshes[0]!.geometry : null);
+
+      // Build sketch overlay (only for features with a sketch/plane)
+      if ('sketchId' in draft && 'plane' in draft) {
+        const sketchDocId = (draft as ExtrudeFeature | RevolveFeature).sketchDocumentId;
+        const sketchId = (draft as ExtrudeFeature | RevolveFeature).sketchId;
+        const plane: Plane = (draft as ExtrudeFeature | RevolveFeature).plane;
+        const doc = docMap.get(sketchDocId);
+        const sketch = doc?.sketches.find((s) => s.id === sketchId);
+        if (sketch) {
+          const overlay = buildSketchOverlay(sketch, plane);
+          vp.setSketchOverlay(
+            overlay.linePositions,
+            { center: overlay.planeCenter, normal: overlay.planeNormal, xAxis: overlay.planeXAxis, size: overlay.planeSize },
+          );
+        } else {
+          vp.setSketchOverlay(null, null);
+        }
+      } else {
+        vp.setSketchOverlay(null, null);
+      }
+    } catch (err) {
+      console.error('Preview evaluation failed:', err);
+    }
+  }
+
+  // --- Toolbar handlers ---
 
   const handleAddExtrude = useCallback(() => {
-    setEditingFeature(null);
-    setShowExtrudeForm(true);
-  }, []);
+    const sketchId = rolodexSketchIdRef.current;
+    const docId = usePartStore.getState().part.documentId;
+    startCreating({
+      id: crypto.randomUUID(),
+      type: 'extrude',
+      sketchDocumentId: docId,
+      sketchId,
+      plane: DEFAULT_XY_PLANE,
+      distance: 20,
+      direction: 'forward',
+      operation: 'add',
+    });
+  }, [startCreating]);
+
+  const handleAddRevolve = useCallback(() => {
+    const sketchId = rolodexSketchIdRef.current;
+    const docId = usePartStore.getState().part.documentId;
+    startCreating({
+      id: crypto.randomUUID(),
+      type: 'revolve',
+      sketchDocumentId: docId,
+      sketchId,
+      plane: DEFAULT_XY_PLANE,
+      axisEntityId: '',
+      angle: 360,
+      operation: 'add',
+    });
+  }, [startCreating]);
+
+  const handleAddShell = useCallback(() => {
+    startCreating({
+      id: crypto.randomUUID(),
+      type: 'shell',
+      thickness: 1,
+      faceDirection: [0, 0, 1],
+    });
+  }, [startCreating]);
 
   const handleEditFeature = useCallback((feature: Feature) => {
-    if (feature.type === 'extrude') {
-      setEditingFeature(feature);
-      setShowExtrudeForm(true);
-    }
-  }, []);
+    startEditing(feature);
+  }, [startEditing]);
 
-  const handleExtrudeSubmit = useCallback((feature: ExtrudeFeature) => {
-    beginTransaction(editingFeature ? 'Edit extrude' : 'Add extrude');
-    if (editingFeature) {
+  // --- Unified submit/cancel ---
+
+  const handleSubmit = useCallback((feature: Feature) => {
+    const existingId = usePartEditorStore.getState().editingExistingId;
+    beginTransaction(existingId ? `Edit ${feature.type}` : `Add ${feature.type}`);
+    if (existingId) {
       updateFeature(feature.id, feature);
     } else {
       addFeature(feature);
     }
-    setShowExtrudeForm(false);
-    setEditingFeature(null);
-  }, [editingFeature, beginTransaction, updateFeature, addFeature]);
+    clearDraft();
+    viewportRef.current?.clearPreview();
+  }, [beginTransaction, updateFeature, addFeature, clearDraft]);
+
+  const handleCancel = useCallback(() => {
+    clearDraft();
+    viewportRef.current?.clearPreview();
+  }, [clearDraft]);
+
+  const handleDraftChange = useCallback((feature: Feature) => {
+    setDraftFeature(feature);
+  }, [setDraftFeature]);
+
+  const handleRolodexChange = useCallback((sketchId: string) => {
+    rolodexSketchIdRef.current = sketchId;
+  }, []);
+
+  // --- Export handlers (unchanged) ---
 
   const handleExportSTL = useCallback(() => {
     const features = usePartStore.getState().part.features;
     if (features.length === 0) return;
 
-    const docIds = [...new Set(features.map((f) => f.sketchDocumentId))];
+    const docIds = [...new Set(features.filter((f) => 'sketchDocumentId' in f).map((f) => (f as ExtrudeFeature | RevolveFeature).sketchDocumentId))];
     Promise.all(docIds.map((docId) => api.getDocument(docId).then((full) => [docId, full.data as unknown as Document] as const)))
-      .then((entries) => {
+      .then(async (entries) => {
         const docMap = new Map<string, Document>(entries);
-        const meshes = evaluateFeatures(features, docMap);
+        const meshes = await evaluateFeatures(features, docMap);
         const blob = exportSTL(meshes.map((m) => m.geometry));
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -143,6 +310,80 @@ export function PartEditorPage() {
       });
   }, [part.name]);
 
+  const handleExportSTEP = useCallback(() => {
+    const features = usePartStore.getState().part.features;
+    if (features.length === 0) return;
+
+    const docIds = [...new Set(features.filter((f) => 'sketchDocumentId' in f).map((f) => (f as ExtrudeFeature | RevolveFeature).sketchDocumentId))];
+    Promise.all(docIds.map((docId) => api.getDocument(docId).then((full) => [docId, full.data as unknown as Document] as const)))
+      .then(async (entries) => {
+        const docMap = new Map<string, Document>(entries);
+        const blob = await exportFeaturesToSTEP(features, docMap);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${part.name || 'part'}.step`;
+        a.click();
+        URL.revokeObjectURL(url);
+      })
+      .catch((err) => {
+        console.error('STEP export failed:', err);
+      });
+  }, [part.name]);
+
+  // --- Render sidebar content ---
+
+  function renderSidebarContent() {
+    if (draftFeature) {
+      const initial = editingExistingId
+        ? part.features.find((f) => f.id === editingExistingId) ?? undefined
+        : undefined;
+
+      switch (draftFeature.type) {
+        case 'extrude':
+          return (
+            <ExtrudeForm
+              documentId={part.documentId}
+              initial={initial?.type === 'extrude' ? initial : undefined}
+              defaultSketchId={rolodexSketchIdRef.current}
+              sketchDoc={draftSketchDoc ?? undefined}
+              onSubmit={(f) => handleSubmit(f)}
+              onCancel={handleCancel}
+              onChange={(f) => handleDraftChange(f)}
+            />
+          );
+        case 'revolve':
+          return (
+            <RevolveForm
+              documentId={part.documentId}
+              initial={initial?.type === 'revolve' ? initial : undefined}
+              defaultSketchId={rolodexSketchIdRef.current}
+              sketchDoc={draftSketchDoc ?? undefined}
+              onSubmit={(f) => handleSubmit(f)}
+              onCancel={handleCancel}
+              onChange={(f) => handleDraftChange(f)}
+            />
+          );
+        case 'shell':
+          return (
+            <ShellForm
+              initial={initial?.type === 'shell' ? initial : undefined}
+              onSubmit={(f) => handleSubmit(f)}
+              onCancel={handleCancel}
+              onChange={(f) => handleDraftChange(f)}
+            />
+          );
+      }
+    }
+
+    return (
+      <>
+        <SketchRolodex onSketchChange={handleRolodexChange} />
+        <FeaturePanel onEditFeature={handleEditFeature} />
+      </>
+    );
+  }
+
   return (
     <div
       style={{
@@ -153,7 +394,7 @@ export function PartEditorPage() {
         color: palette.text,
       }}
     >
-      <PartToolbar onAddExtrude={handleAddExtrude} onExportSTL={handleExportSTL} />
+      <PartToolbar onAddExtrude={handleAddExtrude} onAddRevolve={handleAddRevolve} onAddShell={handleAddShell} onExportSTL={handleExportSTL} onExportSTEP={handleExportSTEP} />
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative' }}>
         <div
@@ -169,18 +410,8 @@ export function PartEditorPage() {
           flexDirection: 'column',
           overflow: 'auto',
         }}>
-          <SketchRolodex />
-          <FeaturePanel onEditFeature={handleEditFeature} />
+          {renderSidebarContent()}
         </div>
-
-        {showExtrudeForm && (
-          <ExtrudeForm
-            documentId={part.documentId}
-            initial={editingFeature ?? undefined}
-            onSubmit={handleExtrudeSubmit}
-            onCancel={() => { setShowExtrudeForm(false); setEditingFeature(null); }}
-          />
-        )}
       </div>
     </div>
   );

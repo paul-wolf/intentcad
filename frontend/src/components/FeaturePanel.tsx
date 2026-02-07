@@ -1,7 +1,10 @@
+import { useState, useEffect } from 'react';
 import { usePartStore } from '@/stores/partStore';
 import { usePartEditorStore } from '@/stores/partEditorStore';
 import { useThemeStore } from '@/theme';
-import type { Feature } from '@/types/part';
+import { api } from '@/api/client';
+import type { Feature, ExtrudeFeature, RevolveFeature } from '@/types/part';
+import type { Document } from '@/types/document';
 
 interface FeaturePanelProps {
   onEditFeature: (feature: Feature) => void;
@@ -14,6 +17,40 @@ export function FeaturePanel({ onEditFeature }: FeaturePanelProps) {
   const selectedFeatureId = usePartEditorStore((s) => s.selectedFeatureId);
   const setSelectedFeatureId = usePartEditorStore((s) => s.setSelectedFeatureId);
   const palette = useThemeStore((s) => s.palette);
+
+  // Build a map of sketchId → sketch name from referenced documents
+  const [sketchNames, setSketchNames] = useState<Map<string, string>>(new Map());
+
+  useEffect(() => {
+    const docIds = [
+      ...new Set(
+        features
+          .filter((f): f is ExtrudeFeature | RevolveFeature => 'sketchDocumentId' in f)
+          .map((f) => f.sketchDocumentId),
+      ),
+    ];
+    if (docIds.length === 0) {
+      setSketchNames(new Map());
+      return;
+    }
+    let cancelled = false;
+    Promise.all(
+      docIds.map((docId) =>
+        api.getDocument(docId).then((full) => full.data as unknown as Document).catch(() => null),
+      ),
+    ).then((docs) => {
+      if (cancelled) return;
+      const map = new Map<string, string>();
+      for (const doc of docs) {
+        if (!doc) continue;
+        for (const sk of doc.sketches) {
+          map.set(sk.id, sk.name);
+        }
+      }
+      setSketchNames(map);
+    });
+    return () => { cancelled = true; };
+  }, [features]);
 
   return (
     <div
@@ -37,7 +74,7 @@ export function FeaturePanel({ onEditFeature }: FeaturePanelProps) {
 
       {features.length === 0 && (
         <div style={{ padding: '12px', fontSize: '12px', color: palette.textSecondary }}>
-          No features yet. Click "Add Extrude" to begin.
+          No features yet. Click "Add Extrude" or "Add Revolve" to begin.
         </div>
       )}
 
@@ -57,10 +94,19 @@ export function FeaturePanel({ onEditFeature }: FeaturePanelProps) {
           onDoubleClick={() => onEditFeature(f)}
         >
           <span style={{ fontSize: '12px', color: palette.accent }}>
-            {f.type === 'extrude' ? 'E' : '?'}
+            {f.type === 'extrude' ? 'E' : f.type === 'revolve' ? 'R' : f.type === 'shell' ? 'S' : '?'}
           </span>
-          <span style={{ flex: 1, fontSize: '12px', color: palette.text }}>
-            {f.operation === 'remove' ? 'Cut' : 'Extrude'} {f.distance}mm
+          <span style={{ flex: 1, fontSize: '12px', color: palette.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {f.type === 'shell'
+              ? `Shell ${f.thickness}mm`
+              : f.type === 'revolve'
+                ? `${f.operation === 'remove' ? 'Cut' : 'Revolve'} ${f.angle}\u00B0`
+                : `${f.operation === 'remove' ? 'Cut' : 'Extrude'} ${Math.abs(f.distance)}mm`}
+            {'sketchId' in f && sketchNames.has(f.sketchId) && (
+              <span style={{ color: palette.textSecondary, marginLeft: '4px' }}>
+                ({sketchNames.get(f.sketchId)})
+              </span>
+            )}
           </span>
           <button
             style={{

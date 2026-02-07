@@ -4,10 +4,13 @@ import { useThemeStore } from '@/theme';
 
 interface PartToolbarProps {
   onAddExtrude: () => void;
+  onAddRevolve: () => void;
+  onAddShell: () => void;
   onExportSTL: () => void;
+  onExportSTEP: () => void;
 }
 
-export function PartToolbar({ onAddExtrude, onExportSTL }: PartToolbarProps) {
+export function PartToolbar({ onAddExtrude, onAddRevolve, onAddShell, onExportSTL, onExportSTEP }: PartToolbarProps) {
   const navigate = useNavigate();
   const part = usePartStore((s) => s.part);
   const setPartName = usePartStore((s) => s.setPartName);
@@ -82,8 +85,23 @@ export function PartToolbar({ onAddExtrude, onExportSTL }: PartToolbarProps) {
       >
         Add Extrude
       </button>
+      <button
+        style={{ ...buttonStyle, background: palette.primaryBtn, color: '#fff', border: 'none' }}
+        onClick={onAddRevolve}
+      >
+        Add Revolve
+      </button>
+      <button
+        style={{ ...buttonStyle, background: palette.primaryBtn, color: '#fff', border: 'none' }}
+        onClick={onAddShell}
+      >
+        Add Shell
+      </button>
       <button style={buttonStyle} onClick={onExportSTL}>
         Export STL
+      </button>
+      <button style={buttonStyle} onClick={onExportSTEP}>
+        Export STEP
       </button>
     </div>
   );

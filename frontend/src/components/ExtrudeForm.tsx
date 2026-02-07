@@ -1,25 +1,100 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { api } from '@/api/client';
 import { useThemeStore } from '@/theme';
 import type { Document } from '@/types/document';
-import type { ExtrudeFeature, Plane } from '@/types/part';
-import { PLANE_PRESETS, planeWithOffset } from '@/types/part';
+import type { ExtrudeFeature, ExtrudeDirection, Plane } from '@/types/part';
+import { PLANE_PRESETS } from '@/types/part';
 import { getExtrudableEntities } from '@/part/profileDetect';
+
+/** Compute yAxis = normal × xAxis */
+function getYAxis(normal: [number, number, number], xAxis: [number, number, number]): [number, number, number] {
+  return [
+    normal[1] * xAxis[2] - normal[2] * xAxis[1],
+    normal[2] * xAxis[0] - normal[0] * xAxis[2],
+    normal[0] * xAxis[1] - normal[1] * xAxis[0],
+  ];
+}
+
+/** Decompose a plane origin into (normalOffset, xOffset, yOffset) relative to a base plane. */
+function decomposeOrigin(origin: [number, number, number], base: Plane): { normalOff: number; xOff: number; yOff: number } {
+  const [ox, oy, oz] = origin;
+  const [bx, by, bz] = base.origin;
+  const dx = ox - bx, dy = oy - by, dz = oz - bz;
+  const n = base.normal, x = base.xAxis;
+  const y = getYAxis(n, x);
+  return {
+    normalOff: dx * n[0] + dy * n[1] + dz * n[2],
+    xOff: dx * x[0] + dy * x[1] + dz * x[2],
+    yOff: dx * y[0] + dy * y[1] + dz * y[2],
+  };
+}
+
+/** Build plane origin from base + three offsets. */
+function buildPlaneOrigin(base: Plane, normalOff: number, xOff: number, yOff: number): [number, number, number] {
+  const n = base.normal, x = base.xAxis;
+  const y = getYAxis(n, x);
+  return [
+    base.origin[0] + n[0] * normalOff + x[0] * xOff + y[0] * yOff,
+    base.origin[1] + n[1] * normalOff + x[1] * xOff + y[1] * yOff,
+    base.origin[2] + n[2] * normalOff + x[2] * xOff + y[2] * yOff,
+  ];
+}
+
+function buildFeature(
+  documentId: string,
+  initialId: string | undefined,
+  selectedSketchId: string,
+  planePreset: string,
+  planeOffset: number,
+  originX: number,
+  originY: number,
+  distance: number,
+  direction: ExtrudeDirection,
+  operation: 'add' | 'remove',
+): ExtrudeFeature {
+  const presetNames = Object.keys(PLANE_PRESETS);
+  const basePlane = PLANE_PRESETS[planePreset] ?? PLANE_PRESETS[presetNames[0]!]!;
+  const plane: Plane = {
+    origin: buildPlaneOrigin(basePlane, planeOffset, originX, originY),
+    normal: basePlane.normal,
+    xAxis: basePlane.xAxis,
+  };
+  return {
+    id: initialId ?? crypto.randomUUID(),
+    type: 'extrude',
+    sketchDocumentId: documentId,
+    sketchId: selectedSketchId,
+    plane,
+    distance,
+    direction,
+    operation,
+  };
+}
 
 interface ExtrudeFormProps {
   documentId: string;
   initial?: ExtrudeFeature;
+  defaultSketchId?: string;
+  sketchDoc?: Document;
   onSubmit: (feature: ExtrudeFeature) => void;
   onCancel: () => void;
+  onChange?: (feature: ExtrudeFeature) => void;
 }
 
-export function ExtrudeForm({ documentId, initial, onSubmit, onCancel }: ExtrudeFormProps) {
+export function ExtrudeForm({ documentId, initial, defaultSketchId, sketchDoc: externalSketchDoc, onSubmit, onCancel, onChange }: ExtrudeFormProps) {
   const palette = useThemeStore((s) => s.palette);
 
-  const [sketchDoc, setSketchDoc] = useState<Document | null>(null);
-  const [selectedSketchId, setSelectedSketchId] = useState(initial?.sketchId ?? '');
-  const [distance, setDistance] = useState(initial?.distance ?? 20);
+  const [internalSketchDoc, setInternalSketchDoc] = useState<Document | null>(null);
+  const sketchDoc = externalSketchDoc ?? internalSketchDoc;
+  const [selectedSketchId, setSelectedSketchId] = useState(initial?.sketchId ?? defaultSketchId ?? '');
+  const [distance, setDistance] = useState(Math.abs(initial?.distance ?? 20));
+  const [direction, setDirection] = useState<ExtrudeDirection>(initial?.direction ?? 'forward');
   const [operation, setOperation] = useState<'add' | 'remove'>(initial?.operation ?? 'add');
+
+  // Stable ID ref for new features
+  const featureIdRef = useRef(initial?.id ?? crypto.randomUUID());
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
 
   // Plane controls
   const presetNames = Object.keys(PLANE_PRESETS);
@@ -34,26 +109,44 @@ export function ExtrudeForm({ documentId, initial, onSubmit, onCancel }: Extrude
     }
     return presetNames[0]!;
   });
+
+  // Decompose initial plane origin into three offsets
   const [planeOffset, setPlaneOffset] = useState(() => {
     if (!initial) return 0;
-    const p = initial.plane;
-    return p.origin[0] * p.normal[0] + p.origin[1] * p.normal[1] + p.origin[2] * p.normal[2];
+    const base = Object.values(PLANE_PRESETS).find(
+      (p) => p.normal[0] === initial.plane.normal[0] && p.normal[1] === initial.plane.normal[1] && p.normal[2] === initial.plane.normal[2],
+    ) ?? PLANE_PRESETS[presetNames[0]!]!;
+    return decomposeOrigin(initial.plane.origin, base).normalOff;
+  });
+  const [originX, setOriginX] = useState(() => {
+    if (!initial) return 0;
+    const base = Object.values(PLANE_PRESETS).find(
+      (p) => p.normal[0] === initial.plane.normal[0] && p.normal[1] === initial.plane.normal[1] && p.normal[2] === initial.plane.normal[2],
+    ) ?? PLANE_PRESETS[presetNames[0]!]!;
+    return decomposeOrigin(initial.plane.origin, base).xOff;
+  });
+  const [originY, setOriginY] = useState(() => {
+    if (!initial) return 0;
+    const base = Object.values(PLANE_PRESETS).find(
+      (p) => p.normal[0] === initial.plane.normal[0] && p.normal[1] === initial.plane.normal[1] && p.normal[2] === initial.plane.normal[2],
+    ) ?? PLANE_PRESETS[presetNames[0]!]!;
+    return decomposeOrigin(initial.plane.origin, base).yOff;
   });
 
-  // Load the document
+  // Load the document (only if not provided externally)
   useEffect(() => {
-    if (!documentId) return;
+    if (externalSketchDoc || !documentId) return;
     api.getDocument(documentId)
       .then((full) => {
-        setSketchDoc(full.data as unknown as Document);
+        setInternalSketchDoc(full.data as unknown as Document);
       })
-      .catch(() => setSketchDoc(null));
-  }, [documentId]);
+      .catch(() => setInternalSketchDoc(null));
+  }, [documentId, externalSketchDoc]);
 
-  // Auto-select sketch when doc loads
+  // Auto-select sketch when doc loads (prefer last sketch)
   useEffect(() => {
     if (sketchDoc && !selectedSketchId && sketchDoc.sketches.length > 0) {
-      setSelectedSketchId(sketchDoc.sketches[0]!.id);
+      setSelectedSketchId(sketchDoc.sketches[sketchDoc.sketches.length - 1]!.id);
     }
   }, [sketchDoc, selectedSketchId]);
 
@@ -62,62 +155,55 @@ export function ExtrudeForm({ documentId, initial, onSubmit, onCancel }: Extrude
 
   const canSubmit = selectedSketchId && hasExtrudable && distance > 0;
 
+  // Fire onChange whenever parameters change
+  useEffect(() => {
+    if (!onChangeRef.current || !selectedSketchId) return;
+    const feature = buildFeature(documentId, featureIdRef.current, selectedSketchId, planePreset, planeOffset, originX, originY, distance, direction, operation);
+    onChangeRef.current(feature);
+  }, [documentId, selectedSketchId, planePreset, planeOffset, originX, originY, distance, direction, operation]);
+
   const handleSubmit = () => {
     if (!canSubmit) return;
-    const basePlane = PLANE_PRESETS[planePreset] ?? PLANE_PRESETS[presetNames[0]!]!;
-    const plane: Plane = planeOffset !== 0 ? planeWithOffset(basePlane, planeOffset) : basePlane;
-    const feature: ExtrudeFeature = {
-      id: initial?.id ?? crypto.randomUUID(),
-      type: 'extrude',
-      sketchDocumentId: documentId,
-      sketchId: selectedSketchId,
-      plane,
-      distance,
-      operation,
-    };
+    const feature = buildFeature(documentId, featureIdRef.current, selectedSketchId, planePreset, planeOffset, originX, originY, distance, direction, operation);
     onSubmit(feature);
   };
 
   const labelStyle: React.CSSProperties = {
-    fontSize: '12px',
+    fontSize: '11px',
     color: palette.textSecondary,
-    marginBottom: '4px',
+    marginBottom: '2px',
   };
 
   const inputStyle: React.CSSProperties = {
     width: '100%',
-    padding: '4px 8px',
+    padding: '3px 6px',
     background: palette.inputBg,
     color: palette.text,
     border: `1px solid ${palette.inputBorder}`,
     borderRadius: '4px',
-    fontSize: '13px',
+    fontSize: '12px',
     boxSizing: 'border-box',
+  };
+
+  const halfInputStyle: React.CSSProperties = {
+    ...inputStyle,
+    width: 'calc(50% - 3px)',
   };
 
   return (
     <div
       style={{
-        position: 'absolute',
-        top: '50%',
-        left: '50%',
-        transform: 'translate(-50%, -50%)',
-        background: palette.panelBg,
-        border: `1px solid ${palette.border}`,
-        borderRadius: '8px',
-        padding: '16px',
-        width: '320px',
-        zIndex: 100,
         display: 'flex',
         flexDirection: 'column',
-        gap: '12px',
+        gap: '8px',
+        padding: '8px 10px',
       }}
     >
-      <div style={{ fontSize: '14px', fontWeight: 600, color: palette.text }}>
+      <div style={{ fontSize: '13px', fontWeight: 600, color: palette.text }}>
         {initial ? 'Edit Extrude' : 'Add Extrude'}
       </div>
 
-      {sketchDoc && sketchDoc.sketches.length > 1 && (
+      {sketchDoc && (
         <div>
           <div style={labelStyle}>Sketch</div>
           <select
@@ -133,7 +219,7 @@ export function ExtrudeForm({ documentId, initial, onSubmit, onCancel }: Extrude
       )}
 
       {sketchDoc && !hasExtrudable && (
-        <div style={{ fontSize: '12px', color: palette.danger }}>
+        <div style={{ fontSize: '11px', color: palette.danger }}>
           No extrudable profiles found (need a rectangle, circle, or closed polygon).
         </div>
       )}
@@ -152,7 +238,7 @@ export function ExtrudeForm({ documentId, initial, onSubmit, onCancel }: Extrude
       </div>
 
       <div>
-        <div style={labelStyle}>Plane offset (mm)</div>
+        <div style={labelStyle}>Depth offset (mm)</div>
         <input
           type="number"
           style={inputStyle}
@@ -160,6 +246,30 @@ export function ExtrudeForm({ documentId, initial, onSubmit, onCancel }: Extrude
           step={1}
           onChange={(e) => setPlaneOffset(parseFloat(e.target.value) || 0)}
         />
+      </div>
+
+      <div>
+        <div style={labelStyle}>Origin offset (mm)</div>
+        <div style={{ display: 'flex', gap: '6px' }}>
+          <input
+            type="number"
+            style={halfInputStyle}
+            value={originX}
+            step={1}
+            placeholder="X"
+            title="X offset on plane"
+            onChange={(e) => setOriginX(parseFloat(e.target.value) || 0)}
+          />
+          <input
+            type="number"
+            style={halfInputStyle}
+            value={originY}
+            step={1}
+            placeholder="Y"
+            title="Y offset on plane"
+            onChange={(e) => setOriginY(parseFloat(e.target.value) || 0)}
+          />
+        </div>
       </div>
 
       <div>
@@ -175,6 +285,19 @@ export function ExtrudeForm({ documentId, initial, onSubmit, onCancel }: Extrude
       </div>
 
       <div>
+        <div style={labelStyle}>Direction</div>
+        <select
+          style={inputStyle}
+          value={direction}
+          onChange={(e) => setDirection(e.target.value as ExtrudeDirection)}
+        >
+          <option value="forward">Forward</option>
+          <option value="reverse">Reverse</option>
+          <option value="both">Both (symmetric)</option>
+        </select>
+      </div>
+
+      <div>
         <div style={labelStyle}>Operation</div>
         <select
           style={inputStyle}
@@ -186,15 +309,15 @@ export function ExtrudeForm({ documentId, initial, onSubmit, onCancel }: Extrude
         </select>
       </div>
 
-      <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+      <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', marginTop: '4px' }}>
         <button
           style={{
-            padding: '6px 16px',
+            padding: '4px 12px',
             background: palette.buttonBg,
             color: palette.text,
             border: `1px solid ${palette.border}`,
             borderRadius: '4px',
-            fontSize: '13px',
+            fontSize: '12px',
             cursor: 'pointer',
           }}
           onClick={onCancel}
@@ -203,19 +326,19 @@ export function ExtrudeForm({ documentId, initial, onSubmit, onCancel }: Extrude
         </button>
         <button
           style={{
-            padding: '6px 16px',
+            padding: '4px 12px',
             background: canSubmit ? palette.primaryBtn : palette.border,
             color: '#fff',
             border: 'none',
             borderRadius: '4px',
-            fontSize: '13px',
+            fontSize: '12px',
             cursor: canSubmit ? 'pointer' : 'default',
             opacity: canSubmit ? 1 : 0.5,
           }}
           disabled={!canSubmit}
           onClick={handleSubmit}
         >
-          {initial ? 'Update' : 'Add'}
+          {initial ? 'Update' : 'Apply'}
         </button>
       </div>
     </div>

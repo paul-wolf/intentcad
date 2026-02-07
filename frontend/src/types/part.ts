@@ -4,6 +4,8 @@ export interface Plane {
   xAxis: [number, number, number];
 }
 
+export type ExtrudeDirection = 'forward' | 'reverse' | 'both';
+
 export interface ExtrudeFeature {
   id: string;
   type: 'extrude';
@@ -11,10 +13,29 @@ export interface ExtrudeFeature {
   sketchId: string;
   plane: Plane;
   distance: number;
+  direction?: ExtrudeDirection;
   operation: 'add' | 'remove';
 }
 
-export type Feature = ExtrudeFeature;
+export interface RevolveFeature {
+  id: string;
+  type: 'revolve';
+  sketchDocumentId: string;
+  sketchId: string;
+  plane: Plane;
+  axisEntityId: string;
+  angle: number;
+  operation: 'add' | 'remove';
+}
+
+export interface ShellFeature {
+  id: string;
+  type: 'shell';
+  thickness: number;
+  faceDirection: [number, number, number];
+}
+
+export type Feature = ExtrudeFeature | RevolveFeature | ShellFeature;
 
 export interface Part {
   id: string;

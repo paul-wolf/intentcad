@@ -18,6 +18,8 @@ export class PartViewport {
   private resizeObserver: ResizeObserver;
   private animationId: number = 0;
   private meshGroup: THREE.Group;
+  private previewGroup: THREE.Group;
+  private sketchOverlayGroup: THREE.Group;
 
   constructor(opts: PartViewportOptions) {
     const { container } = opts;
@@ -64,6 +66,14 @@ export class PartViewport {
     this.meshGroup = new THREE.Group();
     this.scene.add(this.meshGroup);
 
+    // Preview group (semi-transparent preview mesh)
+    this.previewGroup = new THREE.Group();
+    this.scene.add(this.previewGroup);
+
+    // Sketch overlay group (3D sketch lines + plane quad)
+    this.sketchOverlayGroup = new THREE.Group();
+    this.scene.add(this.sketchOverlayGroup);
+
     // Handle resize
     this.resizeObserver = new ResizeObserver(() => this.handleResize());
     this.resizeObserver.observe(container);
@@ -101,6 +111,80 @@ export class PartViewport {
     for (const geometry of geometries) {
       const mesh = new THREE.Mesh(geometry, material.clone());
       this.meshGroup.add(mesh);
+    }
+  }
+
+  setPreviewMesh(geometry: THREE.BufferGeometry | null) {
+    this.clearGroup(this.previewGroup);
+    if (!geometry) return;
+
+    const material = new THREE.MeshStandardMaterial({
+      color: 0x60a5fa,
+      metalness: 0.2,
+      roughness: 0.7,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.85,
+      depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    this.previewGroup.add(mesh);
+  }
+
+  setSketchOverlay(
+    linePositions: Float32Array | null,
+    planeInfo: { center: [number, number, number]; normal: [number, number, number]; xAxis: [number, number, number]; size: number } | null,
+  ) {
+    this.clearGroup(this.sketchOverlayGroup);
+
+    if (linePositions && linePositions.length > 0) {
+      const lineGeometry = new THREE.BufferGeometry();
+      lineGeometry.setAttribute('position', new THREE.BufferAttribute(linePositions, 3));
+      const lineMaterial = new THREE.LineBasicMaterial({ color: 0xfbbf24, linewidth: 2 });
+      const lines = new THREE.LineSegments(lineGeometry, lineMaterial);
+      this.sketchOverlayGroup.add(lines);
+    }
+
+    if (planeInfo) {
+      const planeGeometry = new THREE.PlaneGeometry(planeInfo.size, planeInfo.size);
+      const planeMaterial = new THREE.MeshBasicMaterial({
+        color: 0xfbbf24,
+        transparent: true,
+        opacity: 0.08,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      const planeMesh = new THREE.Mesh(planeGeometry, planeMaterial);
+
+      // Orient plane: compute yAxis = normal × xAxis
+      const n = new THREE.Vector3(...planeInfo.normal);
+      const x = new THREE.Vector3(...planeInfo.xAxis);
+      const y = new THREE.Vector3().crossVectors(n, x);
+
+      // Build rotation matrix from axes
+      const m = new THREE.Matrix4();
+      m.makeBasis(x, y, n);
+      planeMesh.setRotationFromMatrix(m);
+      planeMesh.position.set(...planeInfo.center);
+      this.sketchOverlayGroup.add(planeMesh);
+    }
+  }
+
+  clearPreview() {
+    this.clearGroup(this.previewGroup);
+    this.clearGroup(this.sketchOverlayGroup);
+  }
+
+  private clearGroup(group: THREE.Group) {
+    while (group.children.length > 0) {
+      const child = group.children[0]!;
+      group.remove(child);
+      if (child instanceof THREE.Mesh || child instanceof THREE.LineSegments) {
+        child.geometry.dispose();
+        if (child.material instanceof THREE.Material) {
+          child.material.dispose();
+        }
+      }
     }
   }
 

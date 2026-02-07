@@ -23,7 +23,6 @@ TODO:
 * two corner rectangle
 * Fillet
 
-
 **Full feature vision** (across all iterations):
 
 * Geometry: Point, Line, Circle, Rectangle, Spline, Polygon

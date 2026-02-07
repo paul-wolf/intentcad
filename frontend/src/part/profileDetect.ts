@@ -36,9 +36,11 @@ export function findTopLevelProfiles(sketch: Sketch): Entity[] {
   return extrudable.filter((e) => {
     const center = getEntityCenter(e);
     if (!center) return true;
+    const myArea = getEntityArea(e);
+    // Only consider "contained" if the other entity is strictly larger
     return !extrudable.some((other) => {
       if (other.id === e.id) return false;
-      return isPointInsideEntity(center.x, center.y, other);
+      return getEntityArea(other) > myArea && isPointInsideEntity(center.x, center.y, other);
     });
   });
 }

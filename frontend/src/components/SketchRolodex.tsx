@@ -9,7 +9,11 @@ import type { ExtrudeFeature } from '@/types/part';
 import { DEFAULT_XY_PLANE } from '@/types/part';
 import { SketchThumbnail } from './SketchThumbnail';
 
-export function SketchRolodex() {
+interface SketchRolodexProps {
+  onSketchChange?: (sketchId: string) => void;
+}
+
+export function SketchRolodex({ onSketchChange }: SketchRolodexProps = {}) {
   const navigate = useNavigate();
   const part = usePartStore((s) => s.part);
   const beginTransaction = usePartStore((s) => s.beginTransaction);
@@ -28,6 +32,13 @@ export function SketchRolodex() {
       .catch(() => setSketches([]));
   }, [part.documentId]);
 
+  // Notify parent of current sketch selection
+  useEffect(() => {
+    if (sketches.length > 0 && sketches[selectedIdx]) {
+      onSketchChange?.(sketches[selectedIdx]!.id);
+    }
+  }, [selectedIdx, sketches, onSketchChange]);
+
   if (sketches.length === 0) return null;
 
   const currentSketch = sketches[selectedIdx]!;
@@ -36,7 +47,7 @@ export function SketchRolodex() {
   const hasExtrudable = getExtrudableEntities(currentSketch).length > 0;
   // Check if this sketch already has a feature
   const alreadyExtruded = part.features.some(
-    (f) => f.sketchId === currentSketch.id,
+    (f) => 'sketchId' in f && f.sketchId === currentSketch.id,
   );
 
   const handleExtrude = () => {

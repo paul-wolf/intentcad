@@ -1,4 +1,4 @@
-import type { Constraint, Entity, Point, EqualConstraint, CoincidentConstraint, HorizontalConstraint, VerticalConstraint, MidpointConstraint, ParallelConstraint, PerpendicularConstraint, TangentConstraint, BisectConstraint, LineEntity, CircleEntity } from '@/types/document';
+import type { Constraint, Entity, Point, EqualConstraint, CoincidentConstraint, HorizontalConstraint, VerticalConstraint, MidpointConstraint, ParallelConstraint, PerpendicularConstraint, TangentConstraint, BisectConstraint, LineEntity, CircleEntity, RectangleEntity } from '@/types/document';
 import { propagateDerived } from '@/utils/propagate';
 import { rotatePoint } from '@/utils/geometry';
 import { getEntityPoint, setEntityPoint } from '@/utils/entityPoints';
@@ -511,8 +511,18 @@ function enforceEqual(
 
     const targetLen = (len1 + len2) / 2;
 
-    // Helper: scale a segment's endpoints around their midpoint to targetLen
+    // Helper: scale a segment to targetLen
     const scaleSegment = (entity: Entity, segIdx: number, ep: [Point, Point]) => {
+      if (entity.type === 'rectangle') {
+        const rect = entity as RectangleEntity;
+        // Segments 0,2 = width; segments 1,3 = height
+        if (segIdx % 2 === 0) {
+          entityMap.set(entity.id, { ...rect, width: targetLen });
+        } else {
+          entityMap.set(entity.id, { ...rect, height: targetLen });
+        }
+        return;
+      }
       if (entity.type !== 'line') return;
       const le = entity as LineEntity;
       const [i1, i2] = getSegmentPointIndices(le, segIdx);
