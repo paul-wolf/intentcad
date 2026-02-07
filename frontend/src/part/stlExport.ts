@@ -15,9 +15,9 @@ export function exportSTL(geometries: THREE.BufferGeometry[]): Blob {
   let totalTriangles = 0;
   for (const geom of geometries) {
     const pos = geom.getAttribute('position');
-    if (pos) {
-      totalTriangles += pos.count / 3;
-    }
+    if (!pos) continue;
+    const idx = geom.getIndex();
+    totalTriangles += idx ? idx.count / 3 : pos.count / 3;
   }
 
   // 80 header + 4 count + 50 bytes per triangle
@@ -37,11 +37,13 @@ export function exportSTL(geometries: THREE.BufferGeometry[]): Blob {
     const normAttr = geom.getAttribute('normal');
     if (!posAttr) continue;
 
-    const triCount = posAttr.count / 3;
+    const idx = geom.getIndex();
+    const triCount = idx ? idx.count / 3 : posAttr.count / 3;
     for (let t = 0; t < triCount; t++) {
-      const i0 = t * 3;
-      const i1 = t * 3 + 1;
-      const i2 = t * 3 + 2;
+      // Resolve vertex indices (indexed vs non-indexed geometry)
+      const i0 = idx ? idx.getX(t * 3) : t * 3;
+      const i1 = idx ? idx.getX(t * 3 + 1) : t * 3 + 1;
+      const i2 = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
 
       // Normal — use first vertex normal or compute from vertices
       if (normAttr) {

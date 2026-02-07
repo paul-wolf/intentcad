@@ -11,16 +11,26 @@ export function exportSTEP(oc: OC, shape: any, cleanup: OcctCleanup): Blob {
 
   writer.Transfer(shape, oc.STEPControl_StepModelType.STEPControl_AsIs, true);
 
-  const filename = '/tmp/export.step';
-  const status = writer.Write(filename);
+  // Snapshot root FS before write. The Embind binding for Write() mangles the
+  // JS string into a garbled C filename, so we can't predict the actual path.
+  // Instead we detect whatever new file appeared after the write.
+  const before = new Set(oc.FS.readdir('/') as string[]);
+
+  const status = writer.Write('export.step');
 
   if (status !== oc.IFSelect_ReturnStatus.IFSelect_RetDone) {
     throw new Error('STEP export failed');
   }
 
-  // Read file from Emscripten virtual filesystem
-  const fileData = oc.FS.readFile(filename, { encoding: 'binary' });
-  oc.FS.unlink(filename);
+  const after = (oc.FS.readdir('/') as string[]);
+  const newFile = after.find((f: string) => !before.has(f));
+  if (!newFile) {
+    throw new Error('STEP file not found in Emscripten FS after write');
+  }
+
+  const path = '/' + newFile;
+  const fileData = oc.FS.readFile(path, { encoding: 'binary' });
+  oc.FS.unlink(path);
 
   return new Blob([fileData], { type: 'application/step' });
 }

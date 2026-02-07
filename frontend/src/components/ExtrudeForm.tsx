@@ -1,10 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { api } from '@/api/client';
 import { useThemeStore } from '@/theme';
 import type { Document } from '@/types/document';
 import type { ExtrudeFeature, ExtrudeDirection, Plane } from '@/types/part';
 import { PLANE_PRESETS } from '@/types/part';
 import { getExtrudableEntities } from '@/part/profileDetect';
+import { rotatePlane, decomposePlaneAngles, closestPreset } from '@/part/planeRotation';
 
 /** Compute yAxis = normal × xAxis */
 function getYAxis(normal: [number, number, number], xAxis: [number, number, number]): [number, number, number] {
@@ -48,16 +49,19 @@ function buildFeature(
   planeOffset: number,
   originX: number,
   originY: number,
+  spin: number,
+  tilt: number,
   distance: number,
   direction: ExtrudeDirection,
   operation: 'add' | 'remove',
 ): ExtrudeFeature {
   const presetNames = Object.keys(PLANE_PRESETS);
   const basePlane = PLANE_PRESETS[planePreset] ?? PLANE_PRESETS[presetNames[0]!]!;
+  const { normal, xAxis } = rotatePlane(basePlane, spin, tilt);
   const plane: Plane = {
     origin: buildPlaneOrigin(basePlane, planeOffset, originX, originY),
-    normal: basePlane.normal,
-    xAxis: basePlane.xAxis,
+    normal,
+    xAxis,
   };
   return {
     id: initialId ?? crypto.randomUUID(),
@@ -71,6 +75,12 @@ function buildFeature(
   };
 }
 
+export interface ExtrudeFormHandle {
+  setDistance(v: number): void;
+  setDirection(d: ExtrudeDirection): void;
+  setOperation(op: 'add' | 'remove'): void;
+}
+
 interface ExtrudeFormProps {
   documentId: string;
   initial?: ExtrudeFeature;
@@ -81,7 +91,7 @@ interface ExtrudeFormProps {
   onChange?: (feature: ExtrudeFeature) => void;
 }
 
-export function ExtrudeForm({ documentId, initial, defaultSketchId, sketchDoc: externalSketchDoc, onSubmit, onCancel, onChange }: ExtrudeFormProps) {
+export const ExtrudeForm = forwardRef<ExtrudeFormHandle, ExtrudeFormProps>(function ExtrudeForm({ documentId, initial, defaultSketchId, sketchDoc: externalSketchDoc, onSubmit, onCancel, onChange }, ref) {
   const palette = useThemeStore((s) => s.palette);
 
   const [internalSketchDoc, setInternalSketchDoc] = useState<Document | null>(null);
@@ -96,40 +106,45 @@ export function ExtrudeForm({ documentId, initial, defaultSketchId, sketchDoc: e
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
+  useImperativeHandle(ref, () => ({
+    setDistance(v: number) { setDistance(v); },
+    setDirection(d: ExtrudeDirection) { setDirection(d); },
+    setOperation(op: 'add' | 'remove') { setOperation(op); },
+  }));
+
   // Plane controls
   const presetNames = Object.keys(PLANE_PRESETS);
   const [planePreset, setPlanePreset] = useState(() => {
     if (!initial) return presetNames[0]!;
-    for (const [name, preset] of Object.entries(PLANE_PRESETS)) {
-      if (preset.normal[0] === initial.plane.normal[0] &&
-          preset.normal[1] === initial.plane.normal[1] &&
-          preset.normal[2] === initial.plane.normal[2]) {
-        return name;
-      }
-    }
-    return presetNames[0]!;
+    return closestPreset(initial.plane.normal, PLANE_PRESETS);
+  });
+
+  // Recover spin/tilt from stored plane
+  const [spin, setSpin] = useState(() => {
+    if (!initial) return 0;
+    const base = PLANE_PRESETS[closestPreset(initial.plane.normal, PLANE_PRESETS)]!;
+    return decomposePlaneAngles(initial.plane, base).spinDeg;
+  });
+  const [tilt, setTilt] = useState(() => {
+    if (!initial) return 0;
+    const base = PLANE_PRESETS[closestPreset(initial.plane.normal, PLANE_PRESETS)]!;
+    return decomposePlaneAngles(initial.plane, base).tiltDeg;
   });
 
   // Decompose initial plane origin into three offsets
   const [planeOffset, setPlaneOffset] = useState(() => {
     if (!initial) return 0;
-    const base = Object.values(PLANE_PRESETS).find(
-      (p) => p.normal[0] === initial.plane.normal[0] && p.normal[1] === initial.plane.normal[1] && p.normal[2] === initial.plane.normal[2],
-    ) ?? PLANE_PRESETS[presetNames[0]!]!;
+    const base = PLANE_PRESETS[closestPreset(initial.plane.normal, PLANE_PRESETS)]!;
     return decomposeOrigin(initial.plane.origin, base).normalOff;
   });
   const [originX, setOriginX] = useState(() => {
     if (!initial) return 0;
-    const base = Object.values(PLANE_PRESETS).find(
-      (p) => p.normal[0] === initial.plane.normal[0] && p.normal[1] === initial.plane.normal[1] && p.normal[2] === initial.plane.normal[2],
-    ) ?? PLANE_PRESETS[presetNames[0]!]!;
+    const base = PLANE_PRESETS[closestPreset(initial.plane.normal, PLANE_PRESETS)]!;
     return decomposeOrigin(initial.plane.origin, base).xOff;
   });
   const [originY, setOriginY] = useState(() => {
     if (!initial) return 0;
-    const base = Object.values(PLANE_PRESETS).find(
-      (p) => p.normal[0] === initial.plane.normal[0] && p.normal[1] === initial.plane.normal[1] && p.normal[2] === initial.plane.normal[2],
-    ) ?? PLANE_PRESETS[presetNames[0]!]!;
+    const base = PLANE_PRESETS[closestPreset(initial.plane.normal, PLANE_PRESETS)]!;
     return decomposeOrigin(initial.plane.origin, base).yOff;
   });
 
@@ -158,13 +173,13 @@ export function ExtrudeForm({ documentId, initial, defaultSketchId, sketchDoc: e
   // Fire onChange whenever parameters change
   useEffect(() => {
     if (!onChangeRef.current || !selectedSketchId) return;
-    const feature = buildFeature(documentId, featureIdRef.current, selectedSketchId, planePreset, planeOffset, originX, originY, distance, direction, operation);
+    const feature = buildFeature(documentId, featureIdRef.current, selectedSketchId, planePreset, planeOffset, originX, originY, spin, tilt, distance, direction, operation);
     onChangeRef.current(feature);
-  }, [documentId, selectedSketchId, planePreset, planeOffset, originX, originY, distance, direction, operation]);
+  }, [documentId, selectedSketchId, planePreset, planeOffset, originX, originY, spin, tilt, distance, direction, operation]);
 
   const handleSubmit = () => {
     if (!canSubmit) return;
-    const feature = buildFeature(documentId, featureIdRef.current, selectedSketchId, planePreset, planeOffset, originX, originY, distance, direction, operation);
+    const feature = buildFeature(documentId, featureIdRef.current, selectedSketchId, planePreset, planeOffset, originX, originY, spin, tilt, distance, direction, operation);
     onSubmit(feature);
   };
 
@@ -235,6 +250,30 @@ export function ExtrudeForm({ documentId, initial, defaultSketchId, sketchDoc: e
             <option key={name} value={name}>{name}</option>
           ))}
         </select>
+      </div>
+
+      <div>
+        <div style={labelStyle}>Plane rotation (degrees)</div>
+        <div style={{ display: 'flex', gap: '6px' }}>
+          <input
+            type="number"
+            style={halfInputStyle}
+            value={spin}
+            step={5}
+            placeholder="Spin"
+            title="Spin: rotate in-plane"
+            onChange={(e) => setSpin(parseFloat(e.target.value) || 0)}
+          />
+          <input
+            type="number"
+            style={halfInputStyle}
+            value={tilt}
+            step={5}
+            placeholder="Tilt"
+            title="Tilt: tip forward/backward"
+            onChange={(e) => setTilt(parseFloat(e.target.value) || 0)}
+          />
+        </div>
       </div>
 
       <div>
@@ -343,4 +382,4 @@ export function ExtrudeForm({ documentId, initial, defaultSketchId, sketchDoc: e
       </div>
     </div>
   );
-}
+});

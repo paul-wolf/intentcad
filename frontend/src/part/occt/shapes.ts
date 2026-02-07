@@ -92,9 +92,11 @@ function circleToWire(
   try {
     const center = to3D(oc, circle.center.x, circle.center.y, plane, cleanup);
     const [nx, ny, nz] = plane.normal;
+    const [xx, xy, xz] = plane.xAxis;
     const dir = cleanup.track(new oc.gp_Dir_4(nx, ny, nz));
-    // gp_Ax2(Point, Dir) auto-computes X — that's overload _3, not _2
-    const axis = cleanup.track(new oc.gp_Ax2_3(center, dir));
+    const xDir = cleanup.track(new oc.gp_Dir_4(xx, xy, xz));
+    // gp_Ax2(Point, N, Vx) — explicit X direction for correct orientation on rotated planes
+    const axis = cleanup.track(new oc.gp_Ax2_2(center, dir, xDir));
 
     // Approach 1: GC_MakeCircle → Handle(Geom_Circle) → BRepBuilderAPI_MakeEdge
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

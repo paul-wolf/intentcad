@@ -1,6 +1,22 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
+export interface DragInteractionCallbacks {
+  onDragStart: (hitPoint: [number, number, number]) => {
+    axis: [number, number, number];
+    initialValue: number;
+  } | null;
+  onDrag: (newValue: number, isNegative: boolean) => void;
+  onDragEnd?: () => void;
+}
+
+const ARROW_SHAFT_RADIUS = 0.8;
+const ARROW_SHAFT_LENGTH = 15;
+const ARROW_HEAD_RADIUS = 2.5;
+const ARROW_HEAD_HEIGHT = 6;
+const ARROW_COLOR = 0xf59e0b;
+const ARROW_HOVER_COLOR = 0xffffff;
+
 export interface PartViewportOptions {
   container: HTMLElement;
   background?: string;
@@ -20,6 +36,27 @@ export class PartViewport {
   private meshGroup: THREE.Group;
   private previewGroup: THREE.Group;
   private sketchOverlayGroup: THREE.Group;
+  private gizmoGroup: THREE.Group;
+  private raycaster = new THREE.Raycaster();
+  private dragCallbacks: DragInteractionCallbacks | null = null;
+  private activeDrag: {
+    axisOrigin: THREE.Vector3;
+    axisDir: THREE.Vector3;
+    initialT: number;
+    initialValue: number;
+    arrowOrigin?: THREE.Vector3;
+    arrowNormal?: THREE.Vector3;
+  } | null = null;
+  private arrowConfig: {
+    origin: THREE.Vector3;
+    normal: THREE.Vector3;
+    distance: number;
+    direction: 'forward' | 'reverse';
+  } | null = null;
+  private arrowHovered = false;
+  private boundPointerMove: ((e: PointerEvent) => void) | null = null;
+  private boundPointerDown: ((e: PointerEvent) => void) | null = null;
+  private boundPointerUp: ((e: PointerEvent) => void) | null = null;
 
   constructor(opts: PartViewportOptions) {
     const { container } = opts;
@@ -73,6 +110,11 @@ export class PartViewport {
     // Sketch overlay group (3D sketch lines + plane quad)
     this.sketchOverlayGroup = new THREE.Group();
     this.scene.add(this.sketchOverlayGroup);
+
+    // Gizmo group (arrow handle for extrude drag)
+    this.gizmoGroup = new THREE.Group();
+    this.gizmoGroup.renderOrder = 999;
+    this.scene.add(this.gizmoGroup);
 
     // Handle resize
     this.resizeObserver = new ResizeObserver(() => this.handleResize());
@@ -175,6 +217,78 @@ export class PartViewport {
     this.clearGroup(this.sketchOverlayGroup);
   }
 
+  setExtrudeArrow(
+    origin: [number, number, number],
+    normal: [number, number, number],
+    distance: number,
+    direction: 'forward' | 'reverse',
+  ) {
+    const o = new THREE.Vector3(...origin);
+    const n = new THREE.Vector3(...normal).normalize();
+    this.arrowConfig = { origin: o, normal: n, distance, direction };
+    this.rebuildArrow();
+  }
+
+  clearExtrudeArrow() {
+    this.arrowConfig = null;
+    this.clearGroup(this.gizmoGroup);
+  }
+
+  private rebuildArrow() {
+    this.clearGroup(this.gizmoGroup);
+    if (!this.arrowConfig) return;
+
+    const { origin, normal, distance, direction } = this.arrowConfig;
+    const sign = direction === 'reverse' ? -1 : 1;
+
+    // Tip of the extrusion = origin + distance * normal * sign
+    const extrudeTip = origin.clone().addScaledVector(normal, distance * sign);
+
+    // outward = direction away from body along the extrude axis
+    const outward = normal.clone().multiplyScalar(sign);
+
+    // Shaft extends from extrudeTip outward; cone sits at far end with tip pointing outward
+    const shaftCenter = extrudeTip.clone().addScaledVector(outward, ARROW_SHAFT_LENGTH / 2);
+    const headCenter = extrudeTip.clone().addScaledVector(outward, ARROW_SHAFT_LENGTH + ARROW_HEAD_HEIGHT / 2);
+
+    const color = this.arrowHovered ? ARROW_HOVER_COLOR : ARROW_COLOR;
+    const material = new THREE.MeshBasicMaterial({ color, depthTest: false });
+
+    // Shaft
+    const shaftGeo = new THREE.CylinderGeometry(ARROW_SHAFT_RADIUS, ARROW_SHAFT_RADIUS, ARROW_SHAFT_LENGTH, 8);
+    const shaft = new THREE.Mesh(shaftGeo, material);
+    shaft.position.copy(shaftCenter);
+
+    // Head — ConeGeometry tip (radius=0) is at +Y, base at -Y.
+    // We want the tip pointing outward (same as `outward`).
+    const headGeo = new THREE.ConeGeometry(ARROW_HEAD_RADIUS, ARROW_HEAD_HEIGHT, 12);
+    const head = new THREE.Mesh(headGeo, material.clone());
+    head.position.copy(headCenter);
+
+    // Rotate +Y to outward direction
+    const quat = new THREE.Quaternion().setFromUnitVectors(
+      new THREE.Vector3(0, 1, 0),
+      outward,
+    );
+    shaft.setRotationFromQuaternion(quat);
+    head.setRotationFromQuaternion(quat);
+
+    this.gizmoGroup.add(shaft);
+    this.gizmoGroup.add(head);
+  }
+
+  private updateArrowDuringDrag(newValue: number, isNegative: boolean) {
+    if (!this.activeDrag?.arrowOrigin || !this.activeDrag?.arrowNormal) return;
+    const direction: 'forward' | 'reverse' = isNegative ? 'reverse' : 'forward';
+    this.arrowConfig = {
+      origin: this.activeDrag.arrowOrigin,
+      normal: this.activeDrag.arrowNormal,
+      distance: newValue,
+      direction,
+    };
+    this.rebuildArrow();
+  }
+
   private clearGroup(group: THREE.Group) {
     while (group.children.length > 0) {
       const child = group.children[0]!;
@@ -204,7 +318,142 @@ export class PartViewport {
     this.renderer.render(this.scene, this.camera);
   };
 
+  enableDragInteraction(callbacks: DragInteractionCallbacks) {
+    this.disableDragInteraction();
+    this.dragCallbacks = callbacks;
+    const canvas = this.renderer.domElement;
+
+    this.boundPointerMove = (e: PointerEvent) => this.handlePointerMove(e);
+    this.boundPointerDown = (e: PointerEvent) => this.handlePointerDown(e);
+    this.boundPointerUp = () => this.handlePointerUp();
+
+    canvas.addEventListener('pointermove', this.boundPointerMove);
+    canvas.addEventListener('pointerdown', this.boundPointerDown);
+    canvas.addEventListener('pointerup', this.boundPointerUp);
+  }
+
+  disableDragInteraction() {
+    const canvas = this.renderer.domElement;
+    if (this.boundPointerMove) canvas.removeEventListener('pointermove', this.boundPointerMove);
+    if (this.boundPointerDown) canvas.removeEventListener('pointerdown', this.boundPointerDown);
+    if (this.boundPointerUp) canvas.removeEventListener('pointerup', this.boundPointerUp);
+    this.boundPointerMove = null;
+    this.boundPointerDown = null;
+    this.boundPointerUp = null;
+    this.dragCallbacks = null;
+    this.activeDrag = null;
+    this.clearExtrudeArrow();
+  }
+
+  private getNdc(e: PointerEvent): THREE.Vector2 {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    return new THREE.Vector2(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+  }
+
+  private projectOntoAxis(ndc: THREE.Vector2): number {
+    if (!this.activeDrag) return 0;
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const { axisOrigin, axisDir } = this.activeDrag;
+    const R = this.raycaster.ray.origin;
+    const D = this.raycaster.ray.direction;
+
+    // Closest point between two lines:
+    // Line 1: P(t) = axisOrigin + t * axisDir
+    // Line 2: Q(s) = R + s * D
+    // With w = R - axisOrigin, t = (d - b*e) / (1 - b²)
+    const w = new THREE.Vector3().subVectors(R, axisOrigin);
+    const b = axisDir.dot(D);
+    const d = axisDir.dot(w);
+    const e = D.dot(w);
+    const denom = 1 - b * b;
+    if (Math.abs(denom) < 1e-6) return this.activeDrag.initialT; // Lines parallel
+    return (d - b * e) / denom;
+  }
+
+  private handlePointerMove(e: PointerEvent) {
+    const ndc = this.getNdc(e);
+    const canvas = this.renderer.domElement;
+
+    if (this.activeDrag) {
+      const t = this.projectOntoAxis(ndc);
+      const delta = t - this.activeDrag.initialT;
+      const newValue = this.activeDrag.initialValue + delta;
+      const absValue = Math.abs(newValue);
+      const isNeg = newValue < 0;
+      this.dragCallbacks?.onDrag(absValue, isNeg);
+      this.updateArrowDuringDrag(absValue, isNeg);
+      return;
+    }
+
+    // Hover detection — target gizmo arrow if present, else preview mesh
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const target = this.gizmoGroup.children.length > 0 ? this.gizmoGroup : this.previewGroup;
+    const hits = this.raycaster.intersectObjects(target.children, true);
+    const hovering = hits.length > 0;
+    canvas.style.cursor = hovering ? 'grab' : '';
+
+    // Update arrow highlight
+    if (this.gizmoGroup.children.length > 0 && hovering !== this.arrowHovered) {
+      this.arrowHovered = hovering;
+      this.rebuildArrow();
+    }
+  }
+
+  private handlePointerDown(e: PointerEvent) {
+    if (!this.dragCallbacks || e.button !== 0) return;
+
+    const ndc = this.getNdc(e);
+    this.raycaster.setFromCamera(ndc, this.camera);
+    // Raycast against gizmo arrow if present, else preview mesh
+    const target = this.gizmoGroup.children.length > 0 ? this.gizmoGroup : this.previewGroup;
+    const hits = this.raycaster.intersectObjects(target.children, true);
+    if (hits.length === 0) return;
+
+    const hitPoint = hits[0]!.point;
+    const result = this.dragCallbacks.onDragStart([hitPoint.x, hitPoint.y, hitPoint.z]);
+    if (!result) return;
+
+    const axisDir = new THREE.Vector3(...result.axis).normalize();
+    const axisOrigin = hitPoint.clone();
+
+    // Compute initial t
+    const R = this.raycaster.ray.origin;
+    const D = this.raycaster.ray.direction;
+    const w = new THREE.Vector3().subVectors(R, axisOrigin);
+    const b2 = axisDir.dot(D);
+    const d2 = axisDir.dot(w);
+    const e2 = D.dot(w);
+    const denom = 1 - b2 * b2;
+    const initialT = Math.abs(denom) < 1e-6 ? 0 : (d2 - b2 * e2) / denom;
+
+    this.activeDrag = {
+      axisOrigin,
+      axisDir,
+      initialT,
+      initialValue: result.initialValue,
+      arrowOrigin: this.arrowConfig?.origin.clone(),
+      arrowNormal: this.arrowConfig?.normal.clone(),
+    };
+    this.controls.enabled = false;
+    this.renderer.domElement.style.cursor = 'grabbing';
+    this.renderer.domElement.setPointerCapture(e.pointerId);
+  }
+
+  private handlePointerUp() {
+    if (!this.activeDrag) return;
+    this.activeDrag = null;
+    this.controls.enabled = true;
+    this.renderer.domElement.style.cursor = '';
+    this.arrowHovered = false;
+    this.rebuildArrow();
+    this.dragCallbacks?.onDragEnd?.();
+  }
+
   dispose() {
+    this.disableDragInteraction();
     cancelAnimationFrame(this.animationId);
     this.resizeObserver.disconnect();
     this.controls.dispose();

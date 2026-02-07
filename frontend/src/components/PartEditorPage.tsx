@@ -6,14 +6,14 @@ import { useThemeStore } from '@/theme';
 import { partApi } from '@/api/client';
 import { api } from '@/api/client';
 import { setPartBackendId, startPartAutoSave } from '@/api/partAutoSave';
-import { PartViewport } from '@/part/PartViewport';
+import { PartViewport, type DragInteractionCallbacks } from '@/part/PartViewport';
 import { evaluateFeatures, exportFeaturesToSTEP } from '@/part/featureEngine';
 import { exportSTL } from '@/part/stlExport';
 import { buildSketchOverlay } from '@/part/sketchOverlay';
 import { PartToolbar } from './PartToolbar';
 import { FeaturePanel } from './FeaturePanel';
 import { SketchRolodex } from './SketchRolodex';
-import { ExtrudeForm } from './ExtrudeForm';
+import { ExtrudeForm, type ExtrudeFormHandle } from './ExtrudeForm';
 import { RevolveForm } from './RevolveForm';
 import { ShellForm } from './ShellForm';
 import type { Part, Feature, ExtrudeFeature, RevolveFeature, Plane } from '@/types/part';
@@ -43,6 +43,8 @@ export function PartEditorPage() {
   const viewportRef = useRef<PartViewport | null>(null);
   const rolodexSketchIdRef = useRef<string>('');
   const previewCounterRef = useRef(0);
+  const lastPreviewTimeRef = useRef(0);
+  const extrudeFormRef = useRef<ExtrudeFormHandle>(null);
 
   // Load part from backend
   useEffect(() => {
@@ -92,6 +94,40 @@ export function PartEditorPage() {
     viewportRef.current?.setBackground(palette.background);
   }, [palette.background]);
 
+  // Enable/disable drag interaction when draft is an extrude
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+
+    if (!draftFeature || draftFeature.type !== 'extrude') {
+      vp.disableDragInteraction();
+      return;
+    }
+
+    const callbacks: DragInteractionCallbacks = {
+      onDragStart(_hitPoint) {
+        const draft = usePartEditorStore.getState().draftFeature;
+        if (!draft || draft.type !== 'extrude') return null;
+        const ext = draft as ExtrudeFeature;
+        const sign = ext.direction === 'reverse' ? -1 : 1;
+        return {
+          axis: ext.plane.normal,
+          initialValue: ext.distance * sign,
+        };
+      },
+      onDrag(newValue, isNegative) {
+        const handle = extrudeFormRef.current;
+        if (!handle) return;
+        handle.setDistance(Math.max(0.1, newValue));
+        handle.setDirection(isNegative ? 'reverse' : 'forward');
+        handle.setOperation(isNegative ? 'remove' : 'add');
+      },
+    };
+
+    vp.enableDragInteraction(callbacks);
+    return () => vp.disableDragInteraction();
+  }, [draftFeature?.type]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Re-evaluate committed meshes when features change (only when not previewing)
   useEffect(() => {
     if (draftFeature) return; // Skip — preview effect handles display while drafting
@@ -133,17 +169,31 @@ export function PartEditorPage() {
       .catch(() => setDraftSketchDoc(null));
   }, [draftFeature && 'sketchDocumentId' in draftFeature ? draftFeature.sketchDocumentId : null]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Debounced preview evaluation when draftFeature changes
+  // Throttled preview evaluation when draftFeature changes
+  // Fires at most once per 250ms, ensuring updates during continuous drag
   useEffect(() => {
     if (!draftFeature) {
       viewportRef.current?.clearPreview();
+      viewportRef.current?.clearExtrudeArrow();
       return;
     }
 
     const counter = ++previewCounterRef.current;
-    const timer = setTimeout(() => {
+    const now = Date.now();
+    const elapsed = now - lastPreviewTimeRef.current;
+
+    // If enough time has passed, fire immediately
+    if (elapsed >= 250) {
+      lastPreviewTimeRef.current = now;
       runPreview(counter);
-    }, 250);
+      return;
+    }
+
+    // Otherwise schedule for the remaining interval
+    const timer = setTimeout(() => {
+      lastPreviewTimeRef.current = Date.now();
+      runPreview(counter);
+    }, 250 - elapsed);
 
     return () => clearTimeout(timer);
   }, [draftFeature]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -189,6 +239,17 @@ export function PartEditorPage() {
       // Hide committed meshes, show preview
       vp.setMeshes([]);
       vp.setPreviewMesh(meshes.length > 0 ? meshes[0]!.geometry : null);
+
+      // Position extrude arrow gizmo
+      if (draft.type === 'extrude') {
+        const ext = draft as ExtrudeFeature;
+        vp.setExtrudeArrow(
+          ext.plane.origin,
+          ext.plane.normal,
+          ext.distance,
+          ext.direction === 'reverse' ? 'reverse' : 'forward',
+        );
+      }
 
       // Build sketch overlay (only for features with a sketch/plane)
       if ('sketchId' in draft && 'plane' in draft) {
@@ -271,11 +332,13 @@ export function PartEditorPage() {
     }
     clearDraft();
     viewportRef.current?.clearPreview();
+    viewportRef.current?.clearExtrudeArrow();
   }, [beginTransaction, updateFeature, addFeature, clearDraft]);
 
   const handleCancel = useCallback(() => {
     clearDraft();
     viewportRef.current?.clearPreview();
+    viewportRef.current?.clearExtrudeArrow();
   }, [clearDraft]);
 
   const handleDraftChange = useCallback((feature: Feature) => {
@@ -343,6 +406,7 @@ export function PartEditorPage() {
         case 'extrude':
           return (
             <ExtrudeForm
+              ref={extrudeFormRef}
               documentId={part.documentId}
               initial={initial?.type === 'extrude' ? initial : undefined}
               defaultSketchId={rolodexSketchIdRef.current}

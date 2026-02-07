@@ -5,6 +5,7 @@ import type { Document, LineEntity } from '@/types/document';
 import type { RevolveFeature, Plane } from '@/types/part';
 import { PLANE_PRESETS } from '@/types/part';
 import { getExtrudableEntities } from '@/part/profileDetect';
+import { rotatePlane, decomposePlaneAngles, closestPreset } from '@/part/planeRotation';
 
 function getYAxis(normal: [number, number, number], xAxis: [number, number, number]): [number, number, number] {
   return [
@@ -41,16 +42,19 @@ function buildFeature(
   planeOffset: number,
   originX: number,
   originY: number,
+  spin: number,
+  tilt: number,
   axisEntityId: string,
   angle: number,
   operation: 'add' | 'remove',
 ): RevolveFeature {
   const presetNames = Object.keys(PLANE_PRESETS);
   const basePlane = PLANE_PRESETS[planePreset] ?? PLANE_PRESETS[presetNames[0]!]!;
+  const { normal, xAxis } = rotatePlane(basePlane, spin, tilt);
   const plane: Plane = {
     origin: buildPlaneOrigin(basePlane, planeOffset, originX, originY),
-    normal: basePlane.normal,
-    xAxis: basePlane.xAxis,
+    normal,
+    xAxis,
   };
   return {
     id: featureId,
@@ -91,34 +95,33 @@ export function RevolveForm({ documentId, initial, defaultSketchId, sketchDoc: e
   const presetNames = Object.keys(PLANE_PRESETS);
   const [planePreset, setPlanePreset] = useState(() => {
     if (!initial) return presetNames[0]!;
-    for (const [name, preset] of Object.entries(PLANE_PRESETS)) {
-      if (preset.normal[0] === initial.plane.normal[0] &&
-          preset.normal[1] === initial.plane.normal[1] &&
-          preset.normal[2] === initial.plane.normal[2]) {
-        return name;
-      }
-    }
-    return presetNames[0]!;
+    return closestPreset(initial.plane.normal, PLANE_PRESETS);
   });
+
+  const [spin, setSpin] = useState(() => {
+    if (!initial) return 0;
+    const base = PLANE_PRESETS[closestPreset(initial.plane.normal, PLANE_PRESETS)]!;
+    return decomposePlaneAngles(initial.plane, base).spinDeg;
+  });
+  const [tilt, setTilt] = useState(() => {
+    if (!initial) return 0;
+    const base = PLANE_PRESETS[closestPreset(initial.plane.normal, PLANE_PRESETS)]!;
+    return decomposePlaneAngles(initial.plane, base).tiltDeg;
+  });
+
   const [planeOffset, setPlaneOffset] = useState(() => {
     if (!initial) return 0;
-    const base = Object.values(PLANE_PRESETS).find(
-      (p) => p.normal[0] === initial.plane.normal[0] && p.normal[1] === initial.plane.normal[1] && p.normal[2] === initial.plane.normal[2],
-    ) ?? PLANE_PRESETS[presetNames[0]!]!;
+    const base = PLANE_PRESETS[closestPreset(initial.plane.normal, PLANE_PRESETS)]!;
     return decomposeOrigin(initial.plane.origin, base).normalOff;
   });
   const [originX, setOriginX] = useState(() => {
     if (!initial) return 0;
-    const base = Object.values(PLANE_PRESETS).find(
-      (p) => p.normal[0] === initial.plane.normal[0] && p.normal[1] === initial.plane.normal[1] && p.normal[2] === initial.plane.normal[2],
-    ) ?? PLANE_PRESETS[presetNames[0]!]!;
+    const base = PLANE_PRESETS[closestPreset(initial.plane.normal, PLANE_PRESETS)]!;
     return decomposeOrigin(initial.plane.origin, base).xOff;
   });
   const [originY, setOriginY] = useState(() => {
     if (!initial) return 0;
-    const base = Object.values(PLANE_PRESETS).find(
-      (p) => p.normal[0] === initial.plane.normal[0] && p.normal[1] === initial.plane.normal[1] && p.normal[2] === initial.plane.normal[2],
-    ) ?? PLANE_PRESETS[presetNames[0]!]!;
+    const base = PLANE_PRESETS[closestPreset(initial.plane.normal, PLANE_PRESETS)]!;
     return decomposeOrigin(initial.plane.origin, base).yOff;
   });
 
@@ -157,13 +160,13 @@ export function RevolveForm({ documentId, initial, defaultSketchId, sketchDoc: e
   // Fire onChange whenever parameters change
   useEffect(() => {
     if (!onChangeRef.current || !selectedSketchId || !axisEntityId) return;
-    const feature = buildFeature(documentId, featureIdRef.current, selectedSketchId, planePreset, planeOffset, originX, originY, axisEntityId, angle, operation);
+    const feature = buildFeature(documentId, featureIdRef.current, selectedSketchId, planePreset, planeOffset, originX, originY, spin, tilt, axisEntityId, angle, operation);
     onChangeRef.current(feature);
-  }, [documentId, selectedSketchId, planePreset, planeOffset, originX, originY, axisEntityId, angle, operation]);
+  }, [documentId, selectedSketchId, planePreset, planeOffset, originX, originY, spin, tilt, axisEntityId, angle, operation]);
 
   const handleSubmit = () => {
     if (!canSubmit) return;
-    const feature = buildFeature(documentId, featureIdRef.current, selectedSketchId, planePreset, planeOffset, originX, originY, axisEntityId, angle, operation);
+    const feature = buildFeature(documentId, featureIdRef.current, selectedSketchId, planePreset, planeOffset, originX, originY, spin, tilt, axisEntityId, angle, operation);
     onSubmit(feature);
   };
 
@@ -250,6 +253,30 @@ export function RevolveForm({ documentId, initial, defaultSketchId, sketchDoc: e
             <option key={name} value={name}>{name}</option>
           ))}
         </select>
+      </div>
+
+      <div>
+        <div style={labelStyle}>Plane rotation (degrees)</div>
+        <div style={{ display: 'flex', gap: '6px' }}>
+          <input
+            type="number"
+            style={{ ...inputStyle, width: 'calc(50% - 3px)' }}
+            value={spin}
+            step={5}
+            placeholder="Spin"
+            title="Spin: rotate in-plane"
+            onChange={(e) => setSpin(parseFloat(e.target.value) || 0)}
+          />
+          <input
+            type="number"
+            style={{ ...inputStyle, width: 'calc(50% - 3px)' }}
+            value={tilt}
+            step={5}
+            placeholder="Tilt"
+            title="Tilt: tip forward/backward"
+            onChange={(e) => setTilt(parseFloat(e.target.value) || 0)}
+          />
+        </div>
       </div>
 
       <div>
