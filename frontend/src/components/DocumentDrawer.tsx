@@ -7,6 +7,7 @@ import { createEmptyDocument, migrateDocument, generateDateName } from '@/utils/
 import { api, type DocumentListItem } from '@/api/client';
 import { setBackendId, getBackendId, flushSave } from '@/api/autoSave';
 import type { Document } from '@/types/document';
+import { DocumentThumbnail } from './DocumentThumbnail';
 
 export function DocumentDrawer() {
   const navigate = useNavigate();
@@ -208,89 +209,98 @@ export function DocumentDrawer() {
                 key={d.id}
                 style={{
                   display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  padding: '8px 14px',
+                  flexDirection: 'column' as const,
+                  padding: '10px 14px',
                   cursor: 'pointer',
                   fontSize: '13px',
                   borderLeft: '3px solid transparent',
+                  gap: '6px',
                   ...(isActive
                     ? { background: palette.activeItemBg, borderLeftColor: palette.accent }
                     : {}),
                 }}
+                onClick={() => {
+                  if (editingId === d.id) return;
+                  if (clickTimer.current) return;
+                  clickTimer.current = setTimeout(() => {
+                    clickTimer.current = null;
+                    handleOpen(d.id);
+                  }, 250);
+                }}
               >
-                {editingId === d.id ? (
-                  <input
-                    style={{
-                      flex: 1,
-                      background: palette.inputBg,
-                      border: `1px solid ${palette.inputBorder}`,
-                      borderRadius: '2px',
-                      color: palette.text,
-                      fontSize: '13px',
-                      padding: '2px 6px',
-                      outline: 'none',
-                    }}
-                    value={editName}
-                    onChange={(e) => setEditName(e.target.value)}
-                    onBlur={commitRename}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') commitRename();
-                      if (e.key === 'Escape') setEditingId(null);
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                    autoFocus
-                  />
-                ) : (
-                  <span
-                    style={{
-                      flex: 1,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap' as const,
-                      color: palette.text,
-                      cursor: 'pointer',
-                    }}
-                    onClick={() => {
-                      if (clickTimer.current) return;
-                      clickTimer.current = setTimeout(() => {
-                        clickTimer.current = null;
-                        handleOpen(d.id);
-                      }, 250);
-                    }}
-                    onDoubleClick={(e) => {
-                      e.stopPropagation();
-                      if (clickTimer.current) {
-                        clearTimeout(clickTimer.current);
-                        clickTimer.current = null;
-                      }
-                      startRename(d.id, d.name);
-                    }}
-                  >
-                    {d.name}
+                <DocumentThumbnail
+                  documentId={d.id}
+                  width={249}
+                  height={150}
+                  background={palette.background}
+                  stroke={palette.line}
+                />
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  {editingId === d.id ? (
+                    <input
+                      style={{
+                        flex: 1,
+                        background: palette.inputBg,
+                        border: `1px solid ${palette.inputBorder}`,
+                        borderRadius: '2px',
+                        color: palette.text,
+                        fontSize: '13px',
+                        padding: '2px 6px',
+                        outline: 'none',
+                      }}
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      onBlur={commitRename}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') commitRename();
+                        if (e.key === 'Escape') setEditingId(null);
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      autoFocus
+                    />
+                  ) : (
+                    <span
+                      style={{
+                        flex: 1,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap' as const,
+                        color: palette.text,
+                      }}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        if (clickTimer.current) {
+                          clearTimeout(clickTimer.current);
+                          clickTimer.current = null;
+                        }
+                        startRename(d.id, d.name);
+                      }}
+                    >
+                      {d.name}
+                    </span>
+                  )}
+                  <span style={{ fontSize: '10px', color: palette.textSecondary, flexShrink: 0 }}>
+                    {new Date(d.updated_at).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })}
                   </span>
-                )}
-                <span style={{ fontSize: '10px', color: palette.textSecondary, flexShrink: 0 }}>
-                  {new Date(d.updated_at).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })}
-                </span>
-                <button
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: palette.danger,
-                    cursor: 'pointer',
-                    fontSize: '13px',
-                    padding: '0 2px',
-                    flexShrink: 0,
-                  }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDelete(d.id);
-                  }}
-                  title="Delete document"
-                >
-                  x
-                </button>
+                  <button
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: palette.danger,
+                      cursor: 'pointer',
+                      fontSize: '13px',
+                      padding: '0 2px',
+                      flexShrink: 0,
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDelete(d.id);
+                    }}
+                    title="Delete document"
+                  >
+                    x
+                  </button>
+                </div>
               </div>
             );
           })}
