@@ -19,10 +19,10 @@ function to3D(p: Point, plane: Plane): [number, number, number] {
   const [ox, oy, oz] = plane.origin;
   const [nx, ny, nz] = plane.normal;
   const [xx, xy, xz] = plane.xAxis;
-  // yAxis = normal × xAxis
-  const yx = ny * xz - nz * xy;
-  const yy = nz * xx - nx * xz;
-  const yz = nx * xy - ny * xx;
+  // yAxis = xAxis × normal (matches screen-Y-down convention in 2D sketch editor)
+  const yx = xy * nz - xz * ny;
+  const yy = xz * nx - xx * nz;
+  const yz = xx * ny - xy * nx;
   return [
     ox + p.x * xx + p.y * yx,
     oy + p.x * xy + p.y * yy,

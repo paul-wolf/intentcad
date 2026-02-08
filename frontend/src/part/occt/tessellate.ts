@@ -13,7 +13,10 @@ export function tessellate(oc: OC, shape: any, deflection: number, cleanup: Occt
 
   const vertices: number[] = [];
   const indices: number[] = [];
+  const faceIds: number[] = [];
+  const faceRanges: { start: number; count: number }[] = [];
   let vertexOffset = 0;
+  let faceId = 0;
 
   // Iterate over faces
   const explorer = cleanup.track(new oc.TopExp_Explorer_2(
@@ -70,11 +73,15 @@ export function tessellate(oc: OC, shape: any, deflection: number, cleanup: Occt
       const faceOrientation = face.Orientation_1();
       const reversed = faceOrientation === oc.TopAbs_Orientation.TopAbs_REVERSED;
 
+      // Track index range for this face
+      const faceIndexStart = indices.length;
+
       // Extract vertices, applying the face location transform
       for (let i = 1; i <= nbNodes; i++) {
         const node = tri.Node(i);
         const transformed = node.Transformed(trsf);
         vertices.push(transformed.X(), transformed.Y(), transformed.Z());
+        faceIds.push(faceId);
       }
 
       // Extract triangles
@@ -93,7 +100,9 @@ export function tessellate(oc: OC, shape: any, deflection: number, cleanup: Occt
         indices.push(n1, n2, n3);
       }
 
+      faceRanges.push({ start: faceIndexStart, count: indices.length - faceIndexStart });
       vertexOffset += nbNodes;
+      faceId++;
     }
 
     explorer.Next();
@@ -101,8 +110,10 @@ export function tessellate(oc: OC, shape: any, deflection: number, cleanup: Occt
 
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+  geometry.setAttribute('faceId', new THREE.Int32BufferAttribute(faceIds, 1));
   geometry.setIndex(indices);
   geometry.computeVertexNormals();
+  geometry.userData.faceRanges = faceRanges;
 
   return geometry;
 }

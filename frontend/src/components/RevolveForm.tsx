@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { api } from '@/api/client';
 import { useThemeStore } from '@/theme';
 import type { Document, LineEntity } from '@/types/document';
@@ -7,11 +7,12 @@ import { PLANE_PRESETS } from '@/types/part';
 import { getExtrudableEntities } from '@/part/profileDetect';
 import { rotatePlane, decomposePlaneAngles, closestPreset } from '@/part/planeRotation';
 
+/** Compute yAxis = xAxis × normal (matches screen-Y-down convention in 2D sketch editor) */
 function getYAxis(normal: [number, number, number], xAxis: [number, number, number]): [number, number, number] {
   return [
-    normal[1] * xAxis[2] - normal[2] * xAxis[1],
-    normal[2] * xAxis[0] - normal[0] * xAxis[2],
-    normal[0] * xAxis[1] - normal[1] * xAxis[0],
+    xAxis[1] * normal[2] - xAxis[2] * normal[1],
+    xAxis[2] * normal[0] - xAxis[0] * normal[2],
+    xAxis[0] * normal[1] - xAxis[1] * normal[0],
   ];
 }
 
@@ -39,6 +40,7 @@ function buildFeature(
   featureId: string,
   selectedSketchId: string,
   planePreset: string,
+  customPlane: Plane | null,
   planeOffset: number,
   originX: number,
   originY: number,
@@ -48,8 +50,9 @@ function buildFeature(
   angle: number,
   operation: 'add' | 'remove',
 ): RevolveFeature {
-  const presetNames = Object.keys(PLANE_PRESETS);
-  const basePlane = PLANE_PRESETS[planePreset] ?? PLANE_PRESETS[presetNames[0]!]!;
+  const basePlane = (planePreset === 'Face' && customPlane)
+    ? customPlane
+    : (PLANE_PRESETS[planePreset] ?? PLANE_PRESETS[Object.keys(PLANE_PRESETS)[0]!]!);
   const { normal, xAxis } = rotatePlane(basePlane, spin, tilt);
   const plane: Plane = {
     origin: buildPlaneOrigin(basePlane, planeOffset, originX, originY),
@@ -68,6 +71,10 @@ function buildFeature(
   };
 }
 
+export interface RevolveFormHandle {
+  setPlane(plane: Plane): void;
+}
+
 interface RevolveFormProps {
   documentId: string;
   initial?: RevolveFeature;
@@ -78,7 +85,7 @@ interface RevolveFormProps {
   onChange?: (feature: RevolveFeature) => void;
 }
 
-export function RevolveForm({ documentId, initial, defaultSketchId, sketchDoc: externalSketchDoc, onSubmit, onCancel, onChange }: RevolveFormProps) {
+export const RevolveForm = forwardRef<RevolveFormHandle, RevolveFormProps>(function RevolveForm({ documentId, initial, defaultSketchId, sketchDoc: externalSketchDoc, onSubmit, onCancel, onChange }, ref) {
   const palette = useThemeStore((s) => s.palette);
 
   const [internalSketchDoc, setInternalSketchDoc] = useState<Document | null>(null);
@@ -88,9 +95,23 @@ export function RevolveForm({ documentId, initial, defaultSketchId, sketchDoc: e
   const [angle, setAngle] = useState(initial?.angle ?? 360);
   const [operation, setOperation] = useState<'add' | 'remove'>(initial?.operation ?? 'add');
 
+  const [customPlane, setCustomPlane] = useState<Plane | null>(null);
+
   const featureIdRef = useRef(initial?.id ?? crypto.randomUUID());
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+
+  useImperativeHandle(ref, () => ({
+    setPlane(plane: Plane) {
+      setCustomPlane(plane);
+      setPlanePreset('Face');
+      setSpin(0);
+      setTilt(0);
+      setPlaneOffset(0);
+      setOriginX(0);
+      setOriginY(0);
+    },
+  }));
 
   const presetNames = Object.keys(PLANE_PRESETS);
   const [planePreset, setPlanePreset] = useState(() => {
@@ -160,13 +181,13 @@ export function RevolveForm({ documentId, initial, defaultSketchId, sketchDoc: e
   // Fire onChange whenever parameters change
   useEffect(() => {
     if (!onChangeRef.current || !selectedSketchId || !axisEntityId) return;
-    const feature = buildFeature(documentId, featureIdRef.current, selectedSketchId, planePreset, planeOffset, originX, originY, spin, tilt, axisEntityId, angle, operation);
+    const feature = buildFeature(documentId, featureIdRef.current, selectedSketchId, planePreset, customPlane, planeOffset, originX, originY, spin, tilt, axisEntityId, angle, operation);
     onChangeRef.current(feature);
-  }, [documentId, selectedSketchId, planePreset, planeOffset, originX, originY, spin, tilt, axisEntityId, angle, operation]);
+  }, [documentId, selectedSketchId, planePreset, customPlane, planeOffset, originX, originY, spin, tilt, axisEntityId, angle, operation]);
 
   const handleSubmit = () => {
     if (!canSubmit) return;
-    const feature = buildFeature(documentId, featureIdRef.current, selectedSketchId, planePreset, planeOffset, originX, originY, spin, tilt, axisEntityId, angle, operation);
+    const feature = buildFeature(documentId, featureIdRef.current, selectedSketchId, planePreset, customPlane, planeOffset, originX, originY, spin, tilt, axisEntityId, angle, operation);
     onSubmit(feature);
   };
 
@@ -247,11 +268,16 @@ export function RevolveForm({ documentId, initial, defaultSketchId, sketchDoc: e
         <select
           style={inputStyle}
           value={planePreset}
-          onChange={(e) => setPlanePreset(e.target.value)}
+          onChange={(e) => {
+            const v = e.target.value;
+            setPlanePreset(v);
+            if (v !== 'Face') setCustomPlane(null);
+          }}
         >
           {presetNames.map((name) => (
             <option key={name} value={name}>{name}</option>
           ))}
+          {customPlane && <option value="Face">Face</option>}
         </select>
       </div>
 
@@ -373,4 +399,4 @@ export function RevolveForm({ documentId, initial, defaultSketchId, sketchDoc: e
       </div>
     </div>
   );
-}
+});

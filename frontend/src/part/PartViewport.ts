@@ -37,6 +37,7 @@ export class PartViewport {
   private previewGroup: THREE.Group;
   private sketchOverlayGroup: THREE.Group;
   private gizmoGroup: THREE.Group;
+  private faceHighlightGroup: THREE.Group;
   private raycaster = new THREE.Raycaster();
   private dragCallbacks: DragInteractionCallbacks | null = null;
   private activeDrag: {
@@ -57,6 +58,9 @@ export class PartViewport {
   private boundPointerMove: ((e: PointerEvent) => void) | null = null;
   private boundPointerDown: ((e: PointerEvent) => void) | null = null;
   private boundPointerUp: ((e: PointerEvent) => void) | null = null;
+  private facePickCallback: ((info: { point: THREE.Vector3; normal: THREE.Vector3 }) => void) | null = null;
+  private facePickDownPos: { x: number; y: number } | null = null;
+  private highlightedFaceId: number | null = null;
 
   constructor(opts: PartViewportOptions) {
     const { container } = opts;
@@ -115,6 +119,11 @@ export class PartViewport {
     this.gizmoGroup = new THREE.Group();
     this.gizmoGroup.renderOrder = 999;
     this.scene.add(this.gizmoGroup);
+
+    // Face highlight overlay group
+    this.faceHighlightGroup = new THREE.Group();
+    this.faceHighlightGroup.renderOrder = 998;
+    this.scene.add(this.faceHighlightGroup);
 
     // Handle resize
     this.resizeObserver = new ResizeObserver(() => this.handleResize());
@@ -321,28 +330,17 @@ export class PartViewport {
   enableDragInteraction(callbacks: DragInteractionCallbacks) {
     this.disableDragInteraction();
     this.dragCallbacks = callbacks;
-    const canvas = this.renderer.domElement;
-
-    this.boundPointerMove = (e: PointerEvent) => this.handlePointerMove(e);
-    this.boundPointerDown = (e: PointerEvent) => this.handlePointerDown(e);
-    this.boundPointerUp = () => this.handlePointerUp();
-
-    canvas.addEventListener('pointermove', this.boundPointerMove);
-    canvas.addEventListener('pointerdown', this.boundPointerDown);
-    canvas.addEventListener('pointerup', this.boundPointerUp);
+    this.ensurePointerListeners();
   }
 
   disableDragInteraction() {
-    const canvas = this.renderer.domElement;
-    if (this.boundPointerMove) canvas.removeEventListener('pointermove', this.boundPointerMove);
-    if (this.boundPointerDown) canvas.removeEventListener('pointerdown', this.boundPointerDown);
-    if (this.boundPointerUp) canvas.removeEventListener('pointerup', this.boundPointerUp);
-    this.boundPointerMove = null;
-    this.boundPointerDown = null;
-    this.boundPointerUp = null;
     this.dragCallbacks = null;
     this.activeDrag = null;
     this.clearExtrudeArrow();
+    // Remove pointer listeners only if face picking is also inactive
+    if (!this.facePickCallback) {
+      this.removePointerListeners();
+    }
   }
 
   private getNdc(e: PointerEvent): THREE.Vector2 {
@@ -389,21 +387,35 @@ export class PartViewport {
     }
 
     // Hover detection — target gizmo arrow if present, else preview mesh
-    this.raycaster.setFromCamera(ndc, this.camera);
-    const target = this.gizmoGroup.children.length > 0 ? this.gizmoGroup : this.previewGroup;
-    const hits = this.raycaster.intersectObjects(target.children, true);
-    const hovering = hits.length > 0;
-    canvas.style.cursor = hovering ? 'grab' : '';
+    if (this.dragCallbacks) {
+      this.raycaster.setFromCamera(ndc, this.camera);
+      const target = this.gizmoGroup.children.length > 0 ? this.gizmoGroup : this.previewGroup;
+      const hits = this.raycaster.intersectObjects(target.children, true);
+      const hovering = hits.length > 0;
+      canvas.style.cursor = hovering ? 'grab' : '';
 
-    // Update arrow highlight
-    if (this.gizmoGroup.children.length > 0 && hovering !== this.arrowHovered) {
-      this.arrowHovered = hovering;
-      this.rebuildArrow();
+      // Update arrow highlight
+      if (this.gizmoGroup.children.length > 0 && hovering !== this.arrowHovered) {
+        this.arrowHovered = hovering;
+        this.rebuildArrow();
+      }
+    }
+
+    // Face picking hover highlight
+    if (this.facePickCallback && !this.activeDrag) {
+      this.updateFaceHighlight(ndc);
     }
   }
 
   private handlePointerDown(e: PointerEvent) {
-    if (!this.dragCallbacks || e.button !== 0) return;
+    if (e.button !== 0) return;
+
+    // Record position for face pick click detection
+    if (this.facePickCallback) {
+      this.facePickDownPos = { x: e.clientX, y: e.clientY };
+    }
+
+    if (!this.dragCallbacks) return;
 
     const ndc = this.getNdc(e);
     this.raycaster.setFromCamera(ndc, this.camera);
@@ -442,18 +454,195 @@ export class PartViewport {
     this.renderer.domElement.setPointerCapture(e.pointerId);
   }
 
-  private handlePointerUp() {
-    if (!this.activeDrag) return;
-    this.activeDrag = null;
-    this.controls.enabled = true;
-    this.renderer.domElement.style.cursor = '';
-    this.arrowHovered = false;
-    this.rebuildArrow();
-    this.dragCallbacks?.onDragEnd?.();
+  private handlePointerUp(e: PointerEvent) {
+    if (this.activeDrag) {
+      this.activeDrag = null;
+      this.controls.enabled = true;
+      this.renderer.domElement.style.cursor = '';
+      this.arrowHovered = false;
+      this.rebuildArrow();
+      this.dragCallbacks?.onDragEnd?.();
+      this.facePickDownPos = null;
+      return;
+    }
+
+    // Face pick: only fire if pointer barely moved (< 3px), distinguishing click from orbit
+    if (this.facePickCallback && this.facePickDownPos) {
+      const dx = e.clientX - this.facePickDownPos.x;
+      const dy = e.clientY - this.facePickDownPos.y;
+      this.facePickDownPos = null;
+
+      if (dx * dx + dy * dy < 9) {
+        const ndc = this.getNdc(e);
+        const target = this.getFacePickTarget();
+        if (target) {
+          this.raycaster.setFromCamera(ndc, this.camera);
+          const hits = this.raycaster.intersectObjects(target.children, true);
+          if (hits.length > 0) {
+            const hit = hits[0]!;
+            const geometry = (hit.object as THREE.Mesh).geometry as THREE.BufferGeometry;
+            if (hit.faceIndex != null) {
+              const faceNormal = this.computeHitNormal(geometry, hit);
+              this.facePickCallback({ point: hit.point.clone(), normal: faceNormal });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  enableFacePicking(callback: (info: { point: THREE.Vector3; normal: THREE.Vector3 }) => void) {
+    this.disableFacePicking();
+    this.facePickCallback = callback;
+    this.ensurePointerListeners();
+  }
+
+  disableFacePicking() {
+    this.facePickCallback = null;
+    this.facePickDownPos = null;
+    this.highlightedFaceId = null;
+    this.clearGroup(this.faceHighlightGroup);
+    // Remove pointer listeners only if drag interaction is also inactive
+    if (!this.dragCallbacks) {
+      this.removePointerListeners();
+    }
+  }
+
+  private ensurePointerListeners() {
+    if (this.boundPointerMove) return; // Already attached
+    const canvas = this.renderer.domElement;
+    this.boundPointerMove = (e: PointerEvent) => this.handlePointerMove(e);
+    this.boundPointerDown = (e: PointerEvent) => this.handlePointerDown(e);
+    this.boundPointerUp = (e: PointerEvent) => this.handlePointerUp(e);
+    canvas.addEventListener('pointermove', this.boundPointerMove);
+    canvas.addEventListener('pointerdown', this.boundPointerDown);
+    canvas.addEventListener('pointerup', this.boundPointerUp);
+  }
+
+  private removePointerListeners() {
+    const canvas = this.renderer.domElement;
+    if (this.boundPointerMove) canvas.removeEventListener('pointermove', this.boundPointerMove);
+    if (this.boundPointerDown) canvas.removeEventListener('pointerdown', this.boundPointerDown);
+    if (this.boundPointerUp) canvas.removeEventListener('pointerup', this.boundPointerUp);
+    this.boundPointerMove = null;
+    this.boundPointerDown = null;
+    this.boundPointerUp = null;
+  }
+
+  private getFacePickTarget(): THREE.Group | null {
+    if (this.meshGroup.children.length > 0) return this.meshGroup;
+    if (this.previewGroup.children.length > 0) return this.previewGroup;
+    return null;
+  }
+
+  private updateFaceHighlight(ndc: THREE.Vector2) {
+    const target = this.getFacePickTarget();
+    if (!target) {
+      this.clearFaceHighlight();
+      return;
+    }
+
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const hits = this.raycaster.intersectObjects(target.children, true);
+    if (hits.length === 0) {
+      this.clearFaceHighlight();
+      return;
+    }
+
+    const hit = hits[0]!;
+    const mesh = hit.object as THREE.Mesh;
+    const geometry = mesh.geometry as THREE.BufferGeometry;
+    const faceIdAttr = geometry.getAttribute('faceId');
+    if (!faceIdAttr || hit.faceIndex == null) {
+      this.clearFaceHighlight();
+      return;
+    }
+
+    const index = geometry.getIndex();
+    if (!index) {
+      this.clearFaceHighlight();
+      return;
+    }
+
+    // Get faceId from the first vertex of the hit triangle
+    const vertIdx = index.getX(hit.faceIndex * 3);
+    const hitFaceId = faceIdAttr.getX(vertIdx);
+
+    if (hitFaceId === this.highlightedFaceId) return; // Already highlighted
+    this.highlightedFaceId = hitFaceId;
+
+    this.clearGroup(this.faceHighlightGroup);
+
+    // Build highlight mesh from faceRanges
+    const faceRanges = geometry.userData.faceRanges as { start: number; count: number }[] | undefined;
+    if (!faceRanges || !faceRanges[hitFaceId]) return;
+
+    const range = faceRanges[hitFaceId]!;
+    const posAttr = geometry.getAttribute('position');
+
+    const highlightPositions: number[] = [];
+    for (let i = range.start; i < range.start + range.count; i++) {
+      const vi = index.getX(i);
+      highlightPositions.push(posAttr.getX(vi), posAttr.getY(vi), posAttr.getZ(vi));
+    }
+
+    const highlightGeometry = new THREE.BufferGeometry();
+    highlightGeometry.setAttribute('position', new THREE.Float32BufferAttribute(highlightPositions, 3));
+    const highlightMaterial = new THREE.MeshBasicMaterial({
+      color: 0xf59e0b,
+      transparent: true,
+      opacity: 0.35,
+      side: THREE.DoubleSide,
+      depthTest: false,
+    });
+    const highlightMesh = new THREE.Mesh(highlightGeometry, highlightMaterial);
+    // Copy world transform from the source mesh
+    highlightMesh.matrixAutoUpdate = false;
+    highlightMesh.matrix.copy(mesh.matrixWorld);
+    this.faceHighlightGroup.add(highlightMesh);
+  }
+
+  private clearFaceHighlight() {
+    if (this.highlightedFaceId === null) return;
+    this.highlightedFaceId = null;
+    this.clearGroup(this.faceHighlightGroup);
+  }
+
+  /** Interpolate vertex normals at the hit point using barycentric coordinates. */
+  private computeHitNormal(geometry: THREE.BufferGeometry, hit: THREE.Intersection): THREE.Vector3 {
+    const normalAttr = geometry.getAttribute('normal');
+    const posAttr = geometry.getAttribute('position');
+    const index = geometry.getIndex();
+    if (!normalAttr || !posAttr || !index || hit.faceIndex == null) {
+      return new THREE.Vector3(0, 0, 1);
+    }
+
+    const i0 = index.getX(hit.faceIndex * 3);
+    const i1 = index.getX(hit.faceIndex * 3 + 1);
+    const i2 = index.getX(hit.faceIndex * 3 + 2);
+
+    const a = new THREE.Vector3(posAttr.getX(i0), posAttr.getY(i0), posAttr.getZ(i0));
+    const b = new THREE.Vector3(posAttr.getX(i1), posAttr.getY(i1), posAttr.getZ(i1));
+    const c = new THREE.Vector3(posAttr.getX(i2), posAttr.getY(i2), posAttr.getZ(i2));
+
+    const bary = new THREE.Vector3();
+    THREE.Triangle.getBarycoord(hit.point, a, b, c, bary);
+
+    const nA = new THREE.Vector3(normalAttr.getX(i0), normalAttr.getY(i0), normalAttr.getZ(i0));
+    const nB = new THREE.Vector3(normalAttr.getX(i1), normalAttr.getY(i1), normalAttr.getZ(i1));
+    const nC = new THREE.Vector3(normalAttr.getX(i2), normalAttr.getY(i2), normalAttr.getZ(i2));
+
+    return new THREE.Vector3()
+      .addScaledVector(nA, bary.x)
+      .addScaledVector(nB, bary.y)
+      .addScaledVector(nC, bary.z)
+      .normalize();
   }
 
   dispose() {
+    this.disableFacePicking();
     this.disableDragInteraction();
+    this.removePointerListeners();
     cancelAnimationFrame(this.animationId);
     this.resizeObserver.disconnect();
     this.controls.dispose();

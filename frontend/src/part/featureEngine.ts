@@ -120,9 +120,10 @@ function buildAccumulatedShape(
         const [ox, oy, oz] = plane.origin;
         const [nx, ny, nz] = plane.normal;
         const [xx, xy, xz] = plane.xAxis;
-        const yx = ny * xz - nz * xy;
-        const yy = nz * xx - nx * xz;
-        const yz = nx * xy - ny * xx;
+        // yAxis = xAxis × normal (matches screen-Y-down convention in 2D sketch editor)
+        const yx = xy * nz - xz * ny;
+        const yy = xz * nx - xx * nz;
+        const yz = xx * ny - xy * nx;
 
         const ax0: [number, number, number] = [
           ox + p0.x * xx + p0.y * yx,

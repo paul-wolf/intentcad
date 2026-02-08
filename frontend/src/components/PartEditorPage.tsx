@@ -14,11 +14,24 @@ import { PartToolbar } from './PartToolbar';
 import { FeaturePanel } from './FeaturePanel';
 import { SketchRolodex } from './SketchRolodex';
 import { ExtrudeForm, type ExtrudeFormHandle } from './ExtrudeForm';
-import { RevolveForm } from './RevolveForm';
+import { RevolveForm, type RevolveFormHandle } from './RevolveForm';
 import { ShellForm } from './ShellForm';
 import type { Part, Feature, ExtrudeFeature, RevolveFeature, Plane } from '@/types/part';
 import { DEFAULT_XY_PLANE } from '@/types/part';
 import type { Document } from '@/types/document';
+
+function computeXAxis(normal: [number, number, number]): [number, number, number] {
+  const ref: [number, number, number] = Math.abs(normal[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+  // cross(ref, normal)
+  const x: [number, number, number] = [
+    ref[1] * normal[2] - ref[2] * normal[1],
+    ref[2] * normal[0] - ref[0] * normal[2],
+    ref[0] * normal[1] - ref[1] * normal[0],
+  ];
+  const len = Math.sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]);
+  if (len < 1e-12) return [1, 0, 0];
+  return [x[0] / len, x[1] / len, x[2] / len];
+}
 
 export function PartEditorPage() {
   const { id } = useParams<{ id: string }>();
@@ -46,6 +59,7 @@ export function PartEditorPage() {
   const previewCounterRef = useRef(0);
   const lastPreviewTimeRef = useRef(0);
   const extrudeFormRef = useRef<ExtrudeFormHandle>(null);
+  const revolveFormRef = useRef<RevolveFormHandle>(null);
 
   // Load part from backend
   useEffect(() => {
@@ -127,6 +141,33 @@ export function PartEditorPage() {
 
     vp.enableDragInteraction(callbacks);
     return () => vp.disableDragInteraction();
+  }, [draftFeature?.type]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Enable face picking when draft is extrude or revolve
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+
+    if (!draftFeature || (draftFeature.type !== 'extrude' && draftFeature.type !== 'revolve')) {
+      vp.disableFacePicking();
+      return;
+    }
+
+    vp.enableFacePicking((info) => {
+      const normal: [number, number, number] = [info.normal.x, info.normal.y, info.normal.z];
+      const origin: [number, number, number] = [info.point.x, info.point.y, info.point.z];
+      const xAxis = computeXAxis(normal);
+      const plane: Plane = { origin, normal, xAxis };
+
+      const draft = usePartEditorStore.getState().draftFeature;
+      if (draft?.type === 'extrude') {
+        extrudeFormRef.current?.setPlane(plane);
+      } else if (draft?.type === 'revolve') {
+        revolveFormRef.current?.setPlane(plane);
+      }
+    });
+
+    return () => vp.disableFacePicking();
   }, [draftFeature?.type]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Re-evaluate committed meshes when features change (only when not previewing)
@@ -460,6 +501,7 @@ export function PartEditorPage() {
         case 'revolve':
           return (
             <RevolveForm
+              ref={revolveFormRef}
               documentId={part.documentId}
               initial={initial?.type === 'revolve' ? initial : undefined}
               defaultSketchId={rolodexSketchIdRef.current}
