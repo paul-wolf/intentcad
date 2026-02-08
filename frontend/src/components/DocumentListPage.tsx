@@ -2,11 +2,12 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useThemeStore } from '@/theme';
-import { createEmptyDocument, migrateDocument } from '@/utils/document';
+import { createEmptyDocument, migrateDocument, generateDateName } from '@/utils/document';
 import { api, partApi, type DocumentListItem, type PartListItem } from '@/api/client';
 import { setBackendId } from '@/api/autoSave';
 import type { Document } from '@/types/document';
 import { DocumentThumbnail } from './DocumentThumbnail';
+import { PartListThumbnail } from './PartListThumbnail';
 
 export function DocumentListPage() {
   const navigate = useNavigate();
@@ -16,6 +17,9 @@ export function DocumentListPage() {
   const [parts, setParts] = useState<PartListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingType, setEditingType] = useState<'doc' | 'part'>('doc');
+  const [editName, setEditName] = useState('');
 
   const fetchDocs = useCallback(async () => {
     try {
@@ -38,7 +42,8 @@ export function DocumentListPage() {
   useEffect(() => { fetchDocs(); }, [fetchDocs]);
 
   const handleNew = async () => {
-    const doc = createEmptyDocument('Untitled');
+    const name = generateDateName(docs.map((d) => d.name));
+    const doc = createEmptyDocument(name);
     setDocument(doc);
     try {
       const saved = await api.createDocument(doc.name, doc as unknown as Record<string, unknown>);
@@ -73,7 +78,8 @@ export function DocumentListPage() {
 
   const handleNewPart = async () => {
     try {
-      const saved = await partApi.createPart('Untitled Part', { id: crypto.randomUUID(), name: 'Untitled Part', features: [] });
+      const partName = generateDateName(parts.map((p) => p.name));
+      const saved = await partApi.createPart(partName, { id: crypto.randomUUID(), name: partName, features: [] });
       navigate(`/part/${saved.id}`);
     } catch {
       // Offline — can't create parts without backend
@@ -88,6 +94,32 @@ export function DocumentListPage() {
     } catch (err) {
       console.error('Failed to delete part:', err);
     }
+  };
+
+  const startRename = (id: string, currentName: string, type: 'doc' | 'part') => {
+    setEditingId(id);
+    setEditingType(type);
+    setEditName(currentName);
+  };
+
+  const commitRename = async () => {
+    if (!editingId || !editName.trim()) {
+      setEditingId(null);
+      return;
+    }
+    const trimmed = editName.trim();
+    try {
+      if (editingType === 'doc') {
+        await api.updateDocument(editingId, { name: trimmed });
+        setDocs((prev) => prev.map((d) => (d.id === editingId ? { ...d, name: trimmed } : d)));
+      } else {
+        await partApi.updatePart(editingId, { name: trimmed });
+        setParts((prev) => prev.map((p) => (p.id === editingId ? { ...p, name: trimmed } : p)));
+      }
+    } catch (err) {
+      console.error('Failed to rename:', err);
+    }
+    setEditingId(null);
   };
 
   return (
@@ -176,12 +208,40 @@ export function DocumentListPage() {
                 background={palette.background}
                 stroke={palette.line}
               />
-              <span
-                style={{ flex: 1, cursor: 'pointer', color: palette.text, fontSize: '14px' }}
-                onClick={() => handleOpen(d.id)}
-              >
-                {d.name}
-              </span>
+              {editingId === d.id && editingType === 'doc' ? (
+                <input
+                  style={{
+                    flex: 1,
+                    background: palette.panelBg,
+                    border: `1px solid ${palette.textSecondary}`,
+                    borderRadius: '2px',
+                    color: palette.text,
+                    fontSize: '14px',
+                    padding: '2px 6px',
+                    outline: 'none',
+                  }}
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  onBlur={commitRename}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitRename();
+                    if (e.key === 'Escape') setEditingId(null);
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  autoFocus
+                />
+              ) : (
+                <span
+                  style={{ flex: 1, cursor: 'pointer', color: palette.text, fontSize: '14px' }}
+                  onClick={() => handleOpen(d.id)}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    startRename(d.id, d.name, 'doc');
+                  }}
+                >
+                  {d.name}
+                </span>
+              )}
               <span style={{ fontSize: '11px', color: palette.textSecondary }}>
                 {new Date(d.updated_at).toLocaleDateString()}
               </span>
@@ -227,12 +287,46 @@ export function DocumentListPage() {
                 borderRadius: '4px',
               }}
             >
-              <span
-                style={{ flex: 1, cursor: 'pointer', color: palette.text, fontSize: '14px' }}
-                onClick={() => navigate(`/part/${p.id}`)}
-              >
-                {p.name}
-              </span>
+              <PartListThumbnail
+                partId={p.id}
+                width={48}
+                height={36}
+                background={palette.background}
+              />
+              {editingId === p.id && editingType === 'part' ? (
+                <input
+                  style={{
+                    flex: 1,
+                    background: palette.panelBg,
+                    border: `1px solid ${palette.textSecondary}`,
+                    borderRadius: '2px',
+                    color: palette.text,
+                    fontSize: '14px',
+                    padding: '2px 6px',
+                    outline: 'none',
+                  }}
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  onBlur={commitRename}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') commitRename();
+                    if (e.key === 'Escape') setEditingId(null);
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  autoFocus
+                />
+              ) : (
+                <span
+                  style={{ flex: 1, cursor: 'pointer', color: palette.text, fontSize: '14px' }}
+                  onClick={() => navigate(`/part/${p.id}`)}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    startRename(p.id, p.name, 'part');
+                  }}
+                >
+                  {p.name}
+                </span>
+              )}
               <span style={{ fontSize: '11px', color: palette.textSecondary }}>
                 {new Date(p.updated_at).toLocaleDateString()}
               </span>

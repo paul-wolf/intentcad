@@ -92,6 +92,8 @@ export function Toolbar() {
   const setActiveTool = useEditorStore((s) => s.setActiveTool);
   const drawerOpen = useUIStateStore((s) => s.drawerOpen);
   const toggleDrawer = useUIStateStore((s) => s.toggleDrawer);
+  const propertiesOpen = useUIStateStore((s) => s.propertiesOpen);
+  const toggleProperties = useUIStateStore((s) => s.toggleProperties);
   const doc = useDocumentStore((s) => s.document);
   const palette = useThemeStore((s) => s.palette);
   const theme = useThemeStore((s) => s.theme);
@@ -579,6 +581,22 @@ export function Toolbar() {
         Fit All
       </button>
       <div style={{ flex: 1 }} />
+      <button
+        onClick={toggleProperties}
+        style={{
+          padding: '4px 12px',
+          border: `1px solid ${propertiesOpen ? palette.accent : palette.inputBorder}`,
+          borderRadius: '4px',
+          background: propertiesOpen ? palette.activeItemBg : palette.buttonBg,
+          color: propertiesOpen ? palette.accent : palette.text,
+          cursor: 'pointer',
+          fontSize: '13px',
+        }}
+        title="Toggle document properties panel"
+      >
+        Props
+      </button>
+      <Sep color={palette.border} />
       <button
         onClick={async () => {
           const backendId = getBackendId();

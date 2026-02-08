@@ -6,6 +6,7 @@ import { RightPanel } from './RightPanel';
 import { DocumentDrawer } from './DocumentDrawer';
 import { LogPanel } from './LogPanel';
 import { HistoryPanel } from './HistoryPanel';
+import { DocumentPropertiesPanel } from './DocumentPropertiesPanel';
 import { CanvasContainer } from '@/canvas/CanvasContainer';
 import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
@@ -129,6 +130,7 @@ export function EditorPage() {
       <div style={styles.middle}>
         <HistoryPanel />
         <CanvasContainer activeTool={toolInstance} docId={id} />
+        <DocumentPropertiesPanel />
         <RightPanel />
       </div>
       <LogPanel />

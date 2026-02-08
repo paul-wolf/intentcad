@@ -247,12 +247,20 @@ function renderActiveSketch(ctx: RenderContext) {
         const lineStyle = isSelected ? styles.dimensionSelected : styles.dimensionLine;
         const textStyle = styles.dimensionText;
 
-        // Two-segment dimension (distance or angle)
+        // Two-entity dimension (distance or angle)
         if (entity.targetEntityId2 != null) {
           const target2 = activeSketch.entities.find(
             (e) => e.id === entity.targetEntityId2,
           );
-          if (!target2 || target.type !== 'line' || target2.type !== 'line') break;
+          if (!target2) break;
+
+          // Circle-to-circle center distance
+          if (target.type === 'circle' && target2.type === 'circle') {
+            drawDimension(renderer, viewport, { a: target.center, b: target2.center, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression);
+            break;
+          }
+
+          if (target.type !== 'line' || target2.type !== 'line') break;
           const idx1 = entity.segmentIndex;
           const idx2 = entity.segmentIndex2!;
           if (idx1 < 0 || idx1 >= getSegmentCount(target)) break;

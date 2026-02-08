@@ -185,10 +185,18 @@ export interface Sketch {
   constraints: Constraint[];
 }
 
+export interface DocumentMetadata {
+  description?: string;
+  author?: string;
+  revision?: string;
+  notes?: string;
+}
+
 export interface Document {
   id: string;
   name: string;
   sketches: Sketch[];
   activeSketchId: string;
   parameters?: Record<string, number>;
+  metadata?: DocumentMetadata;
 }

@@ -3,6 +3,7 @@ import type { Point } from '@/types/document';
 
 const STORAGE_KEY = 'intentcad-ui-state';
 const DRAWER_KEY = 'intentcad-drawer-open';
+const PROPERTIES_KEY = 'intentcad-properties-open';
 
 export interface PerDocumentUIState {
   viewport?: { offset: Point; scale: number };
@@ -11,9 +12,11 @@ export interface PerDocumentUIState {
 interface UIStateStore {
   states: Record<string, PerDocumentUIState>;
   drawerOpen: boolean;
+  propertiesOpen: boolean;
   setViewport(docId: string, offset: Point, scale: number): void;
   getViewport(docId: string): { offset: Point; scale: number } | undefined;
   toggleDrawer(): void;
+  toggleProperties(): void;
 }
 
 function loadStates(): Record<string, PerDocumentUIState> {
@@ -36,12 +39,21 @@ function saveStates(states: Record<string, PerDocumentUIState>): void {
 export const useUIStateStore = create<UIStateStore>((set, get) => ({
   states: loadStates(),
   drawerOpen: localStorage.getItem(DRAWER_KEY) === 'true',
+  propertiesOpen: localStorage.getItem(PROPERTIES_KEY) === 'true',
 
   toggleDrawer() {
     set((s) => {
       const next = !s.drawerOpen;
       localStorage.setItem(DRAWER_KEY, String(next));
       return { drawerOpen: next };
+    });
+  },
+
+  toggleProperties() {
+    set((s) => {
+      const next = !s.propertiesOpen;
+      localStorage.setItem(PROPERTIES_KEY, String(next));
+      return { propertiesOpen: next };
     });
   },
 

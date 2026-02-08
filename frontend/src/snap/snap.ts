@@ -6,7 +6,7 @@ import type { Viewport } from '@/types/renderer';
 
 export interface SnapResult {
   point: Point;
-  type: 'endpoint' | 'intersection' | 'grid';
+  type: 'endpoint' | 'intersection' | 'circumference' | 'grid';
   entityId?: string;
   pointIndex?: number;
 }
@@ -146,6 +146,40 @@ export function snapPosition(
 
   if (bestEndpoint) {
     return { point: bestEndpoint, type: bestType, entityId: bestEntityId, pointIndex: bestPointIndex };
+  }
+
+  // Check circle circumferences (lower priority than endpoints/intersections, higher than grid)
+  let bestCircSnap: Point | null = null;
+  let bestCircDist = SNAP_RADIUS;
+  let bestCircEntityId: string | undefined;
+
+  for (const sketch of document.sketches) {
+    if (!sketch.visible || sketch.suppressed) continue;
+    for (const entity of sketch.entities) {
+      if (excludeEntityIds?.has(entity.id)) continue;
+      if (entity.type === 'circle') {
+        const screenCenter = viewport.worldToScreen(entity.center);
+        const screenRadius = entity.radius * viewport.scale;
+        const dToCenter = distance(screenPos, screenCenter);
+        const dToEdge = Math.abs(dToCenter - screenRadius);
+        if (dToEdge < bestCircDist && dToCenter > 0.001) {
+          bestCircDist = dToEdge;
+          // Nearest point on circumference in world space
+          const dx = worldPos.x - entity.center.x;
+          const dy = worldPos.y - entity.center.y;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          bestCircSnap = {
+            x: entity.center.x + (dx / len) * entity.radius,
+            y: entity.center.y + (dy / len) * entity.radius,
+          };
+          bestCircEntityId = entity.id;
+        }
+      }
+    }
+  }
+
+  if (bestCircSnap) {
+    return { point: bestCircSnap, type: 'circumference', entityId: bestCircEntityId };
   }
 
   // Fall back to grid snap

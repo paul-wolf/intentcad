@@ -208,10 +208,29 @@ export function hitTestEntities(
       );
       if (!target) continue;
 
-      // Two-segment dimension (distance or angle)
+      // Two-entity dimension (distance or angle)
       if (entity.targetEntityId2 != null) {
         const target2 = allEntities.find((e) => e.id === entity.targetEntityId2);
-        if (!target2 || target.type !== 'line' || target2.type !== 'line') continue;
+        if (!target2) continue;
+
+        // Circle-to-circle center distance dimension
+        if (target.type === 'circle' && target2.type === 'circle') {
+          const a = target.center;
+          const b = target2.center;
+          const perp2 = perpDir(a, b);
+          const oa: Point = { x: a.x + perp2.x * entity.offset, y: a.y + perp2.y * entity.offset };
+          const ob: Point = { x: b.x + perp2.x * entity.offset, y: b.y + perp2.y * entity.offset };
+          const sa = viewport.worldToScreen(oa);
+          const sb = viewport.worldToScreen(ob);
+          const d = pointToSegmentDist(screenPos, sa, sb);
+          if (d < bestDist) {
+            bestDist = d;
+            best = entity;
+          }
+          continue;
+        }
+
+        if (target.type !== 'line' || target2.type !== 'line') continue;
         const idx1 = entity.segmentIndex;
         const idx2 = entity.segmentIndex2!;
         if (idx1 < 0 || idx1 >= getSegmentCount(target)) continue;
@@ -387,6 +406,17 @@ export function hitTestSegment(
           bestDist = d;
           best = { entityId: entity.id, segmentIndex: i };
         }
+      }
+    } else if (entity.type === 'circle') {
+      const screenCenter = viewport.worldToScreen(entity.center);
+      const screenRadius = entity.radius * viewport.scale;
+      // Hit the circle edge or center
+      const dEdge = Math.abs(distance(screenPos, screenCenter) - screenRadius);
+      const dCenter = distance(screenPos, screenCenter);
+      const d = Math.min(dEdge, dCenter);
+      if (d < bestDist) {
+        bestDist = d;
+        best = { entityId: entity.id, segmentIndex: -1 };
       }
     } else if (entity.type === 'rectangle') {
       const hw = entity.width / 2;

@@ -15,10 +15,17 @@ export function resolveDimensionEndpoints(
   const target = allEntities.find((e) => e.id === dim.targetEntityId);
   if (!target) return null;
 
-  // Two-segment distance dimension
+  // Two-entity distance dimension
   if (dim.targetEntityId2 != null) {
     const target2 = allEntities.find((e) => e.id === dim.targetEntityId2);
-    if (!target2 || target.type !== 'line' || target2.type !== 'line') return null;
+    if (!target2) return null;
+
+    // Circle-to-circle center distance
+    if (target.type === 'circle' && target2.type === 'circle') {
+      return { a: target.center, b: target2.center };
+    }
+
+    if (target.type !== 'line' || target2.type !== 'line') return null;
     const idx1 = dim.segmentIndex;
     const idx2 = dim.segmentIndex2!;
     if (idx1 < 0 || idx1 >= getSegmentCount(target)) return null;

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Document, Entity, Point, Sketch, Constraint, HorizontalConstraint, VerticalConstraint } from '@/types/document';
+import type { Document, DocumentMetadata, Entity, Point, Sketch, Constraint, HorizontalConstraint, VerticalConstraint } from '@/types/document';
 import { createEmptyDocument, createEmptySketch } from '@/utils/document';
 import { createMirroredEntity, createRotatedEntity, createTranslatedEntity, propagateDerived } from '@/utils/propagate';
 import { rotatePoint, lineLineIntersection } from '@/utils/geometry';
@@ -34,6 +34,7 @@ interface DocumentStore {
   // Document actions
   setDocument(doc: Document): void;
   setDocumentName(name: string): void;
+  setMetadata(metadata: Partial<DocumentMetadata>): void;
 
   // Undo/Redo
   beginTransaction(label: string): void;
@@ -140,6 +141,15 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
 
   setDocumentName(name) {
     set((s) => ({ document: { ...s.document, name } }));
+  },
+
+  setMetadata(metadata) {
+    set((s) => ({
+      document: {
+        ...s.document,
+        metadata: { ...s.document.metadata, ...metadata },
+      },
+    }));
   },
 
   beginTransaction(label: string) {

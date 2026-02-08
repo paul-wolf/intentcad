@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useUIStateStore } from '@/stores/uiStateStore';
 import { useThemeStore } from '@/theme';
-import { createEmptyDocument, migrateDocument } from '@/utils/document';
+import { createEmptyDocument, migrateDocument, generateDateName } from '@/utils/document';
 import { api, type DocumentListItem } from '@/api/client';
 import { setBackendId, getBackendId, flushSave } from '@/api/autoSave';
 import type { Document } from '@/types/document';
@@ -51,7 +51,8 @@ export function DocumentDrawer() {
 
   const handleNew = async () => {
     flushSave();
-    const doc = createEmptyDocument('Untitled');
+    const name = generateDateName(docs.map((d) => d.name));
+    const doc = createEmptyDocument(name);
     setDocument(doc);
     try {
       const saved = await api.createDocument(doc.name, doc as unknown as Record<string, unknown>);
@@ -80,6 +81,8 @@ export function DocumentDrawer() {
       console.error('Failed to delete document:', err);
     }
   };
+
+  const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const startRename = (id: string, currentName: string) => {
     setEditingId(id);
@@ -215,7 +218,6 @@ export function DocumentDrawer() {
                     ? { background: palette.activeItemBg, borderLeftColor: palette.accent }
                     : {}),
                 }}
-                onClick={() => handleOpen(d.id)}
               >
                 {editingId === d.id ? (
                   <input
@@ -247,9 +249,21 @@ export function DocumentDrawer() {
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap' as const,
                       color: palette.text,
+                      cursor: 'pointer',
+                    }}
+                    onClick={() => {
+                      if (clickTimer.current) return;
+                      clickTimer.current = setTimeout(() => {
+                        clickTimer.current = null;
+                        handleOpen(d.id);
+                      }, 250);
                     }}
                     onDoubleClick={(e) => {
                       e.stopPropagation();
+                      if (clickTimer.current) {
+                        clearTimeout(clickTimer.current);
+                        clickTimer.current = null;
+                      }
                       startRename(d.id, d.name);
                     }}
                   >

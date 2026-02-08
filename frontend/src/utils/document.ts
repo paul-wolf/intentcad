@@ -1,6 +1,27 @@
 import type { Document, Entity, Sketch, Constraint } from '@/types/document';
 import { generateId } from './id';
 
+export function generateUniqueName(baseName: string, existingNames: string[]): string {
+  const nameSet = new Set(existingNames);
+  if (!nameSet.has(baseName)) return baseName;
+  for (let i = 2; ; i++) {
+    const candidate = `${baseName} ${i}`;
+    if (!nameSet.has(candidate)) return candidate;
+  }
+}
+
+export function generateDateName(existingNames: string[]): string {
+  const base = new Date().toLocaleDateString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric',
+  });
+  const nameSet = new Set(existingNames);
+  if (!nameSet.has(base)) return base;
+  for (let i = 2; ; i++) {
+    const candidate = `${base} (${i})`;
+    if (!nameSet.has(candidate)) return candidate;
+  }
+}
+
 export function createEmptySketch(name: string): Sketch {
   return {
     id: generateId('sk'),

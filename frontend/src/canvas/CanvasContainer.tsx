@@ -392,10 +392,22 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
     const target = sketch.entities.find((e) => e.id === dim.targetEntityId);
     if (!target) return null;
 
-    // Two-segment dimension (distance or angle)
+    // Two-entity dimension (distance or angle)
     if (dim.targetEntityId2 != null) {
       const target2 = sketch.entities.find((e) => e.id === dim.targetEntityId2);
-      if (!target2 || target.type !== 'line' || target2.type !== 'line') return null;
+      if (!target2) return null;
+
+      // Circle-to-circle center distance
+      if (target.type === 'circle' && target2.type === 'circle') {
+        const a = target.center;
+        const b = target2.center;
+        const geom: DimensionGeom = { a, b, offset: dim.offset };
+        const pos = getDimensionTextScreenPos(vp, geom);
+        const value = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
+        return { pos, value, expression: dim.expression };
+      }
+
+      if (target.type !== 'line' || target2.type !== 'line') return null;
       const idx1 = dim.segmentIndex;
       const idx2 = dim.segmentIndex2!;
       if (idx1 < 0 || idx1 >= getSegmentCount(target)) return null;
