@@ -30,6 +30,7 @@ export function PartEditorPage() {
   const restoreHistory = usePartStore((s) => s.restoreHistory);
   const palette = useThemeStore((s) => s.palette);
 
+  const selectedFeatureId = usePartEditorStore((s) => s.selectedFeatureId);
   const draftFeature = usePartEditorStore((s) => s.draftFeature);
   const editingExistingId = usePartEditorStore((s) => s.editingExistingId);
   const draftSketchDoc = usePartEditorStore((s) => s.draftSketchDoc);
@@ -151,6 +152,46 @@ export function PartEditorPage() {
         console.error('Failed to evaluate features:', err);
       });
   }, [part.features, draftFeature]);
+
+  // Show sketch overlay when a committed feature is selected (not drafting)
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+
+    if (draftFeature || !selectedFeatureId) {
+      if (!draftFeature) vp.setSketchOverlay(null, null);
+      return;
+    }
+
+    const feature = part.features.find((f) => f.id === selectedFeatureId);
+    if (!feature || !('plane' in feature) || !('sketchDocumentId' in feature)) {
+      vp.setSketchOverlay(null, null);
+      return;
+    }
+
+    let cancelled = false;
+    const sketchFeature = feature as ExtrudeFeature | RevolveFeature;
+    api.getDocument(sketchFeature.sketchDocumentId)
+      .then((full) => {
+        if (cancelled) return;
+        const doc = full.data as unknown as Document;
+        const sketch = doc.sketches.find((s) => s.id === sketchFeature.sketchId);
+        if (sketch) {
+          const overlay = buildSketchOverlay(sketch, sketchFeature.plane);
+          vp.setSketchOverlay(
+            overlay.linePositions,
+            { center: overlay.planeCenter, normal: overlay.planeNormal, xAxis: overlay.planeXAxis, size: overlay.planeSize },
+          );
+        } else {
+          vp.setSketchOverlay(null, null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) vp.setSketchOverlay(null, null);
+      });
+
+    return () => { cancelled = true; };
+  }, [selectedFeatureId, draftFeature, part.features]);
 
   // Fetch sketch doc when draft feature changes sketch reference
   useEffect(() => {
