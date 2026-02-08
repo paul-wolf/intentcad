@@ -83,19 +83,19 @@ export function PartToolbar({ onAddExtrude, onAddRevolve, onAddShell, onExportST
         style={{ ...buttonStyle, background: palette.primaryBtn, color: '#fff', border: 'none' }}
         onClick={onAddExtrude}
       >
-        Add Extrude
+        Extrude
       </button>
       <button
         style={{ ...buttonStyle, background: palette.primaryBtn, color: '#fff', border: 'none' }}
         onClick={onAddRevolve}
       >
-        Add Revolve
+        Revolve
       </button>
       <button
         style={{ ...buttonStyle, background: palette.primaryBtn, color: '#fff', border: 'none' }}
         onClick={onAddShell}
       >
-        Add Shell
+        Shell
       </button>
       <button style={buttonStyle} onClick={onExportSTL}>
         Export STL
