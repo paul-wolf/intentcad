@@ -13,6 +13,7 @@ import {
   shellShape,
   filletShape,
   chamferShape,
+  loftShape,
   booleanFuse,
   booleanCut,
   tessellate,
@@ -72,6 +73,44 @@ function buildAccumulatedShape(
         accumulated = chamferShape(oc, accumulated, feature.edgeIndices, feature.distance, cleanup);
       } catch (e) {
         console.error(`[OCCT] chamferShape failed:`, e);
+      }
+      continue;
+    }
+
+    // Loft: join profiles across planes
+    if (feature.type === 'loft') {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const wires: any[] = [];
+      for (const section of feature.sections) {
+        const sDoc = sketchDocs.get(section.sketchDocumentId);
+        if (!sDoc) continue;
+        const sketch = sDoc.sketches.find((s) => s.id === section.sketchId);
+        if (!sketch) continue;
+        const topLevel = findTopLevelProfiles(sketch);
+        if (topLevel.length === 0) continue;
+        // Use first (largest) profile
+        try {
+          const wire = entityToWire(oc, topLevel[0]!, section.plane, cleanup);
+          if (wire) wires.push(wire);
+        } catch (e) {
+          console.error(`[OCCT] loft entityToWire failed:`, e);
+        }
+      }
+      if (wires.length >= 2) {
+        try {
+          const loftResult = loftShape(oc, wires, true, cleanup);
+          if (!accumulated) {
+            accumulated = loftResult;
+          } else {
+            if (feature.operation === 'remove') {
+              accumulated = booleanCut(oc, accumulated, loftResult, cleanup);
+            } else {
+              accumulated = booleanFuse(oc, accumulated, loftResult, cleanup);
+            }
+          }
+        } catch (e) {
+          console.error(`[OCCT] loftShape failed:`, e);
+        }
       }
       continue;
     }

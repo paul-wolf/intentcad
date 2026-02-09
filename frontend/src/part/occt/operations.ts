@@ -448,3 +448,83 @@ export function chamferShape(
 
   return chamfer.Shape();
 }
+
+/**
+ * Loft through a series of wires to create a solid.
+ * Uses BRepOffsetAPI_ThruSections (isSolid, ruled, pres3d).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function loftShape(oc: OC, wires: any[], isSolid: boolean, cleanup: OcctCleanup): any {
+  if (wires.length < 2) throw new Error('Loft requires at least 2 wires');
+
+  // Try to find the ThruSections constructor — WASM bindings may use different suffixes
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let thru: any = null;
+  for (const suffix of ['_1', '_2', '_3', '_4', '_5', '']) {
+    const ctor = oc[`BRepOffsetAPI_ThruSections${suffix}`];
+    if (typeof ctor !== 'function') continue;
+    // Try 3-arg constructor: (isSolid, ruled, pres3d)
+    try {
+      const obj = new ctor(isSolid, false, 1e-6);
+      if (obj && typeof obj.AddWire === 'function' || typeof obj.AddWire_1 === 'function') {
+        thru = cleanup.track(obj);
+        break;
+      }
+      obj.delete?.();
+    } catch { /* wrong overload */ }
+    // Try 2-arg constructor: (isSolid, ruled)
+    try {
+      const obj = new ctor(isSolid, false);
+      if (obj && (typeof obj.AddWire === 'function' || typeof obj.AddWire_1 === 'function')) {
+        thru = cleanup.track(obj);
+        break;
+      }
+      obj.delete?.();
+    } catch { /* wrong overload */ }
+    // Try 1-arg constructor: (isSolid)
+    try {
+      const obj = new ctor(isSolid);
+      if (obj && (typeof obj.AddWire === 'function' || typeof obj.AddWire_1 === 'function')) {
+        thru = cleanup.track(obj);
+        break;
+      }
+      obj.delete?.();
+    } catch { /* wrong overload */ }
+  }
+
+  if (!thru) throw new Error('BRepOffsetAPI_ThruSections not available in this OCCT build');
+
+  // Add wires — try AddWire then AddWire_1
+  for (const wire of wires) {
+    let added = false;
+    // Cast to TopoDS_Wire if needed
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let w: any = wire;
+    const td = oc.TopoDS;
+    if (typeof td?.Wire === 'function') {
+      try { w = td.Wire(wire); } catch { /* use original */ }
+    } else if (typeof td?.Wire_1 === 'function') {
+      try { w = td.Wire_1(wire); } catch { /* use original */ }
+    } else if (td?.prototype && typeof td.prototype.Wire === 'function') {
+      try { w = td.prototype.Wire(wire); } catch { /* use original */ }
+    }
+
+    for (const fn of ['AddWire', 'AddWire_1', 'AddWire_2']) {
+      if (typeof thru[fn] === 'function') {
+        try {
+          thru[fn](w);
+          added = true;
+          break;
+        } catch { /* wrong overload */ }
+      }
+    }
+    if (!added) throw new Error('ThruSections.AddWire failed');
+  }
+
+  thru.Build();
+  const done = typeof thru.IsDone === 'function' ? thru.IsDone() : true;
+  if (!done) throw new Error('ThruSections Build() did not complete');
+
+  console.log(`[OCCT] Loft: success with ${wires.length} sections`);
+  return thru.Shape();
+}

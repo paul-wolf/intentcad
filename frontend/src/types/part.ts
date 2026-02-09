@@ -49,7 +49,20 @@ export interface ChamferFeature {
   edgeIndices: number[];
 }
 
-export type Feature = ExtrudeFeature | RevolveFeature | ShellFeature | FilletFeature | ChamferFeature;
+export interface LoftSection {
+  sketchDocumentId: string;
+  sketchId: string;
+  plane: Plane;
+}
+
+export interface LoftFeature {
+  id: string;
+  type: 'loft';
+  sections: LoftSection[];
+  operation: 'add' | 'remove';
+}
+
+export type Feature = ExtrudeFeature | RevolveFeature | ShellFeature | FilletFeature | ChamferFeature | LoftFeature;
 
 export interface Part {
   id: string;

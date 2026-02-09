@@ -67,6 +67,23 @@ def validate_feature(obj: object) -> list[str]:
             errors.append("Feature.edgeIndices must be an array of integers")
         elif not all(isinstance(v, int) for v in ei):
             errors.append("Feature.edgeIndices must contain only integers")
+    elif feat_type == "loft":
+        sections = obj.get("sections")
+        if not isinstance(sections, list) or len(sections) < 2:
+            errors.append("Feature.sections must be an array with at least 2 items")
+        else:
+            for i, sec in enumerate(sections):
+                if not isinstance(sec, dict):
+                    errors.append(f"Feature.sections[{i}] must be an object")
+                    continue
+                if not isinstance(sec.get("sketchDocumentId"), str):
+                    errors.append(f"Feature.sections[{i}].sketchDocumentId must be a string")
+                if not isinstance(sec.get("sketchId"), str):
+                    errors.append(f"Feature.sections[{i}].sketchId must be a string")
+                plane_errors = _validate_plane(sec.get("plane"))
+                errors.extend([f"Feature.sections[{i}].{e}" for e in plane_errors])
+        if "operation" not in obj or obj["operation"] not in ("add", "remove"):
+            errors.append("Feature.operation must be 'add' or 'remove'")
     elif "type" not in obj:
         errors.append("Feature.type is required")
     else:

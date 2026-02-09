@@ -8,11 +8,12 @@ interface PartToolbarProps {
   onAddShell: () => void;
   onAddFillet: () => void;
   onAddChamfer: () => void;
+  onAddLoft: () => void;
   onExportSTL: () => void;
   onExportSTEP: () => void;
 }
 
-export function PartToolbar({ onAddExtrude, onAddRevolve, onAddShell, onAddFillet, onAddChamfer, onExportSTL, onExportSTEP }: PartToolbarProps) {
+export function PartToolbar({ onAddExtrude, onAddRevolve, onAddShell, onAddFillet, onAddChamfer, onAddLoft, onExportSTL, onExportSTEP }: PartToolbarProps) {
   const navigate = useNavigate();
   const part = usePartStore((s) => s.part);
   const setPartName = usePartStore((s) => s.setPartName);
@@ -110,6 +111,12 @@ export function PartToolbar({ onAddExtrude, onAddRevolve, onAddShell, onAddFille
         onClick={onAddChamfer}
       >
         Chamfer
+      </button>
+      <button
+        style={{ ...buttonStyle, background: palette.primaryBtn, color: '#fff', border: 'none' }}
+        onClick={onAddLoft}
+      >
+        Loft
       </button>
       <button style={buttonStyle} onClick={onExportSTL}>
         Export STL

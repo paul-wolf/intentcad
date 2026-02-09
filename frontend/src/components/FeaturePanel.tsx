@@ -3,7 +3,7 @@ import { usePartStore } from '@/stores/partStore';
 import { usePartEditorStore } from '@/stores/partEditorStore';
 import { useThemeStore } from '@/theme';
 import { api } from '@/api/client';
-import type { Feature, ExtrudeFeature, RevolveFeature, FilletFeature, ChamferFeature } from '@/types/part';
+import type { Feature, ExtrudeFeature, RevolveFeature, FilletFeature, ChamferFeature, LoftFeature } from '@/types/part';
 import type { Document } from '@/types/document';
 
 interface FeaturePanelProps {
@@ -22,13 +22,12 @@ export function FeaturePanel({ onEditFeature }: FeaturePanelProps) {
   const [sketchNames, setSketchNames] = useState<Map<string, string>>(new Map());
 
   useEffect(() => {
-    const docIds = [
-      ...new Set(
-        features
-          .filter((f): f is ExtrudeFeature | RevolveFeature => 'sketchDocumentId' in f)
-          .map((f) => f.sketchDocumentId),
-      ),
-    ];
+    const ids = new Set<string>();
+    for (const f of features) {
+      if ('sketchDocumentId' in f) ids.add((f as ExtrudeFeature | RevolveFeature).sketchDocumentId);
+      if (f.type === 'loft') for (const sec of (f as LoftFeature).sections) ids.add(sec.sketchDocumentId);
+    }
+    const docIds = [...ids];
     if (docIds.length === 0) {
       setSketchNames(new Map());
       return;
@@ -94,7 +93,7 @@ export function FeaturePanel({ onEditFeature }: FeaturePanelProps) {
           onDoubleClick={() => onEditFeature(f)}
         >
           <span style={{ fontSize: '12px', color: palette.accent }}>
-            {f.type === 'extrude' ? 'E' : f.type === 'revolve' ? 'R' : f.type === 'shell' ? 'S' : f.type === 'fillet' ? 'F' : f.type === 'chamfer' ? 'C' : '?'}
+            {f.type === 'extrude' ? 'E' : f.type === 'revolve' ? 'R' : f.type === 'shell' ? 'S' : f.type === 'fillet' ? 'F' : f.type === 'chamfer' ? 'C' : f.type === 'loft' ? 'L' : '?'}
           </span>
           <span style={{ flex: 1, fontSize: '12px', color: palette.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {f.type === 'fillet'
@@ -103,9 +102,11 @@ export function FeaturePanel({ onEditFeature }: FeaturePanelProps) {
                 ? `Chamfer ${(f as ChamferFeature).distance}mm (${(f as ChamferFeature).edgeIndices.length} edges)`
                 : f.type === 'shell'
                   ? `Shell ${f.thickness}mm`
-                  : f.type === 'revolve'
-                    ? `${f.operation === 'remove' ? 'Cut' : 'Revolve'} ${f.angle}\u00B0`
-                    : `${f.operation === 'remove' ? 'Cut' : 'Extrude'} ${Math.abs(f.distance)}mm`}
+                  : f.type === 'loft'
+                    ? `Loft (${(f as LoftFeature).sections.length} sections)`
+                    : f.type === 'revolve'
+                      ? `${f.operation === 'remove' ? 'Cut' : 'Revolve'} ${f.angle}\u00B0`
+                      : `${f.operation === 'remove' ? 'Cut' : 'Extrude'} ${Math.abs(f.distance)}mm`}
             {'sketchId' in f && sketchNames.has(f.sketchId) && (
               <span style={{ color: palette.textSecondary, marginLeft: '4px' }}>
                 ({sketchNames.get(f.sketchId)})

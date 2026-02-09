@@ -19,8 +19,9 @@ import { RevolveForm, type RevolveFormHandle } from './RevolveForm';
 import { ShellForm } from './ShellForm';
 import { FilletForm } from './FilletForm';
 import { ChamferForm } from './ChamferForm';
-import type { Part, Feature, ExtrudeFeature, RevolveFeature, FilletFeature, ChamferFeature, Plane } from '@/types/part';
-import { DEFAULT_XY_PLANE } from '@/types/part';
+import { LoftForm } from './LoftForm';
+import type { Part, Feature, ExtrudeFeature, RevolveFeature, FilletFeature, ChamferFeature, LoftFeature, Plane } from '@/types/part';
+import { DEFAULT_XY_PLANE, planeWithOffset } from '@/types/part';
 import type { Document } from '@/types/document';
 
 function computeXAxis(normal: [number, number, number]): [number, number, number] {
@@ -34,6 +35,22 @@ function computeXAxis(normal: [number, number, number]): [number, number, number
   const len = Math.sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]);
   if (len < 1e-12) return [1, 0, 0];
   return [x[0] / len, x[1] / len, x[2] / len];
+}
+
+/** Extract all sketch document IDs from features, including loft sections. */
+function collectDocIds(features: Feature[]): string[] {
+  const ids = new Set<string>();
+  for (const f of features) {
+    if ('sketchDocumentId' in f) {
+      ids.add((f as ExtrudeFeature | RevolveFeature).sketchDocumentId);
+    }
+    if (f.type === 'loft') {
+      for (const sec of (f as LoftFeature).sections) {
+        ids.add(sec.sketchDocumentId);
+      }
+    }
+  }
+  return [...ids];
 }
 
 export function PartEditorPage() {
@@ -226,7 +243,7 @@ export function PartEditorPage() {
       return;
     }
 
-    const docIds = [...new Set(features.filter((f) => 'sketchDocumentId' in f).map((f) => (f as ExtrudeFeature | RevolveFeature).sketchDocumentId))];
+    const docIds = collectDocIds(features);
     Promise.all(docIds.map((docId) => api.getDocument(docId).then((full) => [docId, full.data as unknown as Document] as const)))
       .then(async (entries) => {
         const docMap = new Map<string, Document>(entries);
@@ -348,7 +365,7 @@ export function PartEditorPage() {
 
     try {
       // Gather all sketch doc IDs needed
-      const docIds = [...new Set(previewFeatures.filter((f) => 'sketchDocumentId' in f).map((f) => (f as ExtrudeFeature | RevolveFeature).sketchDocumentId))];
+      const docIds = collectDocIds(previewFeatures);
       const entries = await Promise.all(
         docIds.map(async (docId) => {
           // Use cached draftSketchDoc if available
@@ -478,6 +495,19 @@ export function PartEditorPage() {
     });
   }, [startCreating]);
 
+  const handleAddLoft = useCallback(() => {
+    const docId = usePartStore.getState().part.documentId;
+    startCreating({
+      id: crypto.randomUUID(),
+      type: 'loft',
+      sections: [
+        { sketchDocumentId: docId, sketchId: '', plane: DEFAULT_XY_PLANE },
+        { sketchDocumentId: docId, sketchId: '', plane: planeWithOffset(DEFAULT_XY_PLANE, 20) },
+      ],
+      operation: 'add',
+    });
+  }, [startCreating]);
+
   const handleEditFeature = useCallback((feature: Feature) => {
     if (feature.type === 'fillet' || feature.type === 'chamfer') {
       setSelectedEdges((feature as FilletFeature | ChamferFeature).edgeIndices);
@@ -526,7 +556,7 @@ export function PartEditorPage() {
     const features = usePartStore.getState().part.features;
     if (features.length === 0) return;
 
-    const docIds = [...new Set(features.filter((f) => 'sketchDocumentId' in f).map((f) => (f as ExtrudeFeature | RevolveFeature).sketchDocumentId))];
+    const docIds = collectDocIds(features);
     Promise.all(docIds.map((docId) => api.getDocument(docId).then((full) => [docId, full.data as unknown as Document] as const)))
       .then(async (entries) => {
         const docMap = new Map<string, Document>(entries);
@@ -548,7 +578,7 @@ export function PartEditorPage() {
     const features = usePartStore.getState().part.features;
     if (features.length === 0) return;
 
-    const docIds = [...new Set(features.filter((f) => 'sketchDocumentId' in f).map((f) => (f as ExtrudeFeature | RevolveFeature).sketchDocumentId))];
+    const docIds = collectDocIds(features);
     Promise.all(docIds.map((docId) => api.getDocument(docId).then((full) => [docId, full.data as unknown as Document] as const)))
       .then(async (entries) => {
         const docMap = new Map<string, Document>(entries);
@@ -629,6 +659,16 @@ export function PartEditorPage() {
               onChange={(f) => handleDraftChange(f)}
             />
           );
+        case 'loft':
+          return (
+            <LoftForm
+              documentId={part.documentId}
+              initial={initial?.type === 'loft' ? initial : undefined}
+              onSubmit={(f) => handleSubmit(f)}
+              onCancel={handleCancel}
+              onChange={(f) => handleDraftChange(f)}
+            />
+          );
       }
     }
 
@@ -650,7 +690,7 @@ export function PartEditorPage() {
         color: palette.text,
       }}
     >
-      <PartToolbar onAddExtrude={handleAddExtrude} onAddRevolve={handleAddRevolve} onAddShell={handleAddShell} onAddFillet={handleAddFillet} onAddChamfer={handleAddChamfer} onExportSTL={handleExportSTL} onExportSTEP={handleExportSTEP} />
+      <PartToolbar onAddExtrude={handleAddExtrude} onAddRevolve={handleAddRevolve} onAddShell={handleAddShell} onAddFillet={handleAddFillet} onAddChamfer={handleAddChamfer} onAddLoft={handleAddLoft} onExportSTL={handleExportSTL} onExportSTEP={handleExportSTEP} />
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative' }}>
         <div
