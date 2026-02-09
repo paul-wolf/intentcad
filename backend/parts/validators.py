@@ -51,6 +51,22 @@ def validate_feature(obj: object) -> list[str]:
             errors.append("Feature.faceDirection must be an array of 3 numbers")
         elif not all(isinstance(v, (int, float)) for v in fd):
             errors.append("Feature.faceDirection must contain only numbers")
+    elif feat_type == "fillet":
+        if "radius" not in obj or not isinstance(obj["radius"], (int, float)):
+            errors.append("Feature.radius must be a number")
+        ei = obj.get("edgeIndices")
+        if not isinstance(ei, list):
+            errors.append("Feature.edgeIndices must be an array of integers")
+        elif not all(isinstance(v, int) for v in ei):
+            errors.append("Feature.edgeIndices must contain only integers")
+    elif feat_type == "chamfer":
+        if "distance" not in obj or not isinstance(obj["distance"], (int, float)):
+            errors.append("Feature.distance must be a number")
+        ei = obj.get("edgeIndices")
+        if not isinstance(ei, list):
+            errors.append("Feature.edgeIndices must be an array of integers")
+        elif not all(isinstance(v, int) for v in ei):
+            errors.append("Feature.edgeIndices must contain only integers")
     elif "type" not in obj:
         errors.append("Feature.type is required")
     else:

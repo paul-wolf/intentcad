@@ -11,16 +11,21 @@ import {
   extrudeShapeSymmetric,
   revolveShape,
   shellShape,
+  filletShape,
+  chamferShape,
   booleanFuse,
   booleanCut,
   tessellate,
+  extractEdges,
   exportSTEP,
 } from './occt';
 import type { OC } from './occt';
+import type { EdgeData } from './occt';
 
 export interface FeatureMesh {
   featureId: string;
   geometry: THREE.BufferGeometry;
+  edgeData?: EdgeData;
 }
 
 /**
@@ -45,6 +50,28 @@ function buildAccumulatedShape(
         accumulated = shellShape(oc, accumulated, feature.faceDirection, feature.thickness, cleanup);
       } catch (e) {
         console.error(`[OCCT] shellShape failed:`, e);
+      }
+      continue;
+    }
+
+    // Fillet operates on the accumulated shape
+    if (feature.type === 'fillet') {
+      if (!accumulated) continue;
+      try {
+        accumulated = filletShape(oc, accumulated, feature.edgeIndices, feature.radius, cleanup);
+      } catch (e) {
+        console.error(`[OCCT] filletShape failed:`, e);
+      }
+      continue;
+    }
+
+    // Chamfer operates on the accumulated shape
+    if (feature.type === 'chamfer') {
+      if (!accumulated) continue;
+      try {
+        accumulated = chamferShape(oc, accumulated, feature.edgeIndices, feature.distance, cleanup);
+      } catch (e) {
+        console.error(`[OCCT] chamferShape failed:`, e);
       }
       continue;
     }
@@ -184,8 +211,9 @@ export async function evaluateFeatures(
 
     const lastFeatureId = features[features.length - 1]!.id;
     const geometry = tessellate(oc, shape, 0.1, cleanup);
+    const edgeData = extractEdges(oc, shape, cleanup);
 
-    return [{ featureId: lastFeatureId, geometry }];
+    return [{ featureId: lastFeatureId, geometry, edgeData }];
   } finally {
     cleanup.dispose();
   }

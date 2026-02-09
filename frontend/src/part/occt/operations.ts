@@ -270,3 +270,181 @@ export function shellShape(
 
   throw new Error('Shell operation failed — geometry may be too complex for shell');
 }
+
+/**
+ * Apply fillets (rounded edges) to selected edges of a shape.
+ * Constructor requires (shape, ChFi3d_FilletShape) — the WASM binding
+ * does not handle the default arg, so we pass ChFi3d_Rational explicitly.
+ */
+export function filletShape(
+  oc: OC,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  shape: any,
+  edgeIndices: number[],
+  radius: number,
+  cleanup: OcctCleanup,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): any {
+  if (edgeIndices.length === 0) throw new Error('No edges selected for fillet');
+
+  // Resolve ChFi3d_FilletShape.ChFi3d_Rational enum value
+  const filletShapeEnum = oc.ChFi3d_FilletShape?.ChFi3d_Rational
+    ?? oc.ChFi3d_Rational
+    ?? 0;
+
+  // Create fillet maker — constructor requires (shape, filletShapeEnum)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let fillet: any = null;
+  for (const suffix of ['', '_1', '_2', '_3']) {
+    const ctor = oc[`BRepFilletAPI_MakeFillet${suffix}`];
+    if (typeof ctor !== 'function') continue;
+
+    // Try 2-arg constructor (shape + enum) — required by WASM binding
+    try {
+      const obj = new ctor(shape, filletShapeEnum);
+      if (obj && (typeof obj.Add_2 === 'function' || typeof obj.Add_1 === 'function')) {
+        fillet = cleanup.track(obj);
+        break;
+      }
+      obj.delete?.();
+    } catch { /* wrong overload */ }
+
+    // Fallback: try 1-arg constructor in case binding handles default arg
+    try {
+      const obj = new ctor(shape);
+      if (obj && (typeof obj.Add_2 === 'function' || typeof obj.Add_1 === 'function')) {
+        fillet = cleanup.track(obj);
+        break;
+      }
+      obj.delete?.();
+    } catch { /* wrong overload */ }
+  }
+  if (!fillet) throw new Error('BRepFilletAPI_MakeFillet not available');
+
+  const edgeSet = new Set(edgeIndices);
+  let edgeIndex = 0;
+
+  const explorer = cleanup.track(new oc.TopExp_Explorer_2(
+    shape,
+    oc.TopAbs_ShapeEnum.TopAbs_EDGE,
+    oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+  ));
+
+  while (explorer.More()) {
+    if (edgeSet.has(edgeIndex)) {
+      const currentShape = explorer.Current();
+      // Cast to TopoDS_Edge
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let edge: any;
+      const td = oc.TopoDS;
+      if (typeof td?.Edge === 'function') edge = td.Edge(currentShape);
+      else if (typeof td?.Edge_1 === 'function') edge = td.Edge_1(currentShape);
+      else if (typeof td?.Edge_2 === 'function') edge = td.Edge_2(currentShape);
+      else if (td?.prototype && typeof td.prototype.Edge === 'function') edge = td.prototype.Edge(currentShape);
+      else if (td?.prototype && typeof td.prototype.Edge_1 === 'function') edge = td.prototype.Edge_1(currentShape);
+      else edge = currentShape;
+
+      // Add_2(radius, edge) — constant radius fillet
+      let added = false;
+      for (const fn of ['Add_2', 'Add_1', 'Add']) {
+        if (typeof fillet[fn] === 'function') {
+          try {
+            fillet[fn](radius, edge);
+            added = true;
+            break;
+          } catch { /* wrong overload */ }
+        }
+      }
+      if (!added) {
+        console.warn(`[OCCT] Fillet: could not add edge index ${edgeIndex}`);
+      }
+    }
+    edgeIndex++;
+    explorer.Next();
+  }
+
+  fillet.Build();
+  const done = typeof fillet.IsDone === 'function' ? fillet.IsDone() : true;
+  if (!done) throw new Error('Fillet Build() did not complete');
+
+  return fillet.Shape();
+}
+
+/**
+ * Apply chamfers (flat bevels) to selected edges of a shape.
+ * Uses symmetric chamfer: Add(distance, edge) — no face reference needed.
+ */
+export function chamferShape(
+  oc: OC,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  shape: any,
+  edgeIndices: number[],
+  distance: number,
+  cleanup: OcctCleanup,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): any {
+  if (edgeIndices.length === 0) throw new Error('No edges selected for chamfer');
+
+  // Create chamfer maker
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let chamfer: any = null;
+  for (const suffix of ['_1', '_2', '_3', '_4', '_5', '']) {
+    const ctor = oc[`BRepFilletAPI_MakeChamfer${suffix}`];
+    if (typeof ctor === 'function') {
+      try {
+        chamfer = cleanup.track(new ctor(shape));
+        if (chamfer && (typeof chamfer.Add === 'function' || typeof chamfer.Add_1 === 'function')) break;
+        chamfer = null;
+      } catch { chamfer = null; }
+    }
+  }
+  if (!chamfer) throw new Error('BRepFilletAPI_MakeChamfer not available');
+
+  const edgeSet = new Set(edgeIndices);
+  let edgeIndex = 0;
+
+  const explorer = cleanup.track(new oc.TopExp_Explorer_2(
+    shape,
+    oc.TopAbs_ShapeEnum.TopAbs_EDGE,
+    oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+  ));
+
+  while (explorer.More()) {
+    if (edgeSet.has(edgeIndex)) {
+      const currentShape = explorer.Current();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let edge: any;
+      const td = oc.TopoDS;
+      if (typeof td?.Edge === 'function') edge = td.Edge(currentShape);
+      else if (typeof td?.Edge_1 === 'function') edge = td.Edge_1(currentShape);
+      else if (typeof td?.Edge_2 === 'function') edge = td.Edge_2(currentShape);
+      else if (td?.prototype && typeof td.prototype.Edge === 'function') edge = td.prototype.Edge(currentShape);
+      else if (td?.prototype && typeof td.prototype.Edge_1 === 'function') edge = td.prototype.Edge_1(currentShape);
+      else edge = currentShape;
+
+      // Symmetric chamfer: Add(distance, edge) — overload order in OCCT bindings:
+      // Add_1 = Add(edge), Add_2 = Add(dist, edge), Add_3 = Add(dist1, dist2, edge, face)
+      let added = false;
+      for (const fn of ['Add_2', 'Add_1', 'Add']) {
+        if (typeof chamfer[fn] === 'function') {
+          try {
+            chamfer[fn](distance, edge);
+            added = true;
+            break;
+          } catch { /* wrong overload */ }
+        }
+      }
+      if (!added) {
+        console.warn(`[OCCT] Chamfer: could not add edge index ${edgeIndex}`);
+      }
+    }
+    edgeIndex++;
+    explorer.Next();
+  }
+
+  chamfer.Build();
+  const done = typeof chamfer.IsDone === 'function' ? chamfer.IsDone() : true;
+  if (!done) throw new Error('Chamfer Build() did not complete');
+
+  return chamfer.Shape();
+}

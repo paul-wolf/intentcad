@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { usePartStore } from '@/stores/partStore';
 import { usePartEditorStore } from '@/stores/partEditorStore';
@@ -8,6 +8,7 @@ import { api } from '@/api/client';
 import { setPartBackendId, startPartAutoSave } from '@/api/partAutoSave';
 import { PartViewport, type DragInteractionCallbacks } from '@/part/PartViewport';
 import { evaluateFeatures, exportFeaturesToSTEP } from '@/part/featureEngine';
+import type { EdgeData } from '@/part/occt/tessellate';
 import { exportSTL } from '@/part/stlExport';
 import { buildSketchOverlay } from '@/part/sketchOverlay';
 import { PartToolbar } from './PartToolbar';
@@ -16,7 +17,9 @@ import { SketchRolodex } from './SketchRolodex';
 import { ExtrudeForm, type ExtrudeFormHandle } from './ExtrudeForm';
 import { RevolveForm, type RevolveFormHandle } from './RevolveForm';
 import { ShellForm } from './ShellForm';
-import type { Part, Feature, ExtrudeFeature, RevolveFeature, Plane } from '@/types/part';
+import { FilletForm } from './FilletForm';
+import { ChamferForm } from './ChamferForm';
+import type { Part, Feature, ExtrudeFeature, RevolveFeature, FilletFeature, ChamferFeature, Plane } from '@/types/part';
 import { DEFAULT_XY_PLANE } from '@/types/part';
 import type { Document } from '@/types/document';
 
@@ -52,6 +55,9 @@ export function PartEditorPage() {
   const startCreating = usePartEditorStore((s) => s.startCreating);
   const startEditing = usePartEditorStore((s) => s.startEditing);
   const clearDraft = usePartEditorStore((s) => s.clearDraft);
+
+  const [selectedEdges, setSelectedEdges] = useState<number[]>([]);
+  const edgeDataRef = useRef<EdgeData | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<PartViewport | null>(null);
@@ -170,6 +176,47 @@ export function PartEditorPage() {
     return () => vp.disableFacePicking();
   }, [draftFeature?.type]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Enable edge picking when draft is fillet or chamfer
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+
+    if (!draftFeature || (draftFeature.type !== 'fillet' && draftFeature.type !== 'chamfer')) {
+      vp.disableEdgePicking();
+      vp.setEdgeWireframe(null);
+      return;
+    }
+
+    // Show edge wireframe from the latest edge data
+    vp.setEdgeWireframe(edgeDataRef.current);
+
+    // Set up toggle callback
+    vp.enableEdgePicking((edgeIndex: number) => {
+      setSelectedEdges((prev) => {
+        const next = prev.includes(edgeIndex)
+          ? prev.filter((i) => i !== edgeIndex)
+          : [...prev, edgeIndex];
+        // Update selection visualization
+        viewportRef.current?.setSelectedEdges(next);
+        return next;
+      });
+    });
+
+    // Restore selection visualization if editing existing
+    const currentEdges = usePartEditorStore.getState().draftFeature;
+    if (currentEdges && 'edgeIndices' in currentEdges) {
+      const indices = (currentEdges as FilletFeature | ChamferFeature).edgeIndices;
+      if (indices.length > 0) {
+        vp.setSelectedEdges(indices);
+      }
+    }
+
+    return () => {
+      vp.disableEdgePicking();
+      vp.setEdgeWireframe(null);
+    };
+  }, [draftFeature?.type]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Re-evaluate committed meshes when features change (only when not previewing)
   useEffect(() => {
     if (draftFeature) return; // Skip — preview effect handles display while drafting
@@ -187,6 +234,10 @@ export function PartEditorPage() {
         // Only apply if we're still not drafting
         if (!usePartEditorStore.getState().draftFeature) {
           viewportRef.current?.setMeshes(meshes.map((m) => m.geometry));
+          // Capture edge data for edge picking
+          if (meshes.length > 0 && meshes[0]!.edgeData) {
+            edgeDataRef.current = meshes[0]!.edgeData;
+          }
         }
       })
       .catch((err) => {
@@ -318,6 +369,11 @@ export function PartEditorPage() {
       const vp = viewportRef.current;
       if (!vp) return;
 
+      // Capture edge data for edge picking
+      if (meshes.length > 0 && meshes[0]!.edgeData) {
+        edgeDataRef.current = meshes[0]!.edgeData;
+      }
+
       // Hide committed meshes, show preview
       vp.setMeshes([]);
       vp.setPreviewMesh(meshes.length > 0 ? meshes[0]!.geometry : null);
@@ -398,7 +454,34 @@ export function PartEditorPage() {
     });
   }, [startCreating]);
 
+  const handleAddFillet = useCallback(() => {
+    const features = usePartStore.getState().part.features;
+    if (features.length === 0) return;
+    setSelectedEdges([]);
+    startCreating({
+      id: crypto.randomUUID(),
+      type: 'fillet',
+      radius: 2,
+      edgeIndices: [],
+    });
+  }, [startCreating]);
+
+  const handleAddChamfer = useCallback(() => {
+    const features = usePartStore.getState().part.features;
+    if (features.length === 0) return;
+    setSelectedEdges([]);
+    startCreating({
+      id: crypto.randomUUID(),
+      type: 'chamfer',
+      distance: 1,
+      edgeIndices: [],
+    });
+  }, [startCreating]);
+
   const handleEditFeature = useCallback((feature: Feature) => {
+    if (feature.type === 'fillet' || feature.type === 'chamfer') {
+      setSelectedEdges((feature as FilletFeature | ChamferFeature).edgeIndices);
+    }
     startEditing(feature);
   }, [startEditing]);
 
@@ -413,14 +496,20 @@ export function PartEditorPage() {
       addFeature(feature);
     }
     clearDraft();
+    setSelectedEdges([]);
     viewportRef.current?.clearPreview();
     viewportRef.current?.clearExtrudeArrow();
+    viewportRef.current?.disableEdgePicking();
+    viewportRef.current?.setEdgeWireframe(null);
   }, [beginTransaction, updateFeature, addFeature, clearDraft]);
 
   const handleCancel = useCallback(() => {
     clearDraft();
+    setSelectedEdges([]);
     viewportRef.current?.clearPreview();
     viewportRef.current?.clearExtrudeArrow();
+    viewportRef.current?.disableEdgePicking();
+    viewportRef.current?.setEdgeWireframe(null);
   }, [clearDraft]);
 
   const handleDraftChange = useCallback((feature: Feature) => {
@@ -520,6 +609,26 @@ export function PartEditorPage() {
               onChange={(f) => handleDraftChange(f)}
             />
           );
+        case 'fillet':
+          return (
+            <FilletForm
+              initial={initial?.type === 'fillet' ? initial : undefined}
+              selectedEdges={selectedEdges}
+              onSubmit={(f) => handleSubmit(f)}
+              onCancel={handleCancel}
+              onChange={(f) => handleDraftChange(f)}
+            />
+          );
+        case 'chamfer':
+          return (
+            <ChamferForm
+              initial={initial?.type === 'chamfer' ? initial : undefined}
+              selectedEdges={selectedEdges}
+              onSubmit={(f) => handleSubmit(f)}
+              onCancel={handleCancel}
+              onChange={(f) => handleDraftChange(f)}
+            />
+          );
       }
     }
 
@@ -541,7 +650,7 @@ export function PartEditorPage() {
         color: palette.text,
       }}
     >
-      <PartToolbar onAddExtrude={handleAddExtrude} onAddRevolve={handleAddRevolve} onAddShell={handleAddShell} onExportSTL={handleExportSTL} onExportSTEP={handleExportSTEP} />
+      <PartToolbar onAddExtrude={handleAddExtrude} onAddRevolve={handleAddRevolve} onAddShell={handleAddShell} onAddFillet={handleAddFillet} onAddChamfer={handleAddChamfer} onExportSTL={handleExportSTL} onExportSTEP={handleExportSTEP} />
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative' }}>
         <div

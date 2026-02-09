@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import type { EdgeData } from './occt/tessellate';
 
 export interface DragInteractionCallbacks {
   onDragStart: (hitPoint: [number, number, number]) => {
@@ -61,6 +62,13 @@ export class PartViewport {
   private facePickCallback: ((info: { point: THREE.Vector3; normal: THREE.Vector3 }) => void) | null = null;
   private facePickDownPos: { x: number; y: number } | null = null;
   private highlightedFaceId: number | null = null;
+  private edgeWireframeGroup: THREE.Group;
+  private edgeHighlightGroup: THREE.Group;
+  private edgeSelectionGroup: THREE.Group;
+  private edgePickCallback: ((edgeIndex: number) => void) | null = null;
+  private edgePickDownPos: { x: number; y: number } | null = null;
+  private highlightedEdgeIndex: number | null = null;
+  private edgeRanges: EdgeData['edgeRanges'] = [];
 
   constructor(opts: PartViewportOptions) {
     const { container } = opts;
@@ -124,6 +132,19 @@ export class PartViewport {
     this.faceHighlightGroup = new THREE.Group();
     this.faceHighlightGroup.renderOrder = 998;
     this.scene.add(this.faceHighlightGroup);
+
+    // Edge picking groups
+    this.edgeWireframeGroup = new THREE.Group();
+    this.edgeWireframeGroup.renderOrder = 997;
+    this.scene.add(this.edgeWireframeGroup);
+
+    this.edgeHighlightGroup = new THREE.Group();
+    this.edgeHighlightGroup.renderOrder = 999;
+    this.scene.add(this.edgeHighlightGroup);
+
+    this.edgeSelectionGroup = new THREE.Group();
+    this.edgeSelectionGroup.renderOrder = 999;
+    this.scene.add(this.edgeSelectionGroup);
 
     // Handle resize
     this.resizeObserver = new ResizeObserver(() => this.handleResize());
@@ -337,8 +358,8 @@ export class PartViewport {
     this.dragCallbacks = null;
     this.activeDrag = null;
     this.clearExtrudeArrow();
-    // Remove pointer listeners only if face picking is also inactive
-    if (!this.facePickCallback) {
+    // Remove pointer listeners only if face and edge picking are also inactive
+    if (!this.facePickCallback && !this.edgePickCallback) {
       this.removePointerListeners();
     }
   }
@@ -401,6 +422,11 @@ export class PartViewport {
       }
     }
 
+    // Edge picking hover highlight
+    if (this.edgePickCallback && !this.activeDrag) {
+      this.updateEdgeHighlight(ndc);
+    }
+
     // Face picking hover highlight
     if (this.facePickCallback && !this.activeDrag) {
       this.updateFaceHighlight(ndc);
@@ -413,6 +439,10 @@ export class PartViewport {
     // Record position for face pick click detection
     if (this.facePickCallback) {
       this.facePickDownPos = { x: e.clientX, y: e.clientY };
+    }
+    // Record position for edge pick click detection
+    if (this.edgePickCallback) {
+      this.edgePickDownPos = { x: e.clientX, y: e.clientY };
     }
 
     if (!this.dragCallbacks) return;
@@ -489,6 +519,17 @@ export class PartViewport {
         }
       }
     }
+
+    // Edge pick: only fire if pointer barely moved (< 3px)
+    if (this.edgePickCallback && this.edgePickDownPos) {
+      const dx = e.clientX - this.edgePickDownPos.x;
+      const dy = e.clientY - this.edgePickDownPos.y;
+      this.edgePickDownPos = null;
+
+      if (dx * dx + dy * dy < 9 && this.highlightedEdgeIndex !== null) {
+        this.edgePickCallback(this.highlightedEdgeIndex);
+      }
+    }
   }
 
   enableFacePicking(callback: (info: { point: THREE.Vector3; normal: THREE.Vector3 }) => void) {
@@ -502,8 +543,8 @@ export class PartViewport {
     this.facePickDownPos = null;
     this.highlightedFaceId = null;
     this.clearGroup(this.faceHighlightGroup);
-    // Remove pointer listeners only if drag interaction is also inactive
-    if (!this.dragCallbacks) {
+    // Remove pointer listeners only if drag and edge picking are also inactive
+    if (!this.dragCallbacks && !this.edgePickCallback) {
       this.removePointerListeners();
     }
   }
@@ -639,7 +680,166 @@ export class PartViewport {
       .normalize();
   }
 
+  setEdgeWireframe(edgeData: EdgeData | null) {
+    this.clearGroup(this.edgeWireframeGroup);
+    this.edgeRanges = [];
+
+    if (!edgeData || edgeData.positions.length === 0) return;
+
+    this.edgeRanges = edgeData.edgeRanges;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(edgeData.positions, 3));
+    const material = new THREE.LineBasicMaterial({
+      color: 0x94a3b8,
+      depthTest: true,
+    });
+    const lines = new THREE.LineSegments(geometry, material);
+    this.edgeWireframeGroup.add(lines);
+  }
+
+  enableEdgePicking(callback: (edgeIndex: number) => void) {
+    this.edgePickCallback = callback;
+    this.ensurePointerListeners();
+  }
+
+  disableEdgePicking() {
+    this.edgePickCallback = null;
+    this.edgePickDownPos = null;
+    this.highlightedEdgeIndex = null;
+    this.clearGroup(this.edgeHighlightGroup);
+    this.clearGroup(this.edgeSelectionGroup);
+    this.clearGroup(this.edgeWireframeGroup);
+    this.edgeRanges = [];
+    // Remove pointer listeners only if drag and face pick are also inactive
+    if (!this.dragCallbacks && !this.facePickCallback) {
+      this.removePointerListeners();
+    }
+  }
+
+  setSelectedEdges(edgeIndices: number[]) {
+    this.clearGroup(this.edgeSelectionGroup);
+    if (this.edgeRanges.length === 0) return;
+
+    const wireChildren = this.edgeWireframeGroup.children;
+    if (wireChildren.length === 0) return;
+    const wireGeo = (wireChildren[0] as THREE.LineSegments).geometry;
+    const posAttr = wireGeo.getAttribute('position');
+    if (!posAttr) return;
+
+    const selectedSet = new Set(edgeIndices);
+
+    for (const range of this.edgeRanges) {
+      if (!selectedSet.has(range.edgeIndex)) continue;
+
+      const positions: number[] = [];
+      // range.start is byte/float offset in the positions array (already *3 for xyz)
+      const startVertex = range.start / 3;
+      for (let i = 0; i < range.count; i++) {
+        positions.push(
+          posAttr.getX(startVertex + i),
+          posAttr.getY(startVertex + i),
+          posAttr.getZ(startVertex + i),
+        );
+      }
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      const mat = new THREE.LineBasicMaterial({
+        color: 0x22c55e,
+        linewidth: 2,
+        depthTest: false,
+      });
+      const line = new THREE.LineSegments(geo, mat);
+      this.edgeSelectionGroup.add(line);
+    }
+  }
+
+  private updateEdgeHighlight(ndc: THREE.Vector2) {
+    if (this.edgeWireframeGroup.children.length === 0) {
+      this.clearEdgeHighlight();
+      return;
+    }
+
+    this.raycaster.setFromCamera(ndc, this.camera);
+    // Set threshold for line picking (in world units, scaled by camera distance)
+    const params = this.raycaster.params;
+    if (params.Line) {
+      params.Line.threshold = 3;
+    }
+
+    const hits = this.raycaster.intersectObjects(this.edgeWireframeGroup.children, true);
+    if (hits.length === 0) {
+      this.clearEdgeHighlight();
+      return;
+    }
+
+    const hit = hits[0]!;
+    const hitIndex = hit.index;
+    if (hitIndex == null) {
+      this.clearEdgeHighlight();
+      return;
+    }
+
+    // Determine which edge range contains this hit vertex index
+    // hitIndex is the vertex pair index in the LineSegments buffer
+    const hitVertex = hitIndex; // LineSegments: each pair is 2 vertices
+    let foundEdge: number | null = null;
+    for (const range of this.edgeRanges) {
+      const startVertex = range.start / 3;
+      if (hitVertex >= startVertex && hitVertex < startVertex + range.count) {
+        foundEdge = range.edgeIndex;
+        break;
+      }
+    }
+
+    if (foundEdge === null) {
+      this.clearEdgeHighlight();
+      return;
+    }
+
+    if (foundEdge === this.highlightedEdgeIndex) return; // Already highlighted
+    this.highlightedEdgeIndex = foundEdge;
+
+    this.clearGroup(this.edgeHighlightGroup);
+
+    // Build amber highlight for this edge
+    const wireGeo = (this.edgeWireframeGroup.children[0] as THREE.LineSegments).geometry;
+    const posAttr = wireGeo.getAttribute('position');
+    if (!posAttr) return;
+
+    const range = this.edgeRanges.find((r) => r.edgeIndex === foundEdge);
+    if (!range) return;
+
+    const positions: number[] = [];
+    const startVertex = range.start / 3;
+    for (let i = 0; i < range.count; i++) {
+      positions.push(
+        posAttr.getX(startVertex + i),
+        posAttr.getY(startVertex + i),
+        posAttr.getZ(startVertex + i),
+      );
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    const mat = new THREE.LineBasicMaterial({
+      color: 0xf59e0b,
+      linewidth: 2,
+      depthTest: false,
+    });
+    const line = new THREE.LineSegments(geo, mat);
+    this.edgeHighlightGroup.add(line);
+    this.renderer.domElement.style.cursor = 'pointer';
+  }
+
+  private clearEdgeHighlight() {
+    if (this.highlightedEdgeIndex === null) return;
+    this.highlightedEdgeIndex = null;
+    this.clearGroup(this.edgeHighlightGroup);
+  }
+
   dispose() {
+    this.disableEdgePicking();
     this.disableFacePicking();
     this.disableDragInteraction();
     this.removePointerListeners();

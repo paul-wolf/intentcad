@@ -3,7 +3,7 @@ import { usePartStore } from '@/stores/partStore';
 import { usePartEditorStore } from '@/stores/partEditorStore';
 import { useThemeStore } from '@/theme';
 import { api } from '@/api/client';
-import type { Feature, ExtrudeFeature, RevolveFeature } from '@/types/part';
+import type { Feature, ExtrudeFeature, RevolveFeature, FilletFeature, ChamferFeature } from '@/types/part';
 import type { Document } from '@/types/document';
 
 interface FeaturePanelProps {
@@ -94,14 +94,18 @@ export function FeaturePanel({ onEditFeature }: FeaturePanelProps) {
           onDoubleClick={() => onEditFeature(f)}
         >
           <span style={{ fontSize: '12px', color: palette.accent }}>
-            {f.type === 'extrude' ? 'E' : f.type === 'revolve' ? 'R' : f.type === 'shell' ? 'S' : '?'}
+            {f.type === 'extrude' ? 'E' : f.type === 'revolve' ? 'R' : f.type === 'shell' ? 'S' : f.type === 'fillet' ? 'F' : f.type === 'chamfer' ? 'C' : '?'}
           </span>
           <span style={{ flex: 1, fontSize: '12px', color: palette.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {f.type === 'shell'
-              ? `Shell ${f.thickness}mm`
-              : f.type === 'revolve'
-                ? `${f.operation === 'remove' ? 'Cut' : 'Revolve'} ${f.angle}\u00B0`
-                : `${f.operation === 'remove' ? 'Cut' : 'Extrude'} ${Math.abs(f.distance)}mm`}
+            {f.type === 'fillet'
+              ? `Fillet R${(f as FilletFeature).radius}mm (${(f as FilletFeature).edgeIndices.length} edges)`
+              : f.type === 'chamfer'
+                ? `Chamfer ${(f as ChamferFeature).distance}mm (${(f as ChamferFeature).edgeIndices.length} edges)`
+                : f.type === 'shell'
+                  ? `Shell ${f.thickness}mm`
+                  : f.type === 'revolve'
+                    ? `${f.operation === 'remove' ? 'Cut' : 'Revolve'} ${f.angle}\u00B0`
+                    : `${f.operation === 'remove' ? 'Cut' : 'Extrude'} ${Math.abs(f.distance)}mm`}
             {'sketchId' in f && sketchNames.has(f.sketchId) && (
               <span style={{ color: palette.textSecondary, marginLeft: '4px' }}>
                 ({sketchNames.get(f.sketchId)})

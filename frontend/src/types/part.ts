@@ -35,7 +35,21 @@ export interface ShellFeature {
   faceDirection: [number, number, number];
 }
 
-export type Feature = ExtrudeFeature | RevolveFeature | ShellFeature;
+export interface FilletFeature {
+  id: string;
+  type: 'fillet';
+  radius: number;
+  edgeIndices: number[];
+}
+
+export interface ChamferFeature {
+  id: string;
+  type: 'chamfer';
+  distance: number;
+  edgeIndices: number[];
+}
+
+export type Feature = ExtrudeFeature | RevolveFeature | ShellFeature | FilletFeature | ChamferFeature;
 
 export interface Part {
   id: string;
