@@ -6,16 +6,23 @@ import { useThemeStore } from '@/theme';
 export function DocumentPropertiesPanel() {
   const propertiesOpen = useUIStateStore((s) => s.propertiesOpen);
   const toggleProperties = useUIStateStore((s) => s.toggleProperties);
+  const docName = useDocumentStore((s) => s.document.name);
+  const setDocumentName = useDocumentStore((s) => s.setDocumentName);
   const metadata = useDocumentStore((s) => s.document.metadata);
   const setMetadata = useDocumentStore((s) => s.setMetadata);
   const palette = useThemeStore((s) => s.palette);
 
+  const [name, setName] = useState(docName ?? '');
   const [description, setDescription] = useState(metadata?.description ?? '');
   const [author, setAuthor] = useState(metadata?.author ?? '');
   const [revision, setRevision] = useState(metadata?.revision ?? '');
   const [notes, setNotes] = useState(metadata?.notes ?? '');
 
   // Sync local state when document metadata changes externally (e.g. document load)
+  useEffect(() => {
+    setName(docName ?? '');
+  }, [docName]);
+
   useEffect(() => {
     setDescription(metadata?.description ?? '');
     setAuthor(metadata?.author ?? '');
@@ -97,6 +104,16 @@ export function DocumentPropertiesPanel() {
 
       {/* Fields */}
       <div style={{ padding: '10px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        <div>
+          <div style={labelStyle}>Name</div>
+          <input
+            type="text"
+            style={inputStyle}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onBlur={() => setDocumentName(name)}
+          />
+        </div>
         <div>
           <div style={labelStyle}>Description</div>
           <textarea

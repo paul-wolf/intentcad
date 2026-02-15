@@ -15,6 +15,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "documents",
     "parts",
+    "cam",
 ]
 
 MIDDLEWARE = [

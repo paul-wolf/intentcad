@@ -8,6 +8,7 @@ import type { Document } from '@/types/document';
 import type { SelectedPoint } from '@/stores/editorStore';
 import type { SegmentHit } from '@/hittest/hitTest';
 import { useThemeStore } from '@/theme';
+import { useCamStore } from '@/stores/camStore';
 
 interface UseCanvasRendererOpts {
   getDocument: () => Document;
@@ -52,6 +53,7 @@ export function useCanvasRenderer(opts: UseCanvasRendererOpts) {
           activeTool: opts.getActiveTool(),
           altKeyHeld: opts.getAltKeyHeld(),
           palette: useThemeStore.getState().palette,
+          camMode: useCamStore.getState().camPanelOpen,
         };
         try {
           renderFrame(ctx);

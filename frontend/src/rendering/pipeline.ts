@@ -14,6 +14,8 @@ import { resolveDimensionEndpoints } from '@/utils/dimensionGeom';
 import { getConstraintPartners, getEntityRepresentativePoint, CONSTRAINT_SYMBOLS } from '@/utils/constraints';
 import { getSegmentCount, getSegmentPointIndices, getSegmentBulge } from '@/utils/lineSegments';
 import { arcFromBulge, arcMidpoint } from '@/utils/arcGeometry';
+import { renderToolpathOverlay } from '@/components/ToolpathOverlay';
+import { useCamStore } from '@/stores/camStore';
 
 export interface RenderContext {
   renderer: Renderer;
@@ -25,6 +27,7 @@ export interface RenderContext {
   activeTool: Tool | null;
   altKeyHeld: boolean;
   palette: ThemePalette;
+  camMode: boolean;
 }
 
 /** Step 1: Clear background */
@@ -169,6 +172,9 @@ function pickStyle(
   return styles.line;
 }
 
+/** CAM operation colors for entity highlighting */
+const CAM_OP_COLORS = ['#ff8c00', '#00bcd4', '#8bc34a', '#e91e63', '#9c27b0', '#ff5722'];
+
 /** Step 4: Draw active sketch entities */
 function renderActiveSketch(ctx: RenderContext) {
   const { renderer, viewport, document: doc, selectedEntityIds } = ctx;
@@ -176,24 +182,56 @@ function renderActiveSketch(ctx: RenderContext) {
   const activeSketch = doc.sketches.find((s) => s.id === doc.activeSketchId);
   if (!activeSketch || activeSketch.suppressed) return;
 
-  const dofMap = computeSketchDoF(activeSketch.entities, activeSketch.constraints);
-  const derivedDimIds = computeDerivedDimensionIds(activeSketch.entities, activeSketch.constraints);
-  const { relatedIds } = getConstraintPartners(selectedEntityIds, activeSketch.constraints);
+  // In CAM mode, build a map of entity -> operation index for coloring
+  let camEntityOpMap: Map<string, number> | undefined;
+  let camFocusedOpIndex: number | null = null;
+  if (ctx.camMode) {
+    const camState = useCamStore.getState();
+    camEntityOpMap = new Map();
+    camFocusedOpIndex = camState.focusedOperationIndex;
+    for (let i = 0; i < camState.jobConfig.operations.length; i++) {
+      for (const eid of camState.jobConfig.operations[i]!.entityIds) {
+        camEntityOpMap.set(eid, i);
+      }
+    }
+  }
+
+  const dofMap = ctx.camMode ? new Map() : computeSketchDoF(activeSketch.entities, activeSketch.constraints);
+  const derivedDimIds = ctx.camMode ? new Set<string>() : computeDerivedDimensionIds(activeSketch.entities, activeSketch.constraints);
+  const { relatedIds } = ctx.camMode ? { relatedIds: new Set<string>() } : getConstraintPartners(selectedEntityIds, activeSketch.constraints);
 
   for (const entity of activeSketch.entities) {
+    // In CAM mode, skip construction entities and dimensions
+    if (ctx.camMode) {
+      if (entity.type === 'dimension') continue;
+      if ('construction' in entity && entity.construction) continue;
+    }
+
     const isSelected = selectedEntityIds.has(entity.id) &&
       !ctx.selectedSegments.some(s => s.entityId === entity.id);
     const isRelated = !isSelected && relatedIds.has(entity.id);
+
+    // In CAM mode, override style for entities assigned to operations
+    let camStyle: LineStyle | undefined;
+    if (ctx.camMode && camEntityOpMap) {
+      const opIdx = camEntityOpMap.get(entity.id);
+      if (opIdx !== undefined) {
+        const color = CAM_OP_COLORS[opIdx % CAM_OP_COLORS.length]!;
+        const isFocused = opIdx === camFocusedOpIndex;
+        camStyle = { color, width: isFocused ? 2.5 : 1.5 };
+      }
+    }
+
     switch (entity.type) {
       case 'line': {
         const isConstrained = dofMap.get(entity.id) === 0;
-        const style = pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
+        const style = camStyle ?? pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
         renderEntity(renderer, viewport, entity, style);
         break;
       }
       case 'circle': {
         const isConstrained = dofMap.get(entity.id) === 0;
-        const style = pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
+        const style = camStyle ?? pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
         const screenCenter = viewport.worldToScreen(entity.center);
         const screenRadius = entity.radius * viewport.scale;
         renderer.drawCircle(screenCenter, screenRadius, style);
@@ -202,11 +240,12 @@ function renderActiveSketch(ctx: RenderContext) {
       }
       case 'rectangle': {
         const isConstrained = dofMap.get(entity.id) === 0;
-        const style = pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
+        const style = camStyle ?? pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
         renderEntity(renderer, viewport, entity, style);
         break;
       }
       case 'point': {
+        if (ctx.camMode) break; // Skip standalone points in CAM mode
         const isConstrained = dofMap.get(entity.id) === 0;
         const style = pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
         const sp = viewport.worldToScreen(entity.position);
@@ -218,7 +257,7 @@ function renderActiveSketch(ctx: RenderContext) {
       }
       case 'bezier': {
         const isConstrained = dofMap.get(entity.id) === 0;
-        const style = pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
+        const style = camStyle ?? pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
         renderEntity(renderer, viewport, entity, style);
         // When selected, show control handle lines and all 4 control points
         if (isSelected) {
@@ -637,6 +676,52 @@ function renderConstraintLinks(ctx: RenderContext) {
   }
 }
 
+/** Step 6: Draw CAM origin marker */
+function renderCamOrigin(ctx: RenderContext) {
+  if (!ctx.camMode) return;
+  const camState = useCamStore.getState();
+  const origin = camState.jobConfig.origin;
+  const screenPos = ctx.viewport.worldToScreen(origin);
+  const size = 10;
+  const picking = camState.pickingOrigin;
+  const color = picking ? '#ff4444' : '#00cc66';
+
+  // Crosshair
+  ctx.renderer.drawLine(
+    { x: screenPos.x - size, y: screenPos.y },
+    { x: screenPos.x + size, y: screenPos.y },
+    { color, width: 2 },
+  );
+  ctx.renderer.drawLine(
+    { x: screenPos.x, y: screenPos.y - size },
+    { x: screenPos.x, y: screenPos.y + size },
+    { color, width: 2 },
+  );
+  // Circle around crosshair
+  ctx.renderer.drawCircle(screenPos, size * 0.7, { color, width: 1.5 });
+
+  // Label
+  ctx.renderer.drawText('WCS', { x: screenPos.x + size + 3, y: screenPos.y - 3 }, {
+    color,
+    fontSize: 10,
+    textAlign: 'left',
+    textBaseline: 'middle',
+  });
+}
+
+/** Step 6b: Draw CAM toolpath overlay */
+function renderCamToolpath(ctx: RenderContext) {
+  const camState = useCamStore.getState();
+  if (!camState.showToolpathPreview || !camState.toolpath) return;
+  renderToolpathOverlay(
+    ctx.renderer,
+    ctx.viewport,
+    camState.toolpath,
+    camState.issues,
+    ctx.palette,
+  );
+}
+
 /** Render pipeline */
 export function renderFrame(ctx: RenderContext): void {
   renderBackground(ctx);
@@ -644,10 +729,21 @@ export function renderFrame(ctx: RenderContext): void {
   renderOrigin(ctx);
   renderGhostedSketches(ctx);
   renderActiveSketch(ctx);
-  renderConstraintLinks(ctx);
-  renderDimensionOverlay(ctx);
+
+  if (!ctx.camMode) {
+    // Sketch-only rendering steps
+    renderConstraintLinks(ctx);
+    renderDimensionOverlay(ctx);
+    renderArcMidpointHandles(ctx);
+  }
+
   renderSelectedSegments(ctx);
-  renderArcMidpointHandles(ctx);
   renderSelectedPoints(ctx);
-  renderToolOverlay(ctx);
+
+  if (!ctx.camMode) {
+    renderToolOverlay(ctx);
+  }
+
+  renderCamOrigin(ctx);
+  renderCamToolpath(ctx);
 }

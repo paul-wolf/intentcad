@@ -114,6 +114,7 @@ export function exportDocumentToPdf(doc: Document, palette: ThemePalette): Blob 
     activeTool: null,
     altKeyHeld: false,
     palette,
+    camMode: false,
   };
 
   renderFrame(renderCtx);

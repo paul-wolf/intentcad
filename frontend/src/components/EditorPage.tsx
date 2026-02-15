@@ -7,9 +7,13 @@ import { DocumentDrawer } from './DocumentDrawer';
 import { LogPanel } from './LogPanel';
 import { HistoryPanel } from './HistoryPanel';
 import { DocumentPropertiesPanel } from './DocumentPropertiesPanel';
+import { GcodePanel } from './GcodePanel';
+import { CamOperationsPanel } from './CamOperationsPanel';
 import { CanvasContainer } from '@/canvas/CanvasContainer';
 import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
+import { useCamStore } from '@/stores/camStore';
+import { useThemeStore } from '@/theme';
 import { createLineTool } from '@/tools/lineTool';
 import { createSelectTool } from '@/tools/selectTool';
 import { createCircleTool } from '@/tools/circleTool';
@@ -25,10 +29,27 @@ import { migrateDocument } from '@/utils/document';
 import type { Document } from '@/types/document';
 import type { Tool } from '@/tools/types';
 
+function CamRightPanel() {
+  const palette = useThemeStore((s) => s.palette);
+  return (
+    <div style={{
+      width: '240px',
+      background: palette.panelBg,
+      borderLeft: `1px solid ${palette.border}`,
+      display: 'flex',
+      flexDirection: 'column',
+      overflowY: 'auto',
+    }}>
+      <GcodePanel />
+    </div>
+  );
+}
+
 export function EditorPage() {
   const { id } = useParams<{ id: string }>();
   const activeTool = useEditorStore((s) => s.activeTool);
   const setActiveTool = useEditorStore((s) => s.setActiveTool);
+  const camPanelOpen = useCamStore((s) => s.camPanelOpen);
 
   // Load document from backend if navigated directly and backendId not set
   useEffect(() => {
@@ -60,8 +81,11 @@ export function EditorPage() {
     return unsub;
   }, []);
 
+  // In CAM mode, force select tool
+  const effectiveTool = camPanelOpen ? 'select' : activeTool;
+
   const toolInstance: Tool = useMemo(() => {
-    switch (activeTool) {
+    switch (effectiveTool) {
       case 'line':
         return createLineTool();
       case 'point':
@@ -81,7 +105,7 @@ export function EditorPage() {
       case 'bezier':
         return createBezierTool();
     }
-  }, [activeTool]);
+  }, [effectiveTool]);
 
   // Keyboard shortcuts for tool switching
   useEffect(() => {
@@ -90,6 +114,27 @@ export function EditorPage() {
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
 
       const ctrl = e.ctrlKey || e.metaKey;
+
+      // Viewport shortcuts work in both modes
+      if (e.key === 'Home') {
+        e.preventDefault();
+        useEditorStore.getState().setViewportCommand('center-origin');
+        return;
+      }
+      if (e.key === 'F' && e.shiftKey) {
+        useEditorStore.getState().setViewportCommand('fit-entities');
+        return;
+      }
+
+      // Escape in CAM mode exits CAM
+      if (e.key === 'Escape' && useCamStore.getState().camPanelOpen) {
+        useCamStore.getState().toggleCamPanel();
+        return;
+      }
+
+      // In CAM mode, skip sketch tool shortcuts
+      if (useCamStore.getState().camPanelOpen) return;
+
       if (ctrl && e.key === 'z' && !e.shiftKey) {
         e.preventDefault();
         useDocumentStore.getState().undo();
@@ -98,16 +143,6 @@ export function EditorPage() {
       if (ctrl && (e.key === 'Z' || e.key === 'y')) {
         e.preventDefault();
         useDocumentStore.getState().redo();
-        return;
-      }
-
-      if (e.key === 'Home') {
-        e.preventDefault();
-        useEditorStore.getState().setViewportCommand('center-origin');
-        return;
-      }
-      if (e.key === 'F' && e.shiftKey) {
-        useEditorStore.getState().setViewportCommand('fit-entities');
         return;
       }
 
@@ -128,10 +163,11 @@ export function EditorPage() {
     <div style={styles.container}>
       <Toolbar />
       <div style={styles.middle}>
-        <HistoryPanel />
+        {!camPanelOpen && <HistoryPanel />}
+        {camPanelOpen && <CamOperationsPanel />}
         <CanvasContainer activeTool={toolInstance} docId={id} />
-        <DocumentPropertiesPanel />
-        <RightPanel />
+        {!camPanelOpen && <DocumentPropertiesPanel />}
+        {camPanelOpen ? <CamRightPanel /> : <RightPanel />}
       </div>
       <LogPanel />
       <StatusBar />
