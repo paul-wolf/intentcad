@@ -3,13 +3,18 @@ import type { CircleEntity, DimensionEntity, LineEntity, Point } from '@/types/d
 import type { Renderer, Viewport } from '@/types/renderer';
 import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
-import { hitTestSegment } from '@/hittest/hitTest';
-import type { SegmentHit } from '@/hittest/hitTest';
+import { hitTestSegment, hitTestPoint } from '@/hittest/hitTest';
+import type { SegmentHit, PointHit } from '@/hittest/hitTest';
 import { drawDimension, computeAngleDimensionGeom, drawAngleDimension } from '@/rendering/dimensionRenderer';
-import { DIMENSION_OFFSET_MM, PARALLEL_DOT_THRESHOLD, ANGLE_DIMENSION_ARC_RADIUS_MM } from '@/config';
+import { DIMENSION_OFFSET_MM, PARALLEL_DOT_THRESHOLD, ANGLE_DIMENSION_ARC_RADIUS_MM, SELECTED_POINT_RADIUS } from '@/config';
 import { getStyles } from '@/rendering/styles';
 import { getThemePalette } from '@/theme';
 import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
+import { getEntityPoint } from '@/utils/entityPoints';
+
+type DimTarget =
+  | { kind: 'segment'; hit: SegmentHit }
+  | { kind: 'point'; hit: PointHit };
 
 /** Check if two segments are approximately parallel (within ~5 degrees). */
 function areSegmentsParallel(p1: Point, p2: Point, q1: Point, q2: Point): boolean {
@@ -50,239 +55,322 @@ function twoSegmentGeom(
   return { a, b };
 }
 
+/** Try to hit-test a point first, then fall back to segment. Returns a DimTarget or null. */
+function hitTestDimTarget(screenPos: Point, entities: import('@/types/document').Entity[], viewport: Viewport): DimTarget | null {
+  const ptHit = hitTestPoint(screenPos, entities, viewport);
+  if (ptHit && ptHit.pointIndex >= 0) {
+    // Valid vertex (pointIndex >= 0 excludes arc midpoints which are encoded as negative)
+    return { kind: 'point', hit: ptHit };
+  }
+  const segHit = hitTestSegment(screenPos, entities, viewport);
+  if (segHit) {
+    return { kind: 'segment', hit: segHit };
+  }
+  return null;
+}
+
 export function createDimensionTool(): Tool {
-  let hoverSegment: SegmentHit | null = null;
-  let firstSegment: SegmentHit | null = null;
+  let hoverTarget: DimTarget | null = null;
+  let firstTarget: DimTarget | null = null;
 
   return {
     onMouseDown(worldPos: Point, screenPos: Point, ctx: ToolContext) {
       const activeSketch = useDocumentStore.getState().getActiveSketch();
       if (!activeSketch) return;
 
-      const hit = hitTestSegment(screenPos, activeSketch.entities, ctx.viewport);
-      if (!hit) return;
+      const target = hitTestDimTarget(screenPos, activeSketch.entities, ctx.viewport);
+      if (!target) return;
 
-      const targetEntity = activeSketch.entities.find((e) => e.id === hit.entityId);
-      if (!targetEntity || (targetEntity.type !== 'line' && targetEntity.type !== 'circle')) return;
+      // Validate the hit entity exists and is a geometry type
+      const targetEntity = activeSketch.entities.find((e) => e.id === (target.kind === 'point' ? target.hit.entityId : target.hit.entityId));
+      if (!targetEntity || targetEntity.type === 'dimension' || targetEntity.type === 'bezier') return;
 
-      // Two-click workflow
-      if (!firstSegment) {
-        firstSegment = hit;
+      // First click: store the target
+      if (!firstTarget) {
+        firstTarget = target;
         return;
       }
 
-      // Second click: if same entity+segment, create single-entity dimension
-      if (firstSegment.entityId === hit.entityId && firstSegment.segmentIndex === hit.segmentIndex) {
-        // Circle: create diameter dimension
-        if (targetEntity.type === 'circle') {
-          const exists = activeSketch.entities.some(
-            (e) =>
-              e.type === 'dimension' &&
-              e.targetEntityId === hit.entityId &&
-              !e.targetEntityId2,
-          );
-          if (!exists) {
-            useDocumentStore.getState().beginTransaction('Add dimension');
-            useDocumentStore.getState().addEntity({
-              id: crypto.randomUUID(),
-              type: 'dimension',
-              targetEntityId: hit.entityId,
-              segmentIndex: -1,
-              offset: DIMENSION_OFFSET_MM,
-            });
-          }
-          firstSegment = null;
+      // Second click: create dimension based on target combination
+      const firstEntity = activeSketch.entities.find((e) => e.id === (firstTarget!.kind === 'point' ? firstTarget!.hit.entityId : firstTarget!.hit.entityId));
+      if (!firstEntity) {
+        firstTarget = null;
+        return;
+      }
+
+      // === POINT + POINT ===
+      if (firstTarget.kind === 'point' && target.kind === 'point') {
+        const pt1 = firstTarget.hit;
+        const pt2 = target.hit;
+
+        // Same entity, same point: no-op (a point has no length)
+        if (pt1.entityId === pt2.entityId && pt1.pointIndex === pt2.pointIndex) {
+          firstTarget = null;
           return;
         }
 
-        // Polygon: create apothem dimension (segmentIndex -1)
-        if ((targetEntity as LineEntity).polygonCenter) {
-          const exists = activeSketch.entities.some(
-            (e) =>
-              e.type === 'dimension' &&
-              e.targetEntityId === hit.entityId &&
-              e.segmentIndex === -1,
-          );
-          if (!exists) {
-            useDocumentStore.getState().beginTransaction('Add dimension');
-            useDocumentStore.getState().addEntity({
-              id: crypto.randomUUID(),
-              type: 'dimension',
-              targetEntityId: hit.entityId,
-              segmentIndex: -1,
-              offset: DIMENSION_OFFSET_MM,
-            });
-          }
-          firstSegment = null;
+        const a = getEntityPoint(firstEntity, pt1.pointIndex);
+        const b = getEntityPoint(targetEntity, pt2.pointIndex);
+        if (!a || !b) {
+          firstTarget = null;
           return;
         }
 
-        // Create single-segment dimension (same as original behavior)
-        const exists = activeSketch.entities.some(
-          (e) =>
-            e.type === 'dimension' &&
-            e.targetEntityId === hit.entityId &&
-            e.segmentIndex === hit.segmentIndex &&
-            !e.targetEntityId2,
-        );
-        if (exists) {
-          firstSegment = null;
-          return;
-        }
-
-        const [hsi1, hsi2] = getSegmentPointIndices(targetEntity as LineEntity, hit.segmentIndex);
-        const a = (targetEntity as LineEntity).points[hsi1]!;
-        const b = (targetEntity as LineEntity).points[hsi2]!;
+        // Offset sign from mouse position
         const dx = b.x - a.x;
         const dy = b.y - a.y;
         const cross = dx * (worldPos.y - a.y) - dy * (worldPos.x - a.x);
         const sign = cross >= 0 ? 1 : -1;
 
+        const sameEntity = pt1.entityId === pt2.entityId;
+
         useDocumentStore.getState().beginTransaction('Add dimension');
         useDocumentStore.getState().addEntity({
           id: crypto.randomUUID(),
           type: 'dimension',
-          targetEntityId: hit.entityId,
-          segmentIndex: hit.segmentIndex,
+          targetEntityId: pt1.entityId,
+          segmentIndex: 0,
+          pointIndex: pt1.pointIndex,
           offset: DIMENSION_OFFSET_MM * sign,
-        });
-        firstSegment = null;
+          ...(sameEntity
+            ? { pointIndex2: pt2.pointIndex }
+            : { targetEntityId2: pt2.entityId, segmentIndex2: 0, pointIndex2: pt2.pointIndex }),
+        } as DimensionEntity);
+        firstTarget = null;
         return;
       }
 
-      // Second click on a different entity
-      const target1 = activeSketch.entities.find((e) => e.id === firstSegment!.entityId);
-      if (!target1 || (target1.type !== 'line' && target1.type !== 'circle')) {
-        firstSegment = null;
-        return;
-      }
+      // === SEGMENT + SEGMENT (existing behavior) ===
+      if (firstTarget.kind === 'segment' && target.kind === 'segment') {
+        const hit = target.hit;
+        const firstHit = firstTarget.hit;
 
-      // Circle-to-circle: center distance dimension
-      if (target1.type === 'circle' && targetEntity.type === 'circle') {
-        const exists = activeSketch.entities.some((e) => {
-          if (e.type !== 'dimension' || !e.targetEntityId2) return false;
-          return (
-            (e.targetEntityId === firstSegment!.entityId && e.targetEntityId2 === hit.entityId) ||
-            (e.targetEntityId === hit.entityId && e.targetEntityId2 === firstSegment!.entityId)
+        // Same entity+segment: single-entity dimension
+        if (firstHit.entityId === hit.entityId && firstHit.segmentIndex === hit.segmentIndex) {
+          // Circle: create diameter dimension
+          if (targetEntity.type === 'circle') {
+            const exists = activeSketch.entities.some(
+              (e) =>
+                e.type === 'dimension' &&
+                e.targetEntityId === hit.entityId &&
+                !e.targetEntityId2,
+            );
+            if (!exists) {
+              useDocumentStore.getState().beginTransaction('Add dimension');
+              useDocumentStore.getState().addEntity({
+                id: crypto.randomUUID(),
+                type: 'dimension',
+                targetEntityId: hit.entityId,
+                segmentIndex: -1,
+                offset: DIMENSION_OFFSET_MM,
+              });
+            }
+            firstTarget = null;
+            return;
+          }
+
+          // Polygon: create apothem dimension (segmentIndex -1)
+          if (targetEntity.type === 'line' && (targetEntity as LineEntity).polygonCenter) {
+            const exists = activeSketch.entities.some(
+              (e) =>
+                e.type === 'dimension' &&
+                e.targetEntityId === hit.entityId &&
+                e.segmentIndex === -1,
+            );
+            if (!exists) {
+              useDocumentStore.getState().beginTransaction('Add dimension');
+              useDocumentStore.getState().addEntity({
+                id: crypto.randomUUID(),
+                type: 'dimension',
+                targetEntityId: hit.entityId,
+                segmentIndex: -1,
+                offset: DIMENSION_OFFSET_MM,
+              });
+            }
+            firstTarget = null;
+            return;
+          }
+
+          if (targetEntity.type !== 'line') {
+            firstTarget = null;
+            return;
+          }
+
+          // Create single-segment dimension
+          const exists = activeSketch.entities.some(
+            (e) =>
+              e.type === 'dimension' &&
+              e.targetEntityId === hit.entityId &&
+              e.segmentIndex === hit.segmentIndex &&
+              !e.targetEntityId2,
           );
-        });
-        if (!exists) {
-          const c1 = (target1 as CircleEntity).center;
-          const c2 = (targetEntity as CircleEntity).center;
-          const dx = c2.x - c1.x;
-          const dy = c2.y - c1.y;
-          const cross = dx * (worldPos.y - c1.y) - dy * (worldPos.x - c1.x);
+          if (exists) {
+            firstTarget = null;
+            return;
+          }
+
+          const [hsi1, hsi2] = getSegmentPointIndices(targetEntity as LineEntity, hit.segmentIndex);
+          const a = (targetEntity as LineEntity).points[hsi1]!;
+          const b = (targetEntity as LineEntity).points[hsi2]!;
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const cross = dx * (worldPos.y - a.y) - dy * (worldPos.x - a.x);
           const sign = cross >= 0 ? 1 : -1;
 
           useDocumentStore.getState().beginTransaction('Add dimension');
           useDocumentStore.getState().addEntity({
             id: crypto.randomUUID(),
             type: 'dimension',
-            targetEntityId: firstSegment!.entityId,
-            segmentIndex: -1,
+            targetEntityId: hit.entityId,
+            segmentIndex: hit.segmentIndex,
             offset: DIMENSION_OFFSET_MM * sign,
-            targetEntityId2: hit.entityId,
-            segmentIndex2: -1,
-          } as DimensionEntity);
+          });
+          firstTarget = null;
+          return;
         }
-        firstSegment = null;
-        return;
-      }
 
-      // Mixed circle + non-circle: not supported yet
-      if (target1.type === 'circle' || targetEntity.type === 'circle') {
-        firstSegment = null;
-        return;
-      }
+        // Different entity: two-segment dimension
+        if (firstEntity.type !== 'line' && firstEntity.type !== 'circle') {
+          firstTarget = null;
+          return;
+        }
 
-      // Duplicate check: prevent creating if one already exists for the same pair
-      const exists = activeSketch.entities.some((e) => {
-        if (e.type !== 'dimension' || !e.targetEntityId2) return false;
-        return (
-          (e.targetEntityId === firstSegment!.entityId &&
-            e.segmentIndex === firstSegment!.segmentIndex &&
-            e.targetEntityId2 === hit.entityId &&
-            e.segmentIndex2 === hit.segmentIndex) ||
-          (e.targetEntityId === hit.entityId &&
-            e.segmentIndex === hit.segmentIndex &&
-            e.targetEntityId2 === firstSegment!.entityId &&
-            e.segmentIndex2 === firstSegment!.segmentIndex)
+        // Circle-to-circle: center distance dimension
+        if (firstEntity.type === 'circle' && targetEntity.type === 'circle') {
+          const exists = activeSketch.entities.some((e) => {
+            if (e.type !== 'dimension' || !e.targetEntityId2) return false;
+            return (
+              (e.targetEntityId === firstHit.entityId && e.targetEntityId2 === hit.entityId) ||
+              (e.targetEntityId === hit.entityId && e.targetEntityId2 === firstHit.entityId)
+            );
+          });
+          if (!exists) {
+            const c1 = (firstEntity as CircleEntity).center;
+            const c2 = (targetEntity as CircleEntity).center;
+            const dx = c2.x - c1.x;
+            const dy = c2.y - c1.y;
+            const cross = dx * (worldPos.y - c1.y) - dy * (worldPos.x - c1.x);
+            const sign = cross >= 0 ? 1 : -1;
+
+            useDocumentStore.getState().beginTransaction('Add dimension');
+            useDocumentStore.getState().addEntity({
+              id: crypto.randomUUID(),
+              type: 'dimension',
+              targetEntityId: firstHit.entityId,
+              segmentIndex: -1,
+              offset: DIMENSION_OFFSET_MM * sign,
+              targetEntityId2: hit.entityId,
+              segmentIndex2: -1,
+            } as DimensionEntity);
+          }
+          firstTarget = null;
+          return;
+        }
+
+        // Mixed circle + non-circle: not supported yet
+        if (firstEntity.type === 'circle' || targetEntity.type === 'circle') {
+          firstTarget = null;
+          return;
+        }
+
+        if (firstEntity.type !== 'line' || targetEntity.type !== 'line') {
+          firstTarget = null;
+          return;
+        }
+
+        // Duplicate check
+        const exists = activeSketch.entities.some((e) => {
+          if (e.type !== 'dimension' || !e.targetEntityId2) return false;
+          return (
+            (e.targetEntityId === firstHit.entityId &&
+              e.segmentIndex === firstHit.segmentIndex &&
+              e.targetEntityId2 === hit.entityId &&
+              e.segmentIndex2 === hit.segmentIndex) ||
+            (e.targetEntityId === hit.entityId &&
+              e.segmentIndex === hit.segmentIndex &&
+              e.targetEntityId2 === firstHit.entityId &&
+              e.segmentIndex2 === firstHit.segmentIndex)
+          );
+        });
+        if (exists) {
+          firstTarget = null;
+          return;
+        }
+
+        const [fs1, fs2] = getSegmentPointIndices(firstEntity, firstHit.segmentIndex);
+        const seg1p1 = firstEntity.points[fs1]!;
+        const seg1p2 = firstEntity.points[fs2]!;
+        const [hs1, hs2] = getSegmentPointIndices(targetEntity as LineEntity, hit.segmentIndex);
+        const seg2p1 = (targetEntity as LineEntity).points[hs1]!;
+        const seg2p2 = (targetEntity as LineEntity).points[hs2]!;
+        const parallel = areSegmentsParallel(seg1p1, seg1p2, seg2p1, seg2p2);
+
+        if (!parallel) {
+          // Angle dimension
+          useDocumentStore.getState().beginTransaction('Add dimension');
+          useDocumentStore.getState().addEntity({
+            id: crypto.randomUUID(),
+            type: 'dimension',
+            targetEntityId: firstHit.entityId,
+            segmentIndex: firstHit.segmentIndex,
+            offset: ANGLE_DIMENSION_ARC_RADIUS_MM,
+            targetEntityId2: hit.entityId,
+            segmentIndex2: hit.segmentIndex,
+            angleMode: true,
+          } as DimensionEntity);
+          firstTarget = null;
+          return;
+        }
+
+        // Parallel: distance dimension
+        const geom = twoSegmentGeom(
+          firstEntity.points,
+          firstHit.segmentIndex,
+          (targetEntity as LineEntity).points,
+          hit.segmentIndex,
         );
-      });
-      if (exists) {
-        firstSegment = null;
-        return;
-      }
+        if (!geom) {
+          firstTarget = null;
+          return;
+        }
 
-      const [fs1, fs2] = getSegmentPointIndices(target1 as LineEntity, firstSegment.segmentIndex);
-      const seg1p1 = (target1 as LineEntity).points[fs1]!;
-      const seg1p2 = (target1 as LineEntity).points[fs2]!;
-      const [hs1, hs2] = getSegmentPointIndices(targetEntity as LineEntity, hit.segmentIndex);
-      const seg2p1 = (targetEntity as LineEntity).points[hs1]!;
-      const seg2p2 = (targetEntity as LineEntity).points[hs2]!;
-      const parallel = areSegmentsParallel(seg1p1, seg1p2, seg2p1, seg2p2);
+        const abDx = geom.b.x - geom.a.x;
+        const abDy = geom.b.y - geom.a.y;
+        const cross = abDx * (worldPos.y - geom.a.y) - abDy * (worldPos.x - geom.a.x);
+        const sign = cross >= 0 ? 1 : -1;
 
-      if (!parallel) {
-        // Angle dimension
         useDocumentStore.getState().beginTransaction('Add dimension');
         useDocumentStore.getState().addEntity({
           id: crypto.randomUUID(),
           type: 'dimension',
-          targetEntityId: firstSegment.entityId,
-          segmentIndex: firstSegment.segmentIndex,
-          offset: ANGLE_DIMENSION_ARC_RADIUS_MM,
+          targetEntityId: firstHit.entityId,
+          segmentIndex: firstHit.segmentIndex,
+          offset: DIMENSION_OFFSET_MM * sign,
           targetEntityId2: hit.entityId,
           segmentIndex2: hit.segmentIndex,
-          angleMode: true,
         } as DimensionEntity);
-        firstSegment = null;
+        firstTarget = null;
         return;
       }
 
-      // Parallel: distance dimension
-      const geom = twoSegmentGeom(
-        (target1 as LineEntity).points,
-        firstSegment.segmentIndex,
-        (targetEntity as LineEntity).points,
-        hit.segmentIndex,
-      );
-      if (!geom) {
-        firstSegment = null;
-        return;
-      }
-
-      // Determine offset sign from mouse position
-      const abDx = geom.b.x - geom.a.x;
-      const abDy = geom.b.y - geom.a.y;
-      const cross = abDx * (worldPos.y - geom.a.y) - abDy * (worldPos.x - geom.a.x);
-      const sign = cross >= 0 ? 1 : -1;
-
-      useDocumentStore.getState().beginTransaction('Add dimension');
-      useDocumentStore.getState().addEntity({
-        id: crypto.randomUUID(),
-        type: 'dimension',
-        targetEntityId: firstSegment.entityId,
-        segmentIndex: firstSegment.segmentIndex,
-        offset: DIMENSION_OFFSET_MM * sign,
-        targetEntityId2: hit.entityId,
-        segmentIndex2: hit.segmentIndex,
-      } as DimensionEntity);
-      firstSegment = null;
+      // === MIXED: POINT + SEGMENT or SEGMENT + POINT ===
+      // Not supported for now — reset
+      firstTarget = null;
     },
 
     onMouseMove(_worldPos: Point, screenPos: Point, ctx: ToolContext) {
       const activeSketch = useDocumentStore.getState().getActiveSketch();
       if (!activeSketch) {
-        hoverSegment = null;
+        hoverTarget = null;
         return;
       }
-      hoverSegment = hitTestSegment(screenPos, activeSketch.entities, ctx.viewport);
+      hoverTarget = hitTestDimTarget(screenPos, activeSketch.entities, ctx.viewport);
     },
 
     onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') {
-        if (firstSegment) {
-          firstSegment = null;
+        if (firstTarget) {
+          firstTarget = null;
         } else {
           useEditorStore.getState().setActiveTool('select');
         }
@@ -296,35 +384,86 @@ export function createDimensionTool(): Tool {
       const palette = getThemePalette();
       const styles = getStyles(palette);
 
-      // Draw highlight on first selected entity
-      if (firstSegment) {
-        const entity1 = activeSketch.entities.find((e) => e.id === firstSegment!.entityId);
-        if (entity1 && entity1.type === 'line') {
-          const idx = firstSegment.segmentIndex;
-          if (idx >= 0 && idx < getSegmentCount(entity1)) {
-            const [dti1, dti2] = getSegmentPointIndices(entity1, idx);
-            const sa = viewport.worldToScreen(entity1.points[dti1]!);
-            const sb = viewport.worldToScreen(entity1.points[dti2]!);
-            renderer.drawLine(sa, sb, { color: palette.accent, width: 2.5 });
+      // Draw highlight on first selected target
+      if (firstTarget) {
+        if (firstTarget.kind === 'point') {
+          const entity1 = activeSketch.entities.find((e) => e.id === firstTarget!.hit.entityId);
+          if (entity1) {
+            const pt = getEntityPoint(entity1, (firstTarget.hit as PointHit).pointIndex);
+            if (pt) {
+              const sp = viewport.worldToScreen(pt);
+              renderer.drawCircle(sp, SELECTED_POINT_RADIUS + 2, { color: palette.accent, width: 2 });
+            }
           }
-        } else if (entity1 && entity1.type === 'circle') {
-          const sc = viewport.worldToScreen(entity1.center);
-          const sr = entity1.radius * viewport.scale;
-          renderer.drawArc(sc, sr, 0, Math.PI * 2, false, { color: palette.accent, width: 2.5 });
+        } else {
+          const entity1 = activeSketch.entities.find((e) => e.id === firstTarget!.hit.entityId);
+          const segHit = firstTarget.hit as SegmentHit;
+          if (entity1 && entity1.type === 'line') {
+            const idx = segHit.segmentIndex;
+            if (idx >= 0 && idx < getSegmentCount(entity1)) {
+              const [dti1, dti2] = getSegmentPointIndices(entity1, idx);
+              const sa = viewport.worldToScreen(entity1.points[dti1]!);
+              const sb = viewport.worldToScreen(entity1.points[dti2]!);
+              renderer.drawLine(sa, sb, { color: palette.accent, width: 2.5 });
+            }
+          } else if (entity1 && entity1.type === 'circle') {
+            const sc = viewport.worldToScreen(entity1.center);
+            const sr = entity1.radius * viewport.scale;
+            renderer.drawArc(sc, sr, 0, Math.PI * 2, false, { color: palette.accent, width: 2.5 });
+          }
         }
       }
 
-      if (!hoverSegment) return;
+      if (!hoverTarget) return;
 
-      const targetEntity = activeSketch.entities.find((e) => e.id === hoverSegment!.entityId);
+      // --- Point hover ---
+      if (hoverTarget.kind === 'point') {
+        const hoverPtHit = hoverTarget.hit as PointHit;
+        const hoverEntity = activeSketch.entities.find((e) => e.id === hoverPtHit.entityId);
+        if (!hoverEntity) return;
+        const hoverPt = getEntityPoint(hoverEntity, hoverPtHit.pointIndex);
+        if (!hoverPt) return;
+
+        // Draw hover circle on the vertex
+        const sp = viewport.worldToScreen(hoverPt);
+        renderer.drawCircle(sp, SELECTED_POINT_RADIUS + 2, { color: palette.accent, width: 1.5 });
+
+        // If we have a first target that's a point, preview the point-to-point dimension
+        if (firstTarget && firstTarget.kind === 'point') {
+          const firstPtHit = firstTarget.hit as PointHit;
+          // Same point: no preview
+          if (firstPtHit.entityId === hoverPtHit.entityId && firstPtHit.pointIndex === hoverPtHit.pointIndex) return;
+
+          const firstEntity = activeSketch.entities.find((e) => e.id === firstPtHit.entityId);
+          if (!firstEntity) return;
+          const a = getEntityPoint(firstEntity, firstPtHit.pointIndex);
+          if (!a) return;
+
+          renderer.setGlobalAlpha(0.4);
+          drawDimension(
+            renderer,
+            viewport,
+            { a, b: hoverPt, offset: DIMENSION_OFFSET_MM },
+            styles.dimensionLine,
+            styles.dimensionText,
+            palette.background,
+          );
+          renderer.resetGlobalAlpha();
+        }
+        return;
+      }
+
+      // --- Segment hover (existing behavior) ---
+      const hoverSegHit = hoverTarget.hit as SegmentHit;
+      const targetEntity = activeSketch.entities.find((e) => e.id === hoverSegHit.entityId);
       if (!targetEntity || (targetEntity.type !== 'line' && targetEntity.type !== 'circle')) return;
 
       // Circle hover preview
       if (targetEntity.type === 'circle') {
-        if (firstSegment) {
+        if (firstTarget && firstTarget.kind === 'segment') {
           // Preview circle-to-circle dimension
-          if (firstSegment.entityId === hoverSegment.entityId) return;
-          const entity1 = activeSketch.entities.find((e) => e.id === firstSegment!.entityId);
+          if (firstTarget.hit.entityId === hoverSegHit.entityId) return;
+          const entity1 = activeSketch.entities.find((e) => e.id === firstTarget!.hit.entityId);
           if (!entity1 || entity1.type !== 'circle') return;
           const c1 = (entity1 as CircleEntity).center;
           const c2 = (targetEntity as CircleEntity).center;
@@ -347,7 +486,7 @@ export function createDimensionTool(): Tool {
         const exists = activeSketch.entities.some(
           (e) =>
             e.type === 'dimension' &&
-            e.targetEntityId === hoverSegment!.entityId &&
+            e.targetEntityId === hoverSegHit.entityId &&
             e.segmentIndex === -1,
         );
         if (exists) return;
@@ -370,18 +509,19 @@ export function createDimensionTool(): Tool {
         return;
       }
 
-      // Two-segment preview: when firstSegment is set, show ghost dimension between the two segments
-      if (firstSegment) {
+      // Two-segment preview: when firstTarget is a segment, show ghost dimension
+      if (firstTarget && firstTarget.kind === 'segment') {
+        const firstSegHit = firstTarget.hit as SegmentHit;
         // Don't preview same segment
-        if (firstSegment.entityId === hoverSegment.entityId && firstSegment.segmentIndex === hoverSegment.segmentIndex) return;
+        if (firstSegHit.entityId === hoverSegHit.entityId && firstSegHit.segmentIndex === hoverSegHit.segmentIndex) return;
 
-        const entity1 = activeSketch.entities.find((e) => e.id === firstSegment!.entityId);
+        const entity1 = activeSketch.entities.find((e) => e.id === firstSegHit.entityId);
         if (!entity1 || entity1.type !== 'line') return;
 
-        const [rfs1, rfs2] = getSegmentPointIndices(entity1, firstSegment.segmentIndex);
+        const [rfs1, rfs2] = getSegmentPointIndices(entity1, firstSegHit.segmentIndex);
         const seg1p1 = entity1.points[rfs1]!;
         const seg1p2 = entity1.points[rfs2]!;
-        const [rhs1, rhs2] = getSegmentPointIndices(targetEntity as LineEntity, hoverSegment.segmentIndex);
+        const [rhs1, rhs2] = getSegmentPointIndices(targetEntity as LineEntity, hoverSegHit.segmentIndex);
         const seg2p1 = (targetEntity as LineEntity).points[rhs1]!;
         const seg2p2 = (targetEntity as LineEntity).points[rhs2]!;
         const parallel = areSegmentsParallel(seg1p1, seg1p2, seg2p1, seg2p2);
@@ -406,9 +546,9 @@ export function createDimensionTool(): Tool {
 
         const geom = twoSegmentGeom(
           entity1.points,
-          firstSegment.segmentIndex,
+          firstSegHit.segmentIndex,
           (targetEntity as LineEntity).points,
-          hoverSegment.segmentIndex,
+          hoverSegHit.segmentIndex,
         );
         if (!geom) return;
 
@@ -425,16 +565,17 @@ export function createDimensionTool(): Tool {
         return;
       }
 
-      // Single-segment preview (no firstSegment set yet)
-      const idx = hoverSegment.segmentIndex;
+      // Single-segment preview (no firstTarget set yet)
+      if (targetEntity.type !== 'line') return;
+      const idx = hoverSegHit.segmentIndex;
       if (idx < 0 || idx >= getSegmentCount(targetEntity as LineEntity)) return;
 
       // Check if dimension already exists for this segment
       const exists = activeSketch.entities.some(
         (e) =>
           e.type === 'dimension' &&
-          e.targetEntityId === hoverSegment!.entityId &&
-          e.segmentIndex === hoverSegment!.segmentIndex &&
+          e.targetEntityId === hoverSegHit.entityId &&
+          e.segmentIndex === hoverSegHit.segmentIndex &&
           !e.targetEntityId2,
       );
       if (exists) return;

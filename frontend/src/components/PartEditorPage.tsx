@@ -19,7 +19,7 @@ import { RevolveForm, type RevolveFormHandle } from './RevolveForm';
 import { ShellForm } from './ShellForm';
 import { FilletForm } from './FilletForm';
 import { ChamferForm } from './ChamferForm';
-import { LoftForm } from './LoftForm';
+import { LoftForm, type LoftFormHandle } from './LoftForm';
 import type { Part, Feature, ExtrudeFeature, RevolveFeature, FilletFeature, ChamferFeature, LoftFeature, Plane } from '@/types/part';
 import { DEFAULT_XY_PLANE, planeWithOffset } from '@/types/part';
 import type { Document } from '@/types/document';
@@ -74,6 +74,7 @@ export function PartEditorPage() {
   const clearDraft = usePartEditorStore((s) => s.clearDraft);
 
   const [selectedEdges, setSelectedEdges] = useState<number[]>([]);
+  const [activeLoftSection, setActiveLoftSection] = useState(1);
   const edgeDataRef = useRef<EdgeData | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -83,6 +84,7 @@ export function PartEditorPage() {
   const lastPreviewTimeRef = useRef(0);
   const extrudeFormRef = useRef<ExtrudeFormHandle>(null);
   const revolveFormRef = useRef<RevolveFormHandle>(null);
+  const loftFormRef = useRef<LoftFormHandle>(null);
 
   // Load part from backend
   useEffect(() => {
@@ -138,7 +140,6 @@ export function PartEditorPage() {
     if (!vp) return;
 
     if (!draftFeature || draftFeature.type !== 'extrude') {
-      vp.disableDragInteraction();
       return;
     }
 
@@ -166,20 +167,128 @@ export function PartEditorPage() {
     return () => vp.disableDragInteraction();
   }, [draftFeature?.type]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Enable face picking when draft is extrude or revolve
+  // Enable drag interaction for loft plane manipulation
   useEffect(() => {
     const vp = viewportRef.current;
     if (!vp) return;
 
-    if (!draftFeature || (draftFeature.type !== 'extrude' && draftFeature.type !== 'revolve')) {
+    if (!draftFeature || draftFeature.type !== 'loft') {
+      return;
+    }
+
+    const RING_RADIUS = 12; // Must match PartViewport's RING_RADIUS
+    const DEG_PER_UNIT = 180 / (Math.PI * RING_RADIUS);
+
+    const callbacks: DragInteractionCallbacks = {
+      onDragStart(hitPoint, handleId) {
+        const active = loftFormRef.current?.getActiveSection();
+        if (!active || !handleId) return null;
+
+        const bn = active.basePlane.normal;
+        const bx = active.basePlane.xAxis;
+        const by: [number, number, number] = [
+          bx[1] * bn[2] - bx[2] * bn[1],
+          bx[2] * bn[0] - bx[0] * bn[2],
+          bx[0] * bn[1] - bx[1] * bn[0],
+        ];
+
+        if (handleId === 'normal') {
+          return { axis: bn, initialValue: active.offset };
+        } else if (handleId === 'x') {
+          return { axis: bx, initialValue: active.originX };
+        } else if (handleId === 'y') {
+          return { axis: by, initialValue: active.originY };
+        } else if (handleId === 'spin' || handleId === 'tilt') {
+          // Compute tangent at the hit point for rotation drag
+          const draft = usePartEditorStore.getState().draftFeature as LoftFeature | null;
+          if (!draft) return null;
+          const section = draft.sections[activeLoftSection];
+          if (!section) return null;
+          const o = section.plane.origin;
+
+          // Rotation axis: normal for spin, xAxis for tilt
+          const rotAxis = handleId === 'spin' ? bn : bx;
+
+          // Radius vector: hit point minus origin, projected perpendicular to rotation axis
+          const toHit: [number, number, number] = [hitPoint[0] - o[0], hitPoint[1] - o[1], hitPoint[2] - o[2]];
+          const dot = toHit[0] * rotAxis[0] + toHit[1] * rotAxis[1] + toHit[2] * rotAxis[2];
+          const proj: [number, number, number] = [
+            toHit[0] - rotAxis[0] * dot,
+            toHit[1] - rotAxis[1] * dot,
+            toHit[2] - rotAxis[2] * dot,
+          ];
+
+          // Tangent = rotationAxis × radiusVector
+          const tangent: [number, number, number] = [
+            rotAxis[1] * proj[2] - rotAxis[2] * proj[1],
+            rotAxis[2] * proj[0] - rotAxis[0] * proj[2],
+            rotAxis[0] * proj[1] - rotAxis[1] * proj[0],
+          ];
+          const len = Math.sqrt(tangent[0] ** 2 + tangent[1] ** 2 + tangent[2] ** 2);
+          if (len < 1e-6) return null;
+          const axis: [number, number, number] = [tangent[0] / len, tangent[1] / len, tangent[2] / len];
+
+          const currentAngle = handleId === 'spin' ? active.spin : active.tilt;
+          // Convert angle to arc-length so the drag system works in linear units
+          return { axis, initialValue: currentAngle / DEG_PER_UNIT };
+        }
+        return null;
+      },
+      onDrag(newValue, isNegative, handleId) {
+        const signedValue = isNegative ? -newValue : newValue;
+        if (handleId === 'normal') {
+          loftFormRef.current?.setOffset(signedValue);
+        } else if (handleId === 'x') {
+          loftFormRef.current?.setOriginX(signedValue);
+        } else if (handleId === 'y') {
+          loftFormRef.current?.setOriginY(signedValue);
+        } else if (handleId === 'spin') {
+          loftFormRef.current?.setSpin(signedValue * DEG_PER_UNIT);
+        } else if (handleId === 'tilt') {
+          loftFormRef.current?.setTilt(signedValue * DEG_PER_UNIT);
+        }
+      },
+    };
+
+    vp.enableDragInteraction(callbacks);
+    return () => vp.disableDragInteraction();
+  }, [draftFeature?.type]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Show plane gizmo for active loft section
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+
+    if (!draftFeature || draftFeature.type !== 'loft') {
+      vp.clearPlaneGizmo();
+      return;
+    }
+
+    const loft = draftFeature as LoftFeature;
+    const section = loft.sections[activeLoftSection];
+    if (section) {
+      vp.setPlaneGizmo(section.plane.origin, section.plane.normal, section.plane.xAxis);
+    }
+  }, [draftFeature, activeLoftSection]);
+
+  // Enable face picking when draft is extrude, revolve, or loft
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+
+    if (!draftFeature || (draftFeature.type !== 'extrude' && draftFeature.type !== 'revolve' && draftFeature.type !== 'loft')) {
       vp.disableFacePicking();
       return;
     }
 
     vp.enableFacePicking((info) => {
       const normal: [number, number, number] = [info.normal.x, info.normal.y, info.normal.z];
-      const origin: [number, number, number] = [info.point.x, info.point.y, info.point.z];
+      const hitPoint = info.point;
       const xAxis = computeXAxis(normal);
+      // Project world origin onto the face plane — keeps depth along normal,
+      // discards in-plane click position so the sketch stays centered
+      const depth = hitPoint.x * normal[0] + hitPoint.y * normal[1] + hitPoint.z * normal[2];
+      const origin: [number, number, number] = [normal[0] * depth, normal[1] * depth, normal[2] * depth];
       const plane: Plane = { origin, normal, xAxis };
 
       const draft = usePartEditorStore.getState().draftFeature;
@@ -187,6 +296,8 @@ export function PartEditorPage() {
         extrudeFormRef.current?.setPlane(plane);
       } else if (draft?.type === 'revolve') {
         revolveFormRef.current?.setPlane(plane);
+      } else if (draft?.type === 'loft') {
+        loftFormRef.current?.setPlane(plane);
       }
     });
 
@@ -319,6 +430,37 @@ export function PartEditorPage() {
       .catch(() => setDraftSketchDoc(null));
   }, [draftFeature && 'sketchDocumentId' in draftFeature ? draftFeature.sketchDocumentId : null]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Instant overlay update — no throttle, sub-millisecond math only
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp || !draftFeature) return;
+
+    // Update sketch overlay for features with a sketch + plane
+    if ('sketchId' in draftFeature && 'plane' in draftFeature) {
+      const df = draftFeature as ExtrudeFeature | RevolveFeature;
+      const doc = draftSketchDoc;
+      const sketch = doc?.sketches.find((s) => s.id === df.sketchId);
+      if (sketch) {
+        const overlay = buildSketchOverlay(sketch, df.plane);
+        vp.setSketchOverlay(
+          overlay.linePositions,
+          { center: overlay.planeCenter, normal: overlay.planeNormal, xAxis: overlay.planeXAxis, size: overlay.planeSize },
+        );
+      }
+    }
+
+    // Update extrude arrow gizmo
+    if (draftFeature.type === 'extrude') {
+      const ext = draftFeature as ExtrudeFeature;
+      vp.setExtrudeArrow(
+        ext.plane.origin,
+        ext.plane.normal,
+        ext.distance,
+        ext.direction === 'reverse' ? 'reverse' : 'forward',
+      );
+    }
+  }, [draftFeature, draftSketchDoc]);
+
   // Throttled preview evaluation when draftFeature changes
   // Fires at most once per 250ms, ensuring updates during continuous drag
   useEffect(() => {
@@ -389,6 +531,11 @@ export function PartEditorPage() {
       // Capture edge data for edge picking
       if (meshes.length > 0 && meshes[0]!.edgeData) {
         edgeDataRef.current = meshes[0]!.edgeData;
+        // If edge picking is active but wireframe wasn't set yet (async race),
+        // update the wireframe now so edges become hoverable
+        if (vp.isEdgePickingActive()) {
+          vp.setEdgeWireframe(edgeDataRef.current);
+        }
       }
 
       // Hide committed meshes, show preview
@@ -529,6 +676,7 @@ export function PartEditorPage() {
     setSelectedEdges([]);
     viewportRef.current?.clearPreview();
     viewportRef.current?.clearExtrudeArrow();
+    viewportRef.current?.clearPlaneGizmo();
     viewportRef.current?.disableEdgePicking();
     viewportRef.current?.setEdgeWireframe(null);
   }, [beginTransaction, updateFeature, addFeature, clearDraft]);
@@ -538,6 +686,7 @@ export function PartEditorPage() {
     setSelectedEdges([]);
     viewportRef.current?.clearPreview();
     viewportRef.current?.clearExtrudeArrow();
+    viewportRef.current?.clearPlaneGizmo();
     viewportRef.current?.disableEdgePicking();
     viewportRef.current?.setEdgeWireframe(null);
   }, [clearDraft]);
@@ -662,11 +811,13 @@ export function PartEditorPage() {
         case 'loft':
           return (
             <LoftForm
+              ref={loftFormRef}
               documentId={part.documentId}
               initial={initial?.type === 'loft' ? initial : undefined}
               onSubmit={(f) => handleSubmit(f)}
               onCancel={handleCancel}
               onChange={(f) => handleDraftChange(f)}
+              onActiveSectionChange={setActiveLoftSection}
             />
           );
       }

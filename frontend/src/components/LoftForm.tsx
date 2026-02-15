@@ -1,15 +1,54 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { api } from '@/api/client';
 import { useThemeStore } from '@/theme';
 import type { Document } from '@/types/document';
 import type { LoftFeature, Plane } from '@/types/part';
-import { PLANE_PRESETS, planeWithOffset } from '@/types/part';
+import { PLANE_PRESETS } from '@/types/part';
+import { rotatePlane, decomposePlaneAngles, closestPreset } from '@/part/planeRotation';
 
 interface SectionState {
   sketchDocumentId: string;
   sketchId: string;
   planePreset: string;
   planeOffset: number;
+  spin: number;
+  tilt: number;
+  originX: number;
+  originY: number;
+}
+
+/** Compute yAxis = xAxis × normal */
+function getYAxis(normal: [number, number, number], xAxis: [number, number, number]): [number, number, number] {
+  return [
+    xAxis[1] * normal[2] - xAxis[2] * normal[1],
+    xAxis[2] * normal[0] - xAxis[0] * normal[2],
+    xAxis[0] * normal[1] - xAxis[1] * normal[0],
+  ];
+}
+
+/** Decompose a plane origin into (normalOffset, xOffset, yOffset) relative to a base plane. */
+function decomposeOrigin(origin: [number, number, number], base: Plane): { normalOff: number; xOff: number; yOff: number } {
+  const [ox, oy, oz] = origin;
+  const [bx, by, bz] = base.origin;
+  const dx = ox - bx, dy = oy - by, dz = oz - bz;
+  const n = base.normal, x = base.xAxis;
+  const y = getYAxis(n, x);
+  return {
+    normalOff: dx * n[0] + dy * n[1] + dz * n[2],
+    xOff: dx * x[0] + dy * x[1] + dz * x[2],
+    yOff: dx * y[0] + dy * y[1] + dz * y[2],
+  };
+}
+
+/** Build plane origin from base + three offsets. */
+function buildPlaneOrigin(base: Plane, normalOff: number, xOff: number, yOff: number): [number, number, number] {
+  const n = base.normal, x = base.xAxis;
+  const y = getYAxis(n, x);
+  return [
+    base.origin[0] + n[0] * normalOff + x[0] * xOff + y[0] * yOff,
+    base.origin[1] + n[1] * normalOff + x[1] * xOff + y[1] * yOff,
+    base.origin[2] + n[2] * normalOff + x[2] * xOff + y[2] * yOff,
+  ];
 }
 
 function buildFeature(
@@ -22,7 +61,12 @@ function buildFeature(
     type: 'loft',
     sections: sections.map((s) => {
       const basePlane = PLANE_PRESETS[s.planePreset] ?? PLANE_PRESETS[Object.keys(PLANE_PRESETS)[0]!]!;
-      const plane: Plane = planeWithOffset(basePlane, s.planeOffset);
+      const { normal, xAxis } = rotatePlane(basePlane, s.spin, s.tilt);
+      const plane: Plane = {
+        origin: buildPlaneOrigin(basePlane, s.planeOffset, s.originX, s.originY),
+        normal,
+        xAxis,
+      };
       return {
         sketchDocumentId: s.sketchDocumentId,
         sketchId: s.sketchId,
@@ -33,29 +77,21 @@ function buildFeature(
   };
 }
 
-/** Find the closest preset name for a given plane (by normal match). */
-function closestPresetForPlane(plane: Plane): string {
-  const presetNames = Object.keys(PLANE_PRESETS);
-  let best = presetNames[0]!;
-  let bestDot = -Infinity;
-  for (const name of presetNames) {
-    const p = PLANE_PRESETS[name]!;
-    const dot = p.normal[0] * plane.normal[0] + p.normal[1] * plane.normal[1] + p.normal[2] * plane.normal[2];
-    if (dot > bestDot) {
-      bestDot = dot;
-      best = name;
-    }
-  }
-  return best;
-}
-
-/** Compute depth offset of a plane origin along the preset normal. */
-function computeOffset(plane: Plane, presetName: string): number {
-  const base = PLANE_PRESETS[presetName];
-  if (!base) return 0;
-  const o = plane.origin;
-  const n = base.normal;
-  return o[0] * n[0] + o[1] * n[1] + o[2] * n[2];
+export interface LoftFormHandle {
+  setPlane(plane: Plane): void;
+  setOffset(v: number): void;
+  setOriginX(v: number): void;
+  setOriginY(v: number): void;
+  setSpin(v: number): void;
+  setTilt(v: number): void;
+  getActiveSection(): {
+    basePlane: Plane;
+    offset: number;
+    originX: number;
+    originY: number;
+    spin: number;
+    tilt: number;
+  } | null;
 }
 
 interface LoftFormProps {
@@ -64,9 +100,10 @@ interface LoftFormProps {
   onSubmit: (feature: LoftFeature) => void;
   onCancel: () => void;
   onChange?: (feature: LoftFeature) => void;
+  onActiveSectionChange?: (index: number) => void;
 }
 
-export function LoftForm({ documentId, initial, onSubmit, onCancel, onChange }: LoftFormProps) {
+export const LoftForm = forwardRef<LoftFormHandle, LoftFormProps>(function LoftForm({ documentId, initial, onSubmit, onCancel, onChange, onActiveSectionChange }, ref) {
   const palette = useThemeStore((s) => s.palette);
   const presetNames = Object.keys(PLANE_PRESETS);
 
@@ -74,25 +111,88 @@ export function LoftForm({ documentId, initial, onSubmit, onCancel, onChange }: 
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
+  const [activeSectionIndex, setActiveSectionIndex] = useState(1); // Default to second section
+
+  const onActiveSectionChangeRef = useRef(onActiveSectionChange);
+  onActiveSectionChangeRef.current = onActiveSectionChange;
+
   const [sections, setSections] = useState<SectionState[]>(() => {
     if (initial) {
       return initial.sections.map((s) => {
-        const preset = closestPresetForPlane(s.plane);
+        const preset = closestPreset(s.plane.normal, PLANE_PRESETS);
+        const base = PLANE_PRESETS[preset]!;
+        const angles = decomposePlaneAngles(s.plane, base);
+        const origin = decomposeOrigin(s.plane.origin, base);
         return {
           sketchDocumentId: s.sketchDocumentId,
           sketchId: s.sketchId,
           planePreset: preset,
-          planeOffset: computeOffset(s.plane, preset),
+          planeOffset: origin.normalOff,
+          spin: angles.spinDeg,
+          tilt: angles.tiltDeg,
+          originX: origin.xOff,
+          originY: origin.yOff,
         };
       });
     }
     return [
-      { sketchDocumentId: documentId, sketchId: '', planePreset: presetNames[0]!, planeOffset: 0 },
-      { sketchDocumentId: documentId, sketchId: '', planePreset: presetNames[0]!, planeOffset: 20 },
+      { sketchDocumentId: documentId, sketchId: '', planePreset: presetNames[0]!, planeOffset: 0, spin: 0, tilt: 0, originX: 0, originY: 0 },
+      { sketchDocumentId: documentId, sketchId: '', planePreset: presetNames[0]!, planeOffset: 20, spin: 0, tilt: 0, originX: 0, originY: 0 },
     ];
   });
 
   const [operation, setOperation] = useState<'add' | 'remove'>(initial?.operation ?? 'add');
+
+  useImperativeHandle(ref, () => ({
+    setPlane(plane: Plane) {
+      const preset = closestPreset(plane.normal, PLANE_PRESETS);
+      const base = PLANE_PRESETS[preset]!;
+      const angles = decomposePlaneAngles(plane, base);
+      const origin = decomposeOrigin(plane.origin, base);
+      setSections((prev) => prev.map((s, i) => i === activeSectionIndex ? {
+        ...s,
+        planePreset: preset,
+        planeOffset: origin.normalOff,
+        spin: angles.spinDeg,
+        tilt: angles.tiltDeg,
+        originX: origin.xOff,
+        originY: origin.yOff,
+      } : s));
+    },
+    setOffset(v: number) {
+      setSections((prev) => prev.map((s, i) => i === activeSectionIndex ? { ...s, planeOffset: v } : s));
+    },
+    setOriginX(v: number) {
+      setSections((prev) => prev.map((s, i) => i === activeSectionIndex ? { ...s, originX: v } : s));
+    },
+    setOriginY(v: number) {
+      setSections((prev) => prev.map((s, i) => i === activeSectionIndex ? { ...s, originY: v } : s));
+    },
+    setSpin(v: number) {
+      setSections((prev) => prev.map((s, i) => i === activeSectionIndex ? { ...s, spin: v } : s));
+    },
+    setTilt(v: number) {
+      setSections((prev) => prev.map((s, i) => i === activeSectionIndex ? { ...s, tilt: v } : s));
+    },
+    getActiveSection() {
+      const sec = sections[activeSectionIndex];
+      if (!sec) return null;
+      const basePlane = PLANE_PRESETS[sec.planePreset] ?? PLANE_PRESETS[Object.keys(PLANE_PRESETS)[0]!]!;
+      return {
+        basePlane,
+        offset: sec.planeOffset,
+        originX: sec.originX,
+        originY: sec.originY,
+        spin: sec.spin,
+        tilt: sec.tilt,
+      };
+    },
+  }), [activeSectionIndex, sections]);
+
+  // Notify parent when active section changes
+  useEffect(() => {
+    onActiveSectionChangeRef.current?.(activeSectionIndex);
+  }, [activeSectionIndex]);
 
   // Per-section sketch docs
   const [sectionDocs, setSectionDocs] = useState<Map<string, Document>>(new Map());
@@ -157,7 +257,7 @@ export function LoftForm({ documentId, initial, onSubmit, onCancel, onChange }: 
     const lastOffset = sections.length > 0 ? sections[sections.length - 1]!.planeOffset : 0;
     setSections((prev) => [
       ...prev,
-      { sketchDocumentId: documentId, sketchId: '', planePreset: presetNames[0]!, planeOffset: lastOffset + 20 },
+      { sketchDocumentId: documentId, sketchId: '', planePreset: presetNames[0]!, planeOffset: lastOffset + 20, spin: 0, tilt: 0, originX: 0, originY: 0 },
     ]);
   };
 
@@ -183,6 +283,11 @@ export function LoftForm({ documentId, initial, onSubmit, onCancel, onChange }: 
     boxSizing: 'border-box',
   };
 
+  const halfInputStyle: React.CSSProperties = {
+    ...inputStyle,
+    width: 'calc(50% - 3px)',
+  };
+
   return (
     <div
       style={{
@@ -198,21 +303,24 @@ export function LoftForm({ documentId, initial, onSubmit, onCancel, onChange }: 
 
       {sections.map((sec, i) => {
         const doc = sectionDocs.get(sec.sketchDocumentId);
+        const isActive = i === activeSectionIndex;
         return (
           <div
             key={i}
             style={{
-              border: `1px solid ${palette.border}`,
+              border: `1px solid ${isActive ? palette.primaryBtn : palette.border}`,
               borderRadius: '4px',
               padding: '6px',
               display: 'flex',
               flexDirection: 'column',
               gap: '4px',
+              cursor: 'pointer',
             }}
+            onClick={() => setActiveSectionIndex(i)}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '11px', fontWeight: 600, color: palette.text }}>
-                Section {i + 1}
+              <span style={{ fontSize: '11px', fontWeight: 600, color: isActive ? palette.primaryBtn : palette.text }}>
+                Section {i + 1}{isActive ? ' — click face to set plane' : ''}
               </span>
               {sections.length > 2 && (
                 <button
@@ -261,6 +369,30 @@ export function LoftForm({ documentId, initial, onSubmit, onCancel, onChange }: 
             </div>
 
             <div>
+              <div style={labelStyle}>Plane rotation (degrees)</div>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <input
+                  type="number"
+                  style={halfInputStyle}
+                  value={sec.spin}
+                  step={5}
+                  placeholder="Spin"
+                  title="Spin: rotate in-plane"
+                  onChange={(e) => updateSection(i, { spin: parseFloat(e.target.value) || 0 })}
+                />
+                <input
+                  type="number"
+                  style={halfInputStyle}
+                  value={sec.tilt}
+                  step={5}
+                  placeholder="Tilt"
+                  title="Tilt: tip forward/backward"
+                  onChange={(e) => updateSection(i, { tilt: parseFloat(e.target.value) || 0 })}
+                />
+              </div>
+            </div>
+
+            <div>
               <div style={labelStyle}>Depth offset (mm)</div>
               <input
                 type="number"
@@ -269,6 +401,30 @@ export function LoftForm({ documentId, initial, onSubmit, onCancel, onChange }: 
                 step={1}
                 onChange={(e) => updateSection(i, { planeOffset: parseFloat(e.target.value) || 0 })}
               />
+            </div>
+
+            <div>
+              <div style={labelStyle}>Origin offset (mm)</div>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <input
+                  type="number"
+                  style={halfInputStyle}
+                  value={sec.originX}
+                  step={1}
+                  placeholder="X"
+                  title="X offset on plane"
+                  onChange={(e) => updateSection(i, { originX: parseFloat(e.target.value) || 0 })}
+                />
+                <input
+                  type="number"
+                  style={halfInputStyle}
+                  value={sec.originY}
+                  step={1}
+                  placeholder="Y"
+                  title="Y offset on plane"
+                  onChange={(e) => updateSection(i, { originY: parseFloat(e.target.value) || 0 })}
+                />
+              </div>
             </div>
           </div>
         );
@@ -335,4 +491,4 @@ export function LoftForm({ documentId, initial, onSubmit, onCancel, onChange }: 
       </div>
     </div>
   );
-}
+});

@@ -1,6 +1,7 @@
 import type { Point, DimensionEntity, Entity, LineEntity } from '@/types/document';
 import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
 import { lineLineIntersection } from '@/utils/geometry';
+import { getEntityPoint } from '@/utils/entityPoints';
 
 /**
  * Resolve the two measurement endpoints for a non-angle dimension.
@@ -14,6 +15,27 @@ export function resolveDimensionEndpoints(
 
   const target = allEntities.find((e) => e.id === dim.targetEntityId);
   if (!target) return null;
+
+  // Point-to-point dimension (vertex-based)
+  if (dim.pointIndex != null) {
+    const a = getEntityPoint(target, dim.pointIndex);
+    if (!a) return null;
+
+    if (dim.pointIndex2 != null && dim.targetEntityId2 != null) {
+      const target2 = allEntities.find((e) => e.id === dim.targetEntityId2);
+      if (!target2) return null;
+      const b = getEntityPoint(target2, dim.pointIndex2);
+      if (!b) return null;
+      return { a, b };
+    }
+    // pointIndex2 on the same entity
+    if (dim.pointIndex2 != null) {
+      const b = getEntityPoint(target, dim.pointIndex2);
+      if (!b) return null;
+      return { a, b };
+    }
+    return null;
+  }
 
   // Two-entity distance dimension
   if (dim.targetEntityId2 != null) {

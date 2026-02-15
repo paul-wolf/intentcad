@@ -57,9 +57,13 @@ export interface DimensionEntity {
   targetEntityId: string;
   segmentIndex: number;
   offset: number;
+  // First target is a vertex (resolved via getEntityPoint) instead of a segment:
+  pointIndex?: number;
   // Two-segment distance dimension (perpendicular distance between segments):
   targetEntityId2?: string;
   segmentIndex2?: number;
+  // Second target is a vertex:
+  pointIndex2?: number;
   // Angle dimension between two non-parallel segments:
   angleMode?: boolean;
   // Expression that drives this dimension's value (e.g. "bolt_hole / 2"):

@@ -3,7 +3,7 @@ import type { Document, DocumentMetadata, Entity, Point, Sketch, Constraint, Hor
 import { createEmptyDocument, createEmptySketch } from '@/utils/document';
 import { createMirroredEntity, createRotatedEntity, createTranslatedEntity, propagateDerived } from '@/utils/propagate';
 import { rotatePoint, lineLineIntersection } from '@/utils/geometry';
-import { getEntityPoints } from '@/utils/entityPoints';
+import { getEntityPoints, getEntityPoint, setEntityPoint } from '@/utils/entityPoints';
 import { solveConstraints, validateConstraint } from '@/utils/constraintSolver';
 import { computeDerivedDimensionIds } from '@/utils/dof';
 import { addLog } from '@/stores/logStore';
@@ -1666,6 +1666,73 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
 
     const target = sketch.entities.find((e) => e.id === dim.targetEntityId);
     if (!target) return;
+
+    // Point-to-point dimension editing
+    if (dim.pointIndex != null && dim.pointIndex2 != null) {
+      const sameEntity = dim.targetEntityId2 == null || dim.targetEntityId2 === dim.targetEntityId;
+      const target2 = sameEntity ? target : sketch.entities.find((e) => e.id === dim.targetEntityId2);
+      if (!target2) return;
+
+      const a = getEntityPoint(target, dim.pointIndex);
+      const b = getEntityPoint(target2, dim.pointIndex2);
+      if (!a || !b) return;
+
+      const dist = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
+      if (dist === 0) return;
+
+      const nx = (b.x - a.x) / dist;
+      const ny = (b.y - a.y) / dist;
+      const delta = newValue - dist;
+
+      const target1Fixed = sketch.constraints.some((c) => c.type === 'fixed' && c.entityId === target.id);
+      const target2Fixed = !sameEntity && sketch.constraints.some((c) => c.type === 'fixed' && c.entityId === target2.id);
+      if (target1Fixed && target2Fixed) return;
+
+      // Split movement: point a moves in -n direction, point b in +n direction
+      let moveA = -delta / 2;
+      let moveB = delta / 2;
+      if (target1Fixed) { moveA = 0; moveB = delta; }
+      if (target2Fixed) { moveB = 0; moveA = -delta; }
+
+      if (!skipTransaction) get().beginTransaction('Edit dimension');
+
+      const newA: Point = { x: a.x + nx * moveA, y: a.y + ny * moveA };
+      const newB: Point = { x: b.x + nx * moveB, y: b.y + ny * moveB };
+
+      const movedIds = new Set<string>();
+      const updatedEntities = sketch.entities.map((e) => {
+        if (sameEntity && e.id === target.id) {
+          let result = setEntityPoint(e, dim.pointIndex!, newA);
+          if (result) result = setEntityPoint(result, dim.pointIndex2!, newB);
+          if (result) {
+            movedIds.add(e.id);
+            return result;
+          }
+        }
+        if (!sameEntity && e.id === target.id && moveA !== 0) {
+          const result = setEntityPoint(e, dim.pointIndex!, newA);
+          if (result) {
+            movedIds.add(e.id);
+            return result;
+          }
+        }
+        if (!sameEntity && e.id === target2.id && moveB !== 0) {
+          const result = setEntityPoint(e, dim.pointIndex2!, newB);
+          if (result) {
+            movedIds.add(e.id);
+            return result;
+          }
+        }
+        return e;
+      });
+      const solved = solveConstraints(updatedEntities, sketch.constraints, { movedIds });
+      set({
+        document: updateActiveSketch(document, () => ({
+          entities: solved.entities,
+        })),
+      });
+      return;
+    }
 
     // Two-segment dimension (distance or angle)
     if (dim.targetEntityId2 != null) {

@@ -10,6 +10,7 @@ import type { ThemeStyles } from './styles';
 import { drawDimension, drawDiameterDimension, drawSegmentLabel, drawDiameterLabel, computeAngleDimensionGeom, drawAngleDimension } from './dimensionRenderer';
 import { computeSketchDoF, computeDerivedDimensionIds } from '@/utils/dof';
 import { getEntityPoint } from '@/utils/entityPoints';
+import { resolveDimensionEndpoints } from '@/utils/dimensionGeom';
 import { getConstraintPartners, getEntityRepresentativePoint, CONSTRAINT_SYMBOLS } from '@/utils/constraints';
 import { getSegmentCount, getSegmentPointIndices, getSegmentBulge } from '@/utils/lineSegments';
 import { arcFromBulge, arcMidpoint } from '@/utils/arcGeometry';
@@ -246,6 +247,15 @@ function renderActiveSketch(ctx: RenderContext) {
         const isDerived = derivedDimIds.has(entity.id);
         const lineStyle = isSelected ? styles.dimensionSelected : styles.dimensionLine;
         const textStyle = styles.dimensionText;
+
+        // Point-to-point dimension (vertex-based)
+        if (entity.pointIndex != null) {
+          const endpoints = resolveDimensionEndpoints(entity, activeSketch.entities);
+          if (endpoints) {
+            drawDimension(renderer, viewport, { a: endpoints.a, b: endpoints.b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression);
+          }
+          break;
+        }
 
         // Two-entity dimension (distance or angle)
         if (entity.targetEntityId2 != null) {

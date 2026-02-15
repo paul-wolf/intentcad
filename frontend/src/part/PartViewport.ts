@@ -1,13 +1,16 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import type { EdgeData } from './occt/tessellate';
 
 export interface DragInteractionCallbacks {
-  onDragStart: (hitPoint: [number, number, number]) => {
+  onDragStart: (hitPoint: [number, number, number], handleId?: string) => {
     axis: [number, number, number];
     initialValue: number;
   } | null;
-  onDrag: (newValue: number, isNegative: boolean) => void;
+  onDrag: (newValue: number, isNegative: boolean, handleId?: string) => void;
   onDragEnd?: () => void;
 }
 
@@ -17,6 +20,23 @@ const ARROW_HEAD_RADIUS = 2.5;
 const ARROW_HEAD_HEIGHT = 6;
 const ARROW_COLOR = 0xf59e0b;
 const ARROW_HOVER_COLOR = 0xffffff;
+
+const HANDLE_SHAFT_RADIUS = 0.6;
+const HANDLE_SHAFT_LENGTH = 15;
+const HANDLE_HEAD_RADIUS = 2;
+const HANDLE_HEAD_HEIGHT = 4;
+const HANDLE_COLORS: Record<string, number> = {
+  normal: 0x3b82f6, // blue
+  x: 0xef4444,      // red
+  y: 0x22c55e,      // green
+};
+
+const RING_RADIUS = 12;
+const RING_TUBE_RADIUS = 0.5;
+const RING_COLORS: Record<string, number> = {
+  spin: 0x06b6d4,  // cyan
+  tilt: 0xd946ef,  // magenta
+};
 
 export interface PartViewportOptions {
   container: HTMLElement;
@@ -38,6 +58,7 @@ export class PartViewport {
   private previewGroup: THREE.Group;
   private sketchOverlayGroup: THREE.Group;
   private gizmoGroup: THREE.Group;
+  private planeGizmoGroup: THREE.Group;
   private faceHighlightGroup: THREE.Group;
   private raycaster = new THREE.Raycaster();
   private dragCallbacks: DragInteractionCallbacks | null = null;
@@ -48,6 +69,17 @@ export class PartViewport {
     initialValue: number;
     arrowOrigin?: THREE.Vector3;
     arrowNormal?: THREE.Vector3;
+    handleId?: string;
+    planeGizmo?: {
+      origin: THREE.Vector3;
+      normal: THREE.Vector3;
+      xAxis: THREE.Vector3;
+    };
+  } | null = null;
+  private planeGizmoConfig: {
+    origin: THREE.Vector3;
+    normal: THREE.Vector3;
+    xAxis: THREE.Vector3;
   } | null = null;
   private arrowConfig: {
     origin: THREE.Vector3;
@@ -127,6 +159,11 @@ export class PartViewport {
     this.gizmoGroup = new THREE.Group();
     this.gizmoGroup.renderOrder = 999;
     this.scene.add(this.gizmoGroup);
+
+    // Plane gizmo group (3-axis handles for plane manipulation)
+    this.planeGizmoGroup = new THREE.Group();
+    this.planeGizmoGroup.renderOrder = 999;
+    this.scene.add(this.planeGizmoGroup);
 
     // Face highlight overlay group
     this.faceHighlightGroup = new THREE.Group();
@@ -264,6 +301,82 @@ export class PartViewport {
     this.clearGroup(this.gizmoGroup);
   }
 
+  setPlaneGizmo(
+    origin: [number, number, number],
+    normal: [number, number, number],
+    xAxis: [number, number, number],
+  ) {
+    this.clearGroup(this.planeGizmoGroup);
+    const o = new THREE.Vector3(...origin);
+    const n = new THREE.Vector3(...normal).normalize();
+    const x = new THREE.Vector3(...xAxis).normalize();
+    const y = new THREE.Vector3().crossVectors(x, n).normalize();
+    this.planeGizmoConfig = { origin: o.clone(), normal: n.clone(), xAxis: x.clone() };
+    this.buildHandle(o, n, HANDLE_COLORS.normal!, 'normal');
+    this.buildHandle(o, x, HANDLE_COLORS.x!, 'x');
+    this.buildHandle(o, y, HANDLE_COLORS.y!, 'y');
+    this.buildRing(o, n, x, y, RING_COLORS.spin!, 'spin', Math.PI * 2);
+    this.buildRing(o, x, y, n, RING_COLORS.tilt!, 'tilt', Math.PI);
+  }
+
+  clearPlaneGizmo() {
+    this.planeGizmoConfig = null;
+    this.clearGroup(this.planeGizmoGroup);
+  }
+
+  private buildHandle(origin: THREE.Vector3, dir: THREE.Vector3, color: number, handleId: string) {
+    const shaftCenter = origin.clone().addScaledVector(dir, HANDLE_SHAFT_LENGTH / 2);
+    const headCenter = origin.clone().addScaledVector(dir, HANDLE_SHAFT_LENGTH + HANDLE_HEAD_HEIGHT / 2);
+    const material = new THREE.MeshBasicMaterial({ color, depthTest: false });
+
+    const shaftGeo = new THREE.CylinderGeometry(HANDLE_SHAFT_RADIUS, HANDLE_SHAFT_RADIUS, HANDLE_SHAFT_LENGTH, 8);
+    const shaft = new THREE.Mesh(shaftGeo, material);
+    shaft.position.copy(shaftCenter);
+    shaft.userData.handleId = handleId;
+
+    const headGeo = new THREE.ConeGeometry(HANDLE_HEAD_RADIUS, HANDLE_HEAD_HEIGHT, 12);
+    const head = new THREE.Mesh(headGeo, material.clone());
+    head.position.copy(headCenter);
+    head.userData.handleId = handleId;
+
+    const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+    shaft.setRotationFromQuaternion(quat);
+    head.setRotationFromQuaternion(quat);
+
+    this.planeGizmoGroup.add(shaft);
+    this.planeGizmoGroup.add(head);
+  }
+
+  /**
+   * Build a rotation ring (torus) around a given axis.
+   * ringAxis: the rotation axis (normal for spin, xAxis for tilt)
+   * ringX, ringY: two axes in the ring plane (for orientation)
+   * arc: angle of the ring in radians (2π for full circle, π for semi-circle)
+   */
+  private buildRing(
+    origin: THREE.Vector3,
+    ringAxis: THREE.Vector3,
+    ringX: THREE.Vector3,
+    ringY: THREE.Vector3,
+    color: number,
+    handleId: string,
+    arc: number,
+  ) {
+    const torusGeo = new THREE.TorusGeometry(RING_RADIUS, RING_TUBE_RADIUS, 8, 32, arc);
+    const material = new THREE.MeshBasicMaterial({ color, depthTest: false });
+    const torus = new THREE.Mesh(torusGeo, material);
+    torus.userData.handleId = handleId;
+
+    // TorusGeometry lies in the XY plane with Z as the ring axis.
+    // We need to orient it so ringAxis is the ring's axis.
+    const m = new THREE.Matrix4();
+    m.makeBasis(ringX, ringY, ringAxis);
+    torus.setRotationFromMatrix(m);
+    torus.position.copy(origin);
+
+    this.planeGizmoGroup.add(torus);
+  }
+
   private rebuildArrow() {
     this.clearGroup(this.gizmoGroup);
     if (!this.arrowConfig) return;
@@ -319,6 +432,19 @@ export class PartViewport {
     this.rebuildArrow();
   }
 
+  private updatePlaneGizmoDuringDrag(signedNewValue: number) {
+    if (!this.activeDrag?.planeGizmo) return;
+    const delta = signedNewValue - this.activeDrag.initialValue;
+    const newOrigin = this.activeDrag.planeGizmo.origin.clone()
+      .addScaledVector(this.activeDrag.axisDir, delta);
+    const pg = this.activeDrag.planeGizmo;
+    this.setPlaneGizmo(
+      [newOrigin.x, newOrigin.y, newOrigin.z],
+      [pg.normal.x, pg.normal.y, pg.normal.z],
+      [pg.xAxis.x, pg.xAxis.y, pg.xAxis.z],
+    );
+  }
+
   private clearGroup(group: THREE.Group) {
     while (group.children.length > 0) {
       const child = group.children[0]!;
@@ -358,6 +484,7 @@ export class PartViewport {
     this.dragCallbacks = null;
     this.activeDrag = null;
     this.clearExtrudeArrow();
+    this.clearPlaneGizmo();
     // Remove pointer listeners only if face and edge picking are also inactive
     if (!this.facePickCallback && !this.edgePickCallback) {
       this.removePointerListeners();
@@ -402,15 +529,18 @@ export class PartViewport {
       const newValue = this.activeDrag.initialValue + delta;
       const absValue = Math.abs(newValue);
       const isNeg = newValue < 0;
-      this.dragCallbacks?.onDrag(absValue, isNeg);
+      this.dragCallbacks?.onDrag(absValue, isNeg, this.activeDrag.handleId);
       this.updateArrowDuringDrag(absValue, isNeg);
+      this.updatePlaneGizmoDuringDrag(newValue);
       return;
     }
 
-    // Hover detection — target gizmo arrow if present, else preview mesh
+    // Hover detection — target gizmo handles or arrow or preview mesh
     if (this.dragCallbacks) {
       this.raycaster.setFromCamera(ndc, this.camera);
-      const target = this.gizmoGroup.children.length > 0 ? this.gizmoGroup : this.previewGroup;
+      const target = this.planeGizmoGroup.children.length > 0 ? this.planeGizmoGroup
+        : this.gizmoGroup.children.length > 0 ? this.gizmoGroup
+        : this.previewGroup;
       const hits = this.raycaster.intersectObjects(target.children, true);
       const hovering = hits.length > 0;
       canvas.style.cursor = hovering ? 'grab' : '';
@@ -449,13 +579,29 @@ export class PartViewport {
 
     const ndc = this.getNdc(e);
     this.raycaster.setFromCamera(ndc, this.camera);
-    // Raycast against gizmo arrow if present, else preview mesh
-    const target = this.gizmoGroup.children.length > 0 ? this.gizmoGroup : this.previewGroup;
+    // Raycast against plane gizmo, arrow gizmo, or preview mesh (in priority order)
+    const target = this.planeGizmoGroup.children.length > 0 ? this.planeGizmoGroup
+      : this.gizmoGroup.children.length > 0 ? this.gizmoGroup
+      : this.previewGroup;
     const hits = this.raycaster.intersectObjects(target.children, true);
     if (hits.length === 0) return;
 
-    const hitPoint = hits[0]!.point;
-    const result = this.dragCallbacks.onDragStart([hitPoint.x, hitPoint.y, hitPoint.z]);
+    // If face picking is active, let model geometry take priority over gizmo handles
+    // (gizmo handles render on top via depthTest:false but may be physically behind the model)
+    if (this.facePickCallback && target !== this.previewGroup) {
+      const modelTarget = this.getFacePickTarget();
+      if (modelTarget) {
+        const modelHits = this.raycaster.intersectObjects(modelTarget.children, true);
+        if (modelHits.length > 0 && modelHits[0]!.distance < hits[0]!.distance) {
+          return; // Model surface is closer — let face pick handle this click
+        }
+      }
+    }
+
+    const hit = hits[0]!;
+    const hitPoint = hit.point;
+    const handleId = hit.object.userData?.handleId as string | undefined;
+    const result = this.dragCallbacks.onDragStart([hitPoint.x, hitPoint.y, hitPoint.z], handleId);
     if (!result) return;
 
     const axisDir = new THREE.Vector3(...result.axis).normalize();
@@ -478,6 +624,12 @@ export class PartViewport {
       initialValue: result.initialValue,
       arrowOrigin: this.arrowConfig?.origin.clone(),
       arrowNormal: this.arrowConfig?.normal.clone(),
+      handleId,
+      planeGizmo: this.planeGizmoConfig ? {
+        origin: this.planeGizmoConfig.origin.clone(),
+        normal: this.planeGizmoConfig.normal.clone(),
+        xAxis: this.planeGizmoConfig.xAxis.clone(),
+      } : undefined,
     };
     this.controls.enabled = false;
     this.renderer.domElement.style.cursor = 'grabbing';
@@ -690,11 +842,15 @@ export class PartViewport {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(edgeData.positions, 3));
     const material = new THREE.LineBasicMaterial({
-      color: 0x94a3b8,
-      depthTest: true,
+      color: 0xcbd5e1,
+      depthTest: false,
     });
     const lines = new THREE.LineSegments(geometry, material);
     this.edgeWireframeGroup.add(lines);
+  }
+
+  isEdgePickingActive(): boolean {
+    return this.edgePickCallback !== null;
   }
 
   enableEdgePicking(callback: (edgeIndex: number) => void) {
@@ -716,40 +872,53 @@ export class PartViewport {
     }
   }
 
+  /** Build a fat line (LineSegments2) from a flat positions array. */
+  private buildFatLine(positions: number[], color: number, linewidth: number): LineSegments2 {
+    const geo = new LineSegmentsGeometry();
+    geo.setPositions(positions);
+    const container = this.renderer.domElement.parentElement;
+    const w = container?.clientWidth ?? 1;
+    const h = container?.clientHeight ?? 1;
+    const mat = new LineMaterial({
+      color,
+      linewidth,
+      depthTest: false,
+      resolution: new THREE.Vector2(w, h),
+    });
+    return new LineSegments2(geo, mat);
+  }
+
+  /** Extract positions array for a single edge from the wireframe geometry. */
+  private getEdgePositions(edgeIndex: number): number[] | null {
+    const wireChildren = this.edgeWireframeGroup.children;
+    if (wireChildren.length === 0) return null;
+    const wireGeo = (wireChildren[0] as THREE.LineSegments).geometry;
+    const posAttr = wireGeo.getAttribute('position');
+    if (!posAttr) return null;
+
+    const range = this.edgeRanges.find((r) => r.edgeIndex === edgeIndex);
+    if (!range) return null;
+
+    const positions: number[] = [];
+    const startVertex = range.start / 3;
+    for (let i = 0; i < range.count; i++) {
+      positions.push(
+        posAttr.getX(startVertex + i),
+        posAttr.getY(startVertex + i),
+        posAttr.getZ(startVertex + i),
+      );
+    }
+    return positions;
+  }
+
   setSelectedEdges(edgeIndices: number[]) {
     this.clearGroup(this.edgeSelectionGroup);
     if (this.edgeRanges.length === 0) return;
 
-    const wireChildren = this.edgeWireframeGroup.children;
-    if (wireChildren.length === 0) return;
-    const wireGeo = (wireChildren[0] as THREE.LineSegments).geometry;
-    const posAttr = wireGeo.getAttribute('position');
-    if (!posAttr) return;
-
-    const selectedSet = new Set(edgeIndices);
-
-    for (const range of this.edgeRanges) {
-      if (!selectedSet.has(range.edgeIndex)) continue;
-
-      const positions: number[] = [];
-      // range.start is byte/float offset in the positions array (already *3 for xyz)
-      const startVertex = range.start / 3;
-      for (let i = 0; i < range.count; i++) {
-        positions.push(
-          posAttr.getX(startVertex + i),
-          posAttr.getY(startVertex + i),
-          posAttr.getZ(startVertex + i),
-        );
-      }
-
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-      const mat = new THREE.LineBasicMaterial({
-        color: 0x22c55e,
-        linewidth: 2,
-        depthTest: false,
-      });
-      const line = new THREE.LineSegments(geo, mat);
+    for (const idx of edgeIndices) {
+      const positions = this.getEdgePositions(idx);
+      if (!positions || positions.length < 6) continue;
+      const line = this.buildFatLine(positions, 0x22c55e, 3);
       this.edgeSelectionGroup.add(line);
     }
   }
@@ -761,10 +930,12 @@ export class PartViewport {
     }
 
     this.raycaster.setFromCamera(ndc, this.camera);
-    // Set threshold for line picking (in world units, scaled by camera distance)
+    // Scale line picking threshold by camera distance for consistent screen-space feel
+    // Use a minimum of 3 world units so edges stay pickable even when zoomed in close
+    const camDist = this.camera.position.distanceTo(this.controls.target);
     const params = this.raycaster.params;
     if (params.Line) {
-      params.Line.threshold = 3;
+      params.Line.threshold = Math.max(camDist * 0.03, 3);
     }
 
     const hits = this.raycaster.intersectObjects(this.edgeWireframeGroup.children, true);
@@ -802,32 +973,11 @@ export class PartViewport {
 
     this.clearGroup(this.edgeHighlightGroup);
 
-    // Build amber highlight for this edge
-    const wireGeo = (this.edgeWireframeGroup.children[0] as THREE.LineSegments).geometry;
-    const posAttr = wireGeo.getAttribute('position');
-    if (!posAttr) return;
+    // Build amber fat-line highlight for this edge
+    const positions = this.getEdgePositions(foundEdge);
+    if (!positions || positions.length < 6) return;
 
-    const range = this.edgeRanges.find((r) => r.edgeIndex === foundEdge);
-    if (!range) return;
-
-    const positions: number[] = [];
-    const startVertex = range.start / 3;
-    for (let i = 0; i < range.count; i++) {
-      positions.push(
-        posAttr.getX(startVertex + i),
-        posAttr.getY(startVertex + i),
-        posAttr.getZ(startVertex + i),
-      );
-    }
-
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    const mat = new THREE.LineBasicMaterial({
-      color: 0xf59e0b,
-      linewidth: 2,
-      depthTest: false,
-    });
-    const line = new THREE.LineSegments(geo, mat);
+    const line = this.buildFatLine(positions, 0xf59e0b, 4);
     this.edgeHighlightGroup.add(line);
     this.renderer.domElement.style.cursor = 'pointer';
   }
@@ -836,6 +986,7 @@ export class PartViewport {
     if (this.highlightedEdgeIndex === null) return;
     this.highlightedEdgeIndex = null;
     this.clearGroup(this.edgeHighlightGroup);
+    this.renderer.domElement.style.cursor = '';
   }
 
   dispose() {

@@ -6,6 +6,7 @@ import { HIT_TOL } from '@/config';
 import { getSegmentCount, getSegmentPointIndices, getSegmentBulge } from '@/utils/lineSegments';
 import { arcFromBulge, pointToArcDist, arcMidpoint } from '@/utils/arcGeometry';
 import { pointToBezierDist } from '@/utils/bezierGeometry';
+import { resolveDimensionEndpoints } from '@/utils/dimensionGeom';
 
 export interface PointHit {
   entityId: string;
@@ -102,6 +103,13 @@ export function hitTestPoint(
           bestDist = dc;
           best = { entityId: entity.id, pointIndex: idx };
         }
+      }
+    } else if (entity.type === 'point') {
+      const sp = viewport.worldToScreen(entity.position);
+      const d = distance(screenPos, sp);
+      if (d < bestDist) {
+        bestDist = d;
+        best = { entityId: entity.id, pointIndex: 0 };
       }
     } else if (entity.type === 'bezier') {
       // All 4 control points are hittable
@@ -207,6 +215,23 @@ export function hitTestEntities(
         (e) => e.id === entity.targetEntityId,
       );
       if (!target) continue;
+
+      // Point-to-point dimension (vertex-based)
+      if (entity.pointIndex != null) {
+        const endpoints = resolveDimensionEndpoints(entity, allEntities);
+        if (!endpoints) continue;
+        const perp2 = perpDir(endpoints.a, endpoints.b);
+        const oa: Point = { x: endpoints.a.x + perp2.x * entity.offset, y: endpoints.a.y + perp2.y * entity.offset };
+        const ob: Point = { x: endpoints.b.x + perp2.x * entity.offset, y: endpoints.b.y + perp2.y * entity.offset };
+        const sa = viewport.worldToScreen(oa);
+        const sb = viewport.worldToScreen(ob);
+        const d = pointToSegmentDist(screenPos, sa, sb);
+        if (d < bestDist) {
+          bestDist = d;
+          best = entity;
+        }
+        continue;
+      }
 
       // Two-entity dimension (distance or angle)
       if (entity.targetEntityId2 != null) {
@@ -522,6 +547,13 @@ export function hitTestAllCandidates(
           bestPointDist = dc;
           bestPointHit = { entityId: entity.id, pointIndex: idx };
         }
+      }
+    } else if (entity.type === 'point') {
+      const sp = viewport.worldToScreen(entity.position);
+      const d = distance(screenPos, sp);
+      if (d < bestPointDist) {
+        bestPointDist = d;
+        bestPointHit = { entityId: entity.id, pointIndex: 0 };
       }
     } else if (entity.type === 'bezier') {
       for (let i = 0; i < 4; i++) {
