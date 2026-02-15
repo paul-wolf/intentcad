@@ -357,7 +357,7 @@ export function CamOperationsPanel() {
 
               {op.kind === 'drill' && (
                 <>
-                  <label style={labelStyle}>Peck Depth (mm, 0=single)</label>
+                  <label style={labelStyle}>Peck Depth (mm, 0=single plunge)</label>
                   <input
                     type="number"
                     value={op.peckDepth}
