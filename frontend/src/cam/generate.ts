@@ -68,6 +68,7 @@ export function generateGcode(
           config.machine.feedRate,
           config.machine.plungeRate,
           config.machine.safeZ,
+          config.origin,
         );
         allToolpathMoves.push(...drillMoves);
         break;
