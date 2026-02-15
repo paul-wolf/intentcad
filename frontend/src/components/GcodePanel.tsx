@@ -3,7 +3,6 @@ import { useCamStore } from '@/stores/camStore';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useThemeStore } from '@/theme';
 import { getBackendId } from '@/api/autoSave';
-import { addLog } from '@/stores/logStore';
 import { CamJobList } from './CamJobList';
 
 export function GcodePanel() {
@@ -13,24 +12,12 @@ export function GcodePanel() {
   const activeJobId = useCamStore((s) => s.activeJobId);
   const profiles = useCamStore((s) => s.profiles);
   const updateJobConfig = useCamStore((s) => s.updateJobConfig);
-  const saveJob = useCamStore((s) => s.saveJob);
   const applyProfile = useCamStore((s) => s.applyProfile);
-  const createJob = useCamStore((s) => s.createJob);
 
-  const jobs = useCamStore((s) => s.jobs);
   const pickingOrigin = useCamStore((s) => s.pickingOrigin);
   const setPickingOrigin = useCamStore((s) => s.setPickingOrigin);
 
-  const [newJobName, setNewJobName] = useState('');
   const [showJobList, setShowJobList] = useState(false);
-
-  // Default job name: "<document name> Job N"
-  useEffect(() => {
-    if (newJobName === '' || newJobName.startsWith(doc.name)) {
-      const nextNum = jobs.length + 1;
-      setNewJobName(`${doc.name || 'Untitled'} Job ${nextNum}`);
-    }
-  }, [doc.name, jobs.length]);
 
   // Load profiles on mount
   useEffect(() => {
@@ -83,42 +70,19 @@ export function GcodePanel() {
     fontSize: '11px',
   };
 
-  const handleNewJob = () => {
-    const backendId = getBackendId();
-    if (!backendId) {
-      addLog('warn', 'Save the document first before creating a CAM job');
-      return;
-    }
-    if (!newJobName.trim()) {
-      addLog('warn', 'Enter a job name');
-      return;
-    }
-    createJob(backendId, newJobName.trim());
-  };
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
       {/* Job Section */}
       <div style={sectionStyle}>
         <div style={headerStyle}>Job</div>
-        {activeJobId ? (
-          <div style={{ fontSize: '12px', color: palette.text, marginBottom: '4px' }}>
-            Active job: {activeJobId.slice(0, 8)}...
-            <button onClick={saveJob} style={{ ...btnStyle, marginLeft: '4px' }}>Save</button>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', gap: '4px' }}>
-            <input
-              value={newJobName}
-              onChange={(e) => setNewJobName(e.target.value)}
-              placeholder="Job name"
-              style={{ ...inputStyle, flex: 1 }}
-              onKeyDown={(e) => e.key === 'Enter' && handleNewJob()}
-            />
-            <button onClick={handleNewJob} style={btnStyle}>New</button>
-          </div>
-        )}
-        <div style={{ marginTop: '4px' }}>
+        <div style={{ fontSize: '11px', color: palette.textMuted, marginBottom: '4px' }}>
+          {activeJobId ? `${activeJobId.slice(0, 8)}... (auto-saved)` : 'Creating...'}
+        </div>
+        <div style={{ display: 'flex', gap: '4px' }}>
+          <button onClick={() => {
+            const docId = getBackendId();
+            if (docId) useCamStore.getState().createJob(docId, `Job ${new Date().toLocaleString()}`);
+          }} style={btnStyle}>New Job</button>
           <button onClick={() => setShowJobList(!showJobList)} style={btnStyle}>
             {showJobList ? 'Hide Jobs' : 'Show Jobs'}
           </button>

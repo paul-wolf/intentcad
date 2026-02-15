@@ -1,5 +1,6 @@
 import type { Renderer, Viewport, LineStyle } from '@/types/renderer';
 import type { ToolpathMove, CamIssue } from '@/types/cam';
+import type { Point } from '@/types/document';
 import type { ThemePalette } from '@/theme';
 
 /** Toolpath color for feed moves */
@@ -8,6 +9,7 @@ const TOOLPATH_COLOR = '#ff8c00'; // orange
 /**
  * Render toolpath overlay on the sketch canvas.
  * Called from pipeline.ts after renderToolOverlay().
+ * origin: the WCS zero point in world coordinates (machine starts here).
  */
 export function renderToolpathOverlay(
   renderer: Renderer,
@@ -15,6 +17,7 @@ export function renderToolpathOverlay(
   toolpath: ToolpathMove[],
   issues: CamIssue[],
   palette: ThemePalette,
+  origin: Point = { x: 0, y: 0 },
 ): void {
   const rapidStyle: LineStyle = {
     color: palette.textSecondary,
@@ -33,7 +36,7 @@ export function renderToolpathOverlay(
     width: 1.5,
   };
 
-  let currentPos = { x: 0, y: 0 };
+  let currentPos = { x: origin.x, y: origin.y };
 
   for (const move of toolpath) {
     const to = viewport.worldToScreen(move.to);

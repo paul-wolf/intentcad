@@ -131,16 +131,59 @@ function renderGhostedSketches(ctx: RenderContext) {
   const { renderer, viewport, document: doc } = ctx;
   const styles = getStyles(ctx.palette);
 
+  // In CAM mode, get selected sketch IDs and operation map for differentiated rendering
+  let camSelectedSketchIds: Set<string> | null = null;
+  let camEntityOpMap: Map<string, number> | null = null;
+  let camFocusedOpIndex: number | null = null;
+  if (ctx.camMode) {
+    const camState = useCamStore.getState();
+    camSelectedSketchIds = new Set(camState.jobConfig.selectedSketchIds);
+    camEntityOpMap = new Map();
+    camFocusedOpIndex = camState.focusedOperationIndex;
+    for (let i = 0; i < camState.jobConfig.operations.length; i++) {
+      for (const eid of camState.jobConfig.operations[i]!.entityIds) {
+        camEntityOpMap.set(eid, i);
+      }
+    }
+  }
+
   for (const sketch of doc.sketches) {
     if (sketch.id === doc.activeSketchId || !sketch.visible || sketch.suppressed) continue;
-    renderer.setGlobalAlpha(GHOSTED_OPACITY);
-    for (const entity of sketch.entities) {
-      const ghostStyle: LineStyle = 'construction' in entity && entity.construction
-        ? { ...styles.ghosted, dash: [6, 4] }
-        : styles.ghosted;
-      renderEntity(renderer, viewport, entity, ghostStyle);
+
+    if (ctx.camMode) {
+      const isSelected = camSelectedSketchIds!.has(sketch.id);
+      if (isSelected) {
+        // CAM-selected non-active sketches: render at full opacity with operation colors
+        for (const entity of sketch.entities) {
+          if (entity.type === 'dimension') continue;
+          if ('construction' in entity && entity.construction) continue;
+          let style: LineStyle = styles.line;
+          const opIdx = camEntityOpMap!.get(entity.id);
+          if (opIdx !== undefined) {
+            const color = CAM_OP_COLORS[opIdx % CAM_OP_COLORS.length]!;
+            style = { color, width: opIdx === camFocusedOpIndex ? 2.5 : 1.5 };
+          }
+          renderEntity(renderer, viewport, entity, style);
+        }
+      } else {
+        // Non-selected sketches in CAM: very faint disabled look
+        renderer.setGlobalAlpha(0.15);
+        for (const entity of sketch.entities) {
+          if (entity.type === 'dimension') continue;
+          renderEntity(renderer, viewport, entity, styles.ghosted);
+        }
+        renderer.resetGlobalAlpha();
+      }
+    } else {
+      renderer.setGlobalAlpha(GHOSTED_OPACITY);
+      for (const entity of sketch.entities) {
+        const ghostStyle: LineStyle = 'construction' in entity && entity.construction
+          ? { ...styles.ghosted, dash: [6, 4] }
+          : styles.ghosted;
+        renderEntity(renderer, viewport, entity, ghostStyle);
+      }
+      renderer.resetGlobalAlpha();
     }
-    renderer.resetGlobalAlpha();
   }
 }
 
@@ -185,14 +228,27 @@ function renderActiveSketch(ctx: RenderContext) {
   // In CAM mode, build a map of entity -> operation index for coloring
   let camEntityOpMap: Map<string, number> | undefined;
   let camFocusedOpIndex: number | null = null;
+  let camActiveSketchSelected = true;
   if (ctx.camMode) {
     const camState = useCamStore.getState();
+    camActiveSketchSelected = camState.jobConfig.selectedSketchIds.includes(activeSketch.id);
     camEntityOpMap = new Map();
     camFocusedOpIndex = camState.focusedOperationIndex;
     for (let i = 0; i < camState.jobConfig.operations.length; i++) {
       for (const eid of camState.jobConfig.operations[i]!.entityIds) {
         camEntityOpMap.set(eid, i);
       }
+    }
+
+    // If active sketch is not CAM-selected, render it faded and return
+    if (!camActiveSketchSelected) {
+      renderer.setGlobalAlpha(0.15);
+      for (const entity of activeSketch.entities) {
+        if (entity.type === 'dimension') continue;
+        renderEntity(renderer, viewport, entity, styles.ghosted);
+      }
+      renderer.resetGlobalAlpha();
+      return;
     }
   }
 
@@ -719,6 +775,7 @@ function renderCamToolpath(ctx: RenderContext) {
     camState.toolpath,
     camState.issues,
     ctx.palette,
+    camState.jobConfig.origin,
   );
 }
 

@@ -12,7 +12,7 @@ import { CamOperationsPanel } from './CamOperationsPanel';
 import { CanvasContainer } from '@/canvas/CanvasContainer';
 import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
-import { useCamStore } from '@/stores/camStore';
+import { useCamStore, setCamDocumentId } from '@/stores/camStore';
 import { useThemeStore } from '@/theme';
 import { createLineTool } from '@/tools/lineTool';
 import { createSelectTool } from '@/tools/selectTool';
@@ -54,7 +54,12 @@ export function EditorPage() {
   // Load document from backend if navigated directly and backendId not set
   useEffect(() => {
     if (!id) return;
-    if (getBackendId() === id) return; // already loaded via list page
+    setCamDocumentId(id);
+    if (getBackendId() === id) {
+      // Already loaded via list page — just restore CAM session
+      useCamStore.getState().restoreSession(id);
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -68,6 +73,8 @@ export function EditorPage() {
           useDocumentStore.getState().restoreHistory(h as never);
         }
         setBackendId(full.id);
+        // Restore CAM session after doc is loaded
+        if (!cancelled) await useCamStore.getState().restoreSession(id);
       } catch (err) {
         console.error('Failed to load document:', err);
       }

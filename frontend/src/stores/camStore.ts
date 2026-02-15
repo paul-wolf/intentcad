@@ -13,6 +13,7 @@ import { createDefaultJobConfig } from '@/types/cam';
 import { generateGcode } from '@/cam/generate';
 import { downloadGcode } from '@/export/gcode';
 import { camApi } from '@/api/camClient';
+import { getBackendId } from '@/api/autoSave';
 import { addLog } from './logStore';
 
 interface CamStore {
@@ -44,6 +45,7 @@ interface CamStore {
   updateOperation(index: number, patch: Partial<CamOperation>): void;
   addOperation(op: CamOperation): void;
   removeOperation(index: number): void;
+  moveOperation(index: number, direction: -1 | 1): void;
 
   assignSelectedEntities(entityIds: string[]): void;
   setFocusedOperation(index: number | null): void;
@@ -55,8 +57,9 @@ interface CamStore {
 
   requestAiSuggestion(documentData: Record<string, unknown>, profileId?: string): Promise<void>;
 
+  restoreSession(documentId: string): Promise<void>;
   toggleToolpathPreview(): void;
-  toggleCamPanel(): void;
+  toggleCamPanel(): Promise<void>;
   clearJob(): void;
 }
 
@@ -134,15 +137,11 @@ export const useCamStore = create<CamStore>((set, get) => ({
 
   async saveJob() {
     const { activeJobId, jobConfig } = get();
-    if (!activeJobId) {
-      addLog('warn', 'No active job to save — create a job first');
-      return;
-    }
+    if (!activeJobId) return;
     try {
       await camApi.updateJob(activeJobId, {
         config: jobConfig as unknown as Record<string, unknown>,
       });
-      addLog('info', 'CAM job saved');
     } catch (err) {
       addLog('error', `Failed to save CAM job: ${err}`);
     }
@@ -222,6 +221,19 @@ export const useCamStore = create<CamStore>((set, get) => ({
       const kindLabel = op.kind === 'profile' ? '2D Contour' : op.kind === 'drill' ? 'Drill' : 'Pocket';
       addLog('info', `Removed ${kindLabel} operation`);
     }
+  },
+
+  moveOperation(index: number, direction: -1 | 1) {
+    const { jobConfig, focusedOperationIndex } = get();
+    const ops = jobConfig.operations;
+    const target = index + direction;
+    if (target < 0 || target >= ops.length) return;
+    const updated = [...ops];
+    [updated[index], updated[target]] = [updated[target]!, updated[index]!];
+    let newFocus = focusedOperationIndex;
+    if (focusedOperationIndex === index) newFocus = target;
+    else if (focusedOperationIndex === target) newFocus = index;
+    set({ jobConfig: { ...jobConfig, operations: updated }, focusedOperationIndex: newFocus });
   },
 
   setFocusedOperation(index: number | null) {
@@ -352,10 +364,35 @@ export const useCamStore = create<CamStore>((set, get) => ({
     set((s) => ({ showToolpathPreview: !s.showToolpathPreview }));
   },
 
-  toggleCamPanel() {
+  async toggleCamPanel() {
     const opening = !get().camPanelOpen;
     set({ camPanelOpen: opening });
     addLog('info', opening ? 'Entered CAM mode' : 'Exited CAM mode');
+    // Auto-create a job when entering CAM if none exists
+    if (opening && !get().activeJobId) {
+      const docId = getBackendId();
+      if (docId) {
+        await get().createJob(docId, `Job ${new Date().toLocaleString()}`);
+      }
+    }
+  },
+
+  async restoreSession(documentId: string) {
+    try {
+      const raw = localStorage.getItem(`cam:${documentId}`);
+      if (!raw) return;
+      const { activeJobId, camPanelOpen } = JSON.parse(raw) as {
+        activeJobId?: string;
+        camPanelOpen?: boolean;
+      };
+      if (!camPanelOpen) return;
+      set({ camPanelOpen: true });
+      if (activeJobId) {
+        await get().openJob(activeJobId);
+      }
+    } catch {
+      // corrupted localStorage — ignore
+    }
   },
 
   clearJob() {
@@ -368,3 +405,36 @@ export const useCamStore = create<CamStore>((set, get) => ({
     });
   },
 }));
+
+// ── Auto-save: debounce jobConfig changes to server ──
+let _autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+useCamStore.subscribe(
+  (state, prev) => {
+    if (!state.activeJobId) return;
+    if (state.jobConfig === prev.jobConfig) return;
+    if (_autoSaveTimer) clearTimeout(_autoSaveTimer);
+    _autoSaveTimer = setTimeout(() => {
+      useCamStore.getState().saveJob();
+    }, 1000);
+  },
+);
+
+// ── Persist CAM session to localStorage ──
+let _lastDocId: string | null = null;
+export function setCamDocumentId(docId: string) { _lastDocId = docId; }
+
+useCamStore.subscribe(
+  (state, prev) => {
+    if (!_lastDocId) return;
+    if (state.camPanelOpen === prev.camPanelOpen && state.activeJobId === prev.activeJobId) return;
+    if (state.camPanelOpen) {
+      localStorage.setItem(`cam:${_lastDocId}`, JSON.stringify({
+        activeJobId: state.activeJobId,
+        camPanelOpen: true,
+      }));
+    } else {
+      localStorage.removeItem(`cam:${_lastDocId}`);
+    }
+  },
+);

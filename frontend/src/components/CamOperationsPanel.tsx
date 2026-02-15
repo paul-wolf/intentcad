@@ -16,6 +16,7 @@ export function CamOperationsPanel() {
   const updateOperation = useCamStore((s) => s.updateOperation);
   const addOperation = useCamStore((s) => s.addOperation);
   const removeOperation = useCamStore((s) => s.removeOperation);
+  const moveOperation = useCamStore((s) => s.moveOperation);
   const generate = useCamStore((s) => s.generate);
   const downloadGcode = useCamStore((s) => s.downloadGcode);
   const toggleToolpathPreview = useCamStore((s) => s.toggleToolpathPreview);
@@ -90,6 +91,7 @@ export function CamOperationsPanel() {
       return;
     }
     generate(entities);
+    setShowGcodePreview(true);
   };
 
   const handleAiSuggest = () => {
@@ -149,9 +151,23 @@ export function CamOperationsPanel() {
                   <option value="drill">Drill</option>
                   <option value="pocket">Pocket</option>
                 </select>
-                <button onClick={() => removeOperation(i)} style={{ ...btnStyle, color: palette.danger, borderColor: palette.danger }}>
-                  X
-                </button>
+                <div style={{ display: 'flex', gap: '2px' }}>
+                  <button
+                    onClick={() => moveOperation(i, -1)}
+                    style={{ ...btnStyle, padding: '2px 5px', fontSize: '10px', opacity: i === 0 ? 0.3 : 1 }}
+                    disabled={i === 0}
+                    title="Move up"
+                  >&#9650;</button>
+                  <button
+                    onClick={() => moveOperation(i, 1)}
+                    style={{ ...btnStyle, padding: '2px 5px', fontSize: '10px', opacity: i === jobConfig.operations.length - 1 ? 0.3 : 1 }}
+                    disabled={i === jobConfig.operations.length - 1}
+                    title="Move down"
+                  >&#9660;</button>
+                  <button onClick={() => removeOperation(i)} style={{ ...btnStyle, color: palette.danger, borderColor: palette.danger }}>
+                    X
+                  </button>
+                </div>
               </div>
 
               {/* Entity assignment */}
@@ -194,11 +210,10 @@ export function CamOperationsPanel() {
                     All Closed
                   </button>
                 )}
-                {op.kind === 'drill' && (
+                {op.kind === 'profile' && (
                   <button
                     onClick={() => {
                       const toolDia = jobConfig.tool.diameter;
-                      const tolerance = 0.05;
                       const selectedSketchIds = new Set(jobConfig.selectedSketchIds);
                       const holeIds: string[] = [];
                       for (const sketch of doc.sketches) {
@@ -206,13 +221,52 @@ export function CamOperationsPanel() {
                         for (const e of sketch.entities) {
                           if (e.type !== 'circle') continue;
                           if ('construction' in e && e.construction) continue;
-                          if (Math.abs(e.radius * 2 - toolDia) <= tolerance) {
+                          // Tool must fit inside the hole with clearance
+                          if (e.radius * 2 > toolDia) {
                             holeIds.push(e.id);
                           }
                         }
                       }
                       if (holeIds.length > 0) {
                         updateOperation(i, { entityIds: holeIds });
+                      } else {
+                        addLog('info', `No circles larger than tool \u00D8${toolDia}mm`);
+                      }
+                    }}
+                    style={{ ...btnStyle, fontSize: '9px', padding: '2px 6px' }}
+                  >
+                    {`Holes > \u00D8${jobConfig.tool.diameter}`}
+                  </button>
+                )}
+                {op.kind === 'drill' && (
+                  <button
+                    onClick={() => {
+                      const toolDia = jobConfig.tool.diameter;
+                      const selectedSketchIds = new Set(jobConfig.selectedSketchIds);
+                      const holeIds: string[] = [];
+                      const diametersFound = new Map<string, number>();
+                      for (const sketch of doc.sketches) {
+                        if (!selectedSketchIds.has(sketch.id)) continue;
+                        for (const e of sketch.entities) {
+                          if (e.type !== 'circle') continue;
+                          if ('construction' in e && e.construction) continue;
+                          const dia = e.radius * 2;
+                          const key = dia.toFixed(2);
+                          diametersFound.set(key, (diametersFound.get(key) ?? 0) + 1);
+                          // Match within 5% of tool diameter
+                          if (Math.abs(dia - toolDia) <= toolDia * 0.05) {
+                            holeIds.push(e.id);
+                          }
+                        }
+                      }
+                      if (holeIds.length > 0) {
+                        updateOperation(i, { entityIds: holeIds });
+                        addLog('info', `Selected ${holeIds.length} hole(s) matching \u00D8${toolDia}mm`);
+                      } else {
+                        const found = diametersFound.size > 0
+                          ? ` (found: ${[...diametersFound.entries()].map(([d, n]) => `${n}\u00D7\u00D8${d}`).join(', ')})`
+                          : ' (no circles in selected sketches)';
+                        addLog('info', `No circles matching tool \u00D8${toolDia}mm${found}`);
                       }
                     }}
                     style={{ ...btnStyle, fontSize: '9px', padding: '2px 6px' }}
@@ -223,7 +277,6 @@ export function CamOperationsPanel() {
                 {op.kind === 'drill' && (
                   <button
                     onClick={() => {
-                      const toolDia = jobConfig.tool.diameter;
                       const selectedSketchIds = new Set(jobConfig.selectedSketchIds);
                       const holeIds: string[] = [];
                       for (const sketch of doc.sketches) {
@@ -231,9 +284,7 @@ export function CamOperationsPanel() {
                         for (const e of sketch.entities) {
                           if (e.type !== 'circle') continue;
                           if ('construction' in e && e.construction) continue;
-                          if (e.radius * 2 <= toolDia) {
-                            holeIds.push(e.id);
-                          }
+                          holeIds.push(e.id);
                         }
                       }
                       if (holeIds.length > 0) {
@@ -242,30 +293,32 @@ export function CamOperationsPanel() {
                     }}
                     style={{ ...btnStyle, fontSize: '9px', padding: '2px 6px' }}
                   >
-                    {`All \u2264\u00D8${jobConfig.tool.diameter}`}
+                    All Circles
                   </button>
                 )}
-                <button
-                  onClick={() => {
-                    const selectedSketchIds = new Set(jobConfig.selectedSketchIds);
-                    const allIds: string[] = [];
-                    for (const sketch of doc.sketches) {
-                      if (!selectedSketchIds.has(sketch.id)) continue;
-                      for (const e of sketch.entities) {
-                        if (e.type === 'dimension') continue;
-                        if (e.type === 'point') continue;
-                        if ('construction' in e && e.construction) continue;
-                        allIds.push(e.id);
+                {op.kind === 'pocket' && (
+                  <button
+                    onClick={() => {
+                      const selectedSketchIds = new Set(jobConfig.selectedSketchIds);
+                      const closedIds: string[] = [];
+                      for (const sketch of doc.sketches) {
+                        if (!selectedSketchIds.has(sketch.id)) continue;
+                        for (const e of sketch.entities) {
+                          if ('construction' in e && e.construction) continue;
+                          if (e.type === 'line' && e.closed) closedIds.push(e.id);
+                          if (e.type === 'circle') closedIds.push(e.id);
+                          if (e.type === 'rectangle') closedIds.push(e.id);
+                        }
                       }
-                    }
-                    if (allIds.length > 0) {
-                      updateOperation(i, { entityIds: allIds });
-                    }
-                  }}
-                  style={{ ...btnStyle, fontSize: '9px', padding: '2px 6px' }}
-                >
-                  All
-                </button>
+                      if (closedIds.length > 0) {
+                        updateOperation(i, { entityIds: closedIds });
+                      }
+                    }}
+                    style={{ ...btnStyle, fontSize: '9px', padding: '2px 6px' }}
+                  >
+                    All Closed
+                  </button>
+                )}
               </div>
               <div style={{ fontSize: '10px', color: palette.textMuted, marginBottom: '4px' }}>
                 {op.entityIds.length} entit{op.entityIds.length === 1 ? 'y' : 'ies'}
@@ -406,13 +459,9 @@ export function CamOperationsPanel() {
             style={generatedGcode ? btnStyle : disabledBtn}
             disabled={!generatedGcode}
           >Download .nc</button>
-          <button
-            onClick={generatedGcode ? () => setShowGcodePreview(!showGcodePreview) : undefined}
-            style={generatedGcode ? btnStyle : disabledBtn}
-            disabled={!generatedGcode}
-          >
-            {showGcodePreview ? 'Hide G-code' : 'View G-code'}
-          </button>
+          {showGcodePreview && generatedGcode && (
+            <button onClick={() => setShowGcodePreview(false)} style={btnStyle}>Hide G-code</button>
+          )}
         </div>
         <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
           <button onClick={toggleToolpathPreview} style={{
