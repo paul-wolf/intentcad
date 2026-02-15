@@ -54,6 +54,9 @@ export function EditorPage() {
   // Load document from backend if navigated directly and backendId not set
   useEffect(() => {
     if (!id) return;
+    // Reset CAM state when switching documents
+    useCamStore.getState().clearJob();
+    useCamStore.setState({ camPanelOpen: false });
     setCamDocumentId(id);
     if (getBackendId() === id) {
       // Already loaded via list page — just restore CAM session

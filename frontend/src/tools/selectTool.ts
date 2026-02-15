@@ -32,6 +32,18 @@ function filterEntitiesForCam(entities: Entity[]): Entity[] {
   });
 }
 
+/** Get all selectable entities from all CAM-selected sketches */
+function getCamEntities(): Entity[] {
+  const doc = useDocumentStore.getState().document;
+  const selectedSketchIds = new Set(useCamStore.getState().jobConfig.selectedSketchIds);
+  const entities: Entity[] = [];
+  for (const sketch of doc.sketches) {
+    if (!selectedSketchIds.has(sketch.id) || !sketch.visible || sketch.suppressed) continue;
+    entities.push(...sketch.entities);
+  }
+  return filterEntitiesForCam(entities);
+}
+
 const DRAG_THRESHOLD = 4; // screen pixels before starting drag
 
 /** Resolve two segments: prefer explicit segment selection, fall back to entity selection for single-segment lines. */
@@ -191,17 +203,22 @@ export function createSelectTool(): Tool {
       dragMode = null;
       shiftOnDown = !!ctx.shiftKey;
 
-      const activeSketch = useDocumentStore.getState().getActiveSketch();
-      if (activeSketch) {
-        const isCam = useCamStore.getState().camPanelOpen;
-        const entities = isCam ? filterEntitiesForCam(activeSketch.entities) : activeSketch.entities;
-        hitPointOnDown = isCam ? null : hitTestPoint(screenPos, entities, ctx.viewport);
-        hitEntityOnDown = hitPointOnDown
-          ? null
-          : hitTestEntities(screenPos, entities, ctx.viewport, entities);
-      } else {
+      const isCam = useCamStore.getState().camPanelOpen;
+      if (isCam) {
+        const entities = getCamEntities();
         hitPointOnDown = null;
-        hitEntityOnDown = null;
+        hitEntityOnDown = hitTestEntities(screenPos, entities, ctx.viewport, entities);
+      } else {
+        const activeSketch = useDocumentStore.getState().getActiveSketch();
+        if (activeSketch) {
+          hitPointOnDown = hitTestPoint(screenPos, activeSketch.entities, ctx.viewport);
+          hitEntityOnDown = hitPointOnDown
+            ? null
+            : hitTestEntities(screenPos, activeSketch.entities, ctx.viewport, activeSketch.entities);
+        } else {
+          hitPointOnDown = null;
+          hitEntityOnDown = null;
+        }
       }
     },
 
@@ -391,10 +408,10 @@ export function createSelectTool(): Tool {
         const maxX = Math.max(dragStartWorld.x, worldPos.x);
         const maxY = Math.max(dragStartWorld.y, worldPos.y);
 
-        const activeSketch = useDocumentStore.getState().getActiveSketch();
-        if (activeSketch) {
-          const isCam = useCamStore.getState().camPanelOpen;
-          const boxEntities = isCam ? filterEntitiesForCam(activeSketch.entities) : activeSketch.entities;
+        const isCamBox = useCamStore.getState().camPanelOpen;
+        const boxSketch = useDocumentStore.getState().getActiveSketch();
+        const boxEntities = isCamBox ? getCamEntities() : boxSketch?.entities;
+        if (boxEntities) {
           const ids = new Set<string>();
           for (const entity of boxEntities) {
             if (entity.type === 'line') {
@@ -464,7 +481,7 @@ export function createSelectTool(): Tool {
           addLog('info', `Selected ${ids.size} entities`);
 
           // In CAM mode, auto-assign box-selected entities to focused operation
-          if (isCam && ids.size > 0) {
+          if (isCamBox && ids.size > 0) {
             useCamStore.getState().assignSelectedEntities([...ids]);
           }
         }
@@ -477,14 +494,15 @@ export function createSelectTool(): Tool {
         lastClickTime = now;
         lastClickScreenPos = screenPos;
 
+        const isCamClick = useCamStore.getState().camPanelOpen;
+
         if (isDoubleClick) {
           cycleScreenPos = null;
           cycleCandidates = [];
           cycleIndex = -1;
-          const activeSketch = useDocumentStore.getState().getActiveSketch();
-          if (activeSketch) {
-            const isCam = useCamStore.getState().camPanelOpen;
-            const dblEntities = isCam ? filterEntitiesForCam(activeSketch.entities) : activeSketch.entities;
+          const dblSketch = useDocumentStore.getState().getActiveSketch();
+          const dblEntities = isCamClick ? getCamEntities() : dblSketch?.entities;
+          if (dblEntities) {
             const hit = hitTestEntities(screenPos, dblEntities, ctx.viewport, dblEntities);
             if (hit) {
               if (hit.type === 'dimension') {
@@ -501,10 +519,10 @@ export function createSelectTool(): Tool {
         }
 
         // Click select (no drag occurred)
-        const activeSketch = useDocumentStore.getState().getActiveSketch();
-        if (activeSketch) {
-          const isCam = useCamStore.getState().camPanelOpen;
-          const entities = isCam ? filterEntitiesForCam(activeSketch.entities) : activeSketch.entities;
+        const clickSketch = useDocumentStore.getState().getActiveSketch();
+        const entities = isCamClick ? getCamEntities() : clickSketch?.entities;
+        if (entities) {
+          const isCam = isCamClick;
 
           if (shiftOnDown) {
             // Shift-click toggle logic (unchanged behavior, with logging)

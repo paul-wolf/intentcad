@@ -44,6 +44,42 @@ export function validateCamJob(
           }
         }
       }
+
+      // Check for acute inside corners where tool can't reach
+      if (op.cutSide === 'inside' || op.cutSide === 'outside') {
+        const segments = entityToSegments(entities, op.entityIds);
+        if (segments.length >= 2) {
+          const toolRadius = config.tool.diameter / 2;
+          for (let si = 0; si < segments.length; si++) {
+            const seg = segments[si]!;
+            const nextSeg = segments[(si + 1) % segments.length]!;
+            // Only check straight-to-straight corners (skip arcs)
+            if (seg.bulge !== 0 || nextSeg.bulge !== 0) continue;
+            // Incoming direction (reversed) and outgoing direction
+            const dx1 = seg.from.x - seg.to.x; // reversed incoming
+            const dy1 = seg.from.y - seg.to.y;
+            const dx2 = nextSeg.to.x - nextSeg.from.x; // outgoing
+            const dy2 = nextSeg.to.y - nextSeg.from.y;
+            const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
+            const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+            if (len1 === 0 || len2 === 0) continue;
+            // Interior angle at the corner
+            const dot = (dx1 / len1) * (dx2 / len2) + (dy1 / len1) * (dy2 / len2);
+            const angle = Math.acos(Math.max(-1, Math.min(1, dot))); // 0..PI
+            const angleDeg = angle * (180 / Math.PI);
+            // Warn on acute corners (< 70°) — fillet radius becomes very noticeable
+            if (angleDeg < 70) {
+              const filletR = toolRadius / Math.tan(angle / 2);
+              issues.push({
+                severity: 'warning',
+                message: `Operation ${i + 1}: ${angleDeg.toFixed(0)}° corner will have ~${filletR.toFixed(1)}mm fillet from tool radius`,
+                operationIndex: i,
+                position: seg.to,
+              });
+            }
+          }
+        }
+      }
     }
 
     if (op.kind === 'drill') {

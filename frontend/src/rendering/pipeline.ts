@@ -767,6 +767,7 @@ function renderCamOrigin(ctx: RenderContext) {
 
 /** Step 6b: Draw CAM toolpath overlay */
 function renderCamToolpath(ctx: RenderContext) {
+  if (!ctx.camMode) return;
   const camState = useCamStore.getState();
   if (!camState.showToolpathPreview || !camState.toolpath) return;
   renderToolpathOverlay(
