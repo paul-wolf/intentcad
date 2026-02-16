@@ -4,6 +4,8 @@ import { api } from './client';
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 let backendId: string | null = null;
+let projectId: string | null = null;
+let projectName: string | null = null;
 let pendingId: string | null = null;
 let pendingDoc: Record<string, unknown> | null = null;
 let pendingHistory: unknown = null;
@@ -24,6 +26,19 @@ export function setBackendId(id: string | null) {
   pendingDoc = null;
   pendingHistory = null;
   backendId = id;
+}
+
+export function getProjectId() {
+  return projectId;
+}
+
+export function getProjectName() {
+  return projectName;
+}
+
+export function setProjectContext(id: string | null, name: string | null) {
+  projectId = id;
+  projectName = name;
 }
 
 function doSave(id: string, doc: Record<string, unknown>, history?: unknown) {

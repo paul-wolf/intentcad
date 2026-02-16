@@ -3,6 +3,7 @@ import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useThemeStore } from '@/theme';
 import { computeSketchDoF, sketchTotalDoF } from '@/utils/dof';
+import { getProjectName } from '@/api/autoSave';
 
 export function StatusBar() {
   const cursorWorld = useEditorStore((s) => s.cursorWorld);
@@ -35,6 +36,12 @@ export function StatusBar() {
         fontFamily: 'monospace',
       }}
     >
+      {getProjectName() && (
+        <>
+          <span>{getProjectName()}</span>
+          <span style={{ color: palette.inputBorder }}>/</span>
+        </>
+      )}
       <span>{docName}</span>
       <span style={{ color: palette.inputBorder }}>|</span>
       <span>Tool: {activeTool}</span>

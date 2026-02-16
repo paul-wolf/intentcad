@@ -5,7 +5,7 @@ import { useUIStateStore } from '@/stores/uiStateStore';
 import { useThemeStore } from '@/theme';
 import { createEmptyDocument, migrateDocument, generateDateName } from '@/utils/document';
 import { api, type DocumentListItem } from '@/api/client';
-import { setBackendId, getBackendId, flushSave } from '@/api/autoSave';
+import { setBackendId, getBackendId, getProjectId, flushSave } from '@/api/autoSave';
 import type { Document } from '@/types/document';
 import { DocumentThumbnail } from './DocumentThumbnail';
 
@@ -23,19 +23,21 @@ export function DocumentDrawer() {
 
   const currentBackendId = getBackendId();
 
+  const currentProjectId = getProjectId();
+
   useEffect(() => {
     if (!drawerOpen) return;
     let cancelled = false;
     (async () => {
       try {
-        const list = await api.listDocuments();
+        const list = await api.listDocuments(currentProjectId ?? undefined);
         if (!cancelled) setDocs(list);
       } catch (err) {
         console.error('Failed to list documents:', err);
       }
     })();
     return () => { cancelled = true; };
-  }, [drawerOpen]);
+  }, [drawerOpen, currentProjectId]);
 
   const handleOpen = async (id: string) => {
     try {
@@ -56,7 +58,7 @@ export function DocumentDrawer() {
     const doc = createEmptyDocument(name);
     setDocument(doc);
     try {
-      const saved = await api.createDocument(doc.name, doc as unknown as Record<string, unknown>);
+      const saved = await api.createDocument(doc.name, doc as unknown as Record<string, unknown>, currentProjectId ?? undefined);
       setBackendId(saved.id);
       setDocs((prev) => [{ id: saved.id, name: saved.name, project_id: saved.project_id, created_at: saved.created_at, updated_at: saved.updated_at }, ...prev]);
       navigate(`/edit/${saved.id}`);

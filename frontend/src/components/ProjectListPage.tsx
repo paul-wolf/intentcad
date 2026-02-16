@@ -6,7 +6,7 @@ import { projectApi } from '@/api/projectClient';
 import { api, type DocumentListItem } from '@/api/client';
 import { useDocumentStore } from '@/stores/documentStore';
 import { migrateDocument } from '@/utils/document';
-import { setBackendId } from '@/api/autoSave';
+import { setBackendId, setProjectContext } from '@/api/autoSave';
 import type { Document } from '@/types/document';
 import type { Project } from '@/types/project';
 
@@ -110,6 +110,13 @@ export function ProjectListPage() {
       const full = await api.getDocument(id);
       setDocument(migrateDocument(full.data as unknown as Document));
       setBackendId(full.id);
+      // Resolve project context for the document
+      if (full.project_id) {
+        const proj = projects.find((p) => p.id === full.project_id);
+        setProjectContext(full.project_id, proj?.name ?? null);
+      } else {
+        setProjectContext(null, null);
+      }
       navigate(`/edit/${id}`);
     } catch (err) {
       console.error('Failed to load document:', err);

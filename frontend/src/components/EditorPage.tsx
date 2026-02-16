@@ -23,8 +23,9 @@ import { createPointTool } from '@/tools/pointTool';
 import { createDimensionTool } from '@/tools/dimensionTool';
 import { createRect2ptTool } from '@/tools/rect2ptTool';
 import { createBezierTool } from '@/tools/bezierTool';
-import { startAutoSave, setBackendId, getBackendId } from '@/api/autoSave';
+import { startAutoSave, setBackendId, getBackendId, setProjectContext } from '@/api/autoSave';
 import { api } from '@/api/client';
+import { projectApi } from '@/api/projectClient';
 import { migrateDocument } from '@/utils/document';
 import type { Document } from '@/types/document';
 import type { Tool } from '@/tools/types';
@@ -76,6 +77,14 @@ export function EditorPage() {
           useDocumentStore.getState().restoreHistory(h as never);
         }
         setBackendId(full.id);
+        // Load project context
+        if (full.project_id) {
+          projectApi.getProject(full.project_id)
+            .then((p) => { if (!cancelled) setProjectContext(full.project_id, p.name); })
+            .catch(() => {});
+        } else {
+          setProjectContext(null, null);
+        }
         // Restore CAM session after doc is loaded
         if (!cancelled) await useCamStore.getState().restoreSession(id);
       } catch (err) {
