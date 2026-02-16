@@ -13,26 +13,34 @@ router = Router()
 
 @router.get("/", response=list[PartListOut])
 def list_parts(request):
-    return Part.objects.all()
+    if not request.user.is_authenticated:
+        return JsonResponse({"message": "Authentication required"}, status=401)
+    return Part.objects.filter(user=request.user)
 
 
 @router.post("/", response={201: PartOut})
 def create_part(request, payload: PartCreateIn):
+    if not request.user.is_authenticated:
+        return JsonResponse({"message": "Authentication required"}, status=401)
     errors = validate_part_data(payload.data)
     if errors:
         return JsonResponse({"errors": errors}, status=422)
-    part = Part.objects.create(name=payload.name, data=payload.data)
+    part = Part.objects.create(name=payload.name, data=payload.data, user=request.user)
     return 201, part
 
 
 @router.get("/{part_id}", response=PartOut)
 def get_part(request, part_id: UUID):
-    return get_object_or_404(Part, id=part_id)
+    if not request.user.is_authenticated:
+        return JsonResponse({"message": "Authentication required"}, status=401)
+    return get_object_or_404(Part, id=part_id, user=request.user)
 
 
 @router.put("/{part_id}", response=PartOut)
 def update_part(request, part_id: UUID, payload: PartUpdateIn):
-    part = get_object_or_404(Part, id=part_id)
+    if not request.user.is_authenticated:
+        return JsonResponse({"message": "Authentication required"}, status=401)
+    part = get_object_or_404(Part, id=part_id, user=request.user)
     if payload.name is not None:
         part.name = payload.name
     if payload.data is not None:
@@ -48,6 +56,8 @@ def update_part(request, part_id: UUID, payload: PartUpdateIn):
 
 @router.delete("/{part_id}", response={204: None})
 def delete_part(request, part_id: UUID):
-    part = get_object_or_404(Part, id=part_id)
+    if not request.user.is_authenticated:
+        return JsonResponse({"message": "Authentication required"}, status=401)
+    part = get_object_or_404(Part, id=part_id, user=request.user)
     part.delete()
     return 204, None

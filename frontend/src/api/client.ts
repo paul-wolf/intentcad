@@ -1,13 +1,57 @@
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8951/api';
 
+let csrfToken: string | null = null;
+
+function getCsrfFromCookie(): string | null {
+  const match = document.cookie
+    .split('; ')
+    .find((row) => row.startsWith('csrftoken='));
+  return match ? match.split('=')[1]! : null;
+}
+
+async function ensureCsrfToken(): Promise<string> {
+  const fromCookie = getCsrfFromCookie();
+  if (fromCookie) {
+    csrfToken = fromCookie;
+    return csrfToken;
+  }
+  if (csrfToken) return csrfToken;
+  const resp = await fetch(`${API_BASE}/auth/csrf`, { credentials: 'include' });
+  const data = await resp.json();
+  csrfToken = data.csrfToken;
+  return csrfToken!;
+}
+
+export function clearCsrfToken() {
+  csrfToken = null;
+}
+
 async function request<T>(
   path: string,
   opts: RequestInit = {},
 ): Promise<T> {
+  const method = (opts.method || 'GET').toUpperCase();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...opts.headers as Record<string, string>,
+  };
+
+  if (method !== 'GET' && method !== 'HEAD') {
+    const token = await ensureCsrfToken();
+    headers['X-CSRFToken'] = token;
+  }
+
   const resp = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...opts.headers as Record<string, string> },
     ...opts,
+    headers,
+    credentials: 'include',
   });
+
+  if (resp.status === 401 && !path.startsWith('/auth/')) {
+    window.location.href = '/login';
+    throw new Error('Not authenticated');
+  }
+
   if (resp.status === 204) return undefined as T;
   if (!resp.ok) {
     const body = await resp.text();

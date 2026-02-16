@@ -21,7 +21,6 @@ export function PartToolbar({ onAddExtrude, onAddRevolve, onAddShell, onAddFille
   const undo = usePartStore((s) => s.undo);
   const redo = usePartStore((s) => s.redo);
   const palette = useThemeStore((s) => s.palette);
-
   const buttonStyle: React.CSSProperties = {
     padding: '4px 12px',
     background: palette.buttonBg,
@@ -43,6 +42,9 @@ export function PartToolbar({ onAddExtrude, onAddRevolve, onAddShell, onAddFille
         borderBottom: `1px solid ${palette.border}`,
       }}
     >
+      <button style={buttonStyle} onClick={() => navigate('/')}>
+        Home
+      </button>
       <button style={buttonStyle} onClick={() => {
         if (part.documentId) {
           navigate(`/edit/${part.documentId}`);

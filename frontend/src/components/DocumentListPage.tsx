@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDocumentStore } from '@/stores/documentStore';
+import { useAuthStore } from '@/stores/authStore';
 import { useThemeStore } from '@/theme';
 import { createEmptyDocument, migrateDocument, generateDateName } from '@/utils/document';
 import { api, partApi, type DocumentListItem, type PartListItem } from '@/api/client';
@@ -13,6 +14,7 @@ export function DocumentListPage() {
   const navigate = useNavigate();
   const setDocument = useDocumentStore((s) => s.setDocument);
   const palette = useThemeStore((s) => s.palette);
+  const { user, logout } = useAuthStore();
   const [docs, setDocs] = useState<DocumentListItem[]>([]);
   const [parts, setParts] = useState<PartListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -122,6 +124,11 @@ export function DocumentListPage() {
     setEditingId(null);
   };
 
+  const handleLogout = async () => {
+    await logout();
+    navigate('/login');
+  };
+
   return (
     <div
       style={{
@@ -133,6 +140,42 @@ export function DocumentListPage() {
         gap: '12px',
       }}
     >
+      <div
+        style={{
+          position: 'absolute',
+          top: '12px',
+          right: '16px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+          fontSize: '12px',
+        }}
+      >
+        <span style={{ color: palette.textSecondary }}>{user?.username}</span>
+        {user?.is_superuser && (
+          <>
+            <button
+              onClick={() => navigate('/admin/users')}
+              style={{ background: 'none', border: 'none', color: palette.primaryBtn, cursor: 'pointer', fontSize: '12px' }}
+            >
+              Users
+            </button>
+            <button
+              onClick={() => navigate('/admin/organisations')}
+              style={{ background: 'none', border: 'none', color: palette.primaryBtn, cursor: 'pointer', fontSize: '12px' }}
+            >
+              Orgs
+            </button>
+          </>
+        )}
+        <button
+          onClick={handleLogout}
+          style={{ background: 'none', border: 'none', color: palette.danger, cursor: 'pointer', fontSize: '12px' }}
+        >
+          Logout
+        </button>
+      </div>
+
       <h1 style={{ fontSize: '28px', fontWeight: 700, color: palette.text }}>
         IntentCAD
       </h1>

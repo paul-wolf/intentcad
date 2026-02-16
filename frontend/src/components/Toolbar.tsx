@@ -121,6 +121,14 @@ export function Toolbar() {
       <div style={{ background: palette.panelBg, borderBottom: `1px solid ${palette.border}`, padding: '4px 8px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
         <div style={rowStyle}>
           <button
+            onClick={() => navigate('/')}
+            style={btn(palette)}
+            title="Back to document list"
+          >
+            Home
+          </button>
+          <Sep color={palette.border} />
+          <button
             onClick={toggleCamPanel}
             style={{ ...btn(palette), background: palette.primaryBtn, color: '#fff', borderColor: palette.primaryBtn }}
             title="Exit CAM mode and return to sketch editing"
@@ -169,6 +177,14 @@ export function Toolbar() {
 
       {/* ── Row 1: Draw ── */}
       <div style={rowStyle}>
+        <button
+          onClick={() => navigate('/')}
+          style={btn(palette)}
+          title="Back to document list"
+        >
+          Home
+        </button>
+        <Sep color={palette.border} />
         <button
           onClick={toggleDrawer}
           style={{ ...btn(palette, drawerOpen), fontSize: '16px' }}
