@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
+import { ProjectListPage } from '@/components/ProjectListPage';
 import { DocumentListPage } from '@/components/DocumentListPage';
 import { EditorPage } from '@/components/EditorPage';
 import { PartEditorPage } from '@/components/PartEditorPage';
@@ -22,10 +23,11 @@ export function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/reset-password" element={<PasswordResetPage />} />
-        <Route path="/" element={<ProtectedRoute><DocumentListPage /></ProtectedRoute>} />
+        <Route path="/" element={<ProtectedRoute><ProjectListPage /></ProtectedRoute>} />
+        <Route path="/project/:projectId" element={<ProtectedRoute><DocumentListPage /></ProtectedRoute>} />
         <Route path="/edit/:id" element={<ProtectedRoute><EditorPage /></ProtectedRoute>} />
         <Route path="/part/:id" element={<ProtectedRoute><PartEditorPage /></ProtectedRoute>} />
-        <Route path="/admin/users" element={<ProtectedRoute requireSuperuser><UsersPage /></ProtectedRoute>} />
+        <Route path="/admin/users" element={<ProtectedRoute requireStaff><UsersPage /></ProtectedRoute>} />
         <Route path="/admin/organisations" element={<ProtectedRoute requireSuperuser><OrganisationsPage /></ProtectedRoute>} />
       </Routes>
     </BrowserRouter>

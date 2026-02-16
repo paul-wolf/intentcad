@@ -63,6 +63,7 @@ async function request<T>(
 export interface DocumentListItem {
   id: string;
   name: string;
+  project_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -72,23 +73,25 @@ export interface DocumentFull {
   name: string;
   data: Record<string, unknown>;
   history: unknown;
+  project_id: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export const api = {
-  listDocuments(): Promise<DocumentListItem[]> {
-    return request('/documents/');
+  listDocuments(projectId?: string): Promise<DocumentListItem[]> {
+    const params = projectId ? `?project=${projectId}` : '';
+    return request(`/documents/${params}`);
   },
 
   getDocument(id: string): Promise<DocumentFull> {
     return request(`/documents/${id}`);
   },
 
-  createDocument(name: string, data: Record<string, unknown>): Promise<DocumentFull> {
+  createDocument(name: string, data: Record<string, unknown>, projectId?: string): Promise<DocumentFull> {
     return request('/documents/', {
       method: 'POST',
-      body: JSON.stringify({ name, data }),
+      body: JSON.stringify({ name, data, project_id: projectId }),
     });
   },
 
@@ -107,6 +110,7 @@ export const api = {
 export interface PartListItem {
   id: string;
   name: string;
+  project_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -116,23 +120,25 @@ export interface PartFull {
   name: string;
   data: Record<string, unknown>;
   history: unknown;
+  project_id: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export const partApi = {
-  listParts(): Promise<PartListItem[]> {
-    return request('/parts/');
+  listParts(projectId?: string): Promise<PartListItem[]> {
+    const params = projectId ? `?project=${projectId}` : '';
+    return request(`/parts/${params}`);
   },
 
   getPart(id: string): Promise<PartFull> {
     return request(`/parts/${id}`);
   },
 
-  createPart(name: string, data: Record<string, unknown>): Promise<PartFull> {
+  createPart(name: string, data: Record<string, unknown>, projectId?: string): Promise<PartFull> {
     return request('/parts/', {
       method: 'POST',
-      body: JSON.stringify({ name, data }),
+      body: JSON.stringify({ name, data, project_id: projectId }),
     });
   },
 

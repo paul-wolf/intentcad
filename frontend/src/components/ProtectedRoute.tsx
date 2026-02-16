@@ -5,9 +5,10 @@ import { useThemeStore } from '@/theme';
 interface Props {
   children: React.ReactNode;
   requireSuperuser?: boolean;
+  requireStaff?: boolean;
 }
 
-export function ProtectedRoute({ children, requireSuperuser }: Props) {
+export function ProtectedRoute({ children, requireSuperuser, requireStaff }: Props) {
   const { user, loading } = useAuthStore();
   const palette = useThemeStore((s) => s.palette);
 
@@ -45,6 +46,23 @@ export function ProtectedRoute({ children, requireSuperuser }: Props) {
         }}
       >
         Access denied. Admin privileges required.
+      </div>
+    );
+  }
+
+  if (requireStaff && !user.is_staff && !user.is_superuser) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: '100%',
+          color: palette.danger,
+          fontSize: '14px',
+        }}
+      >
+        Access denied. Staff privileges required.
       </div>
     );
   }

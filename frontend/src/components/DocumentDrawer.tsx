@@ -58,7 +58,7 @@ export function DocumentDrawer() {
     try {
       const saved = await api.createDocument(doc.name, doc as unknown as Record<string, unknown>);
       setBackendId(saved.id);
-      setDocs((prev) => [{ id: saved.id, name: saved.name, created_at: saved.created_at, updated_at: saved.updated_at }, ...prev]);
+      setDocs((prev) => [{ id: saved.id, name: saved.name, project_id: saved.project_id, created_at: saved.created_at, updated_at: saved.updated_at }, ...prev]);
       navigate(`/edit/${saved.id}`);
       toggleDrawer(); // Close drawer after creating
     } catch {

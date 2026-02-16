@@ -9,6 +9,7 @@ class PartCreateIn(Schema):
     name: str
     data: dict[str, Any]
     history: dict[str, Any] = {}
+    project_id: UUID | None = None
 
 
 class PartUpdateIn(Schema):
@@ -22,6 +23,7 @@ class PartOut(Schema):
     name: str
     data: dict[str, Any]
     history: Any
+    project_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -29,5 +31,6 @@ class PartOut(Schema):
 class PartListOut(Schema):
     id: UUID
     name: str
+    project_id: UUID | None = None
     created_at: datetime
     updated_at: datetime

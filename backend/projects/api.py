@@ -1,0 +1,99 @@
+from uuid import UUID
+
+from django.db.models import Count
+from django.http import JsonResponse
+from django.shortcuts import get_object_or_404
+from ninja import Router
+
+from .access import get_accessible_projects, require_auth, require_project_access
+from .models import Project
+from .schemas import ProjectCreateIn, ProjectListOut, ProjectOut, ProjectUpdateIn
+
+router = Router()
+
+
+@router.get("/", response=list[ProjectListOut])
+def list_projects(request):
+    err = require_auth(request)
+    if err:
+        return err
+    qs = get_accessible_projects(request.user).annotate(
+        document_count=Count("documents", distinct=True),
+        part_count=Count("parts", distinct=True),
+    )
+    return [
+        ProjectListOut(
+            id=p.id,
+            name=p.name,
+            description=p.description,
+            updated_at=p.updated_at,
+            document_count=p.document_count,
+            part_count=p.part_count,
+        )
+        for p in qs
+    ]
+
+
+@router.post("/", response={201: ProjectOut})
+def create_project(request, payload: ProjectCreateIn):
+    err = require_auth(request)
+    if err:
+        return err
+    # Determine organisation: explicit param (superuser), else user's own org
+    org = None
+    if payload.organisation_id and request.user.is_superuser:
+        from accounts.models import Organisation
+        org = get_object_or_404(Organisation, id=payload.organisation_id)
+    else:
+        org = request.user.organisation
+    if not org:
+        return JsonResponse({"message": "User must belong to an organisation"}, status=400)
+    project = Project.objects.create(
+        name=payload.name,
+        description=payload.description,
+        organisation=org,
+        created_by=request.user,
+    )
+    return 201, project
+
+
+@router.get("/{project_id}", response=ProjectOut)
+def get_project(request, project_id: UUID):
+    err = require_auth(request)
+    if err:
+        return err
+    project = get_object_or_404(Project, id=project_id)
+    err = require_project_access(request, project)
+    if err:
+        return err
+    return project
+
+
+@router.patch("/{project_id}", response=ProjectOut)
+def update_project(request, project_id: UUID, payload: ProjectUpdateIn):
+    err = require_auth(request)
+    if err:
+        return err
+    project = get_object_or_404(Project, id=project_id)
+    err = require_project_access(request, project)
+    if err:
+        return err
+    if payload.name is not None:
+        project.name = payload.name
+    if payload.description is not None:
+        project.description = payload.description
+    project.save()
+    return project
+
+
+@router.delete("/{project_id}", response={204: None})
+def delete_project(request, project_id: UUID):
+    err = require_auth(request)
+    if err:
+        return err
+    project = get_object_or_404(Project, id=project_id)
+    err = require_project_access(request, project)
+    if err:
+        return err
+    project.delete()
+    return 204, None

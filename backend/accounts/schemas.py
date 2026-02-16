@@ -49,6 +49,7 @@ class UserSchema(Schema):
     email: str
     first_name: str
     last_name: str
+    is_staff: bool
     is_superuser: bool
     organisation: OrganisationSchema | None = None
 

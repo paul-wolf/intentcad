@@ -18,6 +18,8 @@ INSTALLED_APPS = [
     "documents",
     "parts",
     "cam",
+    "projects",
+    "django_extensions",
 ]
 
 MIDDLEWARE = [

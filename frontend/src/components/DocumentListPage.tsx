@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useDocumentStore } from '@/stores/documentStore';
-import { useAuthStore } from '@/stores/authStore';
 import { useThemeStore } from '@/theme';
 import { createEmptyDocument, migrateDocument, generateDateName } from '@/utils/document';
 import { api, partApi, type DocumentListItem, type PartListItem } from '@/api/client';
@@ -12,9 +11,9 @@ import { PartListThumbnail } from './PartListThumbnail';
 
 export function DocumentListPage() {
   const navigate = useNavigate();
+  const { projectId } = useParams<{ projectId: string }>();
   const setDocument = useDocumentStore((s) => s.setDocument);
   const palette = useThemeStore((s) => s.palette);
-  const { user, logout } = useAuthStore();
   const [docs, setDocs] = useState<DocumentListItem[]>([]);
   const [parts, setParts] = useState<PartListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -27,19 +26,18 @@ export function DocumentListPage() {
     try {
       setLoading(true);
       const [docList, partList] = await Promise.all([
-        api.listDocuments(),
-        partApi.listParts(),
+        api.listDocuments(projectId),
+        partApi.listParts(projectId),
       ]);
       setDocs(docList);
       setParts(partList);
       setError(null);
     } catch {
-      // Backend not available — fall back to local-only mode
       setError('offline');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [projectId]);
 
   useEffect(() => { fetchDocs(); }, [fetchDocs]);
 
@@ -48,11 +46,10 @@ export function DocumentListPage() {
     const doc = createEmptyDocument(name);
     setDocument(doc);
     try {
-      const saved = await api.createDocument(doc.name, doc as unknown as Record<string, unknown>);
+      const saved = await api.createDocument(doc.name, doc as unknown as Record<string, unknown>, projectId);
       setBackendId(saved.id);
       navigate(`/edit/${saved.id}`);
     } catch {
-      // Offline — navigate with local ID
       setBackendId(null);
       navigate(`/edit/${doc.id}`);
     }
@@ -81,10 +78,9 @@ export function DocumentListPage() {
   const handleNewPart = async () => {
     try {
       const partName = generateDateName(parts.map((p) => p.name));
-      const saved = await partApi.createPart(partName, { id: crypto.randomUUID(), name: partName, features: [] });
+      const saved = await partApi.createPart(partName, { id: crypto.randomUUID(), name: partName, features: [] }, projectId);
       navigate(`/part/${saved.id}`);
     } catch {
-      // Offline — can't create parts without backend
       console.error('Failed to create part');
     }
   };
@@ -124,11 +120,6 @@ export function DocumentListPage() {
     setEditingId(null);
   };
 
-  const handleLogout = async () => {
-    await logout();
-    navigate('/login');
-  };
-
   return (
     <div
       style={{
@@ -144,44 +135,25 @@ export function DocumentListPage() {
         style={{
           position: 'absolute',
           top: '12px',
-          right: '16px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '10px',
-          fontSize: '12px',
+          left: '16px',
         }}
       >
-        <span style={{ color: palette.textSecondary }}>{user?.username}</span>
-        {user?.is_superuser && (
-          <>
-            <button
-              onClick={() => navigate('/admin/users')}
-              style={{ background: 'none', border: 'none', color: palette.primaryBtn, cursor: 'pointer', fontSize: '12px' }}
-            >
-              Users
-            </button>
-            <button
-              onClick={() => navigate('/admin/organisations')}
-              style={{ background: 'none', border: 'none', color: palette.primaryBtn, cursor: 'pointer', fontSize: '12px' }}
-            >
-              Orgs
-            </button>
-          </>
-        )}
         <button
-          onClick={handleLogout}
-          style={{ background: 'none', border: 'none', color: palette.danger, cursor: 'pointer', fontSize: '12px' }}
+          onClick={() => navigate('/')}
+          style={{
+            padding: '6px 14px',
+            background: palette.panelBg,
+            color: palette.text,
+            border: `1px solid ${palette.textSecondary}`,
+            borderRadius: '4px',
+            fontSize: '13px',
+            cursor: 'pointer',
+          }}
         >
-          Logout
+          &larr; Projects
         </button>
       </div>
 
-      <h1 style={{ fontSize: '28px', fontWeight: 700, color: palette.text }}>
-        IntentCAD
-      </h1>
-      <p style={{ fontSize: '14px', color: palette.textSecondary, marginBottom: '20px' }}>
-        v0.1
-      </p>
       <div style={{ display: 'flex', gap: '12px' }}>
         <button
           style={{

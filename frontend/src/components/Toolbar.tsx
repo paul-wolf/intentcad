@@ -10,7 +10,7 @@ import { downloadTextFile, downloadBlob } from '@/export/download';
 import { getEntityPoint, getEntityPoints } from '@/utils/entityPoints';
 import { getSegmentCount } from '@/utils/lineSegments';
 import { requestSave, getBackendId } from '@/api/autoSave';
-import { partApi } from '@/api/client';
+import { api, partApi } from '@/api/client';
 import type { ToolType } from '@/types/editor';
 import type { ThemePalette } from '@/theme';
 import type { ReactNode } from 'react';
@@ -215,12 +215,14 @@ export function Toolbar() {
             const backendId = getBackendId();
             if (!backendId) return;
             try {
+              // Fetch document to get its project_id for inheritance
+              const docData = await api.getDocument(backendId);
               const saved = await partApi.createPart(doc.name + ' Part', {
                 id: crypto.randomUUID(),
                 name: doc.name + ' Part',
                 documentId: backendId,
                 features: [],
-              });
+              }, docData.project_id ?? undefined);
               navigate(`/part/${saved.id}`);
             } catch (err) {
               console.error('Failed to create part:', err);

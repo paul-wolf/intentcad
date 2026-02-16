@@ -41,6 +41,7 @@ def user_to_schema(user):
         email=user.email,
         first_name=user.first_name,
         last_name=user.last_name,
+        is_staff=user.is_staff,
         is_superuser=user.is_superuser,
         organisation=organisation_to_schema(user.organisation)
         if user.organisation
@@ -66,6 +67,24 @@ def user_to_detail_schema(user):
         if user.organisation
         else None,
     )
+
+
+def _require_staff_or_superuser(request):
+    """Return error response if user is not staff or superuser, else None."""
+    if not request.user.is_authenticated:
+        return 401, {"message": "Authentication required"}
+    if not request.user.is_staff and not request.user.is_superuser:
+        return 403, {"message": "Staff access required"}
+    return None
+
+
+def _scoped_users(request):
+    """Return users queryset scoped by caller's permissions."""
+    qs = User.objects.select_related("organisation").order_by("-date_joined")
+    if request.user.is_superuser:
+        return qs
+    # Staff: only users in their own org
+    return qs.filter(organisation_id=request.user.organisation_id)
 
 
 # ── Public auth endpoints ──
@@ -168,7 +187,7 @@ def reset_password(request, data: PasswordResetSchema):
     return 200, {"message": "Password has been reset successfully"}
 
 
-# ── User management (superuser only) ──
+# ── User management (staff or superuser) ──
 
 
 @router.get(
@@ -176,13 +195,10 @@ def reset_password(request, data: PasswordResetSchema):
     response={200: list[UserDetailSchema], 401: MessageSchema, 403: MessageSchema},
 )
 def list_users(request):
-    if not request.user.is_authenticated:
-        return 401, {"message": "Authentication required"}
-    if not request.user.is_superuser:
-        return 403, {"message": "Superuser access required"}
-
-    users = User.objects.select_related("organisation").order_by("-date_joined")
-    return 200, [user_to_detail_schema(u) for u in users]
+    err = _require_staff_or_superuser(request)
+    if err:
+        return err
+    return 200, [user_to_detail_schema(u) for u in _scoped_users(request)]
 
 
 @router.get(
@@ -195,14 +211,17 @@ def list_users(request):
     },
 )
 def get_user(request, user_id: str):
-    if not request.user.is_authenticated:
-        return 401, {"message": "Authentication required"}
-    if not request.user.is_superuser:
-        return 403, {"message": "Superuser access required"}
+    err = _require_staff_or_superuser(request)
+    if err:
+        return err
 
     try:
         user = User.objects.select_related("organisation").get(id=user_id)
     except User.DoesNotExist:
+        return 404, {"message": "User not found"}
+
+    # Staff can only view users in their own org
+    if not request.user.is_superuser and user.organisation_id != request.user.organisation_id:
         return 404, {"message": "User not found"}
 
     return 200, user_to_detail_schema(user)
@@ -218,15 +237,30 @@ def get_user(request, user_id: str):
     },
 )
 def create_user(request, data: CreateUserSchema):
-    if not request.user.is_authenticated:
-        return 401, {"message": "Authentication required"}
-    if not request.user.is_superuser:
-        return 403, {"message": "Superuser access required"}
+    err = _require_staff_or_superuser(request)
+    if err:
+        return err
 
     if User.objects.filter(username=data.username).exists():
         return 400, {"message": "Username already exists"}
     if User.objects.filter(email=data.email).exists():
         return 400, {"message": "Email already exists"}
+
+    # Staff cannot set is_superuser
+    if not request.user.is_superuser and data.is_superuser:
+        return 403, {"message": "Only superusers can grant superuser status"}
+
+    # Staff must create users in their own org
+    org = None
+    if request.user.is_superuser:
+        if data.organisation_id:
+            try:
+                org = Organisation.objects.get(id=data.organisation_id)
+            except Organisation.DoesNotExist:
+                return 400, {"message": "Organisation not found"}
+    else:
+        # Staff: force org to their own
+        org = request.user.organisation
 
     user = User.objects.create_user(
         username=data.username,
@@ -235,17 +269,10 @@ def create_user(request, data: CreateUserSchema):
         first_name=data.first_name,
         last_name=data.last_name,
         is_staff=data.is_staff,
-        is_superuser=data.is_superuser,
+        is_superuser=data.is_superuser if request.user.is_superuser else False,
     )
     user.set_unusable_password()
-
-    if data.organisation_id:
-        try:
-            org = Organisation.objects.get(id=data.organisation_id)
-            user.organisation = org
-        except Organisation.DoesNotExist:
-            return 400, {"message": "Organisation not found"}
-
+    user.organisation = org
     user.save()
     return 201, user_to_detail_schema(user)
 
@@ -261,18 +288,28 @@ def create_user(request, data: CreateUserSchema):
     },
 )
 def update_user(request, user_id: str, data: UpdateUserSchema):
-    if not request.user.is_authenticated:
-        return 401, {"message": "Authentication required"}
-    if not request.user.is_superuser:
-        return 403, {"message": "Superuser access required"}
+    err = _require_staff_or_superuser(request)
+    if err:
+        return err
 
     try:
         user = User.objects.get(id=user_id)
     except User.DoesNotExist:
         return 404, {"message": "User not found"}
 
+    # Staff can only edit users in their own org
+    if not request.user.is_superuser and user.organisation_id != request.user.organisation_id:
+        return 404, {"message": "User not found"}
+
     if user.id == request.user.id and data.is_superuser is False:
         return 400, {"message": "Cannot remove your own superuser status"}
+
+    # Staff cannot change is_superuser or organisation
+    if not request.user.is_superuser:
+        if data.is_superuser is not None:
+            return 403, {"message": "Only superusers can change superuser status"}
+        if data.organisation_id is not None:
+            return 403, {"message": "Only superusers can change user organisation"}
 
     if data.email is not None:
         if User.objects.filter(email=data.email).exclude(id=user_id).exists():
@@ -316,14 +353,17 @@ def update_user(request, user_id: str, data: UpdateUserSchema):
     },
 )
 def delete_user(request, user_id: str):
-    if not request.user.is_authenticated:
-        return 401, {"message": "Authentication required"}
-    if not request.user.is_superuser:
-        return 403, {"message": "Superuser access required"}
+    err = _require_staff_or_superuser(request)
+    if err:
+        return err
 
     try:
         user = User.objects.get(id=user_id)
     except User.DoesNotExist:
+        return 404, {"message": "User not found"}
+
+    # Staff can only delete users in their own org
+    if not request.user.is_superuser and user.organisation_id != request.user.organisation_id:
         return 404, {"message": "User not found"}
 
     if user.id == request.user.id:
@@ -338,14 +378,16 @@ def delete_user(request, user_id: str):
     response={200: MessageSchema, 401: MessageSchema, 403: MessageSchema, 404: MessageSchema},
 )
 def unlock_user(request, user_id: str):
-    if not request.user.is_authenticated:
-        return 401, {"message": "Authentication required"}
-    if not request.user.is_superuser:
-        return 403, {"message": "Superuser access required"}
+    err = _require_staff_or_superuser(request)
+    if err:
+        return err
 
     try:
         user = User.objects.get(id=user_id)
     except User.DoesNotExist:
+        return 404, {"message": "User not found"}
+
+    if not request.user.is_superuser and user.organisation_id != request.user.organisation_id:
         return 404, {"message": "User not found"}
 
     user.clear_failed_logins()
@@ -357,14 +399,16 @@ def unlock_user(request, user_id: str):
     response={401: MessageSchema, 403: MessageSchema, 404: MessageSchema},
 )
 def generate_reset_link(request, user_id: str):
-    if not request.user.is_authenticated:
-        return 401, {"message": "Authentication required"}
-    if not request.user.is_superuser:
-        return 403, {"message": "Superuser access required"}
+    err = _require_staff_or_superuser(request)
+    if err:
+        return err
 
     try:
         user = User.objects.get(id=user_id)
     except User.DoesNotExist:
+        return 404, {"message": "User not found"}
+
+    if not request.user.is_superuser and user.organisation_id != request.user.organisation_id:
         return 404, {"message": "User not found"}
 
     token = user.generate_password_reset_token()

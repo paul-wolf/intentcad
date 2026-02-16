@@ -15,7 +15,17 @@ export function UsersPage() {
   const [showForm, setShowForm] = useState(false);
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
 
-  // Form state
+  // Edit state
+  const [editingUser, setEditingUser] = useState<UserDetail | null>(null);
+  const [editEmail, setEditEmail] = useState('');
+  const [editFirstName, setEditFirstName] = useState('');
+  const [editLastName, setEditLastName] = useState('');
+  const [editOrgId, setEditOrgId] = useState('');
+  const [editIsStaff, setEditIsStaff] = useState(false);
+  const [editIsSuperuser, setEditIsSuperuser] = useState(false);
+  const [editIsActive, setEditIsActive] = useState(true);
+
+  // Create form state
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [firstName, setFirstName] = useState('');
@@ -23,6 +33,8 @@ export function UsersPage() {
   const [orgId, setOrgId] = useState('');
   const [isStaff, setIsStaff] = useState(false);
   const [isSuperuser, setIsSuperuser] = useState(false);
+
+  const isSuperuserUser = currentUser?.is_superuser ?? false;
 
   useEffect(() => {
     loadData();
@@ -32,7 +44,7 @@ export function UsersPage() {
     try {
       const [userList, orgList] = await Promise.all([
         authApi.listUsers(),
-        authApi.listOrganisations(),
+        isSuperuserUser ? authApi.listOrganisations() : Promise.resolve([]),
       ]);
       setUsers(userList);
       setOrgs(orgList);
@@ -71,6 +83,45 @@ export function UsersPage() {
     } catch (err) {
       console.error('Failed to create user:', err);
       alert(err instanceof Error ? err.message : 'Failed to create user');
+    }
+  };
+
+  const startEdit = (user: UserDetail) => {
+    setEditingUser(user);
+    setEditEmail(user.email);
+    setEditFirstName(user.first_name);
+    setEditLastName(user.last_name);
+    setEditOrgId(user.organisation?.id ?? '');
+    setEditIsStaff(user.is_staff);
+    setEditIsSuperuser(user.is_superuser);
+    setEditIsActive(user.is_active);
+  };
+
+  const cancelEdit = () => {
+    setEditingUser(null);
+  };
+
+  const handleEditSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!editingUser) return;
+    try {
+      const data: Record<string, unknown> = {
+        email: editEmail,
+        first_name: editFirstName,
+        last_name: editLastName,
+        is_active: editIsActive,
+        is_staff: editIsStaff,
+      };
+      if (isSuperuserUser) {
+        data.is_superuser = editIsSuperuser;
+        data.organisation_id = editOrgId || '';
+      }
+      await authApi.updateUser(editingUser.id, data);
+      setEditingUser(null);
+      loadData();
+    } catch (err) {
+      console.error('Failed to update user:', err);
+      alert(err instanceof Error ? err.message : 'Failed to update user');
     }
   };
 
@@ -198,17 +249,21 @@ export function UsersPage() {
               <input type="email" placeholder="Email *" value={email} onChange={(e) => setEmail(e.target.value)} required style={inputStyle} />
               <input type="text" placeholder="First Name" value={firstName} onChange={(e) => setFirstName(e.target.value)} style={inputStyle} />
               <input type="text" placeholder="Last Name" value={lastName} onChange={(e) => setLastName(e.target.value)} style={inputStyle} />
-              <select value={orgId} onChange={(e) => setOrgId(e.target.value)} style={inputStyle}>
-                <option value="">No organisation</option>
-                {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-              </select>
+              {isSuperuserUser && (
+                <select value={orgId} onChange={(e) => setOrgId(e.target.value)} style={inputStyle}>
+                  <option value="">No organisation</option>
+                  {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                </select>
+              )}
               <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                 <label style={{ display: 'flex', gap: '4px', alignItems: 'center', fontSize: '13px', color: palette.text }}>
                   <input type="checkbox" checked={isStaff} onChange={(e) => setIsStaff(e.target.checked)} /> Staff
                 </label>
-                <label style={{ display: 'flex', gap: '4px', alignItems: 'center', fontSize: '13px', color: palette.text }}>
-                  <input type="checkbox" checked={isSuperuser} onChange={(e) => setIsSuperuser(e.target.checked)} /> Admin
-                </label>
+                {isSuperuserUser && (
+                  <label style={{ display: 'flex', gap: '4px', alignItems: 'center', fontSize: '13px', color: palette.text }}>
+                    <input type="checkbox" checked={isSuperuser} onChange={(e) => setIsSuperuser(e.target.checked)} /> Admin
+                  </label>
+                )}
               </div>
             </div>
             <div style={{ display: 'flex', gap: '8px' }}>
@@ -216,6 +271,54 @@ export function UsersPage() {
                 Create
               </button>
               <button type="button" onClick={resetForm} style={{ padding: '8px 16px', background: 'transparent', color: palette.textSecondary, border: `1px solid ${palette.textSecondary}`, borderRadius: '4px', fontSize: '13px', cursor: 'pointer' }}>
+                Cancel
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {editingUser && (
+        <div
+          style={{
+            background: palette.panelBg,
+            borderRadius: '6px',
+            padding: '16px',
+          }}
+        >
+          <p style={{ fontSize: '14px', fontWeight: 600, color: palette.text, margin: '0 0 12px' }}>
+            Edit: {editingUser.username}
+          </p>
+          <form onSubmit={handleEditSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+              <input type="email" placeholder="Email" value={editEmail} onChange={(e) => setEditEmail(e.target.value)} required style={inputStyle} />
+              <input type="text" placeholder="First Name" value={editFirstName} onChange={(e) => setEditFirstName(e.target.value)} style={inputStyle} />
+              <input type="text" placeholder="Last Name" value={editLastName} onChange={(e) => setEditLastName(e.target.value)} style={inputStyle} />
+              {isSuperuserUser && (
+                <select value={editOrgId} onChange={(e) => setEditOrgId(e.target.value)} style={inputStyle}>
+                  <option value="">No organisation</option>
+                  {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                </select>
+              )}
+              <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                <label style={{ display: 'flex', gap: '4px', alignItems: 'center', fontSize: '13px', color: palette.text }}>
+                  <input type="checkbox" checked={editIsActive} onChange={(e) => setEditIsActive(e.target.checked)} /> Active
+                </label>
+                <label style={{ display: 'flex', gap: '4px', alignItems: 'center', fontSize: '13px', color: palette.text }}>
+                  <input type="checkbox" checked={editIsStaff} onChange={(e) => setEditIsStaff(e.target.checked)} /> Staff
+                </label>
+                {isSuperuserUser && (
+                  <label style={{ display: 'flex', gap: '4px', alignItems: 'center', fontSize: '13px', color: palette.text }}>
+                    <input type="checkbox" checked={editIsSuperuser} onChange={(e) => setEditIsSuperuser(e.target.checked)} /> Admin
+                  </label>
+                )}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button type="submit" style={{ padding: '8px 16px', background: palette.primaryBtn, color: '#fff', border: 'none', borderRadius: '4px', fontSize: '13px', cursor: 'pointer' }}>
+                Save
+              </button>
+              <button type="button" onClick={cancelEdit} style={{ padding: '8px 16px', background: 'transparent', color: palette.textSecondary, border: `1px solid ${palette.textSecondary}`, borderRadius: '4px', fontSize: '13px', cursor: 'pointer' }}>
                 Cancel
               </button>
             </div>
@@ -260,6 +363,9 @@ export function UsersPage() {
                   <td style={{ padding: '8px 12px' }}>
                     {currentUser && user.id !== currentUser.id && (
                       <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                        <button onClick={() => startEdit(user)} style={{ ...btnStyle, color: palette.primaryBtn }}>
+                          Edit
+                        </button>
                         <button onClick={() => handleToggleActive(user)} style={{ ...btnStyle, color: '#2196f3' }}>
                           {user.is_active ? 'Disable' : 'Enable'}
                         </button>

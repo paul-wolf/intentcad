@@ -5,6 +5,7 @@ from django.shortcuts import get_object_or_404
 from ninja import Router
 
 from documents.models import Document
+from projects.access import can_access_project, require_auth
 
 from .models import CamJob, CamProfile
 from .schemas import (
@@ -24,39 +25,59 @@ from .validators import validate_cam_job_config, validate_cam_profile_config
 router = Router()
 
 
+def _user_org_filter(user):
+    """Return a queryset filter dict for org-scoped access."""
+    if user.is_superuser:
+        return {}
+    return {"project__organisation_id": user.organisation_id}
+
+
 # ── Profiles ──
 
 
 @router.get("/profiles/", response=list[CamProfileListOut])
 def list_profiles(request):
-    if not request.user.is_authenticated:
-        return JsonResponse({"message": "Authentication required"}, status=401)
-    return CamProfile.objects.filter(user=request.user)
+    err = require_auth(request)
+    if err:
+        return err
+    return CamProfile.objects.filter(**_user_org_filter(request.user))
 
 
 @router.post("/profiles/", response={201: CamProfileOut})
 def create_profile(request, payload: CamProfileCreateIn):
-    if not request.user.is_authenticated:
-        return JsonResponse({"message": "Authentication required"}, status=401)
+    err = require_auth(request)
+    if err:
+        return err
     errors = validate_cam_profile_config(payload.config)
     if errors:
         return JsonResponse({"errors": errors}, status=422)
-    profile = CamProfile.objects.create(name=payload.name, config=payload.config, user=request.user)
+    profile = CamProfile.objects.create(
+        name=payload.name,
+        config=payload.config,
+        created_by=request.user,
+    )
     return 201, profile
 
 
 @router.get("/profiles/{profile_id}", response=CamProfileOut)
 def get_profile(request, profile_id: UUID):
-    if not request.user.is_authenticated:
-        return JsonResponse({"message": "Authentication required"}, status=401)
-    return get_object_or_404(CamProfile, id=profile_id, user=request.user)
+    err = require_auth(request)
+    if err:
+        return err
+    profile = get_object_or_404(CamProfile, id=profile_id)
+    if profile.project and not can_access_project(request.user, profile.project):
+        return JsonResponse({"message": "Access denied"}, status=403)
+    return profile
 
 
 @router.put("/profiles/{profile_id}", response=CamProfileOut)
 def update_profile(request, profile_id: UUID, payload: CamProfileUpdateIn):
-    if not request.user.is_authenticated:
-        return JsonResponse({"message": "Authentication required"}, status=401)
-    profile = get_object_or_404(CamProfile, id=profile_id, user=request.user)
+    err = require_auth(request)
+    if err:
+        return err
+    profile = get_object_or_404(CamProfile, id=profile_id)
+    if profile.project and not can_access_project(request.user, profile.project):
+        return JsonResponse({"message": "Access denied"}, status=403)
     if payload.name is not None:
         profile.name = payload.name
     if payload.config is not None:
@@ -70,9 +91,12 @@ def update_profile(request, profile_id: UUID, payload: CamProfileUpdateIn):
 
 @router.delete("/profiles/{profile_id}", response={204: None})
 def delete_profile(request, profile_id: UUID):
-    if not request.user.is_authenticated:
-        return JsonResponse({"message": "Authentication required"}, status=401)
-    profile = get_object_or_404(CamProfile, id=profile_id, user=request.user)
+    err = require_auth(request)
+    if err:
+        return err
+    profile = get_object_or_404(CamProfile, id=profile_id)
+    if profile.project and not can_access_project(request.user, profile.project):
+        return JsonResponse({"message": "Access denied"}, status=403)
     profile.delete()
     return 204, None
 
@@ -80,11 +104,19 @@ def delete_profile(request, profile_id: UUID):
 # ── Jobs ──
 
 
+def _job_org_filter(user):
+    """Return a queryset filter dict for org-scoped job access."""
+    if user.is_superuser:
+        return {}
+    return {"document__project__organisation_id": user.organisation_id}
+
+
 @router.get("/jobs/", response=list[CamJobListOut])
 def list_jobs(request, document: UUID | None = None):
-    if not request.user.is_authenticated:
-        return JsonResponse({"message": "Authentication required"}, status=401)
-    qs = CamJob.objects.filter(document__user=request.user)
+    err = require_auth(request)
+    if err:
+        return err
+    qs = CamJob.objects.filter(**_job_org_filter(request.user))
     if document:
         qs = qs.filter(document_id=document)
     jobs = []
@@ -104,16 +136,19 @@ def list_jobs(request, document: UUID | None = None):
 
 @router.post("/jobs/", response={201: CamJobOut})
 def create_job(request, payload: CamJobCreateIn):
-    if not request.user.is_authenticated:
-        return JsonResponse({"message": "Authentication required"}, status=401)
-    doc = get_object_or_404(Document, id=payload.document_id, user=request.user)
+    err = require_auth(request)
+    if err:
+        return err
+    doc = get_object_or_404(Document, id=payload.document_id)
+    if doc.project and not can_access_project(request.user, doc.project):
+        return JsonResponse({"message": "Access denied"}, status=403)
     if payload.config:
         errors = validate_cam_job_config(payload.config)
         if errors:
             return JsonResponse({"errors": errors}, status=422)
     profile = None
     if payload.profile_id:
-        profile = get_object_or_404(CamProfile, id=payload.profile_id, user=request.user)
+        profile = get_object_or_404(CamProfile, id=payload.profile_id)
     job = CamJob.objects.create(
         document=doc,
         name=payload.name,
@@ -125,20 +160,27 @@ def create_job(request, payload: CamJobCreateIn):
 
 @router.get("/jobs/{job_id}", response=CamJobOut)
 def get_job(request, job_id: UUID):
-    if not request.user.is_authenticated:
-        return JsonResponse({"message": "Authentication required"}, status=401)
-    return get_object_or_404(CamJob, id=job_id, document__user=request.user)
+    err = require_auth(request)
+    if err:
+        return err
+    job = get_object_or_404(CamJob, id=job_id)
+    if job.document.project and not can_access_project(request.user, job.document.project):
+        return JsonResponse({"message": "Access denied"}, status=403)
+    return job
 
 
 @router.put("/jobs/{job_id}", response=CamJobOut)
 def update_job(request, job_id: UUID, payload: CamJobUpdateIn):
-    if not request.user.is_authenticated:
-        return JsonResponse({"message": "Authentication required"}, status=401)
-    job = get_object_or_404(CamJob, id=job_id, document__user=request.user)
+    err = require_auth(request)
+    if err:
+        return err
+    job = get_object_or_404(CamJob, id=job_id)
+    if job.document.project and not can_access_project(request.user, job.document.project):
+        return JsonResponse({"message": "Access denied"}, status=403)
     if payload.name is not None:
         job.name = payload.name
     if payload.profile_id is not None:
-        profile = get_object_or_404(CamProfile, id=payload.profile_id, user=request.user)
+        profile = get_object_or_404(CamProfile, id=payload.profile_id)
         job.profile = profile
     if payload.config is not None:
         errors = validate_cam_job_config(payload.config)
@@ -151,9 +193,12 @@ def update_job(request, job_id: UUID, payload: CamJobUpdateIn):
 
 @router.delete("/jobs/{job_id}", response={204: None})
 def delete_job(request, job_id: UUID):
-    if not request.user.is_authenticated:
-        return JsonResponse({"message": "Authentication required"}, status=401)
-    job = get_object_or_404(CamJob, id=job_id, document__user=request.user)
+    err = require_auth(request)
+    if err:
+        return err
+    job = get_object_or_404(CamJob, id=job_id)
+    if job.document.project and not can_access_project(request.user, job.document.project):
+        return JsonResponse({"message": "Access denied"}, status=403)
     job.delete()
     return 204, None
 
@@ -163,10 +208,13 @@ def generate_job(request, job_id: UUID):
     """Store G-code and errors posted from the frontend after client-side generation."""
     import json
 
-    if not request.user.is_authenticated:
-        return JsonResponse({"message": "Authentication required"}, status=401)
+    err = require_auth(request)
+    if err:
+        return err
     body = json.loads(request.body)
-    job = get_object_or_404(CamJob, id=job_id, document__user=request.user)
+    job = get_object_or_404(CamJob, id=job_id)
+    if job.document.project and not can_access_project(request.user, job.document.project):
+        return JsonResponse({"message": "Access denied"}, status=403)
     job.gcode = body.get("gcode", "")
     job.errors = body.get("errors", [])
     job.save()
@@ -175,9 +223,12 @@ def generate_job(request, job_id: UUID):
 
 @router.get("/jobs/{job_id}/download")
 def download_job(request, job_id: UUID):
-    if not request.user.is_authenticated:
-        return JsonResponse({"message": "Authentication required"}, status=401)
-    job = get_object_or_404(CamJob, id=job_id, document__user=request.user)
+    err = require_auth(request)
+    if err:
+        return err
+    job = get_object_or_404(CamJob, id=job_id)
+    if job.document.project and not can_access_project(request.user, job.document.project):
+        return JsonResponse({"message": "Access denied"}, status=403)
     if not job.gcode:
         return JsonResponse({"error": "No G-code generated yet"}, status=404)
     response = HttpResponse(job.gcode, content_type="text/plain")
@@ -191,8 +242,9 @@ def download_job(request, job_id: UUID):
 
 @router.post("/advisor/suggest", response=AdvisorOut)
 def suggest_plan(request, payload: AdvisorRequestIn):
-    if not request.user.is_authenticated:
-        return JsonResponse({"message": "Authentication required"}, status=401)
+    err = require_auth(request)
+    if err:
+        return err
     from .advisor import suggest_cutting_plan
 
     result = suggest_cutting_plan(
