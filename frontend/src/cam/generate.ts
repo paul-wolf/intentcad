@@ -1,6 +1,6 @@
 import type { Entity } from '@/types/document';
 import type { CamJobConfig, CamIssue, ToolpathMove } from '@/types/cam';
-import { entityToSegments } from './entityToSegments';
+import { entityToSegments, type CncSegment } from './entityToSegments';
 import { toolpathProfile } from './toolpathProfile';
 import { toolpathDrill } from './toolpathDrill';
 import { toolpathPocket } from './toolpathPocket';
@@ -12,6 +12,7 @@ export interface GenerateResult {
   gcode: string;
   issues: CamIssue[];
   toolpath: ToolpathMove[];
+  moveToLine: number[];
 }
 
 /**
@@ -37,20 +38,25 @@ export function generateGcode(
         const segments = entityToSegments(opEntities, op.entityIds);
         if (segments.length === 0) break;
 
-        // Generate single-depth profile toolpath
-        const singlePass = toolpathProfile(
-          segments,
-          config.tool.diameter,
-          op.cutSide,
-          config.machine.feedRate,
-          op.tabs,
-          op.tabWidth,
-          op.tabHeight,
-        );
+        // Group segments into separate connected contours so each gets
+        // its own rapid/plunge/retract cycle (e.g. 6 separate circles)
+        const contours = groupContours(segments);
 
-        // Apply depth passes
-        const withDepth = depthPasses(singlePass, config.depth, config.machine.safeZ);
-        allToolpathMoves.push(...withDepth);
+        for (const contour of contours) {
+          const { moves, startPosition } = toolpathProfile(
+            contour,
+            config.tool.diameter,
+            op.cutSide,
+            config.machine.feedRate,
+            op.tabs,
+            op.tabWidth,
+            op.tabHeight,
+          );
+          if (moves.length === 0) continue;
+
+          const withDepth = depthPasses(moves, config.depth, config.machine.safeZ, startPosition);
+          allToolpathMoves.push(...withDepth);
+        }
         break;
       }
       case 'drill': {
@@ -98,11 +104,44 @@ export function generateGcode(
   // Generate G-code only if no errors (warnings are OK)
   const hasErrors = issues.some((i) => i.severity === 'error');
   let gcode = '';
+  let moveToLine: number[] = [];
 
   if (!hasErrors && allToolpathMoves.length > 0) {
-    const lines = gcodeEmitter(allToolpathMoves, config.postProcessor, config.origin);
-    gcode = lines.join('\n');
+    const result = gcodeEmitter(allToolpathMoves, config.postProcessor, config.origin);
+    gcode = result.lines.join('\n');
+    moveToLine = result.moveStartLines;
   }
 
-  return { gcode, issues, toolpath: allToolpathMoves };
+  return { gcode, issues, toolpath: allToolpathMoves, moveToLine };
+}
+
+/**
+ * Group segments into connected contours.
+ * Consecutive segments where seg[i].to ≈ seg[i+1].from are in the same contour.
+ * Disconnected segments start a new contour.
+ */
+function groupContours(segments: CncSegment[]): CncSegment[][] {
+  if (segments.length === 0) return [];
+
+  const groups: CncSegment[][] = [];
+  let current: CncSegment[] = [segments[0]!];
+
+  for (let i = 1; i < segments.length; i++) {
+    const seg = segments[i]!;
+    const prev = current[current.length - 1]!;
+    const dx = seg.from.x - prev.to.x;
+    const dy = seg.from.y - prev.to.y;
+
+    if (dx * dx + dy * dy < 1e-4) {
+      // Connected — same contour
+      current.push(seg);
+    } else {
+      // Disconnected — start new contour
+      groups.push(current);
+      current = [seg];
+    }
+  }
+
+  groups.push(current);
+  return groups;
 }

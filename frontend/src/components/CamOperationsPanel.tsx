@@ -23,6 +23,14 @@ export function CamOperationsPanel() {
   const requestAiSuggestion = useCamStore((s) => s.requestAiSuggestion);
   const focusedOperationIndex = useCamStore((s) => s.focusedOperationIndex);
   const setFocusedOperation = useCamStore((s) => s.setFocusedOperation);
+  const toolpath = useCamStore((s) => s.toolpath);
+  const simState = useCamStore((s) => s.simState);
+  const simSpeed = useCamStore((s) => s.simSpeed);
+  const simPlay = useCamStore((s) => s.simPlay);
+  const simPause = useCamStore((s) => s.simPause);
+  const simStop = useCamStore((s) => s.simStop);
+  const simStep = useCamStore((s) => s.simStep);
+  const simSetSpeed = useCamStore((s) => s.simSetSpeed);
 
   const [showGcodePreview, setShowGcodePreview] = useState(false);
 
@@ -474,6 +482,60 @@ export function CamOperationsPanel() {
           <button onClick={handleAiSuggest} style={btnStyle}>AI Suggest</button>
         </div>
       </div>
+
+      {/* Simulator */}
+      {toolpath && toolpath.length > 0 && (
+        <div style={{ ...sectionStyle, display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <div style={headerStyle}>Simulator</div>
+          <div style={{ display: 'flex', gap: '3px' }}>
+            <button
+              onClick={simState === 'playing' ? simPause : simPlay}
+              style={{ ...btnStyle, flex: 1, fontSize: '13px' }}
+              title={simState === 'playing' ? 'Pause' : 'Play'}
+            >
+              {simState === 'playing' ? '\u23F8' : '\u25B6'}
+            </button>
+            <button
+              onClick={simStep}
+              style={{ ...btnStyle, flex: 1, fontSize: '13px' }}
+              title="Step"
+            >
+              {'\u23ED'}
+            </button>
+            <button
+              onClick={simStop}
+              style={{
+                ...btnStyle,
+                flex: 1,
+                fontSize: '13px',
+                opacity: simState === 'idle' ? 0.4 : 1,
+              }}
+              disabled={simState === 'idle'}
+              title="Stop"
+            >
+              {'\u23F9'}
+            </button>
+          </div>
+          <div style={{ display: 'flex', gap: '2px' }}>
+            {[0.5, 1, 2, 4].map((speed) => (
+              <button
+                key={speed}
+                onClick={() => simSetSpeed(speed)}
+                style={{
+                  ...btnStyle,
+                  flex: 1,
+                  fontSize: '10px',
+                  padding: '2px',
+                  borderColor: simSpeed === speed ? palette.accent : palette.inputBorder,
+                  color: simSpeed === speed ? palette.accent : palette.text,
+                }}
+              >
+                {speed}x
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* G-code Preview */}
       {showGcodePreview && generatedGcode && (

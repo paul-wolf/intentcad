@@ -38,8 +38,21 @@ export function useCanvasRenderer(opts: UseCanvasRendererOpts) {
     viewportRef.current = new ViewportImpl(width, height, offset, scale);
   }, [opts.initialViewport]);
 
+  const lastTimeRef = useRef<number>(0);
+
   const startLoop = useCallback(() => {
+    lastTimeRef.current = performance.now();
     const loop = () => {
+      const now = performance.now();
+      const dt = now - lastTimeRef.current;
+      lastTimeRef.current = now;
+
+      // Tick simulator
+      const camState = useCamStore.getState();
+      if (camState.simState === 'playing') {
+        camState.simTick(dt);
+      }
+
       const renderer = rendererRef.current;
       const viewport = viewportRef.current;
       if (renderer && viewport) {

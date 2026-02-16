@@ -14,7 +14,7 @@ import { resolveDimensionEndpoints } from '@/utils/dimensionGeom';
 import { getConstraintPartners, getEntityRepresentativePoint, CONSTRAINT_SYMBOLS } from '@/utils/constraints';
 import { getSegmentCount, getSegmentPointIndices, getSegmentBulge } from '@/utils/lineSegments';
 import { arcFromBulge, arcMidpoint } from '@/utils/arcGeometry';
-import { renderToolpathOverlay } from '@/components/ToolpathOverlay';
+import { renderToolpathOverlay, renderSimulatorOverlay } from '@/components/ToolpathOverlay';
 import { useCamStore } from '@/stores/camStore';
 
 export interface RenderContext {
@@ -770,14 +770,32 @@ function renderCamToolpath(ctx: RenderContext) {
   if (!ctx.camMode) return;
   const camState = useCamStore.getState();
   if (!camState.showToolpathPreview || !camState.toolpath) return;
-  renderToolpathOverlay(
-    ctx.renderer,
-    ctx.viewport,
-    camState.toolpath,
-    camState.issues,
-    ctx.palette,
-    camState.jobConfig.origin,
-  );
+
+  if (camState.simState !== 'idle') {
+    renderSimulatorOverlay(
+      ctx.renderer,
+      ctx.viewport,
+      camState.toolpath,
+      camState.issues,
+      ctx.palette,
+      camState.jobConfig.origin,
+      {
+        simMoveIndex: camState.simMoveIndex,
+        simProgress: camState.simProgress,
+        simPosition: camState.simPosition,
+      },
+      camState.jobConfig.tool.diameter,
+    );
+  } else {
+    renderToolpathOverlay(
+      ctx.renderer,
+      ctx.viewport,
+      camState.toolpath,
+      camState.issues,
+      ctx.palette,
+      camState.jobConfig.origin,
+    );
+  }
 }
 
 /** Render pipeline */

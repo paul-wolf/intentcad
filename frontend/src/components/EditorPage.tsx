@@ -30,6 +30,39 @@ import { migrateDocument } from '@/utils/document';
 import type { Document } from '@/types/document';
 import type { Tool } from '@/tools/types';
 
+function SimDepthIndicator() {
+  const simState = useCamStore((s) => s.simState);
+  const simZ = useCamStore((s) => s.simZ);
+  const palette = useThemeStore((s) => s.palette);
+
+  if (simState === 'idle' || simZ === null) return null;
+
+  return (
+    <div style={{
+      position: 'absolute',
+      top: '12px',
+      left: '50%',
+      transform: 'translateX(-50%)',
+      background: palette.panelBg,
+      border: `1px solid ${palette.border}`,
+      borderRadius: '6px',
+      padding: '6px 16px',
+      zIndex: 10,
+      pointerEvents: 'none',
+      boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+    }}>
+      <span style={{
+        fontFamily: 'monospace',
+        fontSize: '20px',
+        fontWeight: 'bold',
+        color: simZ < 0 ? '#ff8c00' : palette.text,
+      }}>
+        Z {simZ.toFixed(2)}
+      </span>
+    </div>
+  );
+}
+
 function CamRightPanel() {
   const palette = useThemeStore((s) => s.palette);
   return (
@@ -145,14 +178,36 @@ export function EditorPage() {
         return;
       }
 
-      // Escape in CAM mode exits CAM
+      // Escape in CAM mode: stop simulator first, then exit CAM
       if (e.key === 'Escape' && useCamStore.getState().camPanelOpen) {
-        useCamStore.getState().toggleCamPanel();
+        const camState = useCamStore.getState();
+        if (camState.simState !== 'idle') {
+          camState.simStop();
+          return;
+        }
+        camState.toggleCamPanel();
         return;
       }
 
-      // In CAM mode, skip sketch tool shortcuts
-      if (useCamStore.getState().camPanelOpen) return;
+      // In CAM mode: simulator shortcuts
+      if (useCamStore.getState().camPanelOpen) {
+        if (e.key === ' ') {
+          e.preventDefault();
+          const camState = useCamStore.getState();
+          if (camState.simState === 'playing') {
+            camState.simPause();
+          } else {
+            camState.simPlay();
+          }
+          return;
+        }
+        if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          useCamStore.getState().simStep();
+          return;
+        }
+        return;
+      }
 
       if (ctrl && e.key === 'z' && !e.shiftKey) {
         e.preventDefault();
@@ -185,6 +240,7 @@ export function EditorPage() {
         {!camPanelOpen && <HistoryPanel />}
         {camPanelOpen && <CamOperationsPanel />}
         <CanvasContainer activeTool={toolInstance} docId={id} />
+        {camPanelOpen && <SimDepthIndicator />}
         {!camPanelOpen && <DocumentPropertiesPanel />}
         {camPanelOpen ? <CamRightPanel /> : <RightPanel />}
       </div>
@@ -206,5 +262,6 @@ const styles = {
     display: 'flex',
     flex: 1,
     overflow: 'hidden',
+    position: 'relative',
   } as React.CSSProperties,
 };

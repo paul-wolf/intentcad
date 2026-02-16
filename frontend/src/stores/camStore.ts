@@ -11,6 +11,7 @@ import type {
 } from '@/types/cam';
 import { createDefaultJobConfig } from '@/types/cam';
 import { generateGcode } from '@/cam/generate';
+import { moveLength, interpolateMove } from '@/cam/simulatorInterp';
 import { downloadGcode } from '@/export/gcode';
 import { camApi } from '@/api/camClient';
 import { getBackendId } from '@/api/autoSave';
@@ -27,6 +28,15 @@ interface CamStore {
   camPanelOpen: boolean;
   focusedOperationIndex: number | null;
   pickingOrigin: boolean;
+
+  // ── Simulator state ──
+  simState: 'idle' | 'playing' | 'paused';
+  simMoveIndex: number;
+  simProgress: number;
+  simSpeed: number;
+  simPosition: Point | null;
+  simZ: number | null;
+  simGcodeLineMap: number[];
 
   // ── Cached server data ──
   profiles: CamProfileSummary[];
@@ -55,6 +65,13 @@ interface CamStore {
   generate(entities: Entity[]): void;
   downloadGcode(): void;
 
+  simPlay(): void;
+  simPause(): void;
+  simStop(): void;
+  simStep(): void;
+  simSetSpeed(speed: number): void;
+  simTick(dtMs: number): void;
+
   requestAiSuggestion(documentData: Record<string, unknown>, profileId?: string): Promise<void>;
 
   restoreSession(documentId: string): Promise<void>;
@@ -73,6 +90,14 @@ export const useCamStore = create<CamStore>((set, get) => ({
   camPanelOpen: false,
   focusedOperationIndex: null,
   pickingOrigin: false,
+  simState: 'idle',
+  simMoveIndex: 0,
+  simProgress: 0,
+  simSpeed: 1,
+  simPosition: null,
+  simZ: null,
+  simGcodeLineMap: [],
+
   profiles: [],
   jobs: [],
 
@@ -299,6 +324,12 @@ export const useCamStore = create<CamStore>((set, get) => ({
       generatedGcode: result.gcode || null,
       toolpath: result.toolpath.length > 0 ? result.toolpath : null,
       issues: result.issues,
+      simGcodeLineMap: result.moveToLine,
+      simState: 'idle',
+      simMoveIndex: 0,
+      simProgress: 0,
+      simPosition: null,
+      simZ: null,
     });
 
     // Persist to server if we have an active job
@@ -331,6 +362,145 @@ export const useCamStore = create<CamStore>((set, get) => ({
     const filename = activeJobId ? `job_${activeJobId.slice(0, 8)}` : 'output';
     downloadGcode(generatedGcode, filename);
     addLog('info', `Downloaded ${filename}.nc`);
+  },
+
+  simPlay() {
+    const { toolpath, simState } = get();
+    if (!toolpath || toolpath.length === 0) return;
+    if (simState === 'idle') {
+      // Start from beginning
+      const origin = get().jobConfig.origin;
+      const safeZ = get().jobConfig.machine.safeZ;
+      set({ simState: 'playing', simMoveIndex: 0, simProgress: 0, simPosition: { ...origin }, simZ: safeZ });
+    } else {
+      set({ simState: 'playing' });
+    }
+  },
+
+  simPause() {
+    if (get().simState === 'playing') {
+      set({ simState: 'paused' });
+    }
+  },
+
+  simStop() {
+    set({ simState: 'idle', simMoveIndex: 0, simProgress: 0, simPosition: null, simZ: null });
+  },
+
+  simStep() {
+    const { toolpath, simState, simMoveIndex } = get();
+    if (!toolpath || toolpath.length === 0) return;
+    const origin = get().jobConfig.origin;
+
+    if (simState === 'idle') {
+      // Start at first move, fully completed
+      const move = toolpath[0]!;
+      set({ simState: 'paused', simMoveIndex: 0, simProgress: 1, simPosition: { ...move.to }, simZ: move.z });
+      return;
+    }
+
+    // Advance to next move
+    const nextIndex = simMoveIndex + 1;
+    if (nextIndex >= toolpath.length) {
+      // Past last move
+      set({ simState: 'idle', simMoveIndex: 0, simProgress: 0, simPosition: null, simZ: null });
+      return;
+    }
+
+    // Compute start position for the next move
+    let startPos = { ...origin };
+    for (let i = 0; i <= nextIndex - 1; i++) {
+      startPos = toolpath[i]!.to;
+    }
+    // Position is the end of nextIndex move
+    const move = toolpath[nextIndex]!;
+    void startPos; // used conceptually, position is endpoint
+    set({ simState: 'paused', simMoveIndex: nextIndex, simProgress: 1, simPosition: { ...move.to }, simZ: move.z });
+  },
+
+  simSetSpeed(speed: number) {
+    set({ simSpeed: speed });
+  },
+
+  simTick(dtMs: number) {
+    const { simState, toolpath, simMoveIndex, simProgress, simSpeed } = get();
+    if (simState !== 'playing' || !toolpath || toolpath.length === 0) return;
+
+    const origin = get().jobConfig.origin;
+
+    // Clamp dt to prevent huge jumps from frame spikes / tab switches
+    const clampedDt = Math.min(dtMs, 50);
+
+    // Compute start position for current move
+    let startPos = { ...origin };
+    for (let i = 0; i < simMoveIndex; i++) {
+      startPos = toolpath[i]!.to;
+    }
+
+    // Compute a visual rapid rate: 3x the max feed rate in the toolpath (capped)
+    // This keeps rapids visibly faster than feeds but slow enough to follow
+    let maxFeed = 0;
+    for (const m of toolpath) {
+      if (m.kind !== 'rapid' && m.feed > maxFeed) maxFeed = m.feed;
+    }
+    const rapidRate = Math.min(Math.max(maxFeed * 3, 1500), 5000);
+
+    // Work in time, not distance — each move has its own feed rate
+    let remainingTime = clampedDt / 1000; // seconds
+    let moveIdx = simMoveIndex;
+    let progress = simProgress;
+    let from = startPos;
+
+    while (remainingTime > 0 && moveIdx < toolpath.length) {
+      const move = toolpath[moveIdx]!;
+      let feedRate = move.kind === 'rapid' ? rapidRate : move.feed;
+      if (feedRate <= 0) feedRate = rapidRate;
+      const speed = (feedRate / 60) * simSpeed; // mm/sec
+
+      const len = moveLength(from, move);
+      if (len <= 0) {
+        // Zero-length move (e.g. z-only plunge), skip
+        moveIdx++;
+        progress = 0;
+        from = move.to;
+        continue;
+      }
+
+      const remainingDist = len * (1 - progress);
+      const timeForRemaining = remainingDist / speed;
+
+      if (remainingTime >= timeForRemaining) {
+        // Complete this move, advance to next
+        remainingTime -= timeForRemaining;
+        moveIdx++;
+        progress = 0;
+        from = move.to;
+      } else {
+        // Partial advance within this move
+        const distAdvanced = remainingTime * speed;
+        progress += distAdvanced / len;
+        remainingTime = 0;
+      }
+    }
+
+    if (moveIdx >= toolpath.length) {
+      // Finished all moves
+      set({ simState: 'idle', simMoveIndex: 0, simProgress: 0, simPosition: null, simZ: null });
+      return;
+    }
+
+    // Compute interpolated position and Z
+    const move = toolpath[moveIdx]!;
+    const pos = interpolateMove(from, move, progress);
+    // For Z: interpolate between previous move's Z and current move's Z
+    let z = move.z;
+    if (moveIdx > 0 && progress < 1) {
+      const prevZ = toolpath[moveIdx - 1]!.z;
+      if (prevZ !== move.z) {
+        z = prevZ + progress * (move.z - prevZ);
+      }
+    }
+    set({ simMoveIndex: moveIdx, simProgress: progress, simPosition: pos, simZ: z });
   },
 
   async requestAiSuggestion(documentData: Record<string, unknown>, profileId?: string) {
@@ -366,6 +536,10 @@ export const useCamStore = create<CamStore>((set, get) => ({
 
   async toggleCamPanel() {
     const opening = !get().camPanelOpen;
+    if (!opening) {
+      // Reset simulator when leaving CAM mode
+      set({ simState: 'idle', simMoveIndex: 0, simProgress: 0, simPosition: null, simZ: null });
+    }
     set({ camPanelOpen: opening });
     addLog('info', opening ? 'Entered CAM mode' : 'Exited CAM mode');
     // Auto-create a job when entering CAM if none exists
@@ -402,6 +576,12 @@ export const useCamStore = create<CamStore>((set, get) => ({
       generatedGcode: null,
       toolpath: null,
       issues: [],
+      simState: 'idle',
+      simMoveIndex: 0,
+      simProgress: 0,
+      simPosition: null,
+      simZ: null,
+      simGcodeLineMap: [],
     });
   },
 }));

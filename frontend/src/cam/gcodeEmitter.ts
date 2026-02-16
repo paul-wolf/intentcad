@@ -7,12 +7,18 @@ import type { Point } from '@/types/document';
  * Y-axis inversion: sketch Y-down -> CNC Y-up (negate Y).
  * Origin offset: all coordinates are shifted so `origin` becomes (0,0) in G-code.
  */
+export interface GcodeEmitterResult {
+  lines: string[];
+  moveStartLines: number[];
+}
+
 export function gcodeEmitter(
   moves: ToolpathMove[],
   settings: PostProcessorSettings,
   origin: Point = { x: 0, y: 0 },
-): string[] {
+): GcodeEmitterResult {
   const lines: string[] = [];
+  const moveStartLines: number[] = [];
   const { decimalPlaces, header, footer } = settings;
 
   const fmt = (n: number) => n.toFixed(decimalPlaces);
@@ -45,7 +51,9 @@ export function gcodeEmitter(
   let lastY: number | undefined;
   let lastZ: number | undefined;
 
-  for (const move of moves) {
+  for (let mi = 0; mi < moves.length; mi++) {
+    const move = moves[mi]!;
+    moveStartLines.push(lines.length);
     // Offset by origin, then invert Y for CNC (sketch Y-down -> CNC Y-up)
     const x = move.to.x - origin.x;
     const y = -(move.to.y - origin.y);
@@ -125,7 +133,7 @@ export function gcodeEmitter(
   lines.push('G0 X0 Y0 ; return home');
   lines.push('M30 ; program end');
 
-  return lines;
+  return { lines, moveStartLines };
 }
 
 /**

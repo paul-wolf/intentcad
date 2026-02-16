@@ -10,6 +10,7 @@ export function depthPasses(
   moves: ToolpathMove[],
   depth: DepthSettings,
   safeZ: number,
+  startPosition?: { x: number; y: number },
 ): ToolpathMove[] {
   if (moves.length === 0) return [];
 
@@ -17,10 +18,12 @@ export function depthPasses(
   const passes = computePassDepths(totalDepth, depthPerPass, finalPassAllowance);
   const result: ToolpathMove[] = [];
 
+  // Use explicit start position (contour entry point) if provided,
+  // otherwise fall back to first move's destination (legacy behavior)
+  const startPoint = startPosition ?? getMoveTo(moves[0]!);
+
   for (const passDepth of passes) {
-    // Rapid to safe height before each pass
-    const firstMove = moves[0]!;
-    const startPoint = getMoveTo(firstMove);
+    // Rapid to safe height at the contour entry point
     result.push({ kind: 'rapid', to: startPoint, z: safeZ });
 
     // Plunge to pass depth at the start position
