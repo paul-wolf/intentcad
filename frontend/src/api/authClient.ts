@@ -59,6 +59,13 @@ export const authApi = {
     return authRequest('/logout', { method: 'POST' });
   },
 
+  updateMe(data: { email?: string; first_name?: string; last_name?: string }): Promise<User> {
+    return authRequest('/me', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  },
+
   resetPassword(token: string, password: string): Promise<{ message: string }> {
     return authRequest('/password-reset', {
       method: 'POST',

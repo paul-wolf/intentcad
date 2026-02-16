@@ -5,8 +5,8 @@ from ninja import Router
 
 from .models import LoginLog, Organisation, User
 from .schemas import (
-    CSRFTokenSchema,
     CreateUserSchema,
+    CSRFTokenSchema,
     LoginResponseSchema,
     LoginSchema,
     MessageSchema,
@@ -15,6 +15,7 @@ from .schemas import (
     OrganisationSchema,
     OrganisationUpdateSchema,
     PasswordResetSchema,
+    UpdateMeSchema,
     UpdateUserSchema,
     UserDetailSchema,
     UserSchema,
@@ -157,6 +158,30 @@ def get_current_user(request):
     if not request.user.is_authenticated:
         return 401, {"message": "Not authenticated"}
     return 200, user_to_schema(request.user)
+
+
+@router.patch(
+    "/me",
+    response={200: UserSchema, 400: MessageSchema, 401: MessageSchema},
+)
+def update_current_user(request, data: UpdateMeSchema):
+    if not request.user.is_authenticated:
+        return 401, {"message": "Not authenticated"}
+
+    user = request.user
+
+    if data.email is not None:
+        if User.objects.filter(email=data.email).exclude(id=user.id).exists():
+            return 400, {"message": "Email already exists"}
+        user.email = data.email
+
+    if data.first_name is not None:
+        user.first_name = data.first_name
+    if data.last_name is not None:
+        user.last_name = data.last_name
+
+    user.save()
+    return 200, user_to_schema(user)
 
 
 # ── Password reset (token-based, no email) ──

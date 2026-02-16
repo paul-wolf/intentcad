@@ -11,13 +11,22 @@ export function OrganisationsPage() {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
 
-  // Form state
+  // Create form state
   const [name, setName] = useState('');
   const [slug, setSlug] = useState('');
   const [description, setDescription] = useState('');
   const [orgEmail, setOrgEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [website, setWebsite] = useState('');
+
+  // Edit state
+  const [editingOrg, setEditingOrg] = useState<OrganisationDetail | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editSlug, setEditSlug] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editOrgEmail, setEditOrgEmail] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editWebsite, setEditWebsite] = useState('');
 
   useEffect(() => {
     loadOrgs();
@@ -79,6 +88,40 @@ export function OrganisationsPage() {
       loadOrgs();
     } catch (err) {
       console.error('Failed to update organisation:', err);
+    }
+  };
+
+  const startEditOrg = (org: OrganisationDetail) => {
+    setEditingOrg(org);
+    setEditName(org.name);
+    setEditSlug(org.slug);
+    setEditDescription(org.description);
+    setEditOrgEmail(org.email);
+    setEditPhone(org.phone);
+    setEditWebsite(org.website);
+  };
+
+  const cancelEditOrg = () => {
+    setEditingOrg(null);
+  };
+
+  const handleEditOrgSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!editingOrg) return;
+    try {
+      await authApi.updateOrganisation(editingOrg.id, {
+        name: editName,
+        slug: editSlug,
+        description: editDescription,
+        email: editOrgEmail,
+        phone: editPhone,
+        website: editWebsite,
+      });
+      setEditingOrg(null);
+      loadOrgs();
+    } catch (err) {
+      console.error('Failed to update organisation:', err);
+      alert(err instanceof Error ? err.message : 'Failed to update organisation');
     }
   };
 
@@ -170,6 +213,38 @@ export function OrganisationsPage() {
         </div>
       )}
 
+      {editingOrg && (
+        <div style={{ background: palette.panelBg, borderRadius: '6px', padding: '16px' }}>
+          <p style={{ fontSize: '14px', fontWeight: 600, color: palette.text, margin: '0 0 12px' }}>
+            Edit: {editingOrg.name}
+          </p>
+          <form onSubmit={handleEditOrgSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+              <input type="text" placeholder="Name *" value={editName} onChange={(e) => setEditName(e.target.value)} required style={inputStyle} />
+              <input type="text" placeholder="Slug *" value={editSlug} onChange={(e) => setEditSlug(e.target.value)} required style={inputStyle} />
+              <input type="email" placeholder="Email" value={editOrgEmail} onChange={(e) => setEditOrgEmail(e.target.value)} style={inputStyle} />
+              <input type="tel" placeholder="Phone" value={editPhone} onChange={(e) => setEditPhone(e.target.value)} style={inputStyle} />
+              <input type="url" placeholder="Website" value={editWebsite} onChange={(e) => setEditWebsite(e.target.value)} style={inputStyle} />
+            </div>
+            <textarea
+              placeholder="Description"
+              value={editDescription}
+              onChange={(e) => setEditDescription(e.target.value)}
+              rows={2}
+              style={{ ...inputStyle, resize: 'vertical' }}
+            />
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button type="submit" style={{ padding: '8px 16px', background: palette.primaryBtn, color: '#fff', border: 'none', borderRadius: '4px', fontSize: '13px', cursor: 'pointer' }}>
+                Save
+              </button>
+              <button type="button" onClick={cancelEditOrg} style={{ padding: '8px 16px', background: 'transparent', color: palette.textSecondary, border: `1px solid ${palette.textSecondary}`, borderRadius: '4px', fontSize: '13px', cursor: 'pointer' }}>
+                Cancel
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       <div style={{ background: palette.panelBg, borderRadius: '6px', overflow: 'auto' }}>
         {loading ? (
           <div style={{ padding: '24px', textAlign: 'center', color: palette.textSecondary, fontSize: '14px' }}>
@@ -201,6 +276,9 @@ export function OrganisationsPage() {
                   </td>
                   <td style={{ padding: '8px 12px' }}>
                     <div style={{ display: 'flex', gap: '4px' }}>
+                      <button onClick={() => startEditOrg(org)} style={{ background: 'none', border: 'none', fontSize: '12px', cursor: 'pointer', color: palette.primaryBtn, padding: '2px 6px' }}>
+                        Edit
+                      </button>
                       <button onClick={() => handleToggleActive(org)} style={{ background: 'none', border: 'none', fontSize: '12px', cursor: 'pointer', color: '#2196f3', padding: '2px 6px' }}>
                         {org.is_active ? 'Disable' : 'Enable'}
                       </button>

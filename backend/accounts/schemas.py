@@ -103,6 +103,12 @@ class UpdateUserSchema(Schema):
     is_superuser: bool | None = None
 
 
+class UpdateMeSchema(Schema):
+    email: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+
+
 class PasswordResetSchema(Schema):
     token: str
     password: str

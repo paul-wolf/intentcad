@@ -361,27 +361,29 @@ export function UsersPage() {
                     {user.last_login ? new Date(user.last_login).toLocaleDateString() : 'Never'}
                   </td>
                   <td style={{ padding: '8px 12px' }}>
-                    {currentUser && user.id !== currentUser.id && (
-                      <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-                        <button onClick={() => startEdit(user)} style={{ ...btnStyle, color: palette.primaryBtn }}>
-                          Edit
-                        </button>
+                    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                      <button onClick={() => startEdit(user)} style={{ ...btnStyle, color: palette.primaryBtn }}>
+                        Edit
+                      </button>
+                      {currentUser && user.id !== currentUser.id && (
                         <button onClick={() => handleToggleActive(user)} style={{ ...btnStyle, color: '#2196f3' }}>
                           {user.is_active ? 'Disable' : 'Enable'}
                         </button>
-                        {user.locked_until && (
-                          <button onClick={() => handleUnlock(user.id)} style={{ ...btnStyle, color: '#4caf50' }}>
-                            Unlock
-                          </button>
-                        )}
-                        <button onClick={() => handleResetLink(user.id)} style={{ ...btnStyle, color: '#9c27b0' }}>
-                          {copiedLink === user.id ? 'Copied!' : 'Reset Link'}
+                      )}
+                      {user.locked_until && (
+                        <button onClick={() => handleUnlock(user.id)} style={{ ...btnStyle, color: '#4caf50' }}>
+                          Unlock
                         </button>
+                      )}
+                      <button onClick={() => handleResetLink(user.id)} style={{ ...btnStyle, color: '#9c27b0' }}>
+                        {copiedLink === user.id ? 'Copied!' : 'Reset Link'}
+                      </button>
+                      {currentUser && user.id !== currentUser.id && (
                         <button onClick={() => handleDelete(user.id)} style={{ ...btnStyle, color: palette.danger }}>
                           Delete
                         </button>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

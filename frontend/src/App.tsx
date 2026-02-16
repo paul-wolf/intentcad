@@ -8,6 +8,7 @@ import { PartEditorPage } from '@/components/PartEditorPage';
 import { LoginPage } from '@/components/LoginPage';
 import { PasswordResetPage } from '@/components/PasswordResetPage';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
+import { ProfilePage } from '@/components/ProfilePage';
 import { UsersPage } from '@/components/UsersPage';
 import { OrganisationsPage } from '@/components/OrganisationsPage';
 
@@ -27,8 +28,9 @@ export function App() {
         <Route path="/project/:projectId" element={<ProtectedRoute><DocumentListPage /></ProtectedRoute>} />
         <Route path="/edit/:id" element={<ProtectedRoute><EditorPage /></ProtectedRoute>} />
         <Route path="/part/:id" element={<ProtectedRoute><PartEditorPage /></ProtectedRoute>} />
-        <Route path="/admin/users" element={<ProtectedRoute requireStaff><UsersPage /></ProtectedRoute>} />
-        <Route path="/admin/organisations" element={<ProtectedRoute requireSuperuser><OrganisationsPage /></ProtectedRoute>} />
+        <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
+        <Route path="/manage/users" element={<ProtectedRoute requireStaff><UsersPage /></ProtectedRoute>} />
+        <Route path="/manage/organisations" element={<ProtectedRoute requireSuperuser><OrganisationsPage /></ProtectedRoute>} />
       </Routes>
     </BrowserRouter>
   );
