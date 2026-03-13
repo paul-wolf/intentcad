@@ -344,6 +344,18 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
           maxX = Math.max(maxX, entity.center.x + hw);
           maxY = Math.max(maxY, entity.center.y + hh);
           hasGeometry = true;
+        } else if (entity.type === 'point') {
+          minX = Math.min(minX, entity.position.x);
+          minY = Math.min(minY, entity.position.y);
+          maxX = Math.max(maxX, entity.position.x);
+          maxY = Math.max(maxY, entity.position.y);
+          hasGeometry = true;
+        } else if (entity.type === 'bezier') {
+          for (const p of entity.controlPoints) {
+            minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+            maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
+          }
+          hasGeometry = true;
         }
       }
 

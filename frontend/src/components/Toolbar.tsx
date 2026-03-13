@@ -5,11 +5,13 @@ import { useUIStateStore } from '@/stores/uiStateStore';
 import { useCamStore } from '@/stores/camStore';
 import { useThemeStore } from '@/theme';
 import { exportDocumentToDxf } from '@/export/dxf';
+import { importDxf } from '@/export/dxfImport';
 import { exportDocumentToPdf } from '@/export/pdf';
 import { downloadTextFile, downloadBlob } from '@/export/download';
 import { getEntityPoint, getEntityPoints } from '@/utils/entityPoints';
 import { getSegmentCount } from '@/utils/lineSegments';
 import { requestSave, getBackendId } from '@/api/autoSave';
+import { addLog } from '@/stores/logStore';
 import { api, partApi } from '@/api/client';
 import type { ToolType } from '@/types/editor';
 import type { ThemePalette } from '@/theme';
@@ -240,6 +242,45 @@ export function Toolbar() {
           title="Export visible sketches as DXF"
         >
           DXF
+        </button>
+        <button
+          onClick={() => {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.dxf';
+            input.onchange = () => {
+              const file = input.files?.[0];
+              if (!file) return;
+              file.text().then((text) => {
+                const result = importDxf(text);
+                if (result.entities.length === 0) {
+                  addLog('warn', 'No supported entities found in DXF file');
+                  return;
+                }
+                const store = useDocumentStore.getState();
+                if (!store.getActiveSketch()) {
+                  addLog('warn', 'No active sketch — create or select a sketch first');
+                  return;
+                }
+                store.beginTransaction('Import DXF');
+                for (const entity of result.entities) {
+                  useDocumentStore.getState().addEntity(entity);
+                }
+                requestSave();
+                setTimeout(() => useEditorStore.getState().setViewportCommand('fit-entities'), 0);
+                let msg = `Imported ${result.entities.length} entities from DXF`;
+                if (result.skipped > 0) {
+                  msg += ` (${result.skipped} skipped: ${result.skippedTypes.join(', ')})`;
+                }
+                addLog('info', msg);
+              });
+            };
+            input.click();
+          }}
+          style={{ ...btn(palette), color: palette.textSecondary }}
+          title="Import DXF file into active sketch"
+        >
+          +DXF
         </button>
         <button
           onClick={() => { downloadBlob(exportDocumentToPdf(doc, palette), `${doc.name}.pdf`); }}
