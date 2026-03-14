@@ -307,8 +307,12 @@ export function ProjectListPage() {
                     onClick={() => handleOpenDoc(d.id)}
                   >
                     <span style={{ fontSize: '14px', color: palette.text }}>&#9656;</span>
-                    <span style={{ flex: 1, color: palette.text, fontSize: '14px' }}>
+                    <span style={{ flex: 1, color: palette.text, fontSize: '14px', minWidth: 0 }}>
                       {d.name}
+                      {d.project_id && (() => {
+                        const proj = projects.find((p) => p.id === d.project_id);
+                        return proj ? <span style={{ fontSize: '12px', color: palette.textSecondary, marginLeft: '6px' }}>{proj.name}</span> : null;
+                      })()}
                     </span>
                     <span style={{ fontSize: '12px', color: palette.textSecondary, whiteSpace: 'nowrap' }}>
                       {relativeTime(d.updated_at)}
