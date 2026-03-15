@@ -99,7 +99,8 @@ export function PartEditorPage() {
     partApi.getPart(id).then((full) => {
       const data = full.data as unknown as Part;
       if (data && data.features) {
-        setPart(data);
+        // Always use the backend ID (full.id) — the data.id may be an internal UUID
+        setPart({ ...data, id: full.id });
       } else {
         setPart({ id: full.id, name: full.name, documentId: (full.data as { documentId?: string })?.documentId ?? '', features: [] });
       }
@@ -208,7 +209,7 @@ export function PartEditorPage() {
 
       const currentPart = usePartStore.getState().part;
       const docId = currentPart.documentId;
-      if (!docId) return;
+      if (!docId || !id) return;
 
       try {
         // Load the document into documentStore
@@ -230,9 +231,10 @@ export function PartEditorPage() {
         const updatedDoc = useDocumentStore.getState().document;
         await api.updateDocument(docId, { name: updatedDoc.name, data: updatedDoc as unknown as Record<string, unknown> });
 
-        // Write intent to sessionStorage
+        // Write intent to sessionStorage — use `id` (the backend/URL ID), not
+        // currentPart.id which may differ from the backend ID
         sessionStorage.setItem('sketchOnFace_intent', JSON.stringify({
-          returnToPartId: currentPart.id,
+          returnToPartId: id,
           sketchId,
           plane,
           sketchDocumentId: docId,
