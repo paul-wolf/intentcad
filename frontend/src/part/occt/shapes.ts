@@ -1,6 +1,7 @@
 import type { OC } from './init';
 import type { Entity, RectangleEntity, CircleEntity, LineEntity } from '@/types/document';
 import type { Plane } from '@/types/part';
+import { castWire, findConstructorNumeric } from './helpers';
 
 /** Tracks intermediate OCCT objects for cleanup via .delete(). */
 export class OcctCleanup {
@@ -95,58 +96,31 @@ function circleToWire(
     const [xx, xy, xz] = plane.xAxis;
     const dir = cleanup.track(new oc.gp_Dir_4(nx, ny, nz));
     const xDir = cleanup.track(new oc.gp_Dir_4(xx, xy, xz));
-    // gp_Ax2(Point, N, Vx) — explicit X direction for correct orientation on rotated planes
     const axis = cleanup.track(new oc.gp_Ax2_2(center, dir, xDir));
 
-    // Approach 1: GC_MakeCircle → Handle(Geom_Circle) → BRepBuilderAPI_MakeEdge
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let gcMaker: any = null;
-    for (let i = 1; i <= 10; i++) {
-      const ctor = oc[`GC_MakeCircle_${i}`];
-      if (typeof ctor !== 'function') continue;
-      try {
-        const m = new ctor(axis, circle.radius);
-        if (m && typeof m.Value === 'function') {
-          gcMaker = cleanup.track(m);
-          break;
-        }
-        m.delete?.();
-      } catch { /* wrong overload */ }
-    }
-
-    if (gcMaker) {
+    // GC_MakeCircle → Handle(Geom_Circle) → BRepBuilderAPI_MakeEdge
+    const gcCtor = findConstructorNumeric(oc, 'GC_MakeCircle', 10,
+      [[axis, circle.radius]], (m) => typeof m.Value === 'function');
+    if (gcCtor) {
+      const gcMaker = cleanup.track(new gcCtor(axis, circle.radius));
       const curveHandle = gcMaker.Value();
-      for (let i = 1; i <= 35; i++) {
-        const ctor = oc[`BRepBuilderAPI_MakeEdge_${i}`];
-        if (typeof ctor !== 'function') continue;
-        try {
-          const eb = new ctor(curveHandle);
-          if (eb && typeof eb.IsDone === 'function' && eb.IsDone()) {
-            cleanup.track(eb);
-            const wireBuilder = cleanup.track(new oc.BRepBuilderAPI_MakeWire_2(eb.Edge()));
-            // Circle wire created via GC_MakeCircle
-            return wireBuilder.Wire();
-          }
-          eb.delete?.();
-        } catch { /* wrong overload */ }
+      const edgeCtor = findConstructorNumeric(oc, 'BRepBuilderAPI_MakeEdge', 35,
+        [[curveHandle]], (eb) => typeof eb.IsDone === 'function' && eb.IsDone());
+      if (edgeCtor) {
+        const eb = cleanup.track(new edgeCtor(curveHandle));
+        const wireBuilder = cleanup.track(new oc.BRepBuilderAPI_MakeWire_2(eb.Edge()));
+        return wireBuilder.Wire();
       }
     }
 
-    // Approach 2: gp_Circ → BRepBuilderAPI_MakeEdge directly
+    // Fallback: gp_Circ → BRepBuilderAPI_MakeEdge
     const circ = cleanup.track(new oc.gp_Circ_2(axis, circle.radius));
-    for (let i = 1; i <= 35; i++) {
-      const ctor = oc[`BRepBuilderAPI_MakeEdge_${i}`];
-      if (typeof ctor !== 'function') continue;
-      try {
-        const eb = new ctor(circ);
-        if (eb && typeof eb.IsDone === 'function' && eb.IsDone()) {
-          cleanup.track(eb);
-          const wireBuilder = cleanup.track(new oc.BRepBuilderAPI_MakeWire_2(eb.Edge()));
-          // Circle wire created via gp_Circ
-          return wireBuilder.Wire();
-        }
-        eb.delete?.();
-      } catch { /* wrong overload */ }
+    const edgeCtor2 = findConstructorNumeric(oc, 'BRepBuilderAPI_MakeEdge', 35,
+      [[circ]], (eb) => typeof eb.IsDone === 'function' && eb.IsDone());
+    if (edgeCtor2) {
+      const eb = cleanup.track(new edgeCtor2(circ));
+      const wireBuilder = cleanup.track(new oc.BRepBuilderAPI_MakeWire_2(eb.Edge()));
+      return wireBuilder.Wire();
     }
   } catch (e) {
     console.warn('[OCCT] Exact circle construction failed, using polygon:', e);
@@ -198,43 +172,21 @@ function polygonToWire(
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function buildFace(oc: OC, outerWire: any, holeWires: any[], cleanup: OcctCleanup): any {
-  // BRepBuilderAPI_MakeFace(Wire, OnlyPlane) — find the right overload
-  // In OCCT, this is typically overload 15, but numbering can vary by build.
-  let faceBuilder = null;
-  for (let i = 1; i <= 25; i++) {
-    const ctor = oc[`BRepBuilderAPI_MakeFace_${i}`];
-    if (typeof ctor !== 'function') continue;
-    try {
-      const fb = new ctor(outerWire, true);
-      // Verify it actually produced something
-      if (fb && typeof fb.Face === 'function') {
-        faceBuilder = cleanup.track(fb);
-        break;
-      }
-      fb.delete?.();
-    } catch {
-      // Wrong overload, try next
-    }
-  }
+  // BRepBuilderAPI_MakeFace(Wire, OnlyPlane)
+  const makeFaceCtor = findConstructorNumeric(oc, 'BRepBuilderAPI_MakeFace', 25,
+    [[outerWire, true]], (fb) => typeof fb.Face === 'function');
 
-  if (!faceBuilder) {
+  if (!makeFaceCtor) {
     throw new Error('Could not find BRepBuilderAPI_MakeFace overload for (Wire, bool)');
   }
+
+  const faceBuilder = cleanup.track(new makeFaceCtor(outerWire, true));
 
   for (const hole of holeWires) {
     // Inner wire (hole) must have opposite orientation to the outer wire.
     // Reversed() returns a TopoDS_Shape — downcast back to TopoDS_Wire.
     const reversed = hole.Reversed();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let wire: any = reversed;
-    const td = oc.TopoDS;
-    if (typeof td?.Wire === 'function') {
-      try { wire = td.Wire(reversed); } catch { /* use original */ }
-    } else if (typeof td?.Wire_1 === 'function') {
-      try { wire = td.Wire_1(reversed); } catch { /* use original */ }
-    } else if (td?.prototype && typeof td.prototype.Wire === 'function') {
-      try { wire = td.prototype.Wire(reversed); } catch { /* use original */ }
-    }
+    const wire = castWire(oc, reversed);
     faceBuilder.Add(wire);
     if (typeof faceBuilder.Error === 'function') {
       const err = faceBuilder.Error();

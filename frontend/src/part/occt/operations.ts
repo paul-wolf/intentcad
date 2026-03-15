@@ -1,5 +1,6 @@
 import type { OC } from './init';
 import type { OcctCleanup } from './shapes';
+import { castFace, castEdge, castWire, brepTriangulation, findConstructor, findConstructorNumeric, findMethod } from './helpers';
 
 /**
  * Extrude a face along a direction by a distance.
@@ -22,7 +23,6 @@ export function extrudeShape(oc: OC, face: any, normal: [number, number, number]
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function extrudeShapeSymmetric(oc: OC, face: any, normal: [number, number, number], distance: number, cleanup: OcctCleanup): any {
-  // Translate face backward along normal
   const backVec = cleanup.track(new oc.gp_Vec_4(
     -normal[0] * distance,
     -normal[1] * distance,
@@ -33,7 +33,6 @@ export function extrudeShapeSymmetric(oc: OC, face: any, normal: [number, number
   const transformer = cleanup.track(new oc.BRepBuilderAPI_Transform_2(face, trsf, true));
   const movedFace = transformer.Shape();
 
-  // Extrude 2*distance forward
   const fwdVec = cleanup.track(new oc.gp_Vec_4(
     normal[0] * 2 * distance,
     normal[1] * 2 * distance,
@@ -45,8 +44,6 @@ export function extrudeShapeSymmetric(oc: OC, face: any, normal: [number, number
 
 /**
  * Revolve a face around an axis by a given angle (radians).
- * axisOrigin and axisDir define the revolution axis in 3D.
- * Returns a TopoDS_Shape.
  */
 export function revolveShape(
   oc: OC,
@@ -69,7 +66,6 @@ export function revolveShape(
 /** Boolean fuse (union) of two shapes. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function booleanFuse(oc: OC, s1: any, s2: any, cleanup: OcctCleanup): any {
-  // _1=default, _2=PaveFiller, _3=(S1,S2)
   const fuse = cleanup.track(new oc.BRepAlgoAPI_Fuse_3(s1, s2));
   return fuse.Shape();
 }
@@ -83,7 +79,6 @@ export function booleanCut(oc: OC, s1: any, s2: any, cleanup: OcctCleanup): any 
 
 /**
  * Compute the outward normal of a face using its triangulation.
- * The shape must be meshed (BRepMesh_IncrementalMesh) before calling this.
  */
 function getFaceNormal(
   oc: OC,
@@ -91,26 +86,14 @@ function getFaceNormal(
   faceShape: any,
   cleanup: OcctCleanup,
 ): [number, number, number] | null {
-  // Cast to TopoDS_Face for BRep_Tool::Triangulation
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let face: any = faceShape;
-  const td = oc.TopoDS;
-  if (typeof td?.Face === 'function') face = td.Face(faceShape);
-  else if (typeof td?.Face_1 === 'function') face = td.Face_1(faceShape);
-  else if (typeof td?.Face_2 === 'function') face = td.Face_2(faceShape);
-  else if (td?.prototype && typeof td.prototype.Face === 'function') face = td.prototype.Face(faceShape);
-  else if (td?.prototype && typeof td.prototype.Face_1 === 'function') face = td.prototype.Face_1(faceShape);
-
+  const face = castFace(oc, faceShape);
   const location = cleanup.track(new oc.TopLoc_Location_1());
-  const bt = oc.BRep_Tool;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let triangulation: any;
-  if (typeof bt?.Triangulation === 'function') {
-    triangulation = bt.Triangulation(face, location);
-  } else if (bt?.prototype && typeof bt.prototype.Triangulation === 'function') {
-    triangulation = bt.prototype.Triangulation(face, location);
-  } else {
+  try {
+    triangulation = brepTriangulation(oc, face, location);
+  } catch {
     return null;
   }
 
@@ -146,27 +129,18 @@ function getFaceNormal(
 
 /**
  * Unify co-planar faces and co-linear edges in a shape.
- * This is essential after boolean operations, which split faces along seam edges.
- * Without unification, MakeThickSolid often fails on boolean-fused geometry.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function unifyShape(oc: OC, shape: any, cleanup: OcctCleanup): any {
-  for (let i = 1; i <= 5; i++) {
-    const ctor = oc[`ShapeUpgrade_UnifySameDomain_${i}`];
-    if (typeof ctor !== 'function') continue;
-    try {
-      // Constructor: (shape, unifyEdges, unifyFaces, concatBSplines)
-      const u = new ctor(shape, true, true, false);
-      if (u && typeof u.Build === 'function') {
-        cleanup.track(u);
-        u.Build();
-        const result = u.Shape();
-        console.log('[OCCT] UnifySameDomain: success');
-        return result;
-      }
-      u.delete?.();
-    } catch { /* wrong overload */ }
+  const ctor = findConstructorNumeric(oc, 'ShapeUpgrade_UnifySameDomain', 5,
+    [[shape, true, true, false]], (u) => typeof u.Build === 'function');
+
+  if (ctor) {
+    const u = cleanup.track(new ctor(shape, true, true, false));
+    u.Build();
+    return u.Shape();
   }
+
   console.warn('[OCCT] UnifySameDomain: not available, using original shape');
   return shape;
 }
@@ -184,20 +158,17 @@ export function shellShape(
   cleanup: OcctCleanup,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): any {
-  // Unify co-planar faces split by boolean operations — critical for shell success
   const unified = unifyShape(oc, shape, cleanup);
 
-  // Mesh the shape so we can read face normals from triangulation
+  // Mesh so we can read face normals
   cleanup.track(new oc.BRepMesh_IncrementalMesh_2(unified, 0.1, false, 0.5, true));
 
-  // Normalize direction
   const dLen = Math.sqrt(
     faceDirection[0] ** 2 + faceDirection[1] ** 2 + faceDirection[2] ** 2,
   );
   if (dLen < 1e-10) throw new Error('Invalid face direction for shell');
   const dir: [number, number, number] = [faceDirection[0] / dLen, faceDirection[1] / dLen, faceDirection[2] / dLen];
 
-  // Collect faces to remove
   const facesToRemove = cleanup.track(new oc.TopTools_ListOfShape_1());
   let matchCount = 0;
   let faceCount = 0;
@@ -222,8 +193,6 @@ export function shellShape(
     explorer.Next();
   }
 
-  console.log(`[OCCT] Shell: ${faceCount} faces (after unify), ${matchCount} matching direction [${dir}]`);
-
   if (matchCount === 0) {
     throw new Error(`No faces found matching direction [${dir}] (checked ${faceCount} faces)`);
   }
@@ -236,7 +205,6 @@ export function shellShape(
   const joinArc = oc.GeomAbs_JoinType?.GeomAbs_Arc ?? 0;
   const joinIntersection = oc.GeomAbs_JoinType?.GeomAbs_Intersection ?? 2;
 
-  // Try combinations: [tol, join, intersection, selfInter, removeIntEdges]
   const attempts: [number, unknown, boolean, boolean, boolean][] = [
     [1e-3, joinArc, true, false, false],
     [1e-3, joinIntersection, true, false, false],
@@ -255,16 +223,11 @@ export function shellShape(
       );
 
       const done = typeof builder.IsDone === 'function' ? builder.IsDone() : true;
-      if (!done) {
-        console.warn(`[OCCT] Shell: tol=${tol} join=${join} — not done`);
-        continue;
-      }
+      if (!done) continue;
 
-      const result = builder.Shape();
-      console.log(`[OCCT] Shell: success with tol=${tol}`);
-      return result;
-    } catch (e) {
-      console.warn(`[OCCT] Shell: tol=${tol} join=${join} failed:`, e);
+      return builder.Shape();
+    } catch {
+      // Try next parameter combination
     }
   }
 
@@ -273,8 +236,6 @@ export function shellShape(
 
 /**
  * Apply fillets (rounded edges) to selected edges of a shape.
- * Constructor requires (shape, ChFi3d_FilletShape) — the WASM binding
- * does not handle the default arg, so we pass ChFi3d_Rational explicitly.
  */
 export function filletShape(
   oc: OC,
@@ -287,39 +248,28 @@ export function filletShape(
 ): any {
   if (edgeIndices.length === 0) throw new Error('No edges selected for fillet');
 
-  // Resolve ChFi3d_FilletShape.ChFi3d_Rational enum value
   const filletShapeEnum = oc.ChFi3d_FilletShape?.ChFi3d_Rational
     ?? oc.ChFi3d_Rational
     ?? 0;
 
-  // Create fillet maker — constructor requires (shape, filletShapeEnum)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let fillet: any = null;
-  for (const suffix of ['', '_1', '_2', '_3']) {
-    const ctor = oc[`BRepFilletAPI_MakeFillet${suffix}`];
-    if (typeof ctor !== 'function') continue;
+  // Try 2-arg (shape + enum), then 1-arg (shape)
+  const ctor = findConstructor(oc, 'BRepFilletAPI_MakeFillet', ['', '_1', '_2', '_3'],
+    [[shape, filletShapeEnum], [shape]],
+    (obj) => typeof obj.Add_2 === 'function' || typeof obj.Add_1 === 'function');
 
-    // Try 2-arg constructor (shape + enum) — required by WASM binding
+  if (ctor) {
+    // Instantiate with the 2-arg version first, fallback to 1-arg
     try {
-      const obj = new ctor(shape, filletShapeEnum);
-      if (obj && (typeof obj.Add_2 === 'function' || typeof obj.Add_1 === 'function')) {
-        fillet = cleanup.track(obj);
-        break;
-      }
-      obj.delete?.();
-    } catch { /* wrong overload */ }
-
-    // Fallback: try 1-arg constructor in case binding handles default arg
-    try {
-      const obj = new ctor(shape);
-      if (obj && (typeof obj.Add_2 === 'function' || typeof obj.Add_1 === 'function')) {
-        fillet = cleanup.track(obj);
-        break;
-      }
-      obj.delete?.();
-    } catch { /* wrong overload */ }
+      fillet = cleanup.track(new ctor(shape, filletShapeEnum));
+    } catch {
+      fillet = cleanup.track(new ctor(shape));
+    }
   }
   if (!fillet) throw new Error('BRepFilletAPI_MakeFillet not available');
+
+  const addMethod = findMethod(fillet, ['Add_2', 'Add_1', 'Add']);
 
   const edgeSet = new Set(edgeIndices);
   let edgeIndex = 0;
@@ -332,31 +282,13 @@ export function filletShape(
 
   while (explorer.More()) {
     if (edgeSet.has(edgeIndex)) {
-      const currentShape = explorer.Current();
-      // Cast to TopoDS_Edge
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let edge: any;
-      const td = oc.TopoDS;
-      if (typeof td?.Edge === 'function') edge = td.Edge(currentShape);
-      else if (typeof td?.Edge_1 === 'function') edge = td.Edge_1(currentShape);
-      else if (typeof td?.Edge_2 === 'function') edge = td.Edge_2(currentShape);
-      else if (td?.prototype && typeof td.prototype.Edge === 'function') edge = td.prototype.Edge(currentShape);
-      else if (td?.prototype && typeof td.prototype.Edge_1 === 'function') edge = td.prototype.Edge_1(currentShape);
-      else edge = currentShape;
-
-      // Add_2(radius, edge) — constant radius fillet
-      let added = false;
-      for (const fn of ['Add_2', 'Add_1', 'Add']) {
-        if (typeof fillet[fn] === 'function') {
-          try {
-            fillet[fn](radius, edge);
-            added = true;
-            break;
-          } catch { /* wrong overload */ }
+      const edge = castEdge(oc, explorer.Current());
+      if (addMethod) {
+        try {
+          fillet[addMethod](radius, edge);
+        } catch {
+          console.warn(`[OCCT] Fillet: could not add edge index ${edgeIndex}`);
         }
-      }
-      if (!added) {
-        console.warn(`[OCCT] Fillet: could not add edge index ${edgeIndex}`);
       }
     }
     edgeIndex++;
@@ -372,7 +304,6 @@ export function filletShape(
 
 /**
  * Apply chamfers (flat bevels) to selected edges of a shape.
- * Uses symmetric chamfer: Add(distance, edge) — no face reference needed.
  */
 export function chamferShape(
   oc: OC,
@@ -385,20 +316,15 @@ export function chamferShape(
 ): any {
   if (edgeIndices.length === 0) throw new Error('No edges selected for chamfer');
 
-  // Create chamfer maker
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let chamfer: any = null;
-  for (const suffix of ['_1', '_2', '_3', '_4', '_5', '']) {
-    const ctor = oc[`BRepFilletAPI_MakeChamfer${suffix}`];
-    if (typeof ctor === 'function') {
-      try {
-        chamfer = cleanup.track(new ctor(shape));
-        if (chamfer && (typeof chamfer.Add === 'function' || typeof chamfer.Add_1 === 'function')) break;
-        chamfer = null;
-      } catch { chamfer = null; }
-    }
-  }
-  if (!chamfer) throw new Error('BRepFilletAPI_MakeChamfer not available');
+  const ctor = findConstructor(oc, 'BRepFilletAPI_MakeChamfer',
+    ['_1', '_2', '_3', '_4', '_5', ''],
+    [[shape]],
+    (obj) => typeof obj.Add === 'function' || typeof obj.Add_1 === 'function');
+
+  if (!ctor) throw new Error('BRepFilletAPI_MakeChamfer not available');
+  const chamfer = cleanup.track(new ctor(shape));
+
+  const addMethod = findMethod(chamfer, ['Add_2', 'Add_1', 'Add']);
 
   const edgeSet = new Set(edgeIndices);
   let edgeIndex = 0;
@@ -411,31 +337,13 @@ export function chamferShape(
 
   while (explorer.More()) {
     if (edgeSet.has(edgeIndex)) {
-      const currentShape = explorer.Current();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let edge: any;
-      const td = oc.TopoDS;
-      if (typeof td?.Edge === 'function') edge = td.Edge(currentShape);
-      else if (typeof td?.Edge_1 === 'function') edge = td.Edge_1(currentShape);
-      else if (typeof td?.Edge_2 === 'function') edge = td.Edge_2(currentShape);
-      else if (td?.prototype && typeof td.prototype.Edge === 'function') edge = td.prototype.Edge(currentShape);
-      else if (td?.prototype && typeof td.prototype.Edge_1 === 'function') edge = td.prototype.Edge_1(currentShape);
-      else edge = currentShape;
-
-      // Symmetric chamfer: Add(distance, edge) — overload order in OCCT bindings:
-      // Add_1 = Add(edge), Add_2 = Add(dist, edge), Add_3 = Add(dist1, dist2, edge, face)
-      let added = false;
-      for (const fn of ['Add_2', 'Add_1', 'Add']) {
-        if (typeof chamfer[fn] === 'function') {
-          try {
-            chamfer[fn](distance, edge);
-            added = true;
-            break;
-          } catch { /* wrong overload */ }
+      const edge = castEdge(oc, explorer.Current());
+      if (addMethod) {
+        try {
+          chamfer[addMethod](distance, edge);
+        } catch {
+          console.warn(`[OCCT] Chamfer: could not add edge index ${edgeIndex}`);
         }
-      }
-      if (!added) {
-        console.warn(`[OCCT] Chamfer: could not add edge index ${edgeIndex}`);
       }
     }
     edgeIndex++;
@@ -451,80 +359,38 @@ export function chamferShape(
 
 /**
  * Loft through a series of wires to create a solid.
- * Uses BRepOffsetAPI_ThruSections (isSolid, ruled, pres3d).
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function loftShape(oc: OC, wires: any[], isSolid: boolean, cleanup: OcctCleanup): any {
   if (wires.length < 2) throw new Error('Loft requires at least 2 wires');
 
-  // Try to find the ThruSections constructor — WASM bindings may use different suffixes
+  const ctor = findConstructor(oc, 'BRepOffsetAPI_ThruSections',
+    ['_1', '_2', '_3', '_4', '_5', ''],
+    [[isSolid, false, 1e-6], [isSolid, false], [isSolid]],
+    (obj) => typeof obj.AddWire === 'function' || typeof obj.AddWire_1 === 'function');
+
+  if (!ctor) throw new Error('BRepOffsetAPI_ThruSections not available');
+
+  // Instantiate — try 3-arg, 2-arg, 1-arg
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let thru: any = null;
-  for (const suffix of ['_1', '_2', '_3', '_4', '_5', '']) {
-    const ctor = oc[`BRepOffsetAPI_ThruSections${suffix}`];
-    if (typeof ctor !== 'function') continue;
-    // Try 3-arg constructor: (isSolid, ruled, pres3d)
-    try {
-      const obj = new ctor(isSolid, false, 1e-6);
-      if (obj && typeof obj.AddWire === 'function' || typeof obj.AddWire_1 === 'function') {
-        thru = cleanup.track(obj);
-        break;
-      }
-      obj.delete?.();
-    } catch { /* wrong overload */ }
-    // Try 2-arg constructor: (isSolid, ruled)
-    try {
-      const obj = new ctor(isSolid, false);
-      if (obj && (typeof obj.AddWire === 'function' || typeof obj.AddWire_1 === 'function')) {
-        thru = cleanup.track(obj);
-        break;
-      }
-      obj.delete?.();
-    } catch { /* wrong overload */ }
-    // Try 1-arg constructor: (isSolid)
-    try {
-      const obj = new ctor(isSolid);
-      if (obj && (typeof obj.AddWire === 'function' || typeof obj.AddWire_1 === 'function')) {
-        thru = cleanup.track(obj);
-        break;
-      }
-      obj.delete?.();
-    } catch { /* wrong overload */ }
+  try { thru = cleanup.track(new ctor(isSolid, false, 1e-6)); } catch {
+    try { thru = cleanup.track(new ctor(isSolid, false)); } catch {
+      thru = cleanup.track(new ctor(isSolid));
+    }
   }
 
-  if (!thru) throw new Error('BRepOffsetAPI_ThruSections not available in this OCCT build');
+  const addWireMethod = findMethod(thru, ['AddWire', 'AddWire_1', 'AddWire_2']);
+  if (!addWireMethod) throw new Error('ThruSections.AddWire not available');
 
-  // Add wires — try AddWire then AddWire_1
   for (const wire of wires) {
-    let added = false;
-    // Cast to TopoDS_Wire if needed
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let w: any = wire;
-    const td = oc.TopoDS;
-    if (typeof td?.Wire === 'function') {
-      try { w = td.Wire(wire); } catch { /* use original */ }
-    } else if (typeof td?.Wire_1 === 'function') {
-      try { w = td.Wire_1(wire); } catch { /* use original */ }
-    } else if (td?.prototype && typeof td.prototype.Wire === 'function') {
-      try { w = td.prototype.Wire(wire); } catch { /* use original */ }
-    }
-
-    for (const fn of ['AddWire', 'AddWire_1', 'AddWire_2']) {
-      if (typeof thru[fn] === 'function') {
-        try {
-          thru[fn](w);
-          added = true;
-          break;
-        } catch { /* wrong overload */ }
-      }
-    }
-    if (!added) throw new Error('ThruSections.AddWire failed');
+    const w = castWire(oc, wire);
+    thru[addWireMethod](w);
   }
 
   thru.Build();
   const done = typeof thru.IsDone === 'function' ? thru.IsDone() : true;
   if (!done) throw new Error('ThruSections Build() did not complete');
 
-  console.log(`[OCCT] Loft: success with ${wires.length} sections`);
   return thru.Shape();
 }
