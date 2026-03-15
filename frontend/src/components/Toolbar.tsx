@@ -10,7 +10,7 @@ import { exportDocumentToPdf } from '@/export/pdf';
 import { downloadTextFile, downloadBlob } from '@/export/download';
 import { getEntityPoint, getEntityPoints } from '@/utils/entityPoints';
 import { getSegmentCount } from '@/utils/lineSegments';
-import { requestSave, getBackendId } from '@/api/autoSave';
+import { requestSave, getBackendId, flushSaveAsync } from '@/api/autoSave';
 import { addLog } from '@/stores/logStore';
 import { api, partApi } from '@/api/client';
 import type { ToolType } from '@/types/editor';
@@ -217,6 +217,9 @@ export function Toolbar() {
             const backendId = getBackendId();
             if (!backendId) return;
             try {
+              // Ensure latest sketch data is saved before creating the part
+              requestSave();
+              await flushSaveAsync();
               // Fetch document to get its project_id for inheritance
               const docData = await api.getDocument(backendId);
               const saved = await partApi.createPart(doc.name + ' Part', {

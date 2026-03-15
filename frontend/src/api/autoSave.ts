@@ -76,6 +76,27 @@ export function flushSave() {
   }
 }
 
+/** Flush any pending save and return a promise that resolves when it completes. */
+export async function flushSaveAsync(): Promise<void> {
+  if (timer) {
+    clearTimeout(timer);
+    timer = null;
+  }
+  if (pendingId && pendingDoc) {
+    const id = pendingId;
+    const doc = pendingDoc;
+    const history = pendingHistory;
+    pendingId = null;
+    pendingDoc = null;
+    pendingHistory = null;
+    await api.updateDocument(id, {
+      name: (doc as { name: string }).name,
+      data: doc,
+      history: history ?? undefined,
+    });
+  }
+}
+
 function scheduleSave(doc: Record<string, unknown>, history?: unknown) {
   if (!backendId) return;
   pendingId = backendId;
