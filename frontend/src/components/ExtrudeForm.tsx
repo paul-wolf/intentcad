@@ -88,13 +88,14 @@ interface ExtrudeFormProps {
   documentId: string;
   initial?: ExtrudeFeature;
   defaultSketchId?: string;
+  defaultPlane?: Plane;
   sketchDoc?: Document;
   onSubmit: (feature: ExtrudeFeature) => void;
   onCancel: () => void;
   onChange?: (feature: ExtrudeFeature) => void;
 }
 
-export const ExtrudeForm = forwardRef<ExtrudeFormHandle, ExtrudeFormProps>(function ExtrudeForm({ documentId, initial, defaultSketchId, sketchDoc: externalSketchDoc, onSubmit, onCancel, onChange }, ref) {
+export const ExtrudeForm = forwardRef<ExtrudeFormHandle, ExtrudeFormProps>(function ExtrudeForm({ documentId, initial, defaultSketchId, defaultPlane, sketchDoc: externalSketchDoc, onSubmit, onCancel, onChange }, ref) {
   const palette = useThemeStore((s) => s.palette);
 
   const [internalSketchDoc, setInternalSketchDoc] = useState<Document | null>(null);
@@ -104,7 +105,7 @@ export const ExtrudeForm = forwardRef<ExtrudeFormHandle, ExtrudeFormProps>(funct
   const [direction, setDirection] = useState<ExtrudeDirection>(initial?.direction ?? 'forward');
   const [operation, setOperation] = useState<'add' | 'remove'>(initial?.operation ?? 'add');
 
-  const [customPlane, setCustomPlane] = useState<Plane | null>(null);
+  const [customPlane, setCustomPlane] = useState<Plane | null>(defaultPlane ?? null);
 
   // Stable ID ref for new features
   const featureIdRef = useRef(initial?.id ?? crypto.randomUUID());
@@ -129,8 +130,9 @@ export const ExtrudeForm = forwardRef<ExtrudeFormHandle, ExtrudeFormProps>(funct
   // Plane controls
   const presetNames = Object.keys(PLANE_PRESETS);
   const [planePreset, setPlanePreset] = useState(() => {
-    if (!initial) return presetNames[0]!;
-    return closestPreset(initial.plane.normal, PLANE_PRESETS);
+    if (initial) return closestPreset(initial.plane.normal, PLANE_PRESETS);
+    if (defaultPlane) return 'Face';
+    return presetNames[0]!;
   });
 
   // Recover spin/tilt from stored plane

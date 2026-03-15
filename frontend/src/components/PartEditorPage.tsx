@@ -95,6 +95,10 @@ export function PartEditorPage() {
   // Load part from backend
   useEffect(() => {
     if (!id) return;
+    clearDraft();
+    viewportRef.current?.setMeshes([]);
+    viewportRef.current?.clearPreview();
+    viewportRef.current?.setSketchPlaneOverlays([]);
     setPart({ id, name: '', documentId: '', features: [] });
     partApi.getPart(id).then((full) => {
       const data = full.data as unknown as Part;
@@ -930,7 +934,8 @@ export function PartEditorPage() {
               ref={extrudeFormRef}
               documentId={part.documentId}
               initial={initial?.type === 'extrude' ? initial : undefined}
-              defaultSketchId={rolodexSketchIdRef.current}
+              defaultSketchId={(!editingExistingId && (draftFeature as ExtrudeFeature).sketchId) || rolodexSketchIdRef.current}
+              defaultPlane={!editingExistingId && (draftFeature as ExtrudeFeature).plane !== DEFAULT_XY_PLANE ? (draftFeature as ExtrudeFeature).plane : undefined}
               sketchDoc={draftSketchDoc ?? undefined}
               onSubmit={(f) => handleSubmit(f)}
               onCancel={handleCancel}
@@ -943,7 +948,7 @@ export function PartEditorPage() {
               ref={revolveFormRef}
               documentId={part.documentId}
               initial={initial?.type === 'revolve' ? initial : undefined}
-              defaultSketchId={rolodexSketchIdRef.current}
+              defaultSketchId={(!editingExistingId && (draftFeature as RevolveFeature).sketchId) || rolodexSketchIdRef.current}
               sketchDoc={draftSketchDoc ?? undefined}
               onSubmit={(f) => handleSubmit(f)}
               onCancel={handleCancel}

@@ -222,13 +222,22 @@ export function buildFace(oc: OC, outerWire: any, holeWires: any[], cleanup: Occ
   }
 
   for (const hole of holeWires) {
-    // BRepBuilderAPI_MakeFace::Add() handles hole wire orientation internally —
-    // do NOT reverse the wire, as that causes OCCT to treat it as a second
-    // outer boundary instead of a hole.
-    faceBuilder.Add(hole);
+    // Inner wire (hole) must have opposite orientation to the outer wire.
+    // Reversed() returns a TopoDS_Shape — downcast back to TopoDS_Wire.
+    const reversed = hole.Reversed();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let wire: any = reversed;
+    const td = oc.TopoDS;
+    if (typeof td?.Wire === 'function') {
+      try { wire = td.Wire(reversed); } catch { /* use original */ }
+    } else if (typeof td?.Wire_1 === 'function') {
+      try { wire = td.Wire_1(reversed); } catch { /* use original */ }
+    } else if (td?.prototype && typeof td.prototype.Wire === 'function') {
+      try { wire = td.prototype.Wire(reversed); } catch { /* use original */ }
+    }
+    faceBuilder.Add(wire);
     if (typeof faceBuilder.Error === 'function') {
       const err = faceBuilder.Error();
-      // Error value 0 = BRepBuilderAPI_FaceDone (success)
       if (err && err.value !== undefined && err.value !== 0) {
         console.warn(`[OCCT] buildFace: Add hole wire error code=${err.value}`);
       }
