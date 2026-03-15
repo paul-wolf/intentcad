@@ -179,7 +179,23 @@ export const ExtrudeForm = forwardRef<ExtrudeFormHandle, ExtrudeFormProps>(funct
     }
   }, [sketchDoc, selectedSketchId]);
 
+  // If the selected sketch has a plane hint and no custom/initial plane is set, use it
+  const sketchPlaneAppliedRef = useRef<string | null>(null);
   const sketch = sketchDoc?.sketches.find((s) => s.id === selectedSketchId);
+  useEffect(() => {
+    if (!sketch?.plane || initial || customPlane) return;
+    // Only auto-apply once per sketch
+    if (sketchPlaneAppliedRef.current === selectedSketchId) return;
+    sketchPlaneAppliedRef.current = selectedSketchId;
+    setCustomPlane(sketch.plane);
+    setPlanePreset('Face');
+    setSpin(0);
+    setTilt(0);
+    setPlaneOffset(0);
+    setOriginX(0);
+    setOriginY(0);
+  }, [selectedSketchId, sketch?.plane]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const hasExtrudable = sketch ? getExtrudableEntities(sketch).length > 0 : false;
 
   const canSubmit = selectedSketchId && hasExtrudable && distance > 0;

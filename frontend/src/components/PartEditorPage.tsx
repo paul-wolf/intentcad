@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { usePartStore } from '@/stores/partStore';
 import { usePartEditorStore } from '@/stores/partEditorStore';
 import { useThemeStore } from '@/theme';
@@ -23,6 +23,10 @@ import { LoftForm, type LoftFormHandle } from './LoftForm';
 import type { Part, Feature, ExtrudeFeature, RevolveFeature, FilletFeature, ChamferFeature, LoftFeature, Plane } from '@/types/part';
 import { DEFAULT_XY_PLANE, planeWithOffset } from '@/types/part';
 import type { Document } from '@/types/document';
+import { useDocumentStore } from '@/stores/documentStore';
+import { migrateDocument } from '@/utils/document';
+import { generateId } from '@/utils/id';
+import type { LineEntity } from '@/types/document';
 
 function computeXAxis(normal: [number, number, number]): [number, number, number] {
   const ref: [number, number, number] = Math.abs(normal[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
@@ -55,6 +59,7 @@ function collectDocIds(features: Feature[]): string[] {
 
 export function PartEditorPage() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const part = usePartStore((s) => s.part);
   const setPart = usePartStore((s) => s.setPart);
   const beginTransaction = usePartStore((s) => s.beginTransaction);
@@ -75,6 +80,7 @@ export function PartEditorPage() {
 
   const [selectedEdges, setSelectedEdges] = useState<number[]>([]);
   const [activeLoftSection, setActiveLoftSection] = useState(1);
+  const [sketchOnFacePending, setSketchOnFacePending] = useState(false);
   const edgeDataRef = useRef<EdgeData | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -114,6 +120,133 @@ export function PartEditorPage() {
     const cleanup = startPartAutoSave();
     return cleanup;
   }, []);
+
+  // On mount: check sessionStorage for sketchOnFace intent → auto-start extrude
+  useEffect(() => {
+    const raw = sessionStorage.getItem('sketchOnFace_intent');
+    if (!raw) return;
+    try {
+      const intent = JSON.parse(raw) as { returnToPartId: string; sketchId: string; plane: Plane; sketchDocumentId: string };
+      sessionStorage.removeItem('sketchOnFace_intent');
+      // Wait for part to be loaded before starting the extrude draft
+      const unsub = usePartStore.subscribe((state) => {
+        if (!state.part.documentId) return;
+        unsub();
+        startCreating({
+          id: crypto.randomUUID(),
+          type: 'extrude',
+          sketchDocumentId: intent.sketchDocumentId,
+          sketchId: intent.sketchId,
+          plane: intent.plane,
+          distance: 20,
+          direction: 'forward',
+          operation: 'add',
+        });
+      });
+      // Check if already loaded
+      if (usePartStore.getState().part.documentId) {
+        unsub();
+        startCreating({
+          id: crypto.randomUUID(),
+          type: 'extrude',
+          sketchDocumentId: intent.sketchDocumentId,
+          sketchId: intent.sketchId,
+          plane: intent.plane,
+          distance: 20,
+          direction: 'forward',
+          operation: 'add',
+        });
+      }
+    } catch {
+      sessionStorage.removeItem('sketchOnFace_intent');
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Enable face picking for "Sketch on Face" mode
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp || !sketchOnFacePending) return;
+
+    vp.enableFacePicking(async (info) => {
+      setSketchOnFacePending(false);
+      vp.disableFacePicking();
+
+      const normal: [number, number, number] = [info.normal.x, info.normal.y, info.normal.z];
+      const hitPoint = info.point;
+      const xAxis = computeXAxis(normal);
+      const depth = hitPoint.x * normal[0] + hitPoint.y * normal[1] + hitPoint.z * normal[2];
+      const origin: [number, number, number] = [normal[0] * depth, normal[1] * depth, normal[2] * depth];
+      const plane: Plane = { origin, normal, xAxis };
+
+      // Compute yAxis = xAxis × normal (matches screen-Y-down convention in 2D sketch editor)
+      const yAxis: [number, number, number] = [
+        xAxis[1] * normal[2] - xAxis[2] * normal[1],
+        xAxis[2] * normal[0] - xAxis[0] * normal[2],
+        xAxis[0] * normal[1] - xAxis[1] * normal[0],
+      ];
+
+      // Project 3D boundary loops onto the 2D sketch plane as construction lines
+      const constructionEntities: LineEntity[] = [];
+      for (const loop of info.boundaryLoops) {
+        if (loop.length < 2) continue;
+        const points = loop.map((pt) => {
+          const dx = pt[0] - origin[0];
+          const dy = pt[1] - origin[1];
+          const dz = pt[2] - origin[2];
+          return {
+            x: dx * xAxis[0] + dy * xAxis[1] + dz * xAxis[2],
+            y: dx * yAxis[0] + dy * yAxis[1] + dz * yAxis[2],
+          };
+        });
+        constructionEntities.push({
+          id: generateId('ln'),
+          type: 'line',
+          points,
+          construction: true,
+        });
+      }
+
+      const currentPart = usePartStore.getState().part;
+      const docId = currentPart.documentId;
+      if (!docId) return;
+
+      try {
+        // Load the document into documentStore
+        const full = await api.getDocument(docId);
+        const doc = migrateDocument(full.data as unknown as Document);
+        useDocumentStore.getState().setDocument(doc);
+
+        // Create a new sketch with the face plane
+        const sketchName = `Face Sketch ${doc.sketches.length + 1}`;
+        const sketchId = useDocumentStore.getState().addSketch(sketchName, plane);
+
+        // Add face boundary as construction geometry
+        const docStore = useDocumentStore.getState();
+        for (const entity of constructionEntities) {
+          docStore.addEntity(entity);
+        }
+
+        // Save back to backend
+        const updatedDoc = useDocumentStore.getState().document;
+        await api.updateDocument(docId, { name: updatedDoc.name, data: updatedDoc as unknown as Record<string, unknown> });
+
+        // Write intent to sessionStorage
+        sessionStorage.setItem('sketchOnFace_intent', JSON.stringify({
+          returnToPartId: currentPart.id,
+          sketchId,
+          plane,
+          sketchDocumentId: docId,
+        }));
+
+        // Navigate to the 2D sketch editor
+        navigate(`/edit/${docId}`);
+      } catch (err) {
+        console.error('Sketch on face failed:', err);
+      }
+    });
+
+    return () => vp.disableFacePicking();
+  }, [sketchOnFacePending, navigate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Initialize Three.js viewport
   useEffect(() => {
@@ -351,6 +484,7 @@ export function PartEditorPage() {
     const features = part.features;
     if (features.length === 0) {
       viewportRef.current?.setMeshes([]);
+      viewportRef.current?.setSketchPlaneOverlays([]);
       return;
     }
 
@@ -361,11 +495,41 @@ export function PartEditorPage() {
         const meshes = await evaluateFeatures(features, docMap);
         // Only apply if we're still not drafting
         if (!usePartEditorStore.getState().draftFeature) {
-          viewportRef.current?.setMeshes(meshes.map((m) => m.geometry));
+          const vp = viewportRef.current;
+          const latestEdgeData = meshes.length > 0 ? meshes[0]!.edgeData : null;
+          vp?.setMeshes(meshes.map((m) => m.geometry), latestEdgeData);
           // Capture edge data for edge picking
-          if (meshes.length > 0 && meshes[0]!.edgeData) {
-            edgeDataRef.current = meshes[0]!.edgeData;
+          if (latestEdgeData) {
+            edgeDataRef.current = latestEdgeData;
           }
+          // Build persistent sketch plane overlays for all sketch-based features
+          // Build persistent sketch plane overlays for all sketch-based features
+          const overlays: Parameters<PartViewport['setSketchPlaneOverlays']>[0] = [];
+          const addOverlay = (sketchDocId: string, sketchId: string, plane: Plane) => {
+            const doc = docMap.get(sketchDocId);
+            if (!doc) return;
+            const sketch = doc.sketches.find((s) => s.id === sketchId);
+            if (!sketch) return;
+            const ov = buildSketchOverlay(sketch, plane);
+            overlays.push({
+              linePositions: ov.linePositions,
+              center: ov.planeCenter,
+              normal: ov.planeNormal,
+              xAxis: ov.planeXAxis,
+              size: ov.planeSize,
+            });
+          };
+          for (const f of features) {
+            if (f.type === 'loft') {
+              for (const sec of (f as LoftFeature).sections) {
+                addOverlay(sec.sketchDocumentId, sec.sketchId, sec.plane);
+              }
+            } else if ('plane' in f && 'sketchDocumentId' in f) {
+              const sf = f as ExtrudeFeature | RevolveFeature;
+              addOverlay(sf.sketchDocumentId, sf.sketchId, sf.plane);
+            }
+          }
+          vp?.setSketchPlaneOverlays(overlays);
         }
       })
       .catch((err) => {
@@ -539,8 +703,9 @@ export function PartEditorPage() {
       }
 
       // Hide committed meshes, show preview
+      const previewEdgeData = meshes.length > 0 ? meshes[0]!.edgeData : null;
       vp.setMeshes([]);
-      vp.setPreviewMesh(meshes.length > 0 ? meshes[0]!.geometry : null);
+      vp.setPreviewMesh(meshes.length > 0 ? meshes[0]!.geometry : null, previewEdgeData);
 
       // Position extrude arrow gizmo
       if (draft.type === 'extrude') {
@@ -654,6 +819,10 @@ export function PartEditorPage() {
       operation: 'add',
     });
   }, [startCreating]);
+
+  const handleSketchOnFace = useCallback(() => {
+    setSketchOnFacePending(true);
+  }, []);
 
   const handleEditFeature = useCallback((feature: Feature) => {
     if (feature.type === 'fillet' || feature.type === 'chamfer') {
@@ -841,7 +1010,7 @@ export function PartEditorPage() {
         color: palette.text,
       }}
     >
-      <PartToolbar onAddExtrude={handleAddExtrude} onAddRevolve={handleAddRevolve} onAddShell={handleAddShell} onAddFillet={handleAddFillet} onAddChamfer={handleAddChamfer} onAddLoft={handleAddLoft} onExportSTL={handleExportSTL} onExportSTEP={handleExportSTEP} />
+      <PartToolbar onAddExtrude={handleAddExtrude} onAddRevolve={handleAddRevolve} onAddShell={handleAddShell} onAddFillet={handleAddFillet} onAddChamfer={handleAddChamfer} onAddLoft={handleAddLoft} onSketchOnFace={handleSketchOnFace} onExportSTL={handleExportSTL} onExportSTEP={handleExportSTEP} />
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative' }}>
         <div

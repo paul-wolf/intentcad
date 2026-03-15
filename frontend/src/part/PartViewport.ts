@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import type { EdgeData } from './occt/tessellate';
 
 export interface DragInteractionCallbacks {
@@ -57,8 +58,10 @@ export class PartViewport {
   private meshGroup: THREE.Group;
   private previewGroup: THREE.Group;
   private sketchOverlayGroup: THREE.Group;
+  private sketchPlanesGroup: THREE.Group;
   private gizmoGroup: THREE.Group;
   private planeGizmoGroup: THREE.Group;
+  private outlineGroup: THREE.Group;
   private faceHighlightGroup: THREE.Group;
   private raycaster = new THREE.Raycaster();
   private dragCallbacks: DragInteractionCallbacks | null = null;
@@ -91,7 +94,7 @@ export class PartViewport {
   private boundPointerMove: ((e: PointerEvent) => void) | null = null;
   private boundPointerDown: ((e: PointerEvent) => void) | null = null;
   private boundPointerUp: ((e: PointerEvent) => void) | null = null;
-  private facePickCallback: ((info: { point: THREE.Vector3; normal: THREE.Vector3 }) => void) | null = null;
+  private facePickCallback: ((info: { point: THREE.Vector3; normal: THREE.Vector3; boundaryLoops: [number, number, number][][] }) => void) | null = null;
   private facePickDownPos: { x: number; y: number } | null = null;
   private highlightedFaceId: number | null = null;
   private edgeWireframeGroup: THREE.Group;
@@ -101,6 +104,7 @@ export class PartViewport {
   private edgePickDownPos: { x: number; y: number } | null = null;
   private highlightedEdgeIndex: number | null = null;
   private edgeRanges: EdgeData['edgeRanges'] = [];
+  private outlineEdgeRanges: EdgeData['edgeRanges'] = [];
 
   constructor(opts: PartViewportOptions) {
     const { container } = opts;
@@ -108,6 +112,8 @@ export class PartViewport {
     // Renderer
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(window.devicePixelRatio);
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
     container.appendChild(this.renderer.domElement);
 
     // Scene
@@ -126,13 +132,21 @@ export class PartViewport {
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.1;
 
-    // Lights
-    const ambient = new THREE.AmbientLight(0xffffff, 0.6);
-    this.scene.add(ambient);
+    // Environment map — neutral studio lighting for per-face shading variation
+    const pmremGenerator = new THREE.PMREMGenerator(this.renderer);
+    pmremGenerator.compileEquirectangularShader();
+    const envScene = new RoomEnvironment();
+    this.scene.environment = pmremGenerator.fromScene(envScene).texture;
+    pmremGenerator.dispose();
 
-    const directional = new THREE.DirectionalLight(0xffffff, 0.8);
-    directional.position.set(50, 100, 50);
-    this.scene.add(directional);
+    // Lights — supplement the environment map with directional lights for stronger shadows
+    const keyLight = new THREE.DirectionalLight(0xffffff, 1.0);
+    keyLight.position.set(50, 80, 70);
+    this.scene.add(keyLight);
+
+    const fillLight = new THREE.DirectionalLight(0xc8d6e5, 0.3);
+    fillLight.position.set(-60, -30, 40);
+    this.scene.add(fillLight);
 
     // Grid on XY plane (rotated from default XZ)
     const grid = new THREE.GridHelper(200, 20, 0x334155, 0x1e293b);
@@ -151,9 +165,18 @@ export class PartViewport {
     this.previewGroup = new THREE.Group();
     this.scene.add(this.previewGroup);
 
-    // Sketch overlay group (3D sketch lines + plane quad)
+    // Edge outline group (always-visible wireframe-on-shaded lines)
+    this.outlineGroup = new THREE.Group();
+    this.outlineGroup.renderOrder = 1;
+    this.scene.add(this.outlineGroup);
+
+    // Sketch overlay group (3D sketch lines + plane quad — active/selected feature)
     this.sketchOverlayGroup = new THREE.Group();
     this.scene.add(this.sketchOverlayGroup);
+
+    // Persistent sketch plane overlays for all committed features
+    this.sketchPlanesGroup = new THREE.Group();
+    this.scene.add(this.sketchPlanesGroup);
 
     // Gizmo group (arrow handle for extrude drag)
     this.gizmoGroup = new THREE.Group();
@@ -196,7 +219,7 @@ export class PartViewport {
     this.scene.background = new THREE.Color(color);
   }
 
-  setMeshes(geometries: THREE.BufferGeometry[]) {
+  setMeshes(geometries: THREE.BufferGeometry[], edgeData?: EdgeData | null) {
     // Clear existing meshes
     while (this.meshGroup.children.length > 0) {
       const child = this.meshGroup.children[0]!;
@@ -209,35 +232,82 @@ export class PartViewport {
       }
     }
 
-    // Add new meshes
+    // Add new meshes — neutral gray material similar to Fusion 360
     const material = new THREE.MeshStandardMaterial({
-      color: 0x60a5fa,
-      metalness: 0.2,
-      roughness: 0.7,
+      color: 0x8c9bab,
+      metalness: 0.15,
+      roughness: 0.45,
       side: THREE.DoubleSide,
+      envMapIntensity: 0.8,
     });
 
     for (const geometry of geometries) {
       const mesh = new THREE.Mesh(geometry, material.clone());
       this.meshGroup.add(mesh);
     }
+
+    // Update edge outlines
+    this.setOutlineEdges(edgeData ?? null);
   }
 
-  setPreviewMesh(geometry: THREE.BufferGeometry | null) {
+  setPreviewMesh(geometry: THREE.BufferGeometry | null, edgeData?: EdgeData | null) {
     this.clearGroup(this.previewGroup);
-    if (!geometry) return;
+    if (!geometry) {
+      this.setOutlineEdges(null);
+      return;
+    }
 
     const material = new THREE.MeshStandardMaterial({
-      color: 0x60a5fa,
-      metalness: 0.2,
-      roughness: 0.7,
+      color: 0x8c9bab,
+      metalness: 0.15,
+      roughness: 0.45,
       side: THREE.DoubleSide,
+      envMapIntensity: 0.8,
       transparent: true,
       opacity: 0.85,
       depthWrite: false,
     });
     const mesh = new THREE.Mesh(geometry, material);
     this.previewGroup.add(mesh);
+
+    // Show edge outlines on preview too
+    if (edgeData) this.setOutlineEdges(edgeData);
+  }
+
+  private setOutlineEdges(edgeData: EdgeData | null) {
+    this.clearGroup(this.outlineGroup);
+    this.outlineEdgeRanges = [];
+    // Only clear edge highlight if no explicit edge pick wireframe is active
+    if (this.edgeWireframeGroup.children.length === 0) {
+      this.clearEdgeHighlight();
+    }
+    if (!edgeData || edgeData.positions.length === 0) return;
+
+    this.outlineEdgeRanges = edgeData.edgeRanges;
+    // Use fat lines for crisp, resolution-independent edge rendering
+    const container = this.renderer.domElement.parentElement;
+    const w = container?.clientWidth ?? 1;
+    const h = container?.clientHeight ?? 1;
+    const edgeGeo = new LineSegmentsGeometry();
+    edgeGeo.setPositions(Array.from(edgeData.positions));
+    const edgeMat = new LineMaterial({
+      color: 0x2d3748,
+      linewidth: 1.5,
+      resolution: new THREE.Vector2(w, h),
+    });
+    const lines = new LineSegments2(edgeGeo, edgeMat);
+    lines.computeLineDistances();
+    this.outlineGroup.add(lines);
+
+    // Also add a thin THREE.LineSegments for raycasting (LineSegments2 doesn't support it)
+    const raycastGeo = new THREE.BufferGeometry();
+    raycastGeo.setAttribute('position', new THREE.BufferAttribute(edgeData.positions, 3));
+    const raycastMat = new THREE.LineBasicMaterial({ visible: false });
+    const raycastLines = new THREE.LineSegments(raycastGeo, raycastMat);
+    this.outlineGroup.add(raycastLines);
+
+    // Start listening for hover if not already listening
+    this.ensurePointerListeners();
   }
 
   setSketchOverlay(
@@ -277,6 +347,59 @@ export class PartViewport {
       planeMesh.position.set(...planeInfo.center);
       this.sketchOverlayGroup.add(planeMesh);
     }
+  }
+
+  /** Show persistent sketch plane overlays for all committed features. */
+  setSketchPlaneOverlays(
+    overlays: {
+      linePositions: Float32Array;
+      center: [number, number, number];
+      normal: [number, number, number];
+      xAxis: [number, number, number];
+      size: number;
+    }[],
+  ) {
+    this.clearGroup(this.sketchPlanesGroup);
+
+    for (const overlay of overlays) {
+      // Sketch wireframe lines
+      if (overlay.linePositions.length > 0) {
+        const lineGeometry = new THREE.BufferGeometry();
+        lineGeometry.setAttribute('position', new THREE.BufferAttribute(overlay.linePositions, 3));
+        const lineMaterial = new THREE.LineBasicMaterial({
+          color: 0x94a3b8,
+          linewidth: 1,
+          transparent: true,
+          opacity: 0.5,
+        });
+        const lines = new THREE.LineSegments(lineGeometry, lineMaterial);
+        this.sketchPlanesGroup.add(lines);
+      }
+
+      // Translucent plane quad
+      const planeGeometry = new THREE.PlaneGeometry(overlay.size, overlay.size);
+      const planeMaterial = new THREE.MeshBasicMaterial({
+        color: 0x94a3b8,
+        transparent: true,
+        opacity: 0.04,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      const planeMesh = new THREE.Mesh(planeGeometry, planeMaterial);
+
+      const n = new THREE.Vector3(...overlay.normal);
+      const x = new THREE.Vector3(...overlay.xAxis);
+      const y = new THREE.Vector3().crossVectors(n, x);
+      const m = new THREE.Matrix4();
+      m.makeBasis(x, y, n);
+      planeMesh.setRotationFromMatrix(m);
+      planeMesh.position.set(...overlay.center);
+      this.sketchPlanesGroup.add(planeMesh);
+    }
+  }
+
+  clearSketchPlaneOverlays() {
+    this.clearGroup(this.sketchPlanesGroup);
   }
 
   clearPreview() {
@@ -466,6 +589,16 @@ export class PartViewport {
     this.renderer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+
+    // Update resolution for fat line materials
+    const res = new THREE.Vector2(w, h);
+    for (const group of [this.outlineGroup, this.edgeHighlightGroup, this.edgeSelectionGroup]) {
+      for (const child of group.children) {
+        if (child instanceof LineSegments2) {
+          (child.material as LineMaterial).resolution = res;
+        }
+      }
+    }
   }
 
   private animate = () => {
@@ -485,8 +618,8 @@ export class PartViewport {
     this.activeDrag = null;
     this.clearExtrudeArrow();
     this.clearPlaneGizmo();
-    // Remove pointer listeners only if face and edge picking are also inactive
-    if (!this.facePickCallback && !this.edgePickCallback) {
+    // Remove pointer listeners only if face and edge picking are also inactive and no outlines
+    if (!this.facePickCallback && !this.edgePickCallback && this.outlineEdgeRanges.length === 0) {
       this.removePointerListeners();
     }
   }
@@ -552,8 +685,8 @@ export class PartViewport {
       }
     }
 
-    // Edge picking hover highlight
-    if (this.edgePickCallback && !this.activeDrag) {
+    // Edge hover highlight (always when outlines visible, or during edge picking)
+    if (!this.activeDrag && (this.edgePickCallback || this.outlineEdgeRanges.length > 0)) {
       this.updateEdgeHighlight(ndc);
     }
 
@@ -665,7 +798,8 @@ export class PartViewport {
             const geometry = (hit.object as THREE.Mesh).geometry as THREE.BufferGeometry;
             if (hit.faceIndex != null) {
               const faceNormal = this.computeHitNormal(geometry, hit);
-              this.facePickCallback({ point: hit.point.clone(), normal: faceNormal });
+              const boundaryLoops = this.extractFaceBoundary(geometry, hit);
+              this.facePickCallback({ point: hit.point.clone(), normal: faceNormal, boundaryLoops });
             }
           }
         }
@@ -684,7 +818,7 @@ export class PartViewport {
     }
   }
 
-  enableFacePicking(callback: (info: { point: THREE.Vector3; normal: THREE.Vector3 }) => void) {
+  enableFacePicking(callback: (info: { point: THREE.Vector3; normal: THREE.Vector3; boundaryLoops: [number, number, number][][] }) => void) {
     this.disableFacePicking();
     this.facePickCallback = callback;
     this.ensurePointerListeners();
@@ -695,8 +829,8 @@ export class PartViewport {
     this.facePickDownPos = null;
     this.highlightedFaceId = null;
     this.clearGroup(this.faceHighlightGroup);
-    // Remove pointer listeners only if drag and edge picking are also inactive
-    if (!this.dragCallbacks && !this.edgePickCallback) {
+    // Remove pointer listeners only if drag and edge picking are also inactive and no outlines
+    if (!this.dragCallbacks && !this.edgePickCallback && this.outlineEdgeRanges.length === 0) {
       this.removePointerListeners();
     }
   }
@@ -832,6 +966,86 @@ export class PartViewport {
       .normalize();
   }
 
+  /**
+   * Extract boundary edge loops of the picked face from the tessellated geometry.
+   * Boundary edges are triangle edges that appear exactly once within the face.
+   */
+  private extractFaceBoundary(geometry: THREE.BufferGeometry, hit: THREE.Intersection): [number, number, number][][] {
+    const faceIdAttr = geometry.getAttribute('faceId');
+    const posAttr = geometry.getAttribute('position');
+    const index = geometry.getIndex();
+    if (!faceIdAttr || !posAttr || !index || hit.faceIndex == null) return [];
+
+    // Get the faceId of the hit triangle
+    const vertIdx = index.getX(hit.faceIndex * 3);
+    const hitFaceId = faceIdAttr.getX(vertIdx);
+
+    // Use faceRanges for efficient iteration
+    const faceRanges = geometry.userData.faceRanges as { start: number; count: number }[] | undefined;
+    if (!faceRanges || !faceRanges[hitFaceId]) return [];
+    const range = faceRanges[hitFaceId]!;
+
+    // Collect all triangle edges for this face, counting occurrences
+    // Edge key: sorted pair of vertex indices
+    const edgeCounts = new Map<string, [number, number]>();
+    for (let i = range.start; i < range.start + range.count; i += 3) {
+      const a = index.getX(i);
+      const b = index.getX(i + 1);
+      const c = index.getX(i + 2);
+      for (const [v0, v1] of [[a, b], [b, c], [c, a]] as [number, number][]) {
+        const key = v0 < v1 ? `${v0}_${v1}` : `${v1}_${v0}`;
+        if (edgeCounts.has(key)) {
+          edgeCounts.delete(key); // Appears twice → interior edge
+        } else {
+          edgeCounts.set(key, [v0, v1]);
+        }
+      }
+    }
+
+    if (edgeCounts.size === 0) return [];
+
+    // Build adjacency: vertex → list of connected vertices
+    const adjacency = new Map<number, number[]>();
+    for (const [v0, v1] of edgeCounts.values()) {
+      if (!adjacency.has(v0)) adjacency.set(v0, []);
+      if (!adjacency.has(v1)) adjacency.set(v1, []);
+      adjacency.get(v0)!.push(v1);
+      adjacency.get(v1)!.push(v0);
+    }
+
+    // Walk connected loops
+    const visited = new Set<number>();
+    const loops: [number, number, number][][] = [];
+
+    for (const startVert of adjacency.keys()) {
+      if (visited.has(startVert)) continue;
+
+      const loop: [number, number, number][] = [];
+      let current = startVert;
+      let prev = -1;
+
+      while (!visited.has(current)) {
+        visited.add(current);
+        loop.push([posAttr.getX(current), posAttr.getY(current), posAttr.getZ(current)]);
+
+        const neighbors = adjacency.get(current) ?? [];
+        const next = neighbors.find((n) => n !== prev);
+        if (next === undefined) break;
+        prev = current;
+        current = next;
+      }
+
+      // Close the loop if it returns to start
+      if (current === startVert && loop.length > 2) {
+        loop.push(loop[0]!);
+      }
+
+      if (loop.length >= 2) loops.push(loop);
+    }
+
+    return loops;
+  }
+
   setEdgeWireframe(edgeData: EdgeData | null) {
     this.clearGroup(this.edgeWireframeGroup);
     this.edgeRanges = [];
@@ -855,6 +1069,8 @@ export class PartViewport {
 
   enableEdgePicking(callback: (edgeIndex: number) => void) {
     this.edgePickCallback = callback;
+    // Hide outline edges to avoid raycast conflicts with the dedicated edge wireframe
+    this.outlineGroup.visible = false;
     this.ensurePointerListeners();
   }
 
@@ -864,10 +1080,11 @@ export class PartViewport {
     this.highlightedEdgeIndex = null;
     this.clearGroup(this.edgeHighlightGroup);
     this.clearGroup(this.edgeSelectionGroup);
+    this.outlineGroup.visible = true;
     this.clearGroup(this.edgeWireframeGroup);
     this.edgeRanges = [];
-    // Remove pointer listeners only if drag and face pick are also inactive
-    if (!this.dragCallbacks && !this.facePickCallback) {
+    // Remove pointer listeners only if drag and face pick are also inactive and no outlines
+    if (!this.dragCallbacks && !this.facePickCallback && this.outlineEdgeRanges.length === 0) {
       this.removePointerListeners();
     }
   }
@@ -890,13 +1107,20 @@ export class PartViewport {
 
   /** Extract positions array for a single edge from the wireframe geometry. */
   private getEdgePositions(edgeIndex: number): number[] | null {
-    const wireChildren = this.edgeWireframeGroup.children;
-    if (wireChildren.length === 0) return null;
-    const wireGeo = (wireChildren[0] as THREE.LineSegments).geometry;
+    return this.getOutlineEdgePositions(edgeIndex, this.edgeWireframeGroup, this.edgeRanges);
+  }
+
+  private getOutlineEdgePositions(edgeIndex: number, group: THREE.Group, ranges: EdgeData['edgeRanges']): number[] | null {
+    if (group.children.length === 0) return null;
+    // For outline group, use the invisible raycast LineSegments (child[1]) geometry
+    const wireChild = (group === this.outlineGroup && group.children.length > 1)
+      ? group.children[1]!
+      : group.children[0]!;
+    const wireGeo = (wireChild as THREE.LineSegments).geometry;
     const posAttr = wireGeo.getAttribute('position');
     if (!posAttr) return null;
 
-    const range = this.edgeRanges.find((r) => r.edgeIndex === edgeIndex);
+    const range = ranges.find((r) => r.edgeIndex === edgeIndex);
     if (!range) return null;
 
     const positions: number[] = [];
@@ -924,21 +1148,32 @@ export class PartViewport {
   }
 
   private updateEdgeHighlight(ndc: THREE.Vector2) {
-    if (this.edgeWireframeGroup.children.length === 0) {
+    // Pick the appropriate line group and edge ranges
+    const useOutline = this.edgeWireframeGroup.children.length === 0 && this.outlineGroup.children.length > 0;
+    const lineGroup = useOutline ? this.outlineGroup : this.edgeWireframeGroup;
+    const ranges = useOutline ? this.outlineEdgeRanges : this.edgeRanges;
+
+    if (lineGroup.children.length === 0) {
       this.clearEdgeHighlight();
       return;
     }
 
     this.raycaster.setFromCamera(ndc, this.camera);
     // Scale line picking threshold by camera distance for consistent screen-space feel
-    // Use a minimum of 3 world units so edges stay pickable even when zoomed in close
     const camDist = this.camera.position.distanceTo(this.controls.target);
     const params = this.raycaster.params;
     if (params.Line) {
-      params.Line.threshold = Math.max(camDist * 0.03, 3);
+      // Tighter threshold for hover-only mode, wider for edge pick mode (fillet/chamfer)
+      params.Line.threshold = this.edgePickCallback
+        ? Math.max(camDist * 0.03, 3)
+        : Math.max(camDist * 0.015, 1.5);
     }
 
-    const hits = this.raycaster.intersectObjects(this.edgeWireframeGroup.children, true);
+    // For outline group, raycast against the invisible LineSegments (child[1]), not the fat LineSegments2
+    const raycastTargets = (lineGroup === this.outlineGroup && lineGroup.children.length > 1)
+      ? [lineGroup.children[1]!]
+      : lineGroup.children;
+    const hits = this.raycaster.intersectObjects(raycastTargets, true);
     if (hits.length === 0) {
       this.clearEdgeHighlight();
       return;
@@ -955,7 +1190,7 @@ export class PartViewport {
     // hitIndex is the vertex pair index in the LineSegments buffer
     const hitVertex = hitIndex; // LineSegments: each pair is 2 vertices
     let foundEdge: number | null = null;
-    for (const range of this.edgeRanges) {
+    for (const range of ranges) {
       const startVertex = range.start / 3;
       if (hitVertex >= startVertex && hitVertex < startVertex + range.count) {
         foundEdge = range.edgeIndex;
@@ -974,7 +1209,7 @@ export class PartViewport {
     this.clearGroup(this.edgeHighlightGroup);
 
     // Build amber fat-line highlight for this edge
-    const positions = this.getEdgePositions(foundEdge);
+    const positions = this.getOutlineEdgePositions(foundEdge, lineGroup, ranges);
     if (!positions || positions.length < 6) return;
 
     const line = this.buildFatLine(positions, 0xf59e0b, 4);

@@ -1,4 +1,5 @@
 import type { Document, Entity, Sketch, Constraint } from '@/types/document';
+import type { Plane } from '@/types/part';
 import { generateId } from './id';
 
 export function generateUniqueName(baseName: string, existingNames: string[]): string {
@@ -22,14 +23,16 @@ export function generateDateName(existingNames: string[]): string {
   }
 }
 
-export function createEmptySketch(name: string): Sketch {
-  return {
+export function createEmptySketch(name: string, plane?: Plane): Sketch {
+  const sketch: Sketch = {
     id: generateId('sk'),
     name,
     visible: true,
     entities: [],
     constraints: [],
   };
+  if (plane) sketch.plane = plane;
+  return sketch;
 }
 
 /** Migrate a document from the old start/end line format to points[]. */

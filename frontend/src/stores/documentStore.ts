@@ -44,7 +44,7 @@ interface DocumentStore {
   restoreHistory(persisted: { undo: HistoryEntry[]; redo: HistoryEntry[] }): void;
 
   // Sketch actions
-  addSketch(name: string): void;
+  addSketch(name: string, plane?: import('@/types/part').Plane): string;
   renameSketch(sketchId: string, name: string): void;
   toggleSketchVisibility(sketchId: string): void;
   toggleSketchSuppressed(sketchId: string): void;
@@ -222,8 +222,8 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     });
   },
 
-  addSketch(name) {
-    const sketch = createEmptySketch(name);
+  addSketch(name, plane) {
+    const sketch = createEmptySketch(name, plane);
     set((s) => ({
       document: {
         ...s.document,
@@ -231,6 +231,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
         activeSketchId: sketch.id,
       },
     }));
+    return sketch.id;
   },
 
   renameSketch(sketchId, name) {

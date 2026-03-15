@@ -185,6 +185,7 @@ export interface Sketch {
   name: string;
   visible: boolean;
   suppressed?: boolean;
+  plane?: import('@/types/part').Plane;
   entities: Entity[];
   constraints: Constraint[];
 }
