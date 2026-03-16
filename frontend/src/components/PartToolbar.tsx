@@ -9,12 +9,13 @@ interface PartToolbarProps {
   onAddFillet: () => void;
   onAddChamfer: () => void;
   onAddLoft: () => void;
+  onAddPlane: () => void;
   onSketchOnFace: () => void;
   onExportSTL: () => void;
   onExportSTEP: () => void;
 }
 
-export function PartToolbar({ onAddExtrude, onAddRevolve, onAddShell, onAddFillet, onAddChamfer, onAddLoft, onSketchOnFace, onExportSTL, onExportSTEP }: PartToolbarProps) {
+export function PartToolbar({ onAddExtrude, onAddRevolve, onAddShell, onAddFillet, onAddChamfer, onAddLoft, onAddPlane, onSketchOnFace, onExportSTL, onExportSTEP }: PartToolbarProps) {
   const navigate = useNavigate();
   const part = usePartStore((s) => s.part);
   const setPartName = usePartStore((s) => s.setPartName);
@@ -120,6 +121,12 @@ export function PartToolbar({ onAddExtrude, onAddRevolve, onAddShell, onAddFille
         onClick={onAddLoft}
       >
         Loft
+      </button>
+      <button
+        style={{ ...buttonStyle, background: palette.primaryBtn, color: '#fff', border: 'none' }}
+        onClick={onAddPlane}
+      >
+        Plane
       </button>
 
       <div style={{ width: '1px', height: '20px', background: palette.border }} />

@@ -20,8 +20,9 @@ import { ShellForm } from './ShellForm';
 import { FilletForm } from './FilletForm';
 import { ChamferForm } from './ChamferForm';
 import { LoftForm, type LoftFormHandle } from './LoftForm';
-import type { Part, Feature, ExtrudeFeature, RevolveFeature, FilletFeature, ChamferFeature, LoftFeature, Plane } from '@/types/part';
-import { DEFAULT_XY_PLANE, planeWithOffset } from '@/types/part';
+import { ConstructionPlaneForm, type ConstructionPlaneFormHandle } from './ConstructionPlaneForm';
+import type { Part, Feature, ExtrudeFeature, RevolveFeature, FilletFeature, ChamferFeature, LoftFeature, ConstructionPlaneFeature, Plane } from '@/types/part';
+import { DEFAULT_XY_PLANE, PLANE_PRESETS, planeWithOffset } from '@/types/part';
 import type { Document } from '@/types/document';
 import { useDocumentStore } from '@/stores/documentStore';
 import { migrateDocument } from '@/utils/document';
@@ -91,6 +92,7 @@ export function PartEditorPage() {
   const extrudeFormRef = useRef<ExtrudeFormHandle>(null);
   const revolveFormRef = useRef<RevolveFormHandle>(null);
   const loftFormRef = useRef<LoftFormHandle>(null);
+  const constructionPlaneFormRef = useRef<ConstructionPlaneFormHandle>(null);
 
   // Load part from backend
   useEffect(() => {
@@ -415,7 +417,7 @@ export function PartEditorPage() {
     const vp = viewportRef.current;
     if (!vp) return;
 
-    if (!draftFeature || (draftFeature.type !== 'extrude' && draftFeature.type !== 'revolve' && draftFeature.type !== 'loft')) {
+    if (!draftFeature || (draftFeature.type !== 'extrude' && draftFeature.type !== 'revolve' && draftFeature.type !== 'loft' && draftFeature.type !== 'constructionPlane')) {
       vp.disableFacePicking();
       return;
     }
@@ -437,6 +439,8 @@ export function PartEditorPage() {
         revolveFormRef.current?.setPlane(plane);
       } else if (draft?.type === 'loft') {
         loftFormRef.current?.setPlane(plane);
+      } else if (draft?.type === 'constructionPlane') {
+        constructionPlaneFormRef.current?.setPlane(plane);
       }
     });
 
@@ -536,6 +540,20 @@ export function PartEditorPage() {
             }
           }
           vp?.setSketchPlaneOverlays(overlays);
+
+          // Build construction plane overlays
+          const cpOverlays: Parameters<PartViewport['setConstructionPlaneOverlays']>[0] = [];
+          for (const f of features) {
+            if (f.type === 'constructionPlane') {
+              cpOverlays.push({
+                center: f.plane.origin,
+                normal: f.plane.normal,
+                xAxis: f.plane.xAxis,
+                size: 60,
+              });
+            }
+          }
+          vp?.setConstructionPlaneOverlays(cpOverlays);
         }
       })
       .catch((err) => {
@@ -619,6 +637,17 @@ export function PartEditorPage() {
       }
     }
 
+    // Update construction plane overlay during draft
+    if (draftFeature.type === 'constructionPlane') {
+      const cp = draftFeature as ConstructionPlaneFeature;
+      vp.setConstructionPlaneOverlays([{
+        center: cp.plane.origin,
+        normal: cp.plane.normal,
+        xAxis: cp.plane.xAxis,
+        size: 60,
+      }]);
+    }
+
     // Update extrude arrow gizmo
     if (draftFeature.type === 'extrude') {
       const ext = draftFeature as ExtrudeFeature;
@@ -637,6 +666,7 @@ export function PartEditorPage() {
     if (!draftFeature) {
       viewportRef.current?.clearPreview();
       viewportRef.current?.clearExtrudeArrow();
+      viewportRef.current?.clearConstructionPlaneOverlays();
       return;
     }
 
@@ -826,6 +856,45 @@ export function PartEditorPage() {
     });
   }, [startCreating]);
 
+  const handleAddPlane = useCallback(() => {
+    const features = usePartStore.getState().part.features;
+    const cpCount = features.filter((f) => f.type === 'constructionPlane').length;
+    const basePlane = Object.keys(PLANE_PRESETS)[0]!;
+    startCreating({
+      id: crypto.randomUUID(),
+      type: 'constructionPlane',
+      name: `Plane ${cpCount + 1}`,
+      basePlane,
+      offset: 0,
+      spin: 0,
+      tilt: 0,
+      plane: PLANE_PRESETS[basePlane]!,
+    });
+  }, [startCreating]);
+
+  const handleSketchOnPlane = useCallback((plane: Plane) => {
+    const currentPart = usePartStore.getState().part;
+    const docId = currentPart.documentId;
+    if (!docId || !id) return;
+
+    (async () => {
+      const full = await api.getDocument(docId);
+      const doc = migrateDocument(full.data as unknown as Document);
+      useDocumentStore.getState().setDocument(doc);
+      const sketchName = `Plane Sketch ${doc.sketches.length + 1}`;
+      const sketchId = useDocumentStore.getState().addSketch(sketchName, plane);
+      const updatedDoc = useDocumentStore.getState().document;
+      await api.updateDocument(docId, { name: updatedDoc.name, data: updatedDoc as unknown as Record<string, unknown> });
+      sessionStorage.setItem('sketchOnFace_intent', JSON.stringify({
+        returnToPartId: id,
+        sketchId,
+        plane,
+        sketchDocumentId: docId,
+      }));
+      navigate(`/edit/${docId}`);
+    })().catch((err) => console.error('Sketch on plane failed:', err));
+  }, [id, navigate]);
+
   const handleSketchOnFace = useCallback(() => {
     setSketchOnFacePending(true);
   }, []);
@@ -936,6 +1005,7 @@ export function PartEditorPage() {
               initial={initial?.type === 'extrude' ? initial : undefined}
               defaultSketchId={(!editingExistingId && (draftFeature as ExtrudeFeature).sketchId) || rolodexSketchIdRef.current}
               defaultPlane={!editingExistingId && (draftFeature as ExtrudeFeature).plane !== DEFAULT_XY_PLANE ? (draftFeature as ExtrudeFeature).plane : undefined}
+              features={part.features}
               sketchDoc={draftSketchDoc ?? undefined}
               onSubmit={(f) => handleSubmit(f)}
               onCancel={handleCancel}
@@ -949,6 +1019,7 @@ export function PartEditorPage() {
               documentId={part.documentId}
               initial={initial?.type === 'revolve' ? initial : undefined}
               defaultSketchId={(!editingExistingId && (draftFeature as RevolveFeature).sketchId) || rolodexSketchIdRef.current}
+              features={part.features}
               sketchDoc={draftSketchDoc ?? undefined}
               onSubmit={(f) => handleSubmit(f)}
               onCancel={handleCancel}
@@ -990,10 +1061,22 @@ export function PartEditorPage() {
               ref={loftFormRef}
               documentId={part.documentId}
               initial={initial?.type === 'loft' ? initial : undefined}
+              features={part.features}
               onSubmit={(f) => handleSubmit(f)}
               onCancel={handleCancel}
               onChange={(f) => handleDraftChange(f)}
               onActiveSectionChange={setActiveLoftSection}
+            />
+          );
+        case 'constructionPlane':
+          return (
+            <ConstructionPlaneForm
+              ref={constructionPlaneFormRef}
+              initial={initial?.type === 'constructionPlane' ? initial : undefined}
+              features={part.features}
+              onSubmit={(f) => handleSubmit(f)}
+              onCancel={handleCancel}
+              onChange={(f) => handleDraftChange(f)}
             />
           );
       }
@@ -1002,7 +1085,7 @@ export function PartEditorPage() {
     return (
       <>
         <SketchRolodex onSketchChange={handleRolodexChange} />
-        <FeaturePanel onEditFeature={handleEditFeature} />
+        <FeaturePanel onEditFeature={handleEditFeature} onSketchOnPlane={handleSketchOnPlane} />
       </>
     );
   }
@@ -1017,7 +1100,7 @@ export function PartEditorPage() {
         color: palette.text,
       }}
     >
-      <PartToolbar onAddExtrude={handleAddExtrude} onAddRevolve={handleAddRevolve} onAddShell={handleAddShell} onAddFillet={handleAddFillet} onAddChamfer={handleAddChamfer} onAddLoft={handleAddLoft} onSketchOnFace={handleSketchOnFace} onExportSTL={handleExportSTL} onExportSTEP={handleExportSTEP} />
+      <PartToolbar onAddExtrude={handleAddExtrude} onAddRevolve={handleAddRevolve} onAddShell={handleAddShell} onAddFillet={handleAddFillet} onAddChamfer={handleAddChamfer} onAddLoft={handleAddLoft} onAddPlane={handleAddPlane} onSketchOnFace={handleSketchOnFace} onExportSTL={handleExportSTL} onExportSTEP={handleExportSTEP} />
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative' }}>
         <div

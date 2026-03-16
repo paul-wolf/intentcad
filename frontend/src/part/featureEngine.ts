@@ -44,6 +44,9 @@ function buildAccumulatedShape(
   let accumulated: any | null = null;
 
   for (const feature of features) {
+    // Construction planes produce no geometry
+    if (feature.type === 'constructionPlane') continue;
+
     // Shell operates on the accumulated shape, not a sketch
     if (feature.type === 'shell') {
       if (!accumulated) continue;

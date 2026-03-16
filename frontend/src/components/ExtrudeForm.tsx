@@ -2,8 +2,8 @@ import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 're
 import { api } from '@/api/client';
 import { useThemeStore } from '@/theme';
 import type { Document } from '@/types/document';
-import type { ExtrudeFeature, ExtrudeDirection, Plane } from '@/types/part';
-import { PLANE_PRESETS } from '@/types/part';
+import type { ExtrudeFeature, ExtrudeDirection, Plane, Feature } from '@/types/part';
+import { PLANE_PRESETS, getConstructionPlanes } from '@/types/part';
 import { getExtrudableEntities } from '@/part/profileDetect';
 import { rotatePlane, decomposePlaneAngles, closestPreset } from '@/part/planeRotation';
 
@@ -41,6 +41,16 @@ function buildPlaneOrigin(base: Plane, normalOff: number, xOff: number, yOff: nu
   ];
 }
 
+function resolveBasePlane(planePreset: string, customPlane: Plane | null, features?: Feature[]): Plane {
+  if (planePreset === 'Face' && customPlane) return customPlane;
+  if (planePreset.startsWith('cp:') && features) {
+    const cpId = planePreset.slice(3);
+    const cp = getConstructionPlanes(features).find((c) => c.id === cpId);
+    if (cp) return cp.plane;
+  }
+  return PLANE_PRESETS[planePreset] ?? PLANE_PRESETS[Object.keys(PLANE_PRESETS)[0]!]!;
+}
+
 function buildFeature(
   documentId: string,
   initialId: string | undefined,
@@ -55,10 +65,9 @@ function buildFeature(
   distance: number,
   direction: ExtrudeDirection,
   operation: 'add' | 'remove',
+  features?: Feature[],
 ): ExtrudeFeature {
-  const basePlane = (planePreset === 'Face' && customPlane)
-    ? customPlane
-    : (PLANE_PRESETS[planePreset] ?? PLANE_PRESETS[Object.keys(PLANE_PRESETS)[0]!]!);
+  const basePlane = resolveBasePlane(planePreset, customPlane, features);
   const { normal, xAxis } = rotatePlane(basePlane, spin, tilt);
   const plane: Plane = {
     origin: buildPlaneOrigin(basePlane, planeOffset, originX, originY),
@@ -89,13 +98,14 @@ interface ExtrudeFormProps {
   initial?: ExtrudeFeature;
   defaultSketchId?: string;
   defaultPlane?: Plane;
+  features?: Feature[];
   sketchDoc?: Document;
   onSubmit: (feature: ExtrudeFeature) => void;
   onCancel: () => void;
   onChange?: (feature: ExtrudeFeature) => void;
 }
 
-export const ExtrudeForm = forwardRef<ExtrudeFormHandle, ExtrudeFormProps>(function ExtrudeForm({ documentId, initial, defaultSketchId, defaultPlane, sketchDoc: externalSketchDoc, onSubmit, onCancel, onChange }, ref) {
+export const ExtrudeForm = forwardRef<ExtrudeFormHandle, ExtrudeFormProps>(function ExtrudeForm({ documentId, initial, defaultSketchId, defaultPlane, features: featuresProp, sketchDoc: externalSketchDoc, onSubmit, onCancel, onChange }, ref) {
   const palette = useThemeStore((s) => s.palette);
 
   const [internalSketchDoc, setInternalSketchDoc] = useState<Document | null>(null);
@@ -128,6 +138,7 @@ export const ExtrudeForm = forwardRef<ExtrudeFormHandle, ExtrudeFormProps>(funct
   }));
 
   // Plane controls
+  const constructionPlanes = featuresProp ? getConstructionPlanes(featuresProp) : [];
   const presetNames = Object.keys(PLANE_PRESETS);
   const [planePreset, setPlanePreset] = useState(() => {
     if (initial) return closestPreset(initial.plane.normal, PLANE_PRESETS);
@@ -205,13 +216,13 @@ export const ExtrudeForm = forwardRef<ExtrudeFormHandle, ExtrudeFormProps>(funct
   // Fire onChange whenever parameters change
   useEffect(() => {
     if (!onChangeRef.current || !selectedSketchId) return;
-    const feature = buildFeature(documentId, featureIdRef.current, selectedSketchId, planePreset, customPlane, planeOffset, originX, originY, spin, tilt, distance, direction, operation);
+    const feature = buildFeature(documentId, featureIdRef.current, selectedSketchId, planePreset, customPlane, planeOffset, originX, originY, spin, tilt, distance, direction, operation, featuresProp);
     onChangeRef.current(feature);
   }, [documentId, selectedSketchId, planePreset, customPlane, planeOffset, originX, originY, spin, tilt, distance, direction, operation]);
 
   const handleSubmit = () => {
     if (!canSubmit) return;
-    const feature = buildFeature(documentId, featureIdRef.current, selectedSketchId, planePreset, customPlane, planeOffset, originX, originY, spin, tilt, distance, direction, operation);
+    const feature = buildFeature(documentId, featureIdRef.current, selectedSketchId, planePreset, customPlane, planeOffset, originX, originY, spin, tilt, distance, direction, operation, featuresProp);
     onSubmit(feature);
   };
 
@@ -284,6 +295,9 @@ export const ExtrudeForm = forwardRef<ExtrudeFormHandle, ExtrudeFormProps>(funct
         >
           {presetNames.map((name) => (
             <option key={name} value={name}>{name}</option>
+          ))}
+          {constructionPlanes.map((cp) => (
+            <option key={cp.id} value={`cp:${cp.id}`}>{cp.name}</option>
           ))}
           {customPlane && <option value="Face">Face</option>}
         </select>

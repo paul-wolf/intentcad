@@ -49,6 +49,18 @@ export interface ChamferFeature {
   edgeIndices: number[];
 }
 
+export interface ConstructionPlaneFeature {
+  id: string;
+  type: 'constructionPlane';
+  name: string;
+  basePlane: string;           // key into PLANE_PRESETS, or cp:<id>, or 'Face'
+  customBasePlane?: Plane;     // set when basePlane === 'Face'
+  offset: number;
+  spin: number;                // in-plane rotation (degrees)
+  tilt: number;                // forward/backward tilt (degrees)
+  plane: Plane;                // resolved plane
+}
+
 export interface LoftSection {
   sketchDocumentId: string;
   sketchId: string;
@@ -62,7 +74,13 @@ export interface LoftFeature {
   operation: 'add' | 'remove';
 }
 
-export type Feature = ExtrudeFeature | RevolveFeature | ShellFeature | FilletFeature | ChamferFeature | LoftFeature;
+export type Feature = ExtrudeFeature | RevolveFeature | ShellFeature | FilletFeature | ChamferFeature | LoftFeature | ConstructionPlaneFeature;
+
+/** Return all ConstructionPlaneFeature entries that precede the given index (or all if omitted). */
+export function getConstructionPlanes(features: Feature[], beforeIndex?: number): ConstructionPlaneFeature[] {
+  const limit = beforeIndex ?? features.length;
+  return features.slice(0, limit).filter((f): f is ConstructionPlaneFeature => f.type === 'constructionPlane');
+}
 
 export interface Part {
   id: string;

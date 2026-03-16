@@ -105,6 +105,7 @@ export class PartViewport {
   private highlightedEdgeIndex: number | null = null;
   private edgeRanges: EdgeData['edgeRanges'] = [];
   private outlineEdgeRanges: EdgeData['edgeRanges'] = [];
+  private constructionPlanesGroup: THREE.Group;
 
   constructor(opts: PartViewportOptions) {
     const { container } = opts;
@@ -205,6 +206,10 @@ export class PartViewport {
     this.edgeSelectionGroup = new THREE.Group();
     this.edgeSelectionGroup.renderOrder = 999;
     this.scene.add(this.edgeSelectionGroup);
+
+    // Construction plane overlays
+    this.constructionPlanesGroup = new THREE.Group();
+    this.scene.add(this.constructionPlanesGroup);
 
     // Handle resize
     this.resizeObserver = new ResizeObserver(() => this.handleResize());
@@ -400,6 +405,64 @@ export class PartViewport {
 
   clearSketchPlaneOverlays() {
     this.clearGroup(this.sketchPlanesGroup);
+  }
+
+  /** Show persistent construction plane overlays. */
+  setConstructionPlaneOverlays(
+    overlays: {
+      center: [number, number, number];
+      normal: [number, number, number];
+      xAxis: [number, number, number];
+      size: number;
+    }[],
+  ) {
+    this.clearGroup(this.constructionPlanesGroup);
+
+    for (const overlay of overlays) {
+      const n = new THREE.Vector3(...overlay.normal);
+      const x = new THREE.Vector3(...overlay.xAxis);
+      const y = new THREE.Vector3().crossVectors(n, x);
+      const m = new THREE.Matrix4();
+      m.makeBasis(x, y, n);
+
+      // Translucent plane quad
+      const planeGeometry = new THREE.PlaneGeometry(overlay.size, overlay.size);
+      const planeMaterial = new THREE.MeshBasicMaterial({
+        color: 0x60a5fa,
+        transparent: true,
+        opacity: 0.15,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      const planeMesh = new THREE.Mesh(planeGeometry, planeMaterial);
+      planeMesh.setRotationFromMatrix(m);
+      planeMesh.position.set(...overlay.center);
+      this.constructionPlanesGroup.add(planeMesh);
+
+      // Border outline
+      const hs = overlay.size / 2;
+      const corners = new Float32Array([
+        -hs, -hs, 0,  hs, -hs, 0,
+         hs, -hs, 0,  hs,  hs, 0,
+         hs,  hs, 0, -hs,  hs, 0,
+        -hs,  hs, 0, -hs, -hs, 0,
+      ]);
+      const borderGeometry = new THREE.BufferGeometry();
+      borderGeometry.setAttribute('position', new THREE.BufferAttribute(corners, 3));
+      const borderMaterial = new THREE.LineBasicMaterial({
+        color: 0x60a5fa,
+        transparent: true,
+        opacity: 0.7,
+      });
+      const borderLines = new THREE.LineSegments(borderGeometry, borderMaterial);
+      borderLines.setRotationFromMatrix(m);
+      borderLines.position.set(...overlay.center);
+      this.constructionPlanesGroup.add(borderLines);
+    }
+  }
+
+  clearConstructionPlaneOverlays() {
+    this.clearGroup(this.constructionPlanesGroup);
   }
 
   clearPreview() {

@@ -2,8 +2,8 @@ import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 're
 import { api } from '@/api/client';
 import { useThemeStore } from '@/theme';
 import type { Document } from '@/types/document';
-import type { LoftFeature, Plane } from '@/types/part';
-import { PLANE_PRESETS } from '@/types/part';
+import type { LoftFeature, Plane, Feature } from '@/types/part';
+import { PLANE_PRESETS, getConstructionPlanes } from '@/types/part';
 import { rotatePlane, decomposePlaneAngles, closestPreset } from '@/part/planeRotation';
 
 interface SectionState {
@@ -51,16 +51,26 @@ function buildPlaneOrigin(base: Plane, normalOff: number, xOff: number, yOff: nu
   ];
 }
 
+function resolveBasePlane(planePreset: string, features?: Feature[]): Plane {
+  if (planePreset.startsWith('cp:') && features) {
+    const cpId = planePreset.slice(3);
+    const cp = getConstructionPlanes(features).find((c) => c.id === cpId);
+    if (cp) return cp.plane;
+  }
+  return PLANE_PRESETS[planePreset] ?? PLANE_PRESETS[Object.keys(PLANE_PRESETS)[0]!]!;
+}
+
 function buildFeature(
   initialId: string,
   sections: SectionState[],
   operation: 'add' | 'remove',
+  features?: Feature[],
 ): LoftFeature {
   return {
     id: initialId,
     type: 'loft',
     sections: sections.map((s) => {
-      const basePlane = PLANE_PRESETS[s.planePreset] ?? PLANE_PRESETS[Object.keys(PLANE_PRESETS)[0]!]!;
+      const basePlane = resolveBasePlane(s.planePreset, features);
       const { normal, xAxis } = rotatePlane(basePlane, s.spin, s.tilt);
       const plane: Plane = {
         origin: buildPlaneOrigin(basePlane, s.planeOffset, s.originX, s.originY),
@@ -97,14 +107,16 @@ export interface LoftFormHandle {
 interface LoftFormProps {
   documentId: string;
   initial?: LoftFeature;
+  features?: Feature[];
   onSubmit: (feature: LoftFeature) => void;
   onCancel: () => void;
   onChange?: (feature: LoftFeature) => void;
   onActiveSectionChange?: (index: number) => void;
 }
 
-export const LoftForm = forwardRef<LoftFormHandle, LoftFormProps>(function LoftForm({ documentId, initial, onSubmit, onCancel, onChange, onActiveSectionChange }, ref) {
+export const LoftForm = forwardRef<LoftFormHandle, LoftFormProps>(function LoftForm({ documentId, initial, features: featuresProp, onSubmit, onCancel, onChange, onActiveSectionChange }, ref) {
   const palette = useThemeStore((s) => s.palette);
+  const constructionPlanes = featuresProp ? getConstructionPlanes(featuresProp) : [];
   const presetNames = Object.keys(PLANE_PRESETS);
 
   const featureIdRef = useRef(initial?.id ?? crypto.randomUUID());
@@ -240,13 +252,13 @@ export const LoftForm = forwardRef<LoftFormHandle, LoftFormProps>(function LoftF
   // Fire onChange
   useEffect(() => {
     if (!onChangeRef.current) return;
-    const feature = buildFeature(featureIdRef.current, sections, operation);
+    const feature = buildFeature(featureIdRef.current, sections, operation, featuresProp);
     onChangeRef.current(feature);
   }, [sections, operation]);
 
   const handleSubmit = () => {
     if (!canSubmit) return;
-    onSubmit(buildFeature(featureIdRef.current, sections, operation));
+    onSubmit(buildFeature(featureIdRef.current, sections, operation, featuresProp));
   };
 
   const updateSection = (index: number, patch: Partial<SectionState>) => {
@@ -364,6 +376,9 @@ export const LoftForm = forwardRef<LoftFormHandle, LoftFormProps>(function LoftF
               >
                 {presetNames.map((name) => (
                   <option key={name} value={name}>{name}</option>
+                ))}
+                {constructionPlanes.map((cp) => (
+                  <option key={cp.id} value={`cp:${cp.id}`}>{cp.name}</option>
                 ))}
               </select>
             </div>
