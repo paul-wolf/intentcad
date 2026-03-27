@@ -12,6 +12,7 @@ function baseDoF(entity: Entity): number {
       return 2 * entity.points.length;
     case 'bezier': return 8; // 4 points x 2 coordinates
     case 'dimension': return 0;
+    case 'text': return 2; // position only
   }
 }
 

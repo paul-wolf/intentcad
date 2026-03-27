@@ -79,7 +79,19 @@ export interface BezierEntity {
   sourceTransform?: SourceTransform;
 }
 
-export type Entity = LineEntity | CircleEntity | RectangleEntity | PointEntity | DimensionEntity | BezierEntity;
+export interface TextEntity {
+  id: string;
+  type: 'text';
+  position: Point;
+  text: string;
+  height: number; // text height in world units
+  rotation?: number; // degrees, counter-clockwise
+  construction?: boolean;
+  sourceId?: string;
+  sourceTransform?: SourceTransform;
+}
+
+export type Entity = LineEntity | CircleEntity | RectangleEntity | PointEntity | DimensionEntity | BezierEntity | TextEntity;
 
 /** Check if a line entity is a closed profile suitable for extrusion.
  *  Handles both explicit `closed: true` and implicit closure (first == last point). */

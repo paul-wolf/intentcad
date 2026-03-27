@@ -1,6 +1,9 @@
 import type { Document } from '@/types/document';
 import { getSegmentCount, getSegmentPointIndices, getSegmentBulge } from '@/utils/lineSegments';
 
+/** Our editor uses Y-down (screen convention), DXF uses Y-up (math convention). */
+function dxfY(y: number): number { return -y; }
+
 export function exportDocumentToDxf(doc: Document): string {
   const visibleSketches = doc.sketches.filter((sk) => !sk.suppressed);
 
@@ -105,11 +108,11 @@ export function exportDocumentToDxf(doc: Document): string {
             w('10');
             w(String(pt.x));
             w('20');
-            w(String(pt.y));
+            w(String(dxfY(pt.y)));
             const bulge = getSegmentBulge(entity, i);
             if (bulge !== 0) {
               w('42');
-              w(String(bulge));
+              w(String(-bulge)); // negate: Y-down CW → Y-up CCW
             }
           }
         } else {
@@ -124,13 +127,13 @@ export function exportDocumentToDxf(doc: Document): string {
             w('10');
             w(String(p1.x));
             w('20');
-            w(String(p1.y));
+            w(String(dxfY(p1.y)));
             w('30');
             w('0.0');
             w('11');
             w(String(p2.x));
             w('21');
-            w(String(p2.y));
+            w(String(dxfY(p2.y)));
             w('31');
             w('0.0');
           }
@@ -143,7 +146,7 @@ export function exportDocumentToDxf(doc: Document): string {
         w('10');
         w(String(entity.center.x));
         w('20');
-        w(String(entity.center.y));
+        w(String(dxfY(entity.center.y)));
         w('30');
         w('0.0');
         w('40');
@@ -164,19 +167,19 @@ export function exportDocumentToDxf(doc: Document): string {
         w('10');
         w(String(cx - hw));
         w('20');
-        w(String(cy - hh));
+        w(String(dxfY(cy - hh)));
         w('10');
         w(String(cx + hw));
         w('20');
-        w(String(cy - hh));
+        w(String(dxfY(cy - hh)));
         w('10');
         w(String(cx + hw));
         w('20');
-        w(String(cy + hh));
+        w(String(dxfY(cy + hh)));
         w('10');
         w(String(cx - hw));
         w('20');
-        w(String(cy + hh));
+        w(String(dxfY(cy + hh)));
       } else if (entity.type === 'point') {
         w('0');
         w('POINT');
@@ -185,7 +188,7 @@ export function exportDocumentToDxf(doc: Document): string {
         w('10');
         w(String(entity.position.x));
         w('20');
-        w(String(entity.position.y));
+        w(String(dxfY(entity.position.y)));
         w('30');
         w('0.0');
       } else if (entity.type === 'bezier') {
@@ -210,9 +213,29 @@ export function exportDocumentToDxf(doc: Document): string {
           w('10');
           w(String(cp.x));
           w('20');
-          w(String(cp.y));
+          w(String(dxfY(cp.y)));
           w('30');
           w('0.0');
+        }
+      }
+      else if (entity.type === 'text') {
+        w('0');
+        w('TEXT');
+        w('8');
+        w(sketch.name);
+        w('10');
+        w(String(entity.position.x));
+        w('20');
+        w(String(dxfY(entity.position.y)));
+        w('30');
+        w('0.0');
+        w('40');
+        w(String(entity.height));
+        w('1');
+        w(entity.text);
+        if (entity.rotation) {
+          w('50');
+          w(String(entity.rotation));
         }
       }
       // Dimensions are not exported (annotations, not geometry)

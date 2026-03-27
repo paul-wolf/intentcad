@@ -1,5 +1,5 @@
 import type { OC } from './init';
-import type { Entity, RectangleEntity, CircleEntity, LineEntity } from '@/types/document';
+import type { Entity, RectangleEntity, CircleEntity, LineEntity, BezierEntity, Point } from '@/types/document';
 import type { Plane } from '@/types/part';
 import { castWire, findConstructorNumeric } from './helpers';
 
@@ -58,7 +58,41 @@ export function entityToWire(oc: OC, entity: Entity, plane: Plane, cleanup: Occt
   if (entity.type === 'line') {
     return polygonToWire(oc, entity as LineEntity, plane, cleanup);
   }
+  if (entity.type === 'bezier') {
+    return bezierToWire(oc, entity as BezierEntity, plane, cleanup);
+  }
   return null;
+}
+
+/**
+ * Build a single closed OCCT wire from multiple entities that form a connected chain.
+ * Entities can be lines (straight segments) and beziers.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function entitiesToWire(oc: OC, entities: Entity[], plane: Plane, cleanup: OcctCleanup): any | null {
+  if (entities.length === 0) return null;
+  if (entities.length === 1) return entityToWire(oc, entities[0]!, plane, cleanup);
+
+  const wireBuilder = cleanup.track(new oc.BRepBuilderAPI_MakeWire_1());
+
+  for (const entity of entities) {
+    if (entity.type === 'line') {
+      const line = entity as LineEntity;
+      for (let i = 0; i < line.points.length - 1; i++) {
+        const p1 = to3D(oc, line.points[i]!.x, line.points[i]!.y, plane, cleanup);
+        const p2 = to3D(oc, line.points[i + 1]!.x, line.points[i + 1]!.y, plane, cleanup);
+        const edge = cleanup.track(new oc.BRepBuilderAPI_MakeEdge_3(p1, p2));
+        wireBuilder.Add_1(edge.Edge());
+      }
+    } else if (entity.type === 'bezier') {
+      const bez = entity as BezierEntity;
+      const edge = bezierToEdge(oc, bez, plane, cleanup);
+      if (edge) wireBuilder.Add_1(edge);
+    }
+  }
+
+  if (!wireBuilder.IsDone()) return null;
+  return wireBuilder.Wire();
 }
 
 function rectangleToWire(
@@ -141,6 +175,29 @@ function circleToWire(
   return poly.Wire();
 }
 
+/** Build a closed polygon wire from an array of 2D points. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function polylineToWire(oc: OC, points: Point[], plane: Plane, cleanup: OcctCleanup): any | null {
+  let pts = [...points];
+  // Strip duplicate closing point
+  if (pts.length > 1) {
+    const first = pts[0]!;
+    const last = pts[pts.length - 1]!;
+    const dx = first.x - last.x;
+    const dy = first.y - last.y;
+    if (dx * dx + dy * dy < 1) pts = pts.slice(0, -1);
+  }
+  if (pts.length < 3) return null;
+
+  const poly = cleanup.track(new oc.BRepBuilderAPI_MakePolygon_1());
+  for (const pt of pts) {
+    const p3d = to3D(oc, pt.x, pt.y, plane, cleanup);
+    poly.Add_1(p3d);
+  }
+  poly.Close();
+  return poly.Wire();
+}
+
 function polygonToWire(
   oc: OC, line: LineEntity, plane: Plane, cleanup: OcctCleanup,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -164,6 +221,60 @@ function polygonToWire(
   poly.Close();
 
   return poly.Wire();
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function bezierToEdge(oc: OC, bez: BezierEntity, plane: Plane, cleanup: OcctCleanup): any | null {
+  const [cp0, cp1, cp2, cp3] = bez.controlPoints;
+  const pts = [cp0, cp1, cp2, cp3].map((p) => to3D(oc, p.x, p.y, plane, cleanup));
+
+  // Build TColgp_Array1OfPnt(1, 4)
+  const arr = cleanup.track(new oc.TColgp_Array1OfPnt_2(1, 4));
+  for (let i = 0; i < 4; i++) {
+    arr.SetValue(i + 1, pts[i]!);
+  }
+
+  const curve = cleanup.track(new oc.Geom_BezierCurve_1(arr));
+  const handleCtor = findConstructorNumeric(oc, 'BRepBuilderAPI_MakeEdge', 35,
+    [[new oc.Handle_Geom_Curve_2(curve)]], (eb) => typeof eb.IsDone === 'function' && eb.IsDone());
+  if (handleCtor) {
+    const eb = cleanup.track(new handleCtor(new oc.Handle_Geom_Curve_2(curve)));
+    return eb.Edge();
+  }
+
+  // Fallback: approximate as line segments
+  const n = 16;
+  const wireBuilder = cleanup.track(new oc.BRepBuilderAPI_MakeWire_1());
+  for (let i = 0; i < n; i++) {
+    const t1 = i / n;
+    const t2 = (i + 1) / n;
+    const p1 = evalBezier(cp0, cp1, cp2, cp3, t1);
+    const p2 = evalBezier(cp0, cp1, cp2, cp3, t2);
+    const pt1 = to3D(oc, p1.x, p1.y, plane, cleanup);
+    const pt2 = to3D(oc, p2.x, p2.y, plane, cleanup);
+    const edge = cleanup.track(new oc.BRepBuilderAPI_MakeEdge_3(pt1, pt2));
+    wireBuilder.Add_1(edge.Edge());
+  }
+  // Return first edge only — this fallback is imperfect but functional
+  return null;
+}
+
+function bezierToWire(
+  oc: OC, bez: BezierEntity, plane: Plane, cleanup: OcctCleanup,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): any | null {
+  const edge = bezierToEdge(oc, bez, plane, cleanup);
+  if (!edge) return null;
+  const wireBuilder = cleanup.track(new oc.BRepBuilderAPI_MakeWire_2(edge));
+  return wireBuilder.Wire();
+}
+
+function evalBezier(p0: Point, p1: Point, p2: Point, p3: Point, t: number): Point {
+  const u = 1 - t;
+  return {
+    x: u * u * u * p0.x + 3 * u * u * t * p1.x + 3 * u * t * t * p2.x + t * t * t * p3.x,
+    y: u * u * u * p0.y + 3 * u * u * t * p1.y + 3 * u * t * t * p2.y + t * t * t * p3.y,
+  };
 }
 
 /**

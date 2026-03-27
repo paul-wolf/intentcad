@@ -9,6 +9,7 @@ import { HistoryPanel } from './HistoryPanel';
 import { DocumentPropertiesPanel } from './DocumentPropertiesPanel';
 import { GcodePanel } from './GcodePanel';
 import { CamOperationsPanel } from './CamOperationsPanel';
+import { HelpModal } from './HelpModal';
 import { CanvasContainer } from '@/canvas/CanvasContainer';
 import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
@@ -93,6 +94,7 @@ export function EditorPage() {
   const setActiveTool = useEditorStore((s) => s.setActiveTool);
   const camPanelOpen = useCamStore((s) => s.camPanelOpen);
   const [sketchOnFaceIntent, setSketchOnFaceIntent] = useState<SketchOnFaceIntent | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
 
   // Load document from backend if navigated directly and backendId not set
   useEffect(() => {
@@ -255,6 +257,7 @@ export function EditorPage() {
       if (e.key === 'p' || e.key === 'P') setActiveTool('polygon');
       if (e.key === 'd' || e.key === 'D') setActiveTool('dimension');
       if (e.key === 's' || e.key === 'S') setActiveTool('bezier');
+      if (e.key === '?') setShowHelp((v) => !v);
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
@@ -311,6 +314,7 @@ export function EditorPage() {
       <LogPanel />
       <StatusBar />
       <DocumentDrawer />
+      {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
     </div>
   );
 }

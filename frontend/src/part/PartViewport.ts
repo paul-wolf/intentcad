@@ -4,7 +4,7 @@ import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import type { EdgeData } from './occt/tessellate';
+import type { EdgeData } from './featureEngine';
 
 export interface DragInteractionCallbacks {
   onDragStart: (hitPoint: [number, number, number], handleId?: string) => {
@@ -101,6 +101,7 @@ export class PartViewport {
   private edgeHighlightGroup: THREE.Group;
   private edgeSelectionGroup: THREE.Group;
   private edgePickCallback: ((edgeIndex: number) => void) | null = null;
+  private edgeHighlightSuppressed = false;
   private edgePickDownPos: { x: number; y: number } | null = null;
   private highlightedEdgeIndex: number | null = null;
   private edgeRanges: EdgeData['edgeRanges'] = [];
@@ -749,7 +750,7 @@ export class PartViewport {
     }
 
     // Edge hover highlight (always when outlines visible, or during edge picking)
-    if (!this.activeDrag && (this.edgePickCallback || this.outlineEdgeRanges.length > 0)) {
+    if (!this.activeDrag && !this.edgeHighlightSuppressed && (this.edgePickCallback || this.outlineEdgeRanges.length > 0)) {
       this.updateEdgeHighlight(ndc);
     }
 
@@ -1120,7 +1121,7 @@ export class PartViewport {
     geometry.setAttribute('position', new THREE.BufferAttribute(edgeData.positions, 3));
     const material = new THREE.LineBasicMaterial({
       color: 0xcbd5e1,
-      depthTest: false,
+      depthTest: true,
     });
     const lines = new THREE.LineSegments(geometry, material);
     this.edgeWireframeGroup.add(lines);
@@ -1162,7 +1163,7 @@ export class PartViewport {
     const mat = new LineMaterial({
       color,
       linewidth,
-      depthTest: false,
+      depthTest: true,
       resolution: new THREE.Vector2(w, h),
     });
     return new LineSegments2(geo, mat);
@@ -1285,6 +1286,165 @@ export class PartViewport {
     this.highlightedEdgeIndex = null;
     this.clearGroup(this.edgeHighlightGroup);
     this.renderer.domElement.style.cursor = '';
+  }
+
+  setEdgeHighlightEnabled(enabled: boolean) {
+    this.edgeHighlightSuppressed = !enabled;
+    if (!enabled) this.clearEdgeHighlight();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Inline sketch support
+  // ---------------------------------------------------------------------------
+
+  private savedCameraState: {
+    position: THREE.Vector3;
+    target: THREE.Vector3;
+    up: THREE.Vector3;
+  } | null = null;
+  private inlineSketchGroup: THREE.Group = new THREE.Group();
+  private inlineSketchGroupAdded = false;
+
+  private ensureInlineSketchGroup() {
+    if (!this.inlineSketchGroupAdded) {
+      this.inlineSketchGroup.renderOrder = 998;
+      this.scene.add(this.inlineSketchGroup);
+      this.inlineSketchGroupAdded = true;
+    }
+  }
+
+  /** Smoothly orient the camera to look straight at a plane. */
+  alignCameraToPlane(plane: { origin: [number, number, number]; normal: [number, number, number]; xAxis: [number, number, number] }) {
+    // Save current state for restoration
+    this.savedCameraState = {
+      position: this.camera.position.clone(),
+      target: this.controls.target.clone(),
+      up: this.camera.up.clone(),
+    };
+
+    const origin = new THREE.Vector3(...plane.origin);
+    const normal = new THREE.Vector3(...plane.normal);
+    const xAxis = new THREE.Vector3(...plane.xAxis);
+
+    // Camera up = cross(normal, xAxis) so that screen-up aligns with the plane's visual "up"
+    const camUp = new THREE.Vector3().crossVectors(normal, xAxis);
+
+    // Position along normal at current viewing distance
+    const dist = this.camera.position.distanceTo(this.controls.target);
+    const camPos = origin.clone().add(normal.clone().multiplyScalar(Math.max(dist, 80)));
+
+    this.camera.position.copy(camPos);
+    this.camera.up.copy(camUp);
+    this.controls.target.copy(origin);
+    this.controls.update();
+  }
+
+  /** Restore camera to the state before alignCameraToPlane. */
+  restoreCamera() {
+    if (!this.savedCameraState) return;
+    this.camera.position.copy(this.savedCameraState.position);
+    this.camera.up.copy(this.savedCameraState.up);
+    this.controls.target.copy(this.savedCameraState.target);
+    this.controls.update();
+    this.savedCameraState = null;
+  }
+
+  /** Enable or disable orbit controls. */
+  setOrbitEnabled(enabled: boolean) {
+    this.controls.enabled = enabled;
+  }
+
+  /**
+   * Project a client-space mouse position onto a 3D plane.
+   * Returns 2D coordinates in the plane's local frame, or null if
+   * the ray doesn't intersect (e.g. looking edge-on).
+   */
+  projectToPlane(
+    clientX: number,
+    clientY: number,
+    plane: { origin: [number, number, number]; normal: [number, number, number]; xAxis: [number, number, number] },
+  ): { x: number; y: number } | null {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+
+    this.raycaster.setFromCamera(ndc, this.camera);
+
+    const planeNormal = new THREE.Vector3(...plane.normal);
+    const planePoint = new THREE.Vector3(...plane.origin);
+    const threePlane = new THREE.Plane().setFromNormalAndCoplanarPoint(planeNormal, planePoint);
+
+    const intersection = new THREE.Vector3();
+    if (!this.raycaster.ray.intersectPlane(threePlane, intersection)) return null;
+
+    // Convert 3D intersection to 2D plane coordinates
+    const delta = intersection.clone().sub(planePoint);
+    const xAxis = new THREE.Vector3(...plane.xAxis);
+    // yAxis = cross(xAxis, normal) — matches sketch editor convention
+    const yAxis = new THREE.Vector3().crossVectors(xAxis, planeNormal);
+
+    return { x: delta.dot(xAxis), y: delta.dot(yAxis) };
+  }
+
+  /** Render line segments for the inline sketch (completed + in-progress entities). */
+  setInlineSketchLines(
+    positions: Float32Array | null,
+    previewPositions: Float32Array | null,
+    constructionPositions?: Float32Array | null,
+  ) {
+    this.ensureInlineSketchGroup();
+    this.clearGroup(this.inlineSketchGroup);
+
+    // Completed entities — solid yellow
+    if (positions && positions.length > 0) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      const mat = new THREE.LineBasicMaterial({ color: 0xfbbf24, linewidth: 2, depthTest: false });
+      this.inlineSketchGroup.add(new THREE.LineSegments(geo, mat));
+    }
+
+    // Construction entities — dashed orange
+    if (constructionPositions && constructionPositions.length > 0) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(constructionPositions, 3));
+      const mat = new THREE.LineDashedMaterial({
+        color: 0xf97316,
+        dashSize: 1.5,
+        gapSize: 1,
+        linewidth: 1,
+        depthTest: false,
+      });
+      const line = new THREE.LineSegments(geo, mat);
+      line.computeLineDistances();
+      this.inlineSketchGroup.add(line);
+    }
+
+    // In-progress preview — dashed cyan
+    if (previewPositions && previewPositions.length > 0) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(previewPositions, 3));
+      const mat = new THREE.LineDashedMaterial({
+        color: 0x22d3ee,
+        dashSize: 2,
+        gapSize: 1,
+        linewidth: 1,
+        depthTest: false,
+      });
+      const line = new THREE.LineSegments(geo, mat);
+      line.computeLineDistances();
+      this.inlineSketchGroup.add(line);
+    }
+  }
+
+  clearInlineSketch() {
+    this.clearGroup(this.inlineSketchGroup);
+  }
+
+  /** Get the renderer's DOM element for attaching mouse handlers. */
+  getCanvas(): HTMLCanvasElement {
+    return this.renderer.domElement;
   }
 
   dispose() {

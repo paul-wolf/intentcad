@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { usePartStore } from '@/stores/partStore';
 import { usePartEditorStore } from '@/stores/partEditorStore';
 import { useThemeStore } from '@/theme';
@@ -8,7 +8,7 @@ import { api } from '@/api/client';
 import { setPartBackendId, startPartAutoSave } from '@/api/partAutoSave';
 import { PartViewport, type DragInteractionCallbacks } from '@/part/PartViewport';
 import { evaluateFeatures, exportFeaturesToSTEP } from '@/part/featureEngine';
-import type { EdgeData } from '@/part/occt/tessellate';
+import type { EdgeData } from '@/part/featureEngine';
 import { exportSTL } from '@/part/stlExport';
 import { buildSketchOverlay } from '@/part/sketchOverlay';
 import { PartToolbar } from './PartToolbar';
@@ -21,13 +21,12 @@ import { FilletForm } from './FilletForm';
 import { ChamferForm } from './ChamferForm';
 import { LoftForm, type LoftFormHandle } from './LoftForm';
 import { ConstructionPlaneForm, type ConstructionPlaneFormHandle } from './ConstructionPlaneForm';
+import { InlineSketchOverlay } from './InlineSketchOverlay';
 import type { Part, Feature, ExtrudeFeature, RevolveFeature, FilletFeature, ChamferFeature, LoftFeature, ConstructionPlaneFeature, Plane } from '@/types/part';
 import { DEFAULT_XY_PLANE, PLANE_PRESETS, planeWithOffset } from '@/types/part';
 import type { Document } from '@/types/document';
 import { useDocumentStore } from '@/stores/documentStore';
 import { migrateDocument } from '@/utils/document';
-import { generateId } from '@/utils/id';
-import type { LineEntity } from '@/types/document';
 
 function computeXAxis(normal: [number, number, number]): [number, number, number] {
   const ref: [number, number, number] = Math.abs(normal[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
@@ -60,7 +59,6 @@ function collectDocIds(features: Feature[]): string[] {
 
 export function PartEditorPage() {
   const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
   const part = usePartStore((s) => s.part);
   const setPart = usePartStore((s) => s.setPart);
   const beginTransaction = usePartStore((s) => s.beginTransaction);
@@ -82,6 +80,7 @@ export function PartEditorPage() {
   const [selectedEdges, setSelectedEdges] = useState<number[]>([]);
   const [activeLoftSection, setActiveLoftSection] = useState(1);
   const [sketchOnFacePending, setSketchOnFacePending] = useState(false);
+  const [inlineSketch, setInlineSketch] = useState<{ plane: Plane; sketchId: string } | null>(null);
   const edgeDataRef = useRef<EdgeData | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -93,6 +92,7 @@ export function PartEditorPage() {
   const revolveFormRef = useRef<RevolveFormHandle>(null);
   const loftFormRef = useRef<LoftFormHandle>(null);
   const constructionPlaneFormRef = useRef<ConstructionPlaneFormHandle>(null);
+  const handleSketchOnPlaneRef = useRef<(plane: Plane) => void>(() => {});
 
   // Load part from backend
   useEffect(() => {
@@ -169,7 +169,7 @@ export function PartEditorPage() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Enable face picking for "Sketch on Face" mode
+  // Enable face picking for "Sketch on Face" mode — enters inline sketch on the clicked face
   useEffect(() => {
     const vp = viewportRef.current;
     if (!vp || !sketchOnFacePending) return;
@@ -185,76 +185,12 @@ export function PartEditorPage() {
       const origin: [number, number, number] = [normal[0] * depth, normal[1] * depth, normal[2] * depth];
       const plane: Plane = { origin, normal, xAxis };
 
-      // Compute yAxis = xAxis × normal (matches screen-Y-down convention in 2D sketch editor)
-      const yAxis: [number, number, number] = [
-        xAxis[1] * normal[2] - xAxis[2] * normal[1],
-        xAxis[2] * normal[0] - xAxis[0] * normal[2],
-        xAxis[0] * normal[1] - xAxis[1] * normal[0],
-      ];
-
-      // Project 3D boundary loops onto the 2D sketch plane as construction lines
-      const constructionEntities: LineEntity[] = [];
-      for (const loop of info.boundaryLoops) {
-        if (loop.length < 2) continue;
-        const points = loop.map((pt) => {
-          const dx = pt[0] - origin[0];
-          const dy = pt[1] - origin[1];
-          const dz = pt[2] - origin[2];
-          return {
-            x: dx * xAxis[0] + dy * xAxis[1] + dz * xAxis[2],
-            y: dx * yAxis[0] + dy * yAxis[1] + dz * yAxis[2],
-          };
-        });
-        constructionEntities.push({
-          id: generateId('ln'),
-          type: 'line',
-          points,
-          construction: true,
-        });
-      }
-
-      const currentPart = usePartStore.getState().part;
-      const docId = currentPart.documentId;
-      if (!docId || !id) return;
-
-      try {
-        // Load the document into documentStore
-        const full = await api.getDocument(docId);
-        const doc = migrateDocument(full.data as unknown as Document);
-        useDocumentStore.getState().setDocument(doc);
-
-        // Create a new sketch with the face plane
-        const sketchName = `Face Sketch ${doc.sketches.length + 1}`;
-        const sketchId = useDocumentStore.getState().addSketch(sketchName, plane);
-
-        // Add face boundary as construction geometry
-        const docStore = useDocumentStore.getState();
-        for (const entity of constructionEntities) {
-          docStore.addEntity(entity);
-        }
-
-        // Save back to backend
-        const updatedDoc = useDocumentStore.getState().document;
-        await api.updateDocument(docId, { name: updatedDoc.name, data: updatedDoc as unknown as Record<string, unknown> });
-
-        // Write intent to sessionStorage — use `id` (the backend/URL ID), not
-        // currentPart.id which may differ from the backend ID
-        sessionStorage.setItem('sketchOnFace_intent', JSON.stringify({
-          returnToPartId: id,
-          sketchId,
-          plane,
-          sketchDocumentId: docId,
-        }));
-
-        // Navigate to the 2D sketch editor
-        navigate(`/edit/${docId}`);
-      } catch (err) {
-        console.error('Sketch on face failed:', err);
-      }
+      // Enter inline sketch mode on this face
+      handleSketchOnPlaneRef.current(plane);
     });
 
     return () => vp.disableFacePicking();
-  }, [sketchOnFacePending, navigate]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sketchOnFacePending]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Initialize Three.js viewport
   useEffect(() => {
@@ -875,29 +811,67 @@ export function PartEditorPage() {
   const handleSketchOnPlane = useCallback((plane: Plane) => {
     const currentPart = usePartStore.getState().part;
     const docId = currentPart.documentId;
-    if (!docId || !id) return;
+    if (!docId) return;
 
     (async () => {
       const full = await api.getDocument(docId);
       const doc = migrateDocument(full.data as unknown as Document);
       useDocumentStore.getState().setDocument(doc);
-      const sketchName = `Plane Sketch ${doc.sketches.length + 1}`;
+      const sketchName = `Sketch ${doc.sketches.length + 1}`;
       const sketchId = useDocumentStore.getState().addSketch(sketchName, plane);
-      const updatedDoc = useDocumentStore.getState().document;
-      await api.updateDocument(docId, { name: updatedDoc.name, data: updatedDoc as unknown as Record<string, unknown> });
-      sessionStorage.setItem('sketchOnFace_intent', JSON.stringify({
-        returnToPartId: id,
-        sketchId,
-        plane,
-        sketchDocumentId: docId,
-      }));
-      navigate(`/edit/${docId}`);
+
+      // Enter inline sketch mode
+      const vp = viewportRef.current;
+      if (vp) {
+        vp.alignCameraToPlane(plane);
+        vp.setOrbitEnabled(false);
+        vp.setEdgeHighlightEnabled(false);
+      }
+      clearDraft();
+      setInlineSketch({ plane, sketchId });
     })().catch((err) => console.error('Sketch on plane failed:', err));
-  }, [id, navigate]);
+  }, [clearDraft]);
+  handleSketchOnPlaneRef.current = handleSketchOnPlane;
 
   const handleSketchOnFace = useCallback(() => {
     setSketchOnFacePending(true);
   }, []);
+
+  const handleInlineSketchDone = useCallback(async () => {
+    const sketch = inlineSketch;
+    if (!sketch) return;
+
+    // Save the document with the new sketch entities
+    const currentPart = usePartStore.getState().part;
+    const docId = currentPart.documentId;
+    if (docId) {
+      const updatedDoc = useDocumentStore.getState().document;
+      await api.updateDocument(docId, { name: updatedDoc.name, data: updatedDoc as unknown as Record<string, unknown> });
+    }
+
+    // Restore viewport
+    const vp = viewportRef.current;
+    if (vp) {
+      vp.clearInlineSketch();
+      vp.restoreCamera();
+      vp.setOrbitEnabled(true);
+      vp.setEdgeHighlightEnabled(true);
+    }
+
+    setInlineSketch(null);
+
+    // Auto-start an extrude draft with this sketch + plane
+    startCreating({
+      id: crypto.randomUUID(),
+      type: 'extrude',
+      sketchDocumentId: docId,
+      sketchId: sketch.sketchId,
+      plane: sketch.plane,
+      distance: 20,
+      direction: 'forward',
+      operation: 'add',
+    });
+  }, [inlineSketch, startCreating]);
 
   const handleEditFeature = useCallback((feature: Feature) => {
     if (feature.type === 'fillet' || feature.type === 'chamfer') {
@@ -1100,13 +1074,22 @@ export function PartEditorPage() {
         color: palette.text,
       }}
     >
-      <PartToolbar onAddExtrude={handleAddExtrude} onAddRevolve={handleAddRevolve} onAddShell={handleAddShell} onAddFillet={handleAddFillet} onAddChamfer={handleAddChamfer} onAddLoft={handleAddLoft} onAddPlane={handleAddPlane} onSketchOnFace={handleSketchOnFace} onExportSTL={handleExportSTL} onExportSTEP={handleExportSTEP} />
+      <PartToolbar onAddExtrude={handleAddExtrude} onAddRevolve={handleAddRevolve} onAddShell={handleAddShell} onAddFillet={handleAddFillet} onAddChamfer={handleAddChamfer} onAddLoft={handleAddLoft} onAddPlane={handleAddPlane} onSketchOnFace={handleSketchOnFace} onExportSTL={handleExportSTL} onExportSTEP={handleExportSTEP} disabled={!!inlineSketch} />
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative' }}>
         <div
           ref={containerRef}
           style={{ flex: 1, position: 'relative' }}
-        />
+        >
+          {inlineSketch && viewportRef.current && (
+            <InlineSketchOverlay
+              plane={inlineSketch.plane}
+              sketchId={inlineSketch.sketchId}
+              viewport={viewportRef.current}
+              onDone={handleInlineSketchDone}
+            />
+          )}
+        </div>
 
         <div style={{
           width: '240px',

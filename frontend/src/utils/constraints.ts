@@ -98,5 +98,7 @@ export function getEntityRepresentativePoint(entity: Entity): Point | null {
     }
     case 'dimension':
       return null;
+    case 'text':
+      return entity.position;
   }
 }

@@ -95,9 +95,9 @@ export function validateCamJob(
         }
       }
 
-      // Check tool diameter vs hole size
+      // Check tool diameter vs hole size (for drilling, equal is fine)
       for (const e of opEntities) {
-        if (e.type === 'circle' && e.radius * 2 < config.tool.diameter) {
+        if (e.type === 'circle' && e.radius * 2 < config.tool.diameter - 0.01) {
           issues.push({
             severity: 'error',
             message: `Operation ${i + 1}: tool diameter (${config.tool.diameter}mm) is larger than hole diameter (${(e.radius * 2).toFixed(1)}mm)`,

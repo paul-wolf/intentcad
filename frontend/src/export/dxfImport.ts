@@ -80,6 +80,9 @@ function getInt(groups: [number, string][], code: number): number {
 
 // ── Entity converters ──
 
+/** DXF uses Y-up (math convention), our editor uses Y-down (screen convention). */
+function dxfY(y: number): number { return -y; }
+
 function convertLine(e: DxfEntity): Entity {
   const x1 = getFloat(e.groups, 10);
   const y1 = getFloat(e.groups, 20);
@@ -88,7 +91,7 @@ function convertLine(e: DxfEntity): Entity {
   return {
     id: generateId('ln'),
     type: 'line',
-    points: [{ x: x1, y: y1 }, { x: x2, y: y2 }],
+    points: [{ x: x1, y: dxfY(y1) }, { x: x2, y: dxfY(y2) }],
   };
 }
 
@@ -96,7 +99,7 @@ function convertCircle(e: DxfEntity): Entity {
   return {
     id: generateId('cir'),
     type: 'circle',
-    center: { x: getFloat(e.groups, 10), y: getFloat(e.groups, 20) },
+    center: { x: getFloat(e.groups, 10), y: dxfY(getFloat(e.groups, 20)) },
     radius: getFloat(e.groups, 40),
   };
 }
@@ -109,18 +112,18 @@ function convertArc(e: DxfEntity): Entity {
   const endDeg = getFloat(e.groups, 51);
 
   // Convert DXF arc (center, radius, start/end angles in degrees CCW from +X)
-  // to a 2-point line with bulge.
-  const sa = startDeg * Math.PI / 180;
-  const ea = endDeg * Math.PI / 180;
+  // to a 2-point line with bulge. Negate angles to flip from Y-up to Y-down.
+  const sa = -(startDeg * Math.PI / 180);
+  const ea = -(endDeg * Math.PI / 180);
 
-  const p1: Point = { x: cx + r * Math.cos(sa), y: cy + r * Math.sin(sa) };
-  const p2: Point = { x: cx + r * Math.cos(ea), y: cy + r * Math.sin(ea) };
+  const p1: Point = { x: cx + r * Math.cos(sa), y: dxfY(cy) + r * Math.sin(sa) };
+  const p2: Point = { x: cx + r * Math.cos(ea), y: dxfY(cy) + r * Math.sin(ea) };
 
-  // Included angle (DXF arcs go CCW)
+  // Included angle — in Y-down space, CW becomes the positive arc direction
   let theta = ea - sa;
-  if (theta <= 0) theta += 2 * Math.PI;
+  if (theta >= 0) theta -= 2 * Math.PI;
 
-  // bulge = tan(theta/4), positive = left of p1→p2 = CCW
+  // bulge = tan(theta/4), negative = CW in Y-down space
   const bulge = Math.tan(theta / 4);
 
   return {
@@ -158,8 +161,9 @@ function convertLwpolyline(e: DxfEntity): Entity {
   }
 
   for (let i = 0; i < xs.length; i++) {
-    points.push({ x: xs[i]!, y: ys[i]! });
-    bulgeArr.push(bulgeMap.get(i) ?? 0);
+    points.push({ x: xs[i]!, y: dxfY(ys[i]!) });
+    // Negate bulge: DXF bulge is CCW-positive (Y-up), we need CW-positive (Y-down)
+    bulgeArr.push(-(bulgeMap.get(i) ?? 0));
   }
 
   return {
@@ -175,7 +179,46 @@ function convertPoint(e: DxfEntity): Entity {
   return {
     id: generateId('pt'),
     type: 'point',
-    position: { x: getFloat(e.groups, 10), y: getFloat(e.groups, 20) },
+    position: { x: getFloat(e.groups, 10), y: dxfY(getFloat(e.groups, 20)) },
+  };
+}
+
+function convertText(e: DxfEntity): Entity {
+  const x = getFloat(e.groups, 10);
+  const y = getFloat(e.groups, 20);
+  const height = getFloat(e.groups, 40);
+  const rotation = getFloat(e.groups, 50);
+  // Group code 1 holds the text string
+  const textValue = e.groups.find(([c]) => c === 1)?.[1] ?? '';
+  return {
+    id: generateId('txt'),
+    type: 'text',
+    position: { x, y: dxfY(y) },
+    text: textValue,
+    height: height || 2.5,
+    rotation: rotation || undefined,
+  };
+}
+
+function convertMtext(e: DxfEntity): Entity {
+  const x = getFloat(e.groups, 10);
+  const y = getFloat(e.groups, 20);
+  const height = getFloat(e.groups, 40);
+  const rotation = getFloat(e.groups, 50);
+  // MTEXT content can span multiple group-1 entries and contain formatting codes
+  let textValue = '';
+  for (const [c, v] of e.groups) {
+    if (c === 1 || c === 3) textValue += v; // 3 = additional text chunks
+  }
+  // Strip MTEXT formatting codes like {\fArial|...;text}
+  textValue = textValue.replace(/\\[A-Za-z][^;]*;/g, '').replace(/[{}]/g, '').replace(/\\P/g, '\n').trim();
+  return {
+    id: generateId('txt'),
+    type: 'text',
+    position: { x, y: dxfY(y) },
+    text: textValue,
+    height: height || 2.5,
+    rotation: rotation || undefined,
   };
 }
 
@@ -199,7 +242,7 @@ function convertSpline(e: DxfEntity): Entity[] {
 
   const ctrlPts: Point[] = [];
   for (let i = 0; i < nCtrl; i++) {
-    ctrlPts.push({ x: xs[i]!, y: ys[i]! });
+    ctrlPts.push({ x: xs[i]!, y: dxfY(ys[i]!) });
   }
 
   // Decompose cubic B-spline into Bezier segments via knot insertion.
@@ -318,6 +361,12 @@ export function importDxf(text: string): DxfImportResult {
         break;
       case 'POINT':
         entities.push(convertPoint(e));
+        break;
+      case 'TEXT':
+        entities.push(convertText(e));
+        break;
+      case 'MTEXT':
+        entities.push(convertMtext(e));
         break;
       case 'SPLINE': {
         const beziers = convertSpline(e);

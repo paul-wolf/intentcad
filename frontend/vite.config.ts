@@ -10,6 +10,9 @@ export default defineConfig({
     },
   },
   assetsInclude: ['**/*.wasm'],
+  worker: {
+    format: 'es',
+  },
   optimizeDeps: {
     exclude: ['opencascade.js'],
   },

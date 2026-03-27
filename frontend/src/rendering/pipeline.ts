@@ -1,5 +1,6 @@
 import type { Renderer, Viewport, LineStyle } from '@/types/renderer';
 import type { Document, Entity, LineEntity, Point } from '@/types/document';
+import type { Canvas2DRenderer } from './canvas2d';
 import type { Tool } from '@/tools/types';
 import type { ThemePalette } from '@/theme';
 import type { SelectedPoint } from '@/stores/editorStore';
@@ -331,6 +332,22 @@ function renderActiveSketch(ctx: RenderContext) {
           renderer.fillCircle(s1, ENDPOINT_RADIUS, style.color);
           renderer.fillCircle(s2, ENDPOINT_RADIUS, style.color);
           renderer.fillCircle(s3, ENDPOINT_RADIUS, style.color);
+        }
+        break;
+      }
+      case 'text': {
+        const style = pickStyle(styles, isSelected, !!entity.construction, false, isRelated);
+        const screenPos = viewport.worldToScreen(entity.position);
+        const screenHeight = entity.height * viewport.scale;
+        const fontSize = Math.max(8, Math.min(screenHeight, 200));
+        const ctx2 = renderer as Canvas2DRenderer;
+        if (ctx2.drawText) {
+          ctx2.drawText(entity.text, screenPos, {
+            fontSize,
+            color: style.color,
+            textAlign: 'left',
+            textBaseline: 'bottom',
+          });
         }
         break;
       }
@@ -672,6 +689,21 @@ function renderEntity(
       // Endpoint dots (P0 and P3)
       renderer.fillCircle(s0, ENDPOINT_RADIUS, style.color);
       renderer.fillCircle(s3, ENDPOINT_RADIUS, style.color);
+      break;
+    }
+    case 'text': {
+      const screenPos = viewport.worldToScreen(entity.position);
+      const screenHeight = entity.height * viewport.scale;
+      const fontSize = Math.max(8, Math.min(screenHeight, 200));
+      const r = renderer as Canvas2DRenderer;
+      if (r.drawText) {
+        r.drawText(entity.text, screenPos, {
+          fontSize,
+          color: style.color,
+          textAlign: 'left',
+          textBaseline: 'bottom',
+        });
+      }
       break;
     }
   }
