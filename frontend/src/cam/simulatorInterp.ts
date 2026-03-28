@@ -27,14 +27,16 @@ function arcSweep(from: Point, move: ToolpathMove & { kind: 'arc' }): { radius: 
 
 /**
  * Compute the length of a toolpath move (linear distance or arc length).
+ * Includes Z distance for plunge/retract moves.
  */
-export function moveLength(from: Point, move: ToolpathMove): number {
+export function moveLength(from: Point, move: ToolpathMove, fromZ?: number): number {
   switch (move.kind) {
     case 'rapid':
     case 'linear': {
       const dx = move.to.x - from.x;
       const dy = move.to.y - from.y;
-      return Math.sqrt(dx * dx + dy * dy);
+      const dz = fromZ !== undefined ? move.z - fromZ : 0;
+      return Math.sqrt(dx * dx + dy * dy + dz * dz);
     }
     case 'arc': {
       const { radius, sweep } = arcSweep(from, move);

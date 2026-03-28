@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useState } from 'react';
+import { useMemo, useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Toolbar } from './Toolbar';
 import { StatusBar } from './StatusBar';
@@ -35,9 +35,105 @@ import type { Tool } from '@/tools/types';
 function SimDepthIndicator() {
   const simState = useCamStore((s) => s.simState);
   const simZ = useCamStore((s) => s.simZ);
+  const simMoveIndex = useCamStore((s) => s.simMoveIndex);
+  const simProgress = useCamStore((s) => s.simProgress);
+  const toolpath = useCamStore((s) => s.toolpath);
   const palette = useThemeStore((s) => s.palette);
 
+  const CHART_W = 260;
+  const CHART_H = 60;
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const samplesRef = useRef<number[]>([]);
+  const prevStateRef = useRef<string>('idle');
+
+  // Reset samples when simulation starts
+  if (simState !== 'idle' && prevStateRef.current === 'idle') {
+    samplesRef.current = [];
+  }
+  prevStateRef.current = simState;
+
+  // Compute Z range from toolpath
+  const { minZ, maxZ } = useMemo(() => {
+    if (!toolpath || toolpath.length === 0) return { minZ: -10, maxZ: 5 };
+    let lo = 0, hi = 0;
+    for (const m of toolpath) {
+      if (m.z < lo) lo = m.z;
+      if (m.z > hi) hi = m.z;
+    }
+    return { minZ: lo - 1, maxZ: hi + 1 };
+  }, [toolpath]);
+
+  // Total moves for x-axis scaling
+  const totalMoves = toolpath?.length ?? 1;
+
+  const drawChart = useCallback(() => {
+    const ctx = canvasRef.current?.getContext('2d');
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = CHART_W * dpr;
+    const h = CHART_H * dpr;
+
+    ctx.clearRect(0, 0, w, h);
+    const range = maxZ - minZ || 1;
+    const toY = (z: number) => ((maxZ - z) / range) * h;
+    const toX = (i: number) => (i / totalMoves) * w;
+
+    // Z=0 reference line
+    const zeroY = toY(0);
+    ctx.strokeStyle = palette.text + '40';
+    ctx.lineWidth = dpr;
+    ctx.setLineDash([4 * dpr, 4 * dpr]);
+    ctx.beginPath();
+    ctx.moveTo(0, zeroY);
+    ctx.lineTo(w, zeroY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Z=0 label
+    ctx.fillStyle = palette.text + '60';
+    ctx.font = `${9 * dpr}px monospace`;
+    ctx.fillText('0', 2 * dpr, zeroY - 2 * dpr);
+
+    // Z trace
+    const samples = samplesRef.current;
+    if (samples.length < 2) return;
+    ctx.strokeStyle = '#ff8c00';
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(toX(0), toY(samples[0]!));
+    for (let i = 1; i < samples.length; i++) {
+      ctx.lineTo(toX(i), toY(samples[i]!));
+    }
+    ctx.stroke();
+
+    // Current position marker
+    const lastSample = samples[samples.length - 1]!;
+    const cx = toX(samples.length - 1);
+    const cy = toY(lastSample);
+    ctx.fillStyle = '#ff8c00';
+    ctx.beginPath();
+    ctx.arc(cx, cy, 3 * dpr, 0, Math.PI * 2);
+    ctx.fill();
+  }, [maxZ, minZ, totalMoves, palette.text]);
+
+  // Record sample and redraw on each sim update
+  useEffect(() => {
+    if (simState === 'idle' || simZ === null) return;
+    // Use fractional move index as sample position
+    const sampleIdx = simMoveIndex + simProgress;
+    // Extend samples array to current position
+    const samples = samplesRef.current;
+    const targetLen = Math.ceil(sampleIdx) + 1;
+    while (samples.length < targetLen) {
+      samples.push(simZ);
+    }
+    samples[samples.length - 1] = simZ;
+    drawChart();
+  }, [simState, simZ, simMoveIndex, simProgress, drawChart]);
+
   if (simState === 'idle' || simZ === null) return null;
+
+  const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
 
   return (
     <div style={{
@@ -48,10 +144,14 @@ function SimDepthIndicator() {
       background: palette.panelBg,
       border: `1px solid ${palette.border}`,
       borderRadius: '6px',
-      padding: '6px 16px',
+      padding: '6px 16px 8px',
       zIndex: 10,
       pointerEvents: 'none',
       boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      gap: '4px',
     }}>
       <span style={{
         fontFamily: 'monospace',
@@ -61,6 +161,12 @@ function SimDepthIndicator() {
       }}>
         Z {simZ.toFixed(2)}
       </span>
+      <canvas
+        ref={canvasRef}
+        width={CHART_W * dpr}
+        height={CHART_H * dpr}
+        style={{ width: CHART_W, height: CHART_H, borderRadius: '4px' }}
+      />
     </div>
   );
 }

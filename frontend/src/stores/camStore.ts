@@ -491,8 +491,10 @@ export const useCamStore = create<CamStore>((set, get) => ({
     const clampedDt = Math.min(dtMs, 50);
 
     let startPos = { ...origin };
+    let startZ = get().jobConfig.operations[0]?.cutting.safeZ ?? 5;
     for (let i = 0; i < simMoveIndex; i++) {
       startPos = toolpath[i]!.to;
+      startZ = toolpath[i]!.z;
     }
 
     let maxFeed = 0;
@@ -505,6 +507,7 @@ export const useCamStore = create<CamStore>((set, get) => ({
     let moveIdx = simMoveIndex;
     let progress = simProgress;
     let from = startPos;
+    let fromZ = startZ;
 
     while (remainingTime > 0 && moveIdx < toolpath.length) {
       const move = toolpath[moveIdx]!;
@@ -512,11 +515,12 @@ export const useCamStore = create<CamStore>((set, get) => ({
       if (feedRate <= 0) feedRate = rapidRate;
       const speed = (feedRate / 60) * simSpeed;
 
-      const len = moveLength(from, move);
+      const len = moveLength(from, move, fromZ);
       if (len <= 0) {
         moveIdx++;
         progress = 0;
         from = move.to;
+        fromZ = move.z;
         continue;
       }
 
@@ -528,6 +532,7 @@ export const useCamStore = create<CamStore>((set, get) => ({
         moveIdx++;
         progress = 0;
         from = move.to;
+        fromZ = move.z;
       } else {
         const distAdvanced = remainingTime * speed;
         progress += distAdvanced / len;
