@@ -579,7 +579,15 @@ export const useCamStore = create<CamStore>((set, get) => ({
     if (opening && !get().activeJobId) {
       const docId = getBackendId();
       if (docId) {
-        await get().createJob(docId, `Job ${new Date().toLocaleString()}`);
+        // Try to reuse the most recent job for this document
+        await get().loadJobs(docId);
+        const existing = get().jobs;
+        if (existing.length > 0) {
+          // Open the most recent job
+          await get().openJob(existing[0]!.id);
+        } else {
+          await get().createJob(docId, `Job ${new Date().toLocaleString()}`);
+        }
       }
     }
   },
@@ -641,13 +649,9 @@ useCamStore.subscribe(
   (state, prev) => {
     if (!_lastDocId) return;
     if (state.camPanelOpen === prev.camPanelOpen && state.activeJobId === prev.activeJobId) return;
-    if (state.camPanelOpen) {
-      localStorage.setItem(`cam:${_lastDocId}`, JSON.stringify({
-        activeJobId: state.activeJobId,
-        camPanelOpen: true,
-      }));
-    } else {
-      localStorage.removeItem(`cam:${_lastDocId}`);
-    }
+    localStorage.setItem(`cam:${_lastDocId}`, JSON.stringify({
+      activeJobId: state.activeJobId,
+      camPanelOpen: state.camPanelOpen,
+    }));
   },
 );
