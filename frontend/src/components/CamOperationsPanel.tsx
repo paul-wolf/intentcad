@@ -6,7 +6,7 @@ import { addLog } from '@/stores/logStore';
 import type { CutSide } from '@/types/cam';
 import { GcodePreview } from './GcodePreview';
 
-export function CamOperationsPanel() {
+export function CamOperationsPanel({ onShowCutting }: { onShowCutting?: () => void }) {
   const palette = useThemeStore((s) => s.palette);
   const doc = useDocumentStore((s) => s.document);
   const jobConfig = useCamStore((s) => s.jobConfig);
@@ -331,7 +331,7 @@ export function CamOperationsPanel() {
                 )}
               </div>
               <div
-                onClick={() => setFocusedOperation(i)}
+                onClick={() => { setFocusedOperation(i); onShowCutting?.(); }}
                 style={{
                   fontSize: '12px',
                   color: isFocused ? opColor : palette.text,

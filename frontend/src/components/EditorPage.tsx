@@ -9,6 +9,7 @@ import { HistoryPanel } from './HistoryPanel';
 import { DocumentPropertiesPanel } from './DocumentPropertiesPanel';
 import { GcodePanel } from './GcodePanel';
 import { CamOperationsPanel } from './CamOperationsPanel';
+import { OperationCuttingPanel } from './OperationCuttingPanel';
 import { HelpModal } from './HelpModal';
 import { CanvasContainer } from '@/canvas/CanvasContainer';
 import { useEditorStore } from '@/stores/editorStore';
@@ -93,6 +94,8 @@ export function EditorPage() {
   const activeTool = useEditorStore((s) => s.activeTool);
   const setActiveTool = useEditorStore((s) => s.setActiveTool);
   const camPanelOpen = useCamStore((s) => s.camPanelOpen);
+  const focusedOperationIndex = useCamStore((s) => s.focusedOperationIndex);
+  const [showCuttingPanel, setShowCuttingPanel] = useState(true);
   const [sketchOnFaceIntent, setSketchOnFaceIntent] = useState<SketchOnFaceIntent | null>(null);
   const [showHelp, setShowHelp] = useState(false);
 
@@ -305,7 +308,10 @@ export function EditorPage() {
       )}
       <div style={styles.middle}>
         {!camPanelOpen && <HistoryPanel />}
-        {camPanelOpen && <CamOperationsPanel />}
+        {camPanelOpen && <CamOperationsPanel onShowCutting={() => setShowCuttingPanel(true)} />}
+        {camPanelOpen && showCuttingPanel && focusedOperationIndex !== null && (
+          <OperationCuttingPanel onClose={() => setShowCuttingPanel(false)} />
+        )}
         <CanvasContainer activeTool={toolInstance} docId={id} />
         {camPanelOpen && <SimDepthIndicator />}
         {!camPanelOpen && <DocumentPropertiesPanel />}
