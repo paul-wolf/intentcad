@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useThemeStore } from '@/theme';
 import { createEmptyDocument, migrateDocument, generateDateName } from '@/utils/document';
-import { api, partApi, type DocumentListItem, type PartListItem } from '@/api/client';
+import { api, partApi, type DocumentListItem, type PartListItem } from '@/api/cachedClient';
 import { setBackendId, setProjectContext } from '@/api/autoSave';
 import type { Document } from '@/types/document';
 import { DocumentThumbnail } from './DocumentThumbnail';

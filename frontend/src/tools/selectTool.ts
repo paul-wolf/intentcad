@@ -21,6 +21,7 @@ import type { DimensionEntity } from '@/types/document';
 import { snapPosition, type SnapResult } from '@/snap/snap';
 import { getStyles } from '@/rendering/styles';
 import { SNAP_INDICATOR_RADIUS } from '@/config';
+import { traceContour } from '@/utils/contourTrace';
 
 /** Filter entities for CAM mode: remove construction, dimension, and standalone points */
 function filterEntitiesForCam(entities: Entity[]): Entity[] {
@@ -505,7 +506,15 @@ export function createSelectTool(): Tool {
           if (dblEntities) {
             const hit = hitTestEntities(screenPos, dblEntities, ctx.viewport, dblEntities);
             if (hit) {
-              if (hit.type === 'dimension') {
+              if (isCamClick) {
+                // CAM mode: trace connected contour and select all entities in it
+                const contourIds = traceContour(hit, dblEntities);
+                useEditorStore.getState().setSelectedPoints([]);
+                useEditorStore.getState().setSelectedSegments([]);
+                useEditorStore.getState().setSelectedEntityIds(contourIds);
+                useCamStore.getState().setOperationEntities([...contourIds]);
+                addLog('info', `Selected contour: ${contourIds.size} entities`);
+              } else if (hit.type === 'dimension') {
                 useEditorStore.getState().setEditingDimensionId(hit.id);
               } else {
                 useEditorStore.getState().setSelectedPoints([]);

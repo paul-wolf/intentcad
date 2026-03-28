@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useThemeStore } from '@/theme';
-import { partApi, type PartListItem } from '@/api/client';
+import { partApi, type PartListItem } from '@/api/cachedClient';
 import { getBackendId, flushSave } from '@/api/autoSave';
 import type { Part } from '@/types/part';
 import { PartThumbnail } from './PartThumbnail';

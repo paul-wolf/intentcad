@@ -169,30 +169,80 @@ export function generateGcode(
 }
 
 /**
- * Group segments into connected contours.
- * Consecutive segments where seg[i].to ≈ seg[i+1].from are in the same contour.
- * Disconnected segments start a new contour.
+ * Group segments into connected contours by tracing endpoint connectivity.
+ * Segments are chained so that seg[i].to ≈ seg[i+1].from within each group.
+ * Segments may be reversed if needed to maintain chain continuity.
  */
 function groupContours(segments: CncSegment[]): CncSegment[][] {
   if (segments.length === 0) return [];
 
+  const TOL = 0.5; // matching tolerance
+  const used = new Array(segments.length).fill(false);
   const groups: CncSegment[][] = [];
-  let current: CncSegment[] = [segments[0]!];
 
-  for (let i = 1; i < segments.length; i++) {
-    const seg = segments[i]!;
-    const prev = current[current.length - 1]!;
-    const dx = seg.from.x - prev.to.x;
-    const dy = seg.from.y - prev.to.y;
+  for (let start = 0; start < segments.length; start++) {
+    if (used[start]) continue;
+    used[start] = true;
+    const chain: CncSegment[] = [segments[start]!];
 
-    if (dx * dx + dy * dy < 1e-4) {
-      current.push(seg);
-    } else {
-      groups.push(current);
-      current = [seg];
+    // Extend forward: find a segment whose start matches chain tail
+    let changed = true;
+    while (changed) {
+      changed = false;
+      const tail = chain[chain.length - 1]!.to;
+      for (let i = 0; i < segments.length; i++) {
+        if (used[i]) continue;
+        const s = segments[i]!;
+        const dxF = s.from.x - tail.x;
+        const dyF = s.from.y - tail.y;
+        if (dxF * dxF + dyF * dyF < TOL * TOL) {
+          chain.push(s);
+          used[i] = true;
+          changed = true;
+          break;
+        }
+        // Try reversed
+        const dxR = s.to.x - tail.x;
+        const dyR = s.to.y - tail.y;
+        if (dxR * dxR + dyR * dyR < TOL * TOL) {
+          chain.push({ from: s.to, to: s.from, bulge: -s.bulge });
+          used[i] = true;
+          changed = true;
+          break;
+        }
+      }
     }
+
+    // Extend backward: find a segment whose end matches chain head
+    changed = true;
+    while (changed) {
+      changed = false;
+      const head = chain[0]!.from;
+      for (let i = 0; i < segments.length; i++) {
+        if (used[i]) continue;
+        const s = segments[i]!;
+        const dxT = s.to.x - head.x;
+        const dyT = s.to.y - head.y;
+        if (dxT * dxT + dyT * dyT < TOL * TOL) {
+          chain.unshift(s);
+          used[i] = true;
+          changed = true;
+          break;
+        }
+        // Try reversed
+        const dxR = s.from.x - head.x;
+        const dyR = s.from.y - head.y;
+        if (dxR * dxR + dyR * dyR < TOL * TOL) {
+          chain.unshift({ from: s.to, to: s.from, bulge: -s.bulge });
+          used[i] = true;
+          changed = true;
+          break;
+        }
+      }
+    }
+
+    groups.push(chain);
   }
 
-  groups.push(current);
   return groups;
 }

@@ -62,6 +62,7 @@ interface CamStore {
   moveOperation(index: number, direction: -1 | 1): void;
 
   assignSelectedEntities(entityIds: string[]): void;
+  setOperationEntities(entityIds: string[]): void;
   setFocusedOperation(index: number | null): void;
   setPickingOrigin(picking: boolean): void;
   setOrigin(point: Point): void;
@@ -358,6 +359,16 @@ export const useCamStore = create<CamStore>((set, get) => ({
     }
     const operations = [...jobConfig.operations];
     operations[focusedOperationIndex] = { ...op, entityIds: updated } as CamOperation;
+    set({ jobConfig: { ...jobConfig, operations } });
+  },
+
+  setOperationEntities(entityIds: string[]) {
+    const { focusedOperationIndex, jobConfig } = get();
+    if (focusedOperationIndex === null) return;
+    const op = jobConfig.operations[focusedOperationIndex];
+    if (!op) return;
+    const operations = [...jobConfig.operations];
+    operations[focusedOperationIndex] = { ...op, entityIds: [...entityIds] } as CamOperation;
     set({ jobConfig: { ...jobConfig, operations } });
   },
 

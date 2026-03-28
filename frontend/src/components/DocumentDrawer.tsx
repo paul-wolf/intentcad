@@ -4,7 +4,7 @@ import { useDocumentStore } from '@/stores/documentStore';
 import { useUIStateStore } from '@/stores/uiStateStore';
 import { useThemeStore } from '@/theme';
 import { createEmptyDocument, migrateDocument, generateDateName } from '@/utils/document';
-import { api, type DocumentListItem } from '@/api/client';
+import { api, type DocumentListItem } from '@/api/cachedClient';
 import { setBackendId, getBackendId, getProjectId, flushSave } from '@/api/autoSave';
 import type { Document } from '@/types/document';
 import { DocumentThumbnail } from './DocumentThumbnail';

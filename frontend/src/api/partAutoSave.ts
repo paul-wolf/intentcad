@@ -1,6 +1,6 @@
 import { usePartStore } from '@/stores/partStore';
 import { addLog } from '@/stores/logStore';
-import { partApi } from './client';
+import { partApi } from './cachedClient';
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 let backendId: string | null = null;

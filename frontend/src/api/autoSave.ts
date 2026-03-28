@@ -1,6 +1,6 @@
 import { useDocumentStore } from '@/stores/documentStore';
 import { addLog } from '@/stores/logStore';
-import { api } from './client';
+import { api } from './cachedClient';
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 let backendId: string | null = null;

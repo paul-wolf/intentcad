@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 import { useThemeStore } from '@/theme';
 import { projectApi } from '@/api/projectClient';
-import { api, type DocumentListItem } from '@/api/client';
+import { api, type DocumentListItem } from '@/api/cachedClient';
 import { useDocumentStore } from '@/stores/documentStore';
 import { migrateDocument } from '@/utils/document';
 import { setBackendId, setProjectContext } from '@/api/autoSave';

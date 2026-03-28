@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
-import { api } from '@/api/client';
+import { api } from '@/api/cachedClient';
 import { useThemeStore } from '@/theme';
 import type { Document, LineEntity } from '@/types/document';
 import type { RevolveFeature, Plane, Feature } from '@/types/part';

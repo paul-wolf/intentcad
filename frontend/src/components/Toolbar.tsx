@@ -12,7 +12,7 @@ import { getEntityPoint, getEntityPoints } from '@/utils/entityPoints';
 import { getSegmentCount } from '@/utils/lineSegments';
 import { requestSave, getBackendId, flushSaveAsync } from '@/api/autoSave';
 import { addLog } from '@/stores/logStore';
-import { api, partApi } from '@/api/client';
+import { api, partApi } from '@/api/cachedClient';
 import type { ToolType } from '@/types/editor';
 import type { ThemePalette } from '@/theme';
 import type { ReactNode } from 'react';

@@ -1,4 +1,6 @@
-from django.urls import path
+from django.conf import settings
+from django.http import FileResponse
+from django.urls import path, re_path
 from ninja import NinjaAPI
 
 from accounts.api import router as auth_router
@@ -14,6 +16,16 @@ api.add_router("/documents", documents_router)
 api.add_router("/parts", parts_router)
 api.add_router("/cam", cam_router)
 
+
+def spa_index(request):
+    index = settings.WHITENOISE_ROOT / "index.html"
+    if index.exists():
+        return FileResponse(open(index, "rb"), content_type="text/html")
+    from django.http import HttpResponse
+    return HttpResponse("Frontend not built", status=404)
+
+
 urlpatterns = [
     path("api/", api.urls),
+    re_path(r"^(?!api/|static/).*$", spa_index),
 ]

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePartStore } from '@/stores/partStore';
 import { useThemeStore } from '@/theme';
-import { api } from '@/api/client';
+import { api } from '@/api/cachedClient';
 import type { Document, Sketch } from '@/types/document';
 import { getExtrudableEntities } from '@/part/profileDetect';
 import type { ExtrudeFeature } from '@/types/part';

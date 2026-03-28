@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { usePartStore } from '@/stores/partStore';
 import { usePartEditorStore } from '@/stores/partEditorStore';
 import { useThemeStore } from '@/theme';
-import { api } from '@/api/client';
+import { api } from '@/api/cachedClient';
 import type { Feature, ExtrudeFeature, RevolveFeature, FilletFeature, ChamferFeature, LoftFeature, ConstructionPlaneFeature, Plane } from '@/types/part';
 import type { Document } from '@/types/document';
 

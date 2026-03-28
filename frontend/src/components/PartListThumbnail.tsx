@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { partApi } from '@/api/client';
+import { partApi } from '@/api/cachedClient';
 import type { Part } from '@/types/part';
 import { PartThumbnail } from './PartThumbnail';
 

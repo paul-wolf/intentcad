@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
-import { api } from '@/api/client';
+import { api } from '@/api/cachedClient';
 import { useThemeStore } from '@/theme';
 import type { Document } from '@/types/document';
 import type { ExtrudeFeature, ExtrudeDirection, Plane, Feature } from '@/types/part';

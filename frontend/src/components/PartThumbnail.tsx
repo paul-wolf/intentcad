@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import type { Part, ExtrudeFeature, RevolveFeature } from '@/types/part';
 import type { Document } from '@/types/document';
-import { api } from '@/api/client';
+import { api } from '@/api/cachedClient';
 import { evaluateFeatures } from '@/part/featureEngine';
 import { renderPartThumbnail } from '@/rendering/partThumbnail';
 

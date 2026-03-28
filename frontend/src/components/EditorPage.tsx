@@ -26,7 +26,7 @@ import { createDimensionTool } from '@/tools/dimensionTool';
 import { createRect2ptTool } from '@/tools/rect2ptTool';
 import { createBezierTool } from '@/tools/bezierTool';
 import { startAutoSave, setBackendId, getBackendId, setProjectContext } from '@/api/autoSave';
-import { api } from '@/api/client';
+import { api } from '@/api/cachedClient';
 import { projectApi } from '@/api/projectClient';
 import { migrateDocument } from '@/utils/document';
 import type { Document } from '@/types/document';

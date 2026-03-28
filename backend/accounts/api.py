@@ -421,7 +421,7 @@ def unlock_user(request, user_id: str):
 
 @router.post(
     "/manage/users/{user_id}/reset-link",
-    response={401: MessageSchema, 403: MessageSchema, 404: MessageSchema},
+    response={200: dict, 401: MessageSchema, 403: MessageSchema, 404: MessageSchema},
 )
 def generate_reset_link(request, user_id: str):
     err = _require_staff_or_superuser(request)
