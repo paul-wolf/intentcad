@@ -13,6 +13,9 @@ export function GcodePanel() {
   const profiles = useCamStore((s) => s.profiles);
   const updateJobConfig = useCamStore((s) => s.updateJobConfig);
   const applyProfile = useCamStore((s) => s.applyProfile);
+  const updateOperationCutting = useCamStore((s) => s.updateOperationCutting);
+  const applyCuttingToAll = useCamStore((s) => s.applyCuttingToAll);
+  const focusedOperationIndex = useCamStore((s) => s.focusedOperationIndex);
 
   const pickingOrigin = useCamStore((s) => s.pickingOrigin);
   const setPickingOrigin = useCamStore((s) => s.setPickingOrigin);
@@ -27,6 +30,9 @@ export function GcodePanel() {
       useCamStore.getState().loadJobs(backendId);
     }
   }, []);
+
+  const focusedOp = focusedOperationIndex !== null ? jobConfig.operations[focusedOperationIndex] ?? null : null;
+  const cutting = focusedOp?.cutting ?? null;
 
   const inputStyle: React.CSSProperties = {
     width: '100%',
@@ -68,6 +74,14 @@ export function GcodePanel() {
     color: palette.text,
     cursor: 'pointer',
     fontSize: '11px',
+  };
+
+  const dimStyle: React.CSSProperties = {
+    fontSize: '10px',
+    color: palette.textMuted,
+    fontStyle: 'italic',
+    padding: '8px 10px',
+    textAlign: 'center',
   };
 
   return (
@@ -127,50 +141,7 @@ export function GcodePanel() {
         ))}
       </div>
 
-      {/* Tool */}
-      <div style={sectionStyle}>
-        <div style={headerStyle}>Tool</div>
-        <label style={labelStyle}>Diameter (mm)</label>
-        <input
-          type="number"
-          value={jobConfig.tool.diameter}
-          onChange={(e) => updateJobConfig({ tool: { ...jobConfig.tool, diameter: +e.target.value } })}
-          style={inputStyle}
-          min={0.1}
-          step={0.5}
-        />
-        <label style={labelStyle}>Type</label>
-        <select
-          value={jobConfig.tool.type}
-          onChange={(e) => updateJobConfig({ tool: { ...jobConfig.tool, type: e.target.value as 'flat' | 'ball' | 'vbit' | 'drill' } })}
-          style={inputStyle}
-        >
-          <option value="flat">Flat End Mill</option>
-          <option value="ball">Ball Nose</option>
-          <option value="vbit">V-Bit</option>
-          <option value="drill">Drill</option>
-        </select>
-        <label style={labelStyle}>Flute Count</label>
-        <input
-          type="number"
-          value={jobConfig.tool.fluteCount}
-          onChange={(e) => updateJobConfig({ tool: { ...jobConfig.tool, fluteCount: +e.target.value } })}
-          style={inputStyle}
-          min={1}
-          max={8}
-        />
-        <label style={labelStyle}>Flute Length (mm)</label>
-        <input
-          type="number"
-          value={jobConfig.tool.fluteLength}
-          onChange={(e) => updateJobConfig({ tool: { ...jobConfig.tool, fluteLength: +e.target.value } })}
-          style={inputStyle}
-          min={1}
-          step={1}
-        />
-      </div>
-
-      {/* Stock */}
+      {/* Stock — job level */}
       <div style={sectionStyle}>
         <div style={headerStyle}>Stock</div>
         <label style={labelStyle}>Thickness (mm)</label>
@@ -192,7 +163,7 @@ export function GcodePanel() {
         />
       </div>
 
-      {/* Origin */}
+      {/* Origin — job level */}
       <div style={sectionStyle}>
         <div style={headerStyle}>Origin (WCS Zero)</div>
         <div style={{ display: 'flex', gap: '4px', alignItems: 'center', marginBottom: '4px' }}>
@@ -239,86 +210,159 @@ export function GcodePanel() {
         </div>
       </div>
 
-      {/* Machine */}
+      {/* Coolant — job level */}
       <div style={sectionStyle}>
-        <div style={headerStyle}>Machine</div>
-        <label style={labelStyle}>Spindle Speed (RPM)</label>
-        <input
-          type="number"
-          value={jobConfig.machine.spindleSpeed}
-          onChange={(e) => updateJobConfig({ machine: { ...jobConfig.machine, spindleSpeed: +e.target.value } })}
-          style={inputStyle}
-          min={100}
-          step={500}
-        />
-        <label style={labelStyle}>Feed Rate (mm/min)</label>
-        <input
-          type="number"
-          value={jobConfig.machine.feedRate}
-          onChange={(e) => updateJobConfig({ machine: { ...jobConfig.machine, feedRate: +e.target.value } })}
-          style={inputStyle}
-          min={10}
-          step={50}
-        />
-        <label style={labelStyle}>Plunge Rate (mm/min)</label>
-        <input
-          type="number"
-          value={jobConfig.machine.plungeRate}
-          onChange={(e) => updateJobConfig({ machine: { ...jobConfig.machine, plungeRate: +e.target.value } })}
-          style={inputStyle}
-          min={10}
-          step={10}
-        />
-        <label style={labelStyle}>Safe Z (mm)</label>
-        <input
-          type="number"
-          value={jobConfig.machine.safeZ}
-          onChange={(e) => updateJobConfig({ machine: { ...jobConfig.machine, safeZ: +e.target.value } })}
-          style={inputStyle}
-          min={1}
-          step={1}
-        />
-        <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
+        <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: '4px' }}>
           <input
             type="checkbox"
-            checked={jobConfig.machine.useFloodCoolant}
-            onChange={(e) => updateJobConfig({ machine: { ...jobConfig.machine, useFloodCoolant: e.target.checked } })}
+            checked={jobConfig.useFloodCoolant}
+            onChange={(e) => updateJobConfig({ useFloodCoolant: e.target.checked })}
           />
           Flood Coolant
         </label>
       </div>
 
-      {/* Depth */}
-      <div style={sectionStyle}>
-        <div style={headerStyle}>Depth</div>
-        <label style={labelStyle}>Total Depth (mm)</label>
-        <input
-          type="number"
-          value={jobConfig.depth.totalDepth}
-          onChange={(e) => updateJobConfig({ depth: { ...jobConfig.depth, totalDepth: +e.target.value } })}
-          style={inputStyle}
-          min={0.1}
-          step={0.5}
-        />
-        <label style={labelStyle}>Depth per Pass (mm)</label>
-        <input
-          type="number"
-          value={jobConfig.depth.depthPerPass}
-          onChange={(e) => updateJobConfig({ depth: { ...jobConfig.depth, depthPerPass: +e.target.value } })}
-          style={inputStyle}
-          min={0.1}
-          step={0.25}
-        />
-        <label style={labelStyle}>Finish Allowance (mm)</label>
-        <input
-          type="number"
-          value={jobConfig.depth.finalPassAllowance}
-          onChange={(e) => updateJobConfig({ depth: { ...jobConfig.depth, finalPassAllowance: +e.target.value } })}
-          style={inputStyle}
-          min={0}
-          step={0.05}
-        />
-      </div>
+      {/* ── Per-operation sections below ── */}
+
+      {!cutting && (
+        <div style={dimStyle}>
+          Select an operation to edit tool, speeds, and depth settings
+        </div>
+      )}
+
+      {cutting && focusedOperationIndex !== null && (
+        <>
+          {/* Operation header */}
+          <div style={{ ...sectionStyle, background: palette.panelBg, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: '11px', fontWeight: 600, color: palette.accent }}>
+              Op {focusedOperationIndex + 1}: {focusedOp!.kind}
+            </span>
+            <button
+              onClick={() => applyCuttingToAll(focusedOperationIndex)}
+              style={{ ...btnStyle, fontSize: '9px', padding: '2px 6px' }}
+              title="Copy these cutting settings to all operations"
+            >
+              Apply to All
+            </button>
+          </div>
+
+          {/* Tool — per operation */}
+          <div style={sectionStyle}>
+            <div style={headerStyle}>Tool</div>
+            <label style={labelStyle}>Diameter (mm)</label>
+            <input
+              type="number"
+              value={cutting.tool.diameter}
+              onChange={(e) => updateOperationCutting(focusedOperationIndex, { tool: { ...cutting.tool, diameter: +e.target.value } })}
+              style={inputStyle}
+              min={0.1}
+              step={0.5}
+            />
+            <label style={labelStyle}>Type</label>
+            <select
+              value={cutting.tool.type}
+              onChange={(e) => updateOperationCutting(focusedOperationIndex, { tool: { ...cutting.tool, type: e.target.value as 'flat' | 'ball' | 'vbit' | 'drill' } })}
+              style={inputStyle}
+            >
+              <option value="flat">Flat End Mill</option>
+              <option value="ball">Ball Nose</option>
+              <option value="vbit">V-Bit</option>
+              <option value="drill">Drill</option>
+            </select>
+            <label style={labelStyle}>Flute Count</label>
+            <input
+              type="number"
+              value={cutting.tool.fluteCount}
+              onChange={(e) => updateOperationCutting(focusedOperationIndex, { tool: { ...cutting.tool, fluteCount: +e.target.value } })}
+              style={inputStyle}
+              min={1}
+              max={8}
+            />
+            <label style={labelStyle}>Flute Length (mm)</label>
+            <input
+              type="number"
+              value={cutting.tool.fluteLength}
+              onChange={(e) => updateOperationCutting(focusedOperationIndex, { tool: { ...cutting.tool, fluteLength: +e.target.value } })}
+              style={inputStyle}
+              min={1}
+              step={1}
+            />
+          </div>
+
+          {/* Cutting Params — per operation */}
+          <div style={sectionStyle}>
+            <div style={headerStyle}>Cutting</div>
+            <label style={labelStyle}>Spindle Speed (RPM)</label>
+            <input
+              type="number"
+              value={cutting.spindleSpeed}
+              onChange={(e) => updateOperationCutting(focusedOperationIndex, { spindleSpeed: +e.target.value })}
+              style={inputStyle}
+              min={100}
+              step={500}
+            />
+            <label style={labelStyle}>Feed Rate (mm/min)</label>
+            <input
+              type="number"
+              value={cutting.feedRate}
+              onChange={(e) => updateOperationCutting(focusedOperationIndex, { feedRate: +e.target.value })}
+              style={inputStyle}
+              min={10}
+              step={50}
+            />
+            <label style={labelStyle}>Plunge Rate (mm/min)</label>
+            <input
+              type="number"
+              value={cutting.plungeRate}
+              onChange={(e) => updateOperationCutting(focusedOperationIndex, { plungeRate: +e.target.value })}
+              style={inputStyle}
+              min={10}
+              step={10}
+            />
+            <label style={labelStyle}>Safe Z (mm)</label>
+            <input
+              type="number"
+              value={cutting.safeZ}
+              onChange={(e) => updateOperationCutting(focusedOperationIndex, { safeZ: +e.target.value })}
+              style={inputStyle}
+              min={1}
+              step={1}
+            />
+          </div>
+
+          {/* Depth — per operation */}
+          <div style={sectionStyle}>
+            <div style={headerStyle}>Depth</div>
+            <label style={labelStyle}>Total Depth (mm)</label>
+            <input
+              type="number"
+              value={cutting.depth.totalDepth}
+              onChange={(e) => updateOperationCutting(focusedOperationIndex, { depth: { ...cutting.depth, totalDepth: +e.target.value } })}
+              style={inputStyle}
+              min={0.1}
+              step={0.5}
+            />
+            <label style={labelStyle}>Depth per Pass (mm)</label>
+            <input
+              type="number"
+              value={cutting.depth.depthPerPass}
+              onChange={(e) => updateOperationCutting(focusedOperationIndex, { depth: { ...cutting.depth, depthPerPass: +e.target.value } })}
+              style={inputStyle}
+              min={0.1}
+              step={0.25}
+            />
+            <label style={labelStyle}>Finish Allowance (mm)</label>
+            <input
+              type="number"
+              value={cutting.depth.finalPassAllowance}
+              onChange={(e) => updateOperationCutting(focusedOperationIndex, { depth: { ...cutting.depth, finalPassAllowance: +e.target.value } })}
+              style={inputStyle}
+              min={0}
+              step={0.05}
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 }

@@ -8,8 +8,9 @@ import type {
   CamProfileSummary,
   CamJobSummary,
   CamProfileConfig,
+  OperationCuttingParams,
 } from '@/types/cam';
-import { createDefaultJobConfig } from '@/types/cam';
+import { createDefaultJobConfig, createDefaultCutting, migrateCamJobConfig } from '@/types/cam';
 import { generateGcode } from '@/cam/generate';
 import { moveLength, interpolateMove } from '@/cam/simulatorInterp';
 import { downloadGcode } from '@/export/gcode';
@@ -53,7 +54,10 @@ interface CamStore {
   applyProfile(profileId: string): Promise<void>;
   updateJobConfig(patch: Partial<CamJobConfig>): void;
   updateOperation(index: number, patch: Partial<CamOperation>): void;
-  addOperation(op: CamOperation): void;
+  updateOperationCutting(index: number, patch: Partial<OperationCuttingParams>): void;
+  applyCuttingToAll(sourceIndex: number): void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  addOperation(op: any): void;
   removeOperation(index: number): void;
   moveOperation(index: number, direction: -1 | 1): void;
 
@@ -78,6 +82,15 @@ interface CamStore {
   toggleToolpathPreview(): void;
   toggleCamPanel(): Promise<void>;
   clearJob(): void;
+}
+
+/** Get the max safeZ across all operations (for simulator initial position). */
+function getMaxSafeZ(config: CamJobConfig): number {
+  let max = 5;
+  for (const op of config.operations) {
+    if (op.cutting.safeZ > max) max = op.cutting.safeZ;
+  }
+  return max;
 }
 
 export const useCamStore = create<CamStore>((set, get) => ({
@@ -135,7 +148,6 @@ export const useCamStore = create<CamStore>((set, get) => ({
         toolpath: null,
         issues: [],
       });
-      // Refresh job list
       await get().loadJobs(documentId);
       addLog('info', `Created CAM job: ${name}`);
     } catch (err) {
@@ -146,7 +158,7 @@ export const useCamStore = create<CamStore>((set, get) => ({
   async openJob(jobId: string) {
     try {
       const result = await camApi.getJob(jobId);
-      const config = (result.config ?? createDefaultJobConfig()) as unknown as CamJobConfig;
+      const config = migrateCamJobConfig(result.config ?? createDefaultJobConfig());
       set({
         activeJobId: jobId,
         jobConfig: config,
@@ -195,16 +207,30 @@ export const useCamStore = create<CamStore>((set, get) => ({
     try {
       const result = await camApi.getProfile(profileId);
       const profileConfig = result.config as unknown as CamProfileConfig;
-      set((s) => ({
-        jobConfig: {
-          ...s.jobConfig,
-          profileId,
-          tool: profileConfig.tool ?? s.jobConfig.tool,
-          machine: profileConfig.machine ?? s.jobConfig.machine,
-          postProcessor: profileConfig.postProcessor ?? s.jobConfig.postProcessor,
-        },
-      }));
-      addLog('info', `Applied CAM profile: ${result.name}`);
+
+      // Apply profile cutting params to the focused operation, or all operations if none focused
+      const { focusedOperationIndex, jobConfig } = get();
+      const cutting = profileConfig.cutting ?? createDefaultCutting();
+      const postProcessor = profileConfig.postProcessor ?? jobConfig.postProcessor;
+
+      if (focusedOperationIndex !== null && jobConfig.operations[focusedOperationIndex]) {
+        // Apply to focused operation only
+        const operations = [...jobConfig.operations];
+        operations[focusedOperationIndex] = {
+          ...operations[focusedOperationIndex]!,
+          cutting: { ...cutting, tool: { ...cutting.tool }, depth: { ...cutting.depth } },
+        };
+        set({ jobConfig: { ...jobConfig, profileId, postProcessor, operations } });
+        addLog('info', `Applied profile "${result.name}" to operation ${focusedOperationIndex + 1}`);
+      } else {
+        // Apply to all operations
+        const operations = jobConfig.operations.map((op) => ({
+          ...op,
+          cutting: { ...cutting, tool: { ...cutting.tool }, depth: { ...cutting.depth } },
+        }));
+        set({ jobConfig: { ...jobConfig, profileId, postProcessor, operations } });
+        addLog('info', `Applied profile "${result.name}" to all operations`);
+      }
     } catch (err) {
       addLog('error', `Failed to apply CAM profile: ${err}`);
     }
@@ -222,11 +248,46 @@ export const useCamStore = create<CamStore>((set, get) => ({
     });
   },
 
-  addOperation(op: CamOperation) {
+  updateOperationCutting(index: number, patch: Partial<OperationCuttingParams>) {
+    set((s) => {
+      const operations = [...s.jobConfig.operations];
+      const op = operations[index];
+      if (!op) return s;
+      const cutting = { ...op.cutting, ...patch };
+      if (patch.tool) cutting.tool = { ...op.cutting.tool, ...patch.tool };
+      if (patch.depth) cutting.depth = { ...op.cutting.depth, ...patch.depth };
+      operations[index] = { ...op, cutting } as CamOperation;
+      return { jobConfig: { ...s.jobConfig, operations } };
+    });
+  },
+
+  applyCuttingToAll(sourceIndex: number) {
+    set((s) => {
+      const source = s.jobConfig.operations[sourceIndex];
+      if (!source) return s;
+      const cutting = source.cutting;
+      const operations = s.jobConfig.operations.map((op) => ({
+        ...op,
+        cutting: { ...cutting, tool: { ...cutting.tool }, depth: { ...cutting.depth } },
+      }));
+      return { jobConfig: { ...s.jobConfig, operations } };
+    });
+    addLog('info', 'Applied cutting settings to all operations');
+  },
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  addOperation(op: any) {
+    const { jobConfig } = get();
+    const lastOp = jobConfig.operations[jobConfig.operations.length - 1];
+    const cutting = lastOp
+      ? { ...lastOp.cutting, tool: { ...lastOp.cutting.tool }, depth: { ...lastOp.cutting.depth } }
+      : createDefaultCutting();
+    const fullOp = { ...op, cutting } as CamOperation;
+
     set((s) => ({
       jobConfig: {
         ...s.jobConfig,
-        operations: [...s.jobConfig.operations, op],
+        operations: [...s.jobConfig.operations, fullOp],
       },
     }));
     const kindLabel = op.kind === 'profile' ? '2D Contour' : op.kind === 'drill' ? 'Drill' : 'Pocket';
@@ -282,7 +343,6 @@ export const useCamStore = create<CamStore>((set, get) => ({
     if (focusedOperationIndex === null) return;
     const op = jobConfig.operations[focusedOperationIndex];
     if (!op) return;
-    // Toggle: add entities not present, remove those already present
     const existing = new Set(op.entityIds);
     const updated = [...op.entityIds];
     for (const id of entityIds) {
@@ -332,7 +392,6 @@ export const useCamStore = create<CamStore>((set, get) => ({
       simZ: null,
     });
 
-    // Persist to server if we have an active job
     if (activeJobId && result.gcode) {
       camApi.generateJob(activeJobId, result.gcode, result.issues as unknown as unknown[]).catch((err) => {
         addLog('error', `Failed to save generated G-code: ${err}`);
@@ -368,9 +427,8 @@ export const useCamStore = create<CamStore>((set, get) => ({
     const { toolpath, simState } = get();
     if (!toolpath || toolpath.length === 0) return;
     if (simState === 'idle') {
-      // Start from beginning
       const origin = get().jobConfig.origin;
-      const safeZ = get().jobConfig.machine.safeZ;
+      const safeZ = getMaxSafeZ(get().jobConfig);
       set({ simState: 'playing', simMoveIndex: 0, simProgress: 0, simPosition: { ...origin }, simZ: safeZ });
     } else {
       set({ simState: 'playing' });
@@ -390,31 +448,20 @@ export const useCamStore = create<CamStore>((set, get) => ({
   simStep() {
     const { toolpath, simState, simMoveIndex } = get();
     if (!toolpath || toolpath.length === 0) return;
-    const origin = get().jobConfig.origin;
 
     if (simState === 'idle') {
-      // Start at first move, fully completed
       const move = toolpath[0]!;
       set({ simState: 'paused', simMoveIndex: 0, simProgress: 1, simPosition: { ...move.to }, simZ: move.z });
       return;
     }
 
-    // Advance to next move
     const nextIndex = simMoveIndex + 1;
     if (nextIndex >= toolpath.length) {
-      // Past last move
       set({ simState: 'idle', simMoveIndex: 0, simProgress: 0, simPosition: null, simZ: null });
       return;
     }
 
-    // Compute start position for the next move
-    let startPos = { ...origin };
-    for (let i = 0; i <= nextIndex - 1; i++) {
-      startPos = toolpath[i]!.to;
-    }
-    // Position is the end of nextIndex move
     const move = toolpath[nextIndex]!;
-    void startPos; // used conceptually, position is endpoint
     set({ simState: 'paused', simMoveIndex: nextIndex, simProgress: 1, simPosition: { ...move.to }, simZ: move.z });
   },
 
@@ -427,26 +474,20 @@ export const useCamStore = create<CamStore>((set, get) => ({
     if (simState !== 'playing' || !toolpath || toolpath.length === 0) return;
 
     const origin = get().jobConfig.origin;
-
-    // Clamp dt to prevent huge jumps from frame spikes / tab switches
     const clampedDt = Math.min(dtMs, 50);
 
-    // Compute start position for current move
     let startPos = { ...origin };
     for (let i = 0; i < simMoveIndex; i++) {
       startPos = toolpath[i]!.to;
     }
 
-    // Compute a visual rapid rate: 3x the max feed rate in the toolpath (capped)
-    // This keeps rapids visibly faster than feeds but slow enough to follow
     let maxFeed = 0;
     for (const m of toolpath) {
       if (m.kind !== 'rapid' && m.feed > maxFeed) maxFeed = m.feed;
     }
     const rapidRate = Math.min(Math.max(maxFeed * 3, 1500), 5000);
 
-    // Work in time, not distance — each move has its own feed rate
-    let remainingTime = clampedDt / 1000; // seconds
+    let remainingTime = clampedDt / 1000;
     let moveIdx = simMoveIndex;
     let progress = simProgress;
     let from = startPos;
@@ -455,11 +496,10 @@ export const useCamStore = create<CamStore>((set, get) => ({
       const move = toolpath[moveIdx]!;
       let feedRate = move.kind === 'rapid' ? rapidRate : move.feed;
       if (feedRate <= 0) feedRate = rapidRate;
-      const speed = (feedRate / 60) * simSpeed; // mm/sec
+      const speed = (feedRate / 60) * simSpeed;
 
       const len = moveLength(from, move);
       if (len <= 0) {
-        // Zero-length move (e.g. z-only plunge), skip
         moveIdx++;
         progress = 0;
         from = move.to;
@@ -470,13 +510,11 @@ export const useCamStore = create<CamStore>((set, get) => ({
       const timeForRemaining = remainingDist / speed;
 
       if (remainingTime >= timeForRemaining) {
-        // Complete this move, advance to next
         remainingTime -= timeForRemaining;
         moveIdx++;
         progress = 0;
         from = move.to;
       } else {
-        // Partial advance within this move
         const distAdvanced = remainingTime * speed;
         progress += distAdvanced / len;
         remainingTime = 0;
@@ -484,15 +522,12 @@ export const useCamStore = create<CamStore>((set, get) => ({
     }
 
     if (moveIdx >= toolpath.length) {
-      // Finished all moves
       set({ simState: 'idle', simMoveIndex: 0, simProgress: 0, simPosition: null, simZ: null });
       return;
     }
 
-    // Compute interpolated position and Z
     const move = toolpath[moveIdx]!;
     const pos = interpolateMove(from, move, progress);
-    // For Z: interpolate between previous move's Z and current move's Z
     let z = move.z;
     if (moveIdx > 0 && progress < 1) {
       const prevZ = toolpath[moveIdx - 1]!.z;
@@ -537,12 +572,10 @@ export const useCamStore = create<CamStore>((set, get) => ({
   async toggleCamPanel() {
     const opening = !get().camPanelOpen;
     if (!opening) {
-      // Reset simulator when leaving CAM mode
       set({ simState: 'idle', simMoveIndex: 0, simProgress: 0, simPosition: null, simZ: null });
     }
     set({ camPanelOpen: opening });
     addLog('info', opening ? 'Entered CAM mode' : 'Exited CAM mode');
-    // Auto-create a job when entering CAM if none exists
     if (opening && !get().activeJobId) {
       const docId = getBackendId();
       if (docId) {

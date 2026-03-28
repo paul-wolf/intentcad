@@ -3,7 +3,7 @@ import { useCamStore } from '@/stores/camStore';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useThemeStore } from '@/theme';
 import { addLog } from '@/stores/logStore';
-import type { CamOperation, CutSide } from '@/types/cam';
+import type { CutSide } from '@/types/cam';
 import { GcodePreview } from './GcodePreview';
 
 export function CamOperationsPanel() {
@@ -142,19 +142,21 @@ export function CamOperationsPanel() {
                 <select
                   value={op.kind}
                   onChange={(e) => {
-                    const kind = e.target.value as 'profile' | 'drill' | 'pocket';
-                    let newOp: CamOperation;
+                    const kind = e.target.value as 'profile' | 'drill' | 'pocket' | 'facing';
+                    const base = { entityIds: op.entityIds, sketchId: op.sketchId, cutting: op.cutting };
                     if (kind === 'profile') {
-                      newOp = { kind: 'profile', entityIds: op.entityIds, sketchId: op.sketchId, cutSide: 'on', tabs: false, tabWidth: 5, tabHeight: 1 };
+                      updateOperation(i, { ...base, kind: 'profile', cutSide: 'on', tabs: false, tabWidth: 5, tabHeight: 1 });
                     } else if (kind === 'drill') {
-                      newOp = { kind: 'drill', entityIds: op.entityIds, sketchId: op.sketchId, peckDepth: 0, dwell: 0 };
+                      updateOperation(i, { ...base, kind: 'drill', peckDepth: 0, dwell: 0 });
+                    } else if (kind === 'facing') {
+                      updateOperation(i, { ...base, kind: 'facing', stepover: 0.7, cutDirection: 'climb' });
                     } else {
-                      newOp = { kind: 'pocket', entityIds: op.entityIds, sketchId: op.sketchId, stepover: 0.4, cutDirection: 'climb' };
+                      updateOperation(i, { ...base, kind: 'pocket', stepover: 0.4, cutDirection: 'climb' });
                     }
-                    updateOperation(i, newOp);
                   }}
                   style={{ ...inputStyle, width: 'auto' }}
                 >
+                  <option value="facing">Facing</option>
                   <option value="profile">2D Contour</option>
                   <option value="drill">Drill</option>
                   <option value="pocket">Pocket</option>
@@ -221,7 +223,7 @@ export function CamOperationsPanel() {
                 {op.kind === 'profile' && (
                   <button
                     onClick={() => {
-                      const toolDia = jobConfig.tool.diameter;
+                      const toolDia = op.cutting.tool.diameter;
                       const selectedSketchIds = new Set(jobConfig.selectedSketchIds);
                       const holeIds: string[] = [];
                       for (const sketch of doc.sketches) {
@@ -243,13 +245,13 @@ export function CamOperationsPanel() {
                     }}
                     style={{ ...btnStyle, fontSize: '9px', padding: '2px 6px' }}
                   >
-                    {`Holes > \u00D8${jobConfig.tool.diameter}`}
+                    {`Holes > \u00D8${op.cutting.tool.diameter}`}
                   </button>
                 )}
                 {op.kind === 'drill' && (
                   <button
                     onClick={() => {
-                      const toolDia = jobConfig.tool.diameter;
+                      const toolDia = op.cutting.tool.diameter;
                       const selectedSketchIds = new Set(jobConfig.selectedSketchIds);
                       const holeIds: string[] = [];
                       const diametersFound = new Map<string, number>();
@@ -279,7 +281,7 @@ export function CamOperationsPanel() {
                     }}
                     style={{ ...btnStyle, fontSize: '9px', padding: '2px 6px' }}
                   >
-                    {`Match \u00D8${jobConfig.tool.diameter}`}
+                    {`Match \u00D8${op.cutting.tool.diameter}`}
                   </button>
                 )}
                 {op.kind === 'drill' && (
@@ -327,6 +329,27 @@ export function CamOperationsPanel() {
                     All Closed
                   </button>
                 )}
+              </div>
+              <div
+                onClick={() => setFocusedOperation(i)}
+                style={{
+                  fontSize: '12px',
+                  color: isFocused ? opColor : palette.text,
+                  marginBottom: '4px',
+                  marginTop: '2px',
+                  padding: '3px 6px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  background: isFocused ? opColor + '15' : palette.inputBg,
+                  borderRadius: '3px',
+                  border: `1px solid ${isFocused ? opColor + '40' : 'transparent'}`,
+                }}
+                title="Click to edit tool & cutting settings"
+              >
+                <span>{op.cutting.tool.diameter}mm {op.cutting.tool.type}, F{op.cutting.feedRate}, D{op.cutting.depth.totalDepth}mm</span>
+                {isFocused && <span style={{ fontSize: '9px', opacity: 0.7 }}>edit →</span>}
               </div>
               <div style={{ fontSize: '10px', color: palette.textMuted, marginBottom: '4px' }}>
                 {op.entityIds.length} entit{op.entityIds.length === 1 ? 'y' : 'ies'}
@@ -387,6 +410,30 @@ export function CamOperationsPanel() {
               )}
 
               {op.kind === 'pocket' && (
+                <>
+                  <label style={labelStyle}>Stepover (fraction)</label>
+                  <input
+                    type="number"
+                    value={op.stepover}
+                    onChange={(e) => updateOperation(i, { stepover: +e.target.value })}
+                    style={inputStyle}
+                    min={0.1}
+                    max={1}
+                    step={0.05}
+                  />
+                  <label style={labelStyle}>Direction</label>
+                  <select
+                    value={op.cutDirection}
+                    onChange={(e) => updateOperation(i, { cutDirection: e.target.value as 'climb' | 'conventional' })}
+                    style={inputStyle}
+                  >
+                    <option value="climb">Climb</option>
+                    <option value="conventional">Conventional</option>
+                  </select>
+                </>
+              )}
+
+              {op.kind === 'facing' && (
                 <>
                   <label style={labelStyle}>Stepover (fraction)</label>
                   <input

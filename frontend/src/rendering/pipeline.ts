@@ -816,7 +816,7 @@ function renderCamToolpath(ctx: RenderContext) {
         simProgress: camState.simProgress,
         simPosition: camState.simPosition,
       },
-      camState.jobConfig.tool.diameter,
+      camState.jobConfig.operations[0]?.cutting.tool.diameter ?? 3,
     );
   } else {
     renderToolpathOverlay(

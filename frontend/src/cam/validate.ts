@@ -13,12 +13,12 @@ export function validateCamJob(
 ): CamIssue[] {
   const issues: CamIssue[] = [];
 
-  // Check each operation
   for (let i = 0; i < config.operations.length; i++) {
     const op = config.operations[i]!;
+    const c = op.cutting;
 
-    // Empty operation (no entities selected)
-    if (op.entityIds.length === 0) {
+    // Empty operation (no entities selected) — facing doesn't require entities
+    if (op.entityIds.length === 0 && op.kind !== 'facing') {
       issues.push({
         severity: 'warning',
         message: `Operation ${i + 1} (${op.kind}): no entities selected`,
@@ -49,25 +49,21 @@ export function validateCamJob(
       if (op.cutSide === 'inside' || op.cutSide === 'outside') {
         const segments = entityToSegments(entities, op.entityIds);
         if (segments.length >= 2) {
-          const toolRadius = config.tool.diameter / 2;
+          const toolRadius = c.tool.diameter / 2;
           for (let si = 0; si < segments.length; si++) {
             const seg = segments[si]!;
             const nextSeg = segments[(si + 1) % segments.length]!;
-            // Only check straight-to-straight corners (skip arcs)
             if (seg.bulge !== 0 || nextSeg.bulge !== 0) continue;
-            // Incoming direction (reversed) and outgoing direction
-            const dx1 = seg.from.x - seg.to.x; // reversed incoming
+            const dx1 = seg.from.x - seg.to.x;
             const dy1 = seg.from.y - seg.to.y;
-            const dx2 = nextSeg.to.x - nextSeg.from.x; // outgoing
+            const dx2 = nextSeg.to.x - nextSeg.from.x;
             const dy2 = nextSeg.to.y - nextSeg.from.y;
             const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1);
             const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
             if (len1 === 0 || len2 === 0) continue;
-            // Interior angle at the corner
             const dot = (dx1 / len1) * (dx2 / len2) + (dy1 / len1) * (dy2 / len2);
-            const angle = Math.acos(Math.max(-1, Math.min(1, dot))); // 0..PI
+            const angle = Math.acos(Math.max(-1, Math.min(1, dot)));
             const angleDeg = angle * (180 / Math.PI);
-            // Warn on acute corners (< 70°) — fillet radius becomes very noticeable
             if (angleDeg < 70) {
               const filletR = toolRadius / Math.tan(angle / 2);
               issues.push({
@@ -83,7 +79,6 @@ export function validateCamJob(
     }
 
     if (op.kind === 'drill') {
-      // Verify drill targets are circles
       for (const e of opEntities) {
         if (e.type !== 'circle') {
           issues.push({
@@ -97,10 +92,10 @@ export function validateCamJob(
 
       // Check tool diameter vs hole size (for drilling, equal is fine)
       for (const e of opEntities) {
-        if (e.type === 'circle' && e.radius * 2 < config.tool.diameter - 0.01) {
+        if (e.type === 'circle' && e.radius * 2 < c.tool.diameter - 0.01) {
           issues.push({
             severity: 'error',
-            message: `Operation ${i + 1}: tool diameter (${config.tool.diameter}mm) is larger than hole diameter (${(e.radius * 2).toFixed(1)}mm)`,
+            message: `Operation ${i + 1}: tool diameter (${c.tool.diameter}mm) is larger than hole diameter (${(e.radius * 2).toFixed(1)}mm)`,
             operationIndex: i,
             entityId: e.id,
             position: e.center,
@@ -110,47 +105,82 @@ export function validateCamJob(
     }
 
     if (op.kind === 'pocket') {
-      // Check tool diameter vs pocket size
-      const segments = entityToSegments(entities, op.entityIds);
-      if (segments.length > 0) {
-        const allPoints = segments.flatMap((s) => [s.from, s.to]);
-        const width = Math.max(...allPoints.map((p) => p.x)) - Math.min(...allPoints.map((p) => p.x));
-        const height = Math.max(...allPoints.map((p) => p.y)) - Math.min(...allPoints.map((p) => p.y));
-        const minDim = Math.min(width, height);
-
-        if (config.tool.diameter > minDim) {
+      // Compute bounding box from entities directly (not segments, which lose arc extent)
+      const bounds = entityBounds(opEntities);
+      if (bounds) {
+        const minDim = Math.min(bounds.width, bounds.height);
+        if (c.tool.diameter > minDim) {
           issues.push({
             severity: 'error',
-            message: `Operation ${i + 1}: tool diameter (${config.tool.diameter}mm) is larger than pocket minimum dimension (${minDim.toFixed(1)}mm)`,
+            message: `Operation ${i + 1}: tool diameter (${c.tool.diameter}mm) is larger than pocket minimum dimension (${minDim.toFixed(1)}mm)`,
             operationIndex: i,
           });
         }
       }
     }
-  }
 
-  // Check depth per pass vs flute length
-  if (config.depth.depthPerPass > config.tool.fluteLength) {
-    issues.push({
-      severity: 'warning',
-      message: `Depth per pass (${config.depth.depthPerPass}mm) exceeds flute length (${config.tool.fluteLength}mm)`,
-    });
-  }
+    // Per-operation: depth per pass vs flute length
+    if (c.depth.depthPerPass > c.tool.fluteLength) {
+      issues.push({
+        severity: 'warning',
+        message: `Operation ${i + 1}: depth per pass (${c.depth.depthPerPass}mm) exceeds flute length (${c.tool.fluteLength}mm)`,
+        operationIndex: i,
+      });
+    }
 
-  // Feed rate reasonableness check
-  const chipLoad = config.machine.feedRate / (config.machine.spindleSpeed * config.tool.fluteCount);
-  if (chipLoad > 0.2) {
-    issues.push({
-      severity: 'info',
-      message: `Chip load (${chipLoad.toFixed(3)}mm) seems high — verify feed rate`,
-    });
-  }
-  if (chipLoad < 0.01 && config.machine.feedRate > 0) {
-    issues.push({
-      severity: 'info',
-      message: `Chip load (${chipLoad.toFixed(4)}mm) seems very low — consider increasing feed rate`,
-    });
+    // Per-operation: feed rate reasonableness
+    const chipLoad = c.feedRate / (c.spindleSpeed * c.tool.fluteCount);
+    if (chipLoad > 0.2) {
+      issues.push({
+        severity: 'info',
+        message: `Operation ${i + 1}: chip load (${chipLoad.toFixed(3)}mm) seems high — verify feed rate`,
+        operationIndex: i,
+      });
+    }
+    if (chipLoad < 0.01 && c.feedRate > 0) {
+      issues.push({
+        severity: 'info',
+        message: `Operation ${i + 1}: chip load (${chipLoad.toFixed(4)}mm) seems very low — consider increasing feed rate`,
+        operationIndex: i,
+      });
+    }
   }
 
   return issues;
+}
+
+/** Compute axis-aligned bounding box from entities, accounting for circles and arcs. */
+function entityBounds(entities: Entity[]): { width: number; height: number } | null {
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  let found = false;
+
+  for (const e of entities) {
+    if (e.type === 'circle') {
+      minX = Math.min(minX, e.center.x - e.radius);
+      maxX = Math.max(maxX, e.center.x + e.radius);
+      minY = Math.min(minY, e.center.y - e.radius);
+      maxY = Math.max(maxY, e.center.y + e.radius);
+      found = true;
+    } else if (e.type === 'line') {
+      for (const p of e.points) {
+        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+        minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+      }
+      found = true;
+    } else if (e.type === 'rectangle') {
+      const hw = e.width / 2, hh = e.height / 2;
+      minX = Math.min(minX, e.center.x - hw); maxX = Math.max(maxX, e.center.x + hw);
+      minY = Math.min(minY, e.center.y - hh); maxY = Math.max(maxY, e.center.y + hh);
+      found = true;
+    } else if (e.type === 'bezier') {
+      for (const p of e.controlPoints) {
+        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+        minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+      }
+      found = true;
+    }
+  }
+
+  if (!found) return null;
+  return { width: maxX - minX, height: maxY - minY };
 }
