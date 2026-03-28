@@ -112,15 +112,19 @@ export function generateGcode(
         // Use entity bounds if available, otherwise use a reasonable default
         let stockW = 100;
         let stockH = 100;
+        let areaCenter = { x: 0, y: 0 };
         if (allPts.length > 0) {
           const xs = allPts.map((p) => p.x);
           const ys = allPts.map((p) => p.y);
-          stockW = Math.max(...xs) - Math.min(...xs) + c.tool.diameter * 2;
-          stockH = Math.max(...ys) - Math.min(...ys) + c.tool.diameter * 2;
+          const minX = Math.min(...xs), maxX = Math.max(...xs);
+          const minY = Math.min(...ys), maxY = Math.max(...ys);
+          stockW = maxX - minX + c.tool.diameter * 2;
+          stockH = maxY - minY + c.tool.diameter * 2;
+          areaCenter = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
         }
 
         const facingMoves = toolpathFacing(
-          config.origin,
+          areaCenter,
           c.tool.diameter,
           op.stepover,
           op.cutDirection,

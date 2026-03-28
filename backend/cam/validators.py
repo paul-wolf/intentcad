@@ -51,9 +51,9 @@ def validate_cam_job_config(config: dict) -> list[str]:
                     errors.append(f"config.operations[{i}] must be a dict")
                     continue
                 kind = op.get("kind")
-                if kind not in ("profile", "drill", "pocket"):
+                if kind not in ("profile", "drill", "pocket", "facing"):
                     errors.append(
-                        f"config.operations[{i}].kind must be one of: profile, drill, pocket"
+                        f"config.operations[{i}].kind must be one of: profile, drill, pocket, facing"
                     )
 
     depth = config.get("depth")

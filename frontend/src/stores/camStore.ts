@@ -302,6 +302,9 @@ export const useCamStore = create<CamStore>((set, get) => ({
         operations: s.jobConfig.operations.filter((_, i) => i !== index),
       },
       focusedOperationIndex: s.focusedOperationIndex === index ? null : s.focusedOperationIndex,
+      toolpath: null,
+      generatedGcode: null,
+      issues: [],
     }));
     if (op) {
       const kindLabel = op.kind === 'profile' ? '2D Contour' : op.kind === 'drill' ? 'Drill' : 'Pocket';
