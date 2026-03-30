@@ -14,3 +14,10 @@ export interface ProjectDetail {
   created_at: string;
   updated_at: string;
 }
+
+export interface ProjectShare {
+  id: string;
+  email: string;
+  username: string;
+  shared_at: string;
+}

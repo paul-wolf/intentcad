@@ -30,3 +30,14 @@ class ProjectListOut(Schema):
     updated_at: datetime
     document_count: int = 0
     part_count: int = 0
+
+
+class ShareIn(Schema):
+    email: str
+
+
+class ShareOut(Schema):
+    id: UUID
+    email: str
+    username: str
+    shared_at: datetime

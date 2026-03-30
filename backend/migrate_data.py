@@ -3,13 +3,12 @@
 import os
 import sqlite3
 
-os.environ['DJANGO_SETTINGS_MODULE'] = 'intentcad.settings'
-
 import django
-django.setup()
-
 from django.db import connection
 
+os.environ['DJANGO_SETTINGS_MODULE'] = 'intentcad.settings'
+
+django.setup()
 SQLITE_PATH = os.path.join(os.path.dirname(__file__), 'db.sqlite3')
 
 # Remap SQLite user IDs to Postgres user IDs (for users that conflicted on unique constraints)

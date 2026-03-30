@@ -1,11 +1,12 @@
 from uuid import UUID
 
+from django.db.models import Q
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from ninja import Router
 
 from projects.access import can_access_project, require_auth
-from projects.models import Project
+from projects.models import Project, ProjectShare
 
 from .models import Document
 from .schemas import DocumentCreateIn, DocumentListOut, DocumentOut, DocumentUpdateIn
@@ -14,11 +15,12 @@ from .validators import validate_document_data
 router = Router()
 
 
-def _user_org_filter(user):
-    """Return a queryset filter dict for org-scoped access."""
+def _user_accessible_filter(user):
+    """Return a Q filter for documents the user can access (org + shared projects)."""
     if user.is_superuser:
-        return {}
-    return {"project__organisation_id": user.organisation_id}
+        return Q()
+    shared_project_ids = ProjectShare.objects.filter(user=user).values_list("project_id", flat=True)
+    return Q(project__organisation_id=user.organisation_id) | Q(project_id__in=shared_project_ids)
 
 
 @router.get("/", response=list[DocumentListOut])
@@ -26,7 +28,7 @@ def list_documents(request, project: UUID | None = None):
     err = require_auth(request)
     if err:
         return err
-    qs = Document.objects.filter(**_user_org_filter(request.user))
+    qs = Document.objects.filter(_user_accessible_filter(request.user))
     if project:
         qs = qs.filter(project_id=project)
     return qs

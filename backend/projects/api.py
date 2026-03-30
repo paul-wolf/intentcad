@@ -5,9 +5,11 @@ from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from ninja import Router
 
+from accounts.models import User
+
 from .access import get_accessible_projects, require_auth, require_project_access
-from .models import Project
-from .schemas import ProjectCreateIn, ProjectListOut, ProjectOut, ProjectUpdateIn
+from .models import Project, ProjectShare
+from .schemas import ProjectCreateIn, ProjectListOut, ProjectOut, ProjectUpdateIn, ShareIn, ShareOut
 
 router = Router()
 
@@ -96,4 +98,62 @@ def delete_project(request, project_id: UUID):
     if err:
         return err
     project.delete()
+    return 204, None
+
+
+@router.get("/{project_id}/shares", response=list[ShareOut])
+def list_shares(request, project_id: UUID):
+    err = require_auth(request)
+    if err:
+        return err
+    project = get_object_or_404(Project, id=project_id)
+    err = require_project_access(request, project)
+    if err:
+        return err
+    shares = ProjectShare.objects.filter(project=project).select_related("user")
+    return [
+        ShareOut(
+            id=s.id,
+            email=s.user.email,
+            username=s.user.username,
+            shared_at=s.created_at,
+        )
+        for s in shares
+    ]
+
+
+@router.post("/{project_id}/shares", response={201: ShareOut, 404: dict, 409: dict})
+def add_share(request, project_id: UUID, payload: ShareIn):
+    err = require_auth(request)
+    if err:
+        return err
+    project = get_object_or_404(Project, id=project_id)
+    err = require_project_access(request, project)
+    if err:
+        return err
+    target = User.objects.filter(email=payload.email).first()
+    if not target:
+        return 404, {"message": f"No user found with email {payload.email}"}
+    if ProjectShare.objects.filter(project=project, user=target).exists():
+        return 409, {"message": "Already shared with this user"}
+    share = ProjectShare.objects.create(project=project, user=target)
+    return 201, ShareOut(
+        id=share.id,
+        email=target.email,
+        username=target.username,
+        shared_at=share.created_at,
+    )
+
+
+@router.delete("/{project_id}/shares/{share_id}", response={204: None})
+def remove_share(request, project_id: UUID, share_id: UUID):
+    err = require_auth(request)
+    if err:
+        return err
+    project = get_object_or_404(Project, id=project_id)
+    err = require_project_access(request, project)
+    if err:
+        return err
+    share = get_object_or_404(ProjectShare, id=share_id, project=project)
+    share.delete()
     return 204, None

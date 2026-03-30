@@ -1,4 +1,4 @@
-import type { Project, ProjectDetail } from '@/types/project';
+import type { Project, ProjectDetail, ProjectShare } from '@/types/project';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8951/api';
 
@@ -72,5 +72,20 @@ export const projectApi = {
 
   deleteProject(id: string): Promise<void> {
     return request(`/projects/${id}`, { method: 'DELETE' });
+  },
+
+  listShares(projectId: string): Promise<ProjectShare[]> {
+    return request(`/projects/${projectId}/shares`);
+  },
+
+  addShare(projectId: string, email: string): Promise<ProjectShare> {
+    return request(`/projects/${projectId}/shares`, {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+  },
+
+  removeShare(projectId: string, shareId: string): Promise<void> {
+    return request(`/projects/${projectId}/shares/${shareId}`, { method: 'DELETE' });
   },
 };

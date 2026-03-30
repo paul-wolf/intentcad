@@ -8,6 +8,7 @@ import { useDocumentStore } from '@/stores/documentStore';
 import { migrateDocument } from '@/utils/document';
 import { setBackendId, setProjectContext } from '@/api/autoSave';
 import type { Document } from '@/types/document';
+import { ShareProjectModal } from './ShareProjectModal';
 import type { Project } from '@/types/project';
 
 function relativeTime(iso: string): string {
@@ -32,6 +33,7 @@ export function ProjectListPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [sharingProject, setSharingProject] = useState<Project | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -253,6 +255,24 @@ export function ProjectListPage() {
                     <span style={{ fontSize: '13px', color: palette.textSecondary, whiteSpace: 'nowrap' }}>
                       {p.document_count}
                     </span>
+                    <button
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: palette.textSecondary,
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                        padding: '0 4px',
+                        lineHeight: 1,
+                      }}
+                      title="Share project"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSharingProject(p);
+                      }}
+                    >
+                      &#x1F517;
+                    </button>
                     <span style={{ fontSize: '18px', color: palette.textSecondary, lineHeight: 1 }}>&#9656;</span>
                     {p.document_count === 0 && (
                       <button
@@ -325,6 +345,13 @@ export function ProjectListPage() {
         )}
 
       </div>
+      {sharingProject && (
+        <ShareProjectModal
+          projectId={sharingProject.id}
+          projectName={sharingProject.name}
+          onClose={() => setSharingProject(null)}
+        />
+      )}
     </div>
   );
 }

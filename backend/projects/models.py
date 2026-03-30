@@ -29,3 +29,25 @@ class Project(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class ProjectShare(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name="shares",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="shared_projects",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "project_shares"
+        unique_together = [("project", "user")]
+
+    def __str__(self):
+        return f"{self.project.name} -> {self.user.email}"

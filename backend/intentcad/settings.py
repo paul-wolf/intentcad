@@ -1,5 +1,7 @@
 import os
+import sys
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -52,7 +54,14 @@ LOCKOUT_DURATION = 1800  # 30 minutes
 
 ROOT_URLCONF = "intentcad.urls"
 
-if os.environ.get("DB_HOST"):
+if "test" in sys.argv:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "test.sqlite3",
+        }
+    }
+elif os.environ.get("DB_HOST"):
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.postgresql",

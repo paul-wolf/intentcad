@@ -1,11 +1,13 @@
 from uuid import UUID
 
+from django.db.models import Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404
 from ninja import Router
 
 from documents.models import Document
 from projects.access import can_access_project, require_auth
+from projects.models import ProjectShare
 
 from .models import CamJob, CamProfile
 from .schemas import (
@@ -25,11 +27,12 @@ from .validators import validate_cam_job_config, validate_cam_profile_config
 router = Router()
 
 
-def _user_org_filter(user):
-    """Return a queryset filter dict for org-scoped access."""
+def _user_accessible_filter(user):
+    """Return a Q filter for profiles the user can access (org + shared projects)."""
     if user.is_superuser:
-        return {}
-    return {"project__organisation_id": user.organisation_id}
+        return Q()
+    shared_project_ids = ProjectShare.objects.filter(user=user).values_list("project_id", flat=True)
+    return Q(project__organisation_id=user.organisation_id) | Q(project_id__in=shared_project_ids)
 
 
 # ── Profiles ──
@@ -40,7 +43,7 @@ def list_profiles(request):
     err = require_auth(request)
     if err:
         return err
-    return CamProfile.objects.filter(**_user_org_filter(request.user))
+    return CamProfile.objects.filter(_user_accessible_filter(request.user))
 
 
 @router.post("/profiles/", response={201: CamProfileOut})
@@ -104,11 +107,12 @@ def delete_profile(request, profile_id: UUID):
 # ── Jobs ──
 
 
-def _job_org_filter(user):
-    """Return a queryset filter dict for org-scoped job access."""
+def _job_accessible_filter(user):
+    """Return a Q filter for jobs the user can access (org + shared projects)."""
     if user.is_superuser:
-        return {}
-    return {"document__project__organisation_id": user.organisation_id}
+        return Q()
+    shared_project_ids = ProjectShare.objects.filter(user=user).values_list("project_id", flat=True)
+    return Q(document__project__organisation_id=user.organisation_id) | Q(document__project_id__in=shared_project_ids)
 
 
 @router.get("/jobs/", response=list[CamJobListOut])
@@ -116,7 +120,7 @@ def list_jobs(request, document: UUID | None = None):
     err = require_auth(request)
     if err:
         return err
-    qs = CamJob.objects.filter(**_job_org_filter(request.user))
+    qs = CamJob.objects.filter(_job_accessible_filter(request.user))
     if document:
         qs = qs.filter(document_id=document)
     jobs = []

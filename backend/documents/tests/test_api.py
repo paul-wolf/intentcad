@@ -2,6 +2,9 @@ import json
 
 from django.test import Client, TestCase
 
+from accounts.models import Organisation, User
+from projects.models import Project
+
 
 def _valid_doc_data():
     return {
@@ -22,6 +25,17 @@ def _valid_doc_data():
 class DocumentAPITests(TestCase):
     def setUp(self):
         self.client = Client()
+        self.org = Organisation.objects.create(name="Test Org", slug="test-org")
+        self.user = User.objects.create_user(
+            username="testuser",
+            email="test@example.com",
+            password="testpass123",
+            organisation=self.org,
+        )
+        self.project = Project.objects.create(
+            name="Test Project", organisation=self.org, created_by=self.user,
+        )
+        self.client.force_login(self.user)
 
     def test_create_and_get(self):
         resp = self.client.post(
@@ -39,7 +53,7 @@ class DocumentAPITests(TestCase):
     def test_list(self):
         self.client.post(
             "/api/documents/",
-            data=json.dumps({"name": "Doc 1", "data": _valid_doc_data()}),
+            data=json.dumps({"name": "Doc 1", "data": _valid_doc_data(), "project_id": str(self.project.id)}),
             content_type="application/json",
         )
         resp = self.client.get("/api/documents/")
