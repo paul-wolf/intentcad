@@ -820,13 +820,7 @@ export function PartEditorPage() {
       const sketchName = `Sketch ${doc.sketches.length + 1}`;
       const sketchId = useDocumentStore.getState().addSketch(sketchName, plane);
 
-      // Enter inline sketch mode
-      const vp = viewportRef.current;
-      if (vp) {
-        vp.alignCameraToPlane(plane);
-        vp.setOrbitEnabled(false);
-        vp.setEdgeHighlightEnabled(false);
-      }
+      // Enter inline sketch mode — enterSketchEdit is called by InlineSketchOverlay
       clearDraft();
       setInlineSketch({ plane, sketchId });
     })().catch((err) => console.error('Sketch on plane failed:', err));
@@ -849,15 +843,8 @@ export function PartEditorPage() {
       await api.updateDocument(docId, { name: updatedDoc.name, data: updatedDoc as unknown as Record<string, unknown> });
     }
 
-    // Restore viewport
-    const vp = viewportRef.current;
-    if (vp) {
-      vp.clearInlineSketch();
-      vp.restoreCamera();
-      vp.setOrbitEnabled(true);
-      vp.setEdgeHighlightEnabled(true);
-    }
-
+    // InlineSketchOverlay cleanup (exitSketchEdit, restore orbit, etc.) happens
+    // automatically via its useEffect cleanup when we set inlineSketch to null.
     setInlineSketch(null);
 
     // Auto-start an extrude draft with this sketch + plane
@@ -1085,6 +1072,7 @@ export function PartEditorPage() {
             <InlineSketchOverlay
               plane={inlineSketch.plane}
               sketchId={inlineSketch.sketchId}
+              documentId={part.documentId}
               viewport={viewportRef.current}
               onDone={handleInlineSketchDone}
             />

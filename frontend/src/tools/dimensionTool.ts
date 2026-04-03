@@ -1,5 +1,5 @@
 import type { Tool, ToolContext } from './types';
-import type { CircleEntity, DimensionEntity, LineEntity, Point } from '@/types/document';
+import type { BezierEntity, CircleEntity, DimensionEntity, LineEntity, Point } from '@/types/document';
 import type { Renderer, Viewport } from '@/types/renderer';
 import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
@@ -83,7 +83,7 @@ export function createDimensionTool(): Tool {
 
       // Validate the hit entity exists and is a geometry type
       const targetEntity = activeSketch.entities.find((e) => e.id === (target.kind === 'point' ? target.hit.entityId : target.hit.entityId));
-      if (!targetEntity || targetEntity.type === 'dimension' || targetEntity.type === 'bezier') return;
+      if (!targetEntity || targetEntity.type === 'dimension') return;
 
       // First click: store the target
       if (!firstTarget) {
@@ -185,6 +185,38 @@ export function createDimensionTool(): Tool {
                 targetEntityId: hit.entityId,
                 segmentIndex: -1,
                 offset: DIMENSION_OFFSET_MM,
+              });
+            }
+            firstTarget = null;
+            return;
+          }
+
+          // Bezier: create start-to-end dimension (control points 0 → 3)
+          if (targetEntity.type === 'bezier') {
+            const bz = targetEntity as BezierEntity;
+            const exists = activeSketch.entities.some(
+              (e) =>
+                e.type === 'dimension' &&
+                e.targetEntityId === hit.entityId &&
+                !e.targetEntityId2,
+            );
+            if (!exists) {
+              const a = bz.controlPoints[0]!;
+              const b = bz.controlPoints[3]!;
+              const dx = b.x - a.x;
+              const dy = b.y - a.y;
+              const cross = dx * (worldPos.y - a.y) - dy * (worldPos.x - a.x);
+              const sign = cross >= 0 ? 1 : -1;
+
+              useDocumentStore.getState().beginTransaction('Add dimension');
+              useDocumentStore.getState().addEntity({
+                id: crypto.randomUUID(),
+                type: 'dimension',
+                targetEntityId: hit.entityId,
+                segmentIndex: 0,
+                pointIndex: 0,
+                pointIndex2: 3,
+                offset: DIMENSION_OFFSET_MM * sign,
               });
             }
             firstTarget = null;
@@ -410,6 +442,10 @@ export function createDimensionTool(): Tool {
             const sc = viewport.worldToScreen(entity1.center);
             const sr = entity1.radius * viewport.scale;
             renderer.drawArc(sc, sr, 0, Math.PI * 2, false, { color: palette.accent, width: 2.5 });
+          } else if (entity1 && entity1.type === 'bezier') {
+            const bz = entity1 as BezierEntity;
+            const [p0, p1, p2, p3] = bz.controlPoints.map((p) => viewport.worldToScreen(p));
+            renderer.drawBezier(p0!, p1!, p2!, p3!, { color: palette.accent, width: 2.5 });
           }
         }
       }
@@ -456,7 +492,39 @@ export function createDimensionTool(): Tool {
       // --- Segment hover (existing behavior) ---
       const hoverSegHit = hoverTarget.hit as SegmentHit;
       const targetEntity = activeSketch.entities.find((e) => e.id === hoverSegHit.entityId);
-      if (!targetEntity || (targetEntity.type !== 'line' && targetEntity.type !== 'circle')) return;
+      if (!targetEntity || (targetEntity.type !== 'line' && targetEntity.type !== 'circle' && targetEntity.type !== 'bezier')) return;
+
+      // Bezier hover: preview start-to-end dimension
+      if (targetEntity.type === 'bezier') {
+        const bz = targetEntity as BezierEntity;
+        const [p0, p1, p2, p3] = bz.controlPoints.map((p) => viewport.worldToScreen(p));
+        renderer.drawBezier(p0!, p1!, p2!, p3!, { color: palette.accent, width: 1.5, opacity: 0.6 });
+
+        if (!firstTarget) {
+          // Preview the start-to-end dimension
+          const exists = activeSketch.entities.some(
+            (e) =>
+              e.type === 'dimension' &&
+              e.targetEntityId === hoverSegHit.entityId &&
+              !e.targetEntityId2,
+          );
+          if (!exists) {
+            const a = bz.controlPoints[0]!;
+            const b = bz.controlPoints[3]!;
+            renderer.setGlobalAlpha(0.4);
+            drawDimension(
+              renderer,
+              viewport,
+              { a, b, offset: DIMENSION_OFFSET_MM },
+              styles.dimensionLine,
+              styles.dimensionText,
+              palette.background,
+            );
+            renderer.resetGlobalAlpha();
+          }
+        }
+        return;
+      }
 
       // Circle hover preview
       if (targetEntity.type === 'circle') {

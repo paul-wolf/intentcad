@@ -5,6 +5,9 @@ import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import type { EdgeData } from './featureEngine';
+import type { Plane } from '@/types/part';
+import { ThreeJSRenderer } from '@/rendering/threeRenderer';
+import { PlaneViewport } from '@/rendering/planeViewport';
 
 export interface DragInteractionCallbacks {
   onDragStart: (hitPoint: [number, number, number], handleId?: string) => {
@@ -1440,6 +1443,121 @@ export class PartViewport {
 
   clearInlineSketch() {
     this.clearGroup(this.inlineSketchGroup);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Full sketch-edit mode (renders via pipeline in 3D)
+  // ---------------------------------------------------------------------------
+
+  private sketchEditPlane: Plane | null = null;
+  private sketchEditGroup: THREE.Group = new THREE.Group();
+  private sketchEditGroupAdded = false;
+
+  /** Enter sketch-edit mode: camera aligns to plane, model fades, tools work in 3D. */
+  enterSketchEdit(plane: Plane): void {
+    this.sketchEditPlane = plane;
+    if (!this.sketchEditGroupAdded) {
+      this.sketchEditGroup.renderOrder = 998;
+      this.scene.add(this.sketchEditGroup);
+      this.sketchEditGroupAdded = true;
+    }
+    this.alignCameraToPlane(plane);
+    // Hide existing sketch plane overlays — the pipeline will render the active sketch
+    this.clearGroup(this.sketchPlanesGroup);
+    this.clearGroup(this.sketchOverlayGroup);
+    // Pan + zoom only, no rotation (keeps camera aligned to sketch plane)
+    this.controls.enableRotate = false;
+    this.controls.mouseButtons = {
+      LEFT: -1 as THREE.MOUSE,           // free for tool system
+      MIDDLE: THREE.MOUSE.PAN,
+      RIGHT: THREE.MOUSE.PAN,
+    };
+    // Fade the solid model
+    this.meshGroup.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.material instanceof THREE.Material) {
+        child.material.transparent = true;
+        child.material.opacity = 0.3;
+        child.material.needsUpdate = true;
+      }
+    });
+  }
+
+  /** Exit sketch-edit mode: restore camera and model opacity. */
+  exitSketchEdit(): void {
+    this.sketchEditPlane = null;
+    this.clearGroup(this.sketchEditGroup);
+    this.restoreCamera();
+    // Restore orbit controls defaults
+    this.controls.enableRotate = true;
+    this.controls.mouseButtons = {
+      LEFT: THREE.MOUSE.ROTATE,
+      MIDDLE: THREE.MOUSE.DOLLY,
+      RIGHT: THREE.MOUSE.PAN,
+    };
+    // Restore model opacity
+    this.meshGroup.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.material instanceof THREE.Material) {
+        child.material.transparent = false;
+        child.material.opacity = 1;
+        child.material.needsUpdate = true;
+      }
+    });
+  }
+
+  /** Whether we're currently in sketch-edit mode. */
+  isInSketchEdit(): boolean {
+    return this.sketchEditPlane !== null;
+  }
+
+  /** Get the current sketch-edit plane (null if not in sketch mode). */
+  getSketchEditPlane(): Plane | null {
+    return this.sketchEditPlane;
+  }
+
+  /**
+   * Create a PlaneViewport for the current sketch-edit plane.
+   * This maps screen pixels ↔ plane-local 2D coords via the 3D camera.
+   */
+  createPlaneViewport(): PlaneViewport | null {
+    if (!this.sketchEditPlane) return null;
+    const container = this.renderer.domElement.parentElement;
+    const w = container?.clientWidth ?? this.renderer.domElement.width;
+    const h = container?.clientHeight ?? this.renderer.domElement.height;
+    return new PlaneViewport(this.camera, this.sketchEditPlane, w, h);
+  }
+
+  /**
+   * Create a ThreeJSRenderer that draws sketch geometry on the edit plane.
+   * Call begin() before rendering, end() after.
+   */
+  createSketchRenderer(planeViewport: PlaneViewport): ThreeJSRenderer {
+    const container = this.renderer.domElement.parentElement;
+    const w = container?.clientWidth ?? this.renderer.domElement.width;
+    const h = container?.clientHeight ?? this.renderer.domElement.height;
+    const resolution = new THREE.Vector2(w, h);
+    const worldPerPx = planeViewport.getWorldPerPixel();
+
+    return new ThreeJSRenderer(
+      this.sketchEditGroup,
+      this.sketchEditPlane!,
+      (screenPt) => planeViewport.screenToWorld(screenPt),
+      resolution,
+      worldPerPx,
+    );
+  }
+
+  /** Get camera (for PlaneViewport construction). */
+  getCamera(): THREE.PerspectiveCamera {
+    return this.camera;
+  }
+
+  /** Get container dimensions. */
+  getContainerSize(): { width: number; height: number } {
+    const container = this.renderer.domElement.parentElement;
+    return {
+      width: container?.clientWidth ?? this.renderer.domElement.width,
+      height: container?.clientHeight ?? this.renderer.domElement.height,
+    };
   }
 
   /** Get the renderer's DOM element for attaching mouse handlers. */

@@ -88,6 +88,14 @@ export function resolveDimensionEndpoints(
     }
   }
 
+  // Bezier: start-to-end (control points 0 and 3)
+  if (target.type === 'bezier') {
+    const a = getEntityPoint(target, 0);
+    const b = getEntityPoint(target, 3);
+    if (!a || !b) return null;
+    return { a, b };
+  }
+
   if (target.type !== 'line') return null;
 
   // Polygon apothem dimension
