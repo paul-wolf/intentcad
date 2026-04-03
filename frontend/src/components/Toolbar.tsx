@@ -269,6 +269,7 @@ export function Toolbar() {
                 for (const entity of result.entities) {
                   useDocumentStore.getState().addEntity(entity);
                 }
+                useDocumentStore.getState().centerToOrigin();
                 requestSave();
                 setTimeout(() => useEditorStore.getState().setViewportCommand('fit-entities'), 0);
                 let msg = `Imported ${result.entities.length} entities from DXF`;
@@ -573,6 +574,17 @@ export function Toolbar() {
           title="Grid copy selected entities (G)"
         >
           <ToolIcon><rect x="1.5" y="1.5" width="4" height="4" /><rect x="6" y="1.5" width="4" height="4" strokeDasharray="1.5 1" /><rect x="10.5" y="1.5" width="4" height="4" strokeDasharray="1.5 1" /><rect x="1.5" y="6" width="4" height="4" strokeDasharray="1.5 1" /><rect x="1.5" y="10.5" width="4" height="4" strokeDasharray="1.5 1" /></ToolIcon>
+        </button>
+
+        <button
+          onClick={() => {
+            useDocumentStore.getState().centerToOrigin();
+            requestSave();
+          }}
+          style={btn(palette)}
+          title="Center sketch at origin"
+        >
+          <ToolIcon><circle cx="8" cy="8" r="1.5" fill="currentColor" stroke="none" /><line x1="8" y1="2" x2="8" y2="14" strokeDasharray="2 1.5" /><line x1="2" y1="8" x2="14" y2="8" strokeDasharray="2 1.5" /><rect x="3" y="3" width="10" height="10" rx="1" strokeDasharray="2 1.5" /></ToolIcon>
         </button>
 
         <div style={{ flex: 1 }} />

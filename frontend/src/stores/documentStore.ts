@@ -71,6 +71,9 @@ interface DocumentStore {
   // Grid copy
   gridCopyEntities(entityIds: string[], countX: number, countY: number, spacingX: number, spacingY: number): string[];
 
+  // Center sketch at origin
+  centerToOrigin(): void;
+
   // Constraints
   addConstraint(constraint: Constraint): void;
   removeConstraints(entityIds: string[]): void;
@@ -672,6 +675,48 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     });
     addLog('info', `Grid copy: ${countX}x${countY}`);
     return newEntities.map((e) => e.id);
+  },
+
+  centerToOrigin() {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return;
+
+    // Collect all geometry points to compute bounding box
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    const geomIds: string[] = [];
+    for (const e of sketch.entities) {
+      if (e.type === 'dimension') continue;
+      geomIds.push(e.id);
+      const pts: Point[] = [];
+      if (e.type === 'line') pts.push(...e.points);
+      else if (e.type === 'circle') {
+        pts.push({ x: e.center.x - e.radius, y: e.center.y - e.radius });
+        pts.push({ x: e.center.x + e.radius, y: e.center.y + e.radius });
+      }
+      else if (e.type === 'rectangle') {
+        const hw = e.width / 2, hh = e.height / 2;
+        pts.push({ x: e.center.x - hw, y: e.center.y - hh });
+        pts.push({ x: e.center.x + hw, y: e.center.y + hh });
+      }
+      else if (e.type === 'point') pts.push(e.position);
+      else if (e.type === 'bezier') pts.push(...e.controlPoints);
+      else if (e.type === 'text') pts.push(e.position);
+      for (const p of pts) {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+      }
+    }
+    if (!isFinite(minX) || geomIds.length === 0) return;
+
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    if (Math.abs(cx) < 0.01 && Math.abs(cy) < 0.01) return; // already centered
+
+    get().beginTransaction('Center to origin');
+    get().moveEntities(geomIds, { x: -cx, y: -cy });
   },
 
   addConstraint(constraint) {
