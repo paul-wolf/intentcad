@@ -20,6 +20,7 @@ export function useMouseHandlers(
       screenToWorld: (p) => viewport.screenToWorld(p),
       worldToScreen: (p) => viewport.worldToScreen(p),
       shiftKey: e?.shiftKey || e?.metaKey,
+      altKey: e?.altKey,
     };
   }, [viewportRef]);
 

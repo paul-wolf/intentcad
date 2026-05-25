@@ -5,6 +5,7 @@ import { createMirroredEntity, createRotatedEntity, createTranslatedEntity, prop
 import { rotatePoint, lineLineIntersection } from '@/utils/geometry';
 import { getEntityPoints, getEntityPoint, setEntityPoint } from '@/utils/entityPoints';
 import { solveConstraints, validateConstraint } from '@/utils/constraintSolver';
+import { generateId } from '@/utils/id';
 import { computeDerivedDimensionIds } from '@/utils/dof';
 import { addLog } from '@/stores/logStore';
 import type { SelectedPoint } from '@/stores/editorStore';
@@ -58,6 +59,8 @@ interface DocumentStore {
   movePoint(entityId: string, pointIndex: number, delta: Point): void;
   rotatePolygon(entityId: string, angleDelta: number): void;
   extendPolyline(entityId: string, point: Point, end: 'start' | 'end'): void;
+  deleteSegmentFromPolyline(entityId: string, segmentIndex: number): void;
+  deleteVertexFromPolyline(entityId: string, pointIndex: number): void;
 
   // Construction toggle
   toggleConstruction(entityIds: string[]): void;
@@ -558,6 +561,138 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
         ),
       },
     });
+  },
+
+  deleteSegmentFromPolyline(entityId, segmentIndex) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return;
+    const entity = sketch.entities.find((e) => e.id === entityId);
+    if (!entity || entity.type !== 'line' || entity.sourceId || entity.polygonCenter) return;
+
+    const pts = entity.points;
+    const segCount = entity.closed ? pts.length : pts.length - 1;
+    if (segCount === 0) return;
+
+    const newConstraints = sketch.constraints.filter(
+      (c) => !constraintReferencesAny(c, new Set([entityId])),
+    );
+
+    let newEntities: typeof sketch.entities;
+
+    if (entity.closed) {
+      // Open the closed path: reorder so the gap is at start/end
+      const n = pts.length;
+      const startIdx = (segmentIndex + 1) % n;
+      const newPts = Array.from({ length: n }, (_, i) => pts[(startIdx + i) % n]!);
+      const newBulge = entity.bulge
+        ? Array.from({ length: n - 1 }, (_, i) => entity.bulge![(startIdx + i) % n] ?? 0)
+        : undefined;
+      newEntities = newPts.length < 2
+        ? sketch.entities.filter((e) => e.id !== entityId)
+        : sketch.entities.map((e) =>
+            e.id === entityId ? { ...entity, points: newPts, closed: false, bulge: newBulge } : e,
+          );
+    } else {
+      const lastSeg = pts.length - 2;
+      if (segmentIndex === 0) {
+        const newPts = pts.slice(1);
+        const newBulge = entity.bulge ? entity.bulge.slice(1) : undefined;
+        newEntities = newPts.length < 2
+          ? sketch.entities.filter((e) => e.id !== entityId)
+          : sketch.entities.map((e) =>
+              e.id === entityId ? { ...entity, points: newPts, bulge: newBulge } : e,
+            );
+      } else if (segmentIndex === lastSeg) {
+        const newPts = pts.slice(0, -1);
+        const newBulge = entity.bulge ? entity.bulge.slice(0, -1) : undefined;
+        newEntities = newPts.length < 2
+          ? sketch.entities.filter((e) => e.id !== entityId)
+          : sketch.entities.map((e) =>
+              e.id === entityId ? { ...entity, points: newPts, bulge: newBulge } : e,
+            );
+      } else {
+        // Middle segment: split into two polylines
+        const pts1 = pts.slice(0, segmentIndex + 1);
+        const pts2 = pts.slice(segmentIndex + 1);
+        const bulge1 = entity.bulge ? entity.bulge.slice(0, segmentIndex) : undefined;
+        const bulge2 = entity.bulge ? entity.bulge.slice(segmentIndex + 1) : undefined;
+        const newId = generateId('ln');
+        const ent1 = { ...entity, points: pts1, bulge: bulge1 };
+        const ent2: typeof entity = { ...entity, id: newId, points: pts2, bulge: bulge2, sourceId: undefined, sourceTransform: undefined };
+        newEntities = sketch.entities.flatMap((e) =>
+          e.id === entityId ? (pts1.length >= 2 && pts2.length >= 2 ? [ent1, ent2] : pts1.length >= 2 ? [ent1] : pts2.length >= 2 ? [ent2] : []) : [e],
+        );
+      }
+    }
+
+    set({
+      document: {
+        ...document,
+        sketches: document.sketches.map((sk) =>
+          sk.id === document.activeSketchId
+            ? { ...sk, entities: propagateDerived(newEntities), constraints: newConstraints }
+            : sk,
+        ),
+      },
+    });
+    addLog('info', 'Deleted segment');
+  },
+
+  deleteVertexFromPolyline(entityId, pointIndex) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return;
+    const entity = sketch.entities.find((e) => e.id === entityId);
+    if (!entity || entity.type !== 'line' || entity.sourceId || entity.polygonCenter) return;
+
+    const pts = entity.points;
+    if (pts.length <= 2) {
+      // Removing a vertex from a 2-point line leaves nothing useful
+      get().removeEntities([entityId]);
+      return;
+    }
+
+    const newPts = [...pts.slice(0, pointIndex), ...pts.slice(pointIndex + 1)];
+
+    let newBulge: number[] | undefined;
+    if (entity.bulge) {
+      const b = [...entity.bulge];
+      if (pointIndex === 0) {
+        newBulge = b.slice(1);
+      } else if (pointIndex === pts.length - 1) {
+        newBulge = b.slice(0, -1);
+      } else {
+        // Remove the segment starting at pointIndex, set the previous one to straight
+        b.splice(pointIndex, 1);
+        b[pointIndex - 1] = 0;
+        newBulge = b;
+      }
+    }
+
+    const newConstraints = sketch.constraints.filter(
+      (c) => !constraintReferencesAny(c, new Set([entityId])),
+    );
+
+    set({
+      document: {
+        ...document,
+        sketches: document.sketches.map((sk) =>
+          sk.id === document.activeSketchId
+            ? {
+                ...sk,
+                entities: propagateDerived(
+                  sk.entities.map((e) =>
+                    e.id === entityId ? { ...entity, points: newPts, bulge: newBulge } : e,
+                  ),
+                ),
+                constraints: newConstraints,
+              }
+            : sk,
+        ),
+      },
+    });
+    addLog('info', 'Deleted vertex');
   },
 
   toggleConstruction(entityIds) {
@@ -1688,6 +1823,15 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     const updatedEntities = sketch.entities.map((e) =>
       e.id === entityId ? updatedEntity : e,
     );
+
+    // Dimensions only change visual properties (offset); skip geometry solving.
+    if (updatedEntity.type === 'dimension') {
+      set({
+        document: updateActiveSketch(document, () => ({ entities: updatedEntities })),
+      });
+      return;
+    }
+
     const solved = solveConstraints(updatedEntities, sketch.constraints, { movedIds: new Set([entityId]) });
     set({
       document: updateActiveSketch(document, () => ({

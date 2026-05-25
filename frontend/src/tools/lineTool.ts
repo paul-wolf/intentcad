@@ -80,7 +80,7 @@ export function createLineTool(): Tool {
   return {
     onMouseDown(worldPos: Point, _screenPos: Point, ctx: ToolContext) {
       const doc = useDocumentStore.getState().document;
-      const snap = snapPosition(worldPos, ctx.viewport, doc);
+      const snap = ctx.altKey ? { point: worldPos, type: 'grid' as const } : snapPosition(worldPos, ctx.viewport, doc);
       const ts = getToolState();
       if (!ts) return;
 
@@ -138,7 +138,7 @@ export function createLineTool(): Tool {
 
     onMouseMove(worldPos: Point, _screenPos: Point, ctx: ToolContext) {
       const doc = useDocumentStore.getState().document;
-      currentSnap = snapPosition(worldPos, ctx.viewport, doc);
+      currentSnap = ctx.altKey ? { point: worldPos, type: 'grid' as const } : snapPosition(worldPos, ctx.viewport, doc);
     },
 
     onKeyDown(e: KeyboardEvent) {

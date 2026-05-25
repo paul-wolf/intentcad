@@ -155,7 +155,7 @@ export function solveConstraints(
 
     enforceCoincident(entityMap, constraints, fixedIds, movedIds);
     enforceMidpoint(entityMap, constraints, fixedIds);
-    enforceEqual(entityMap, constraints);
+    enforceEqual(entityMap, constraints, fixedIds);
     enforceParallel(entityMap, constraints, fixedIds);
     enforcePerpendicular(entityMap, constraints, fixedIds);
     enforceTangent(entityMap, constraints, fixedIds);
@@ -489,6 +489,7 @@ function enforceMidpoint(
 function enforceEqual(
   entityMap: Map<string, Entity>,
   constraints: Constraint[],
+  fixedIds: Set<string>,
 ): void {
   const equalConstraints = constraints.filter((c): c is EqualConstraint => c.type === 'equal');
   if (equalConstraints.length === 0) return;
@@ -496,6 +497,14 @@ function enforceEqual(
   // --- Segment-based equal: make two specific segments equal length ---
   for (const c of equalConstraints) {
     if (c.segmentIndex === undefined || c.targetSegmentIndex === undefined) continue;
+
+    const e1Fixed = fixedIds.has(c.entityId);
+    const e2Fixed = fixedIds.has(c.targetEntityId);
+    const sameEntity = c.entityId === c.targetEntityId;
+
+    // Skip entirely if the only modifiable entity is fixed
+    if (sameEntity && e1Fixed) continue;
+    if (!sameEntity && e1Fixed && e2Fixed) continue;
 
     const entity1 = entityMap.get(c.entityId);
     const entity2 = entityMap.get(c.targetEntityId);
@@ -509,7 +518,8 @@ function enforceEqual(
     const len2 = Math.sqrt((ep2[1].x - ep2[0].x) ** 2 + (ep2[1].y - ep2[0].y) ** 2);
     if (Math.abs(len1 - len2) < 1e-9) continue;
 
-    const targetLen = (len1 + len2) / 2;
+    // If one side is fixed, use its length as the target; otherwise average
+    const targetLen = e1Fixed ? len1 : e2Fixed ? len2 : (len1 + len2) / 2;
 
     // Helper: scale a segment to targetLen
     const scaleSegment = (entity: Entity, segIdx: number, ep: [Point, Point]) => {
@@ -536,15 +546,19 @@ function enforceEqual(
       entityMap.set(entity.id, { ...le, points: newPoints });
     };
 
-    if (c.entityId === c.targetEntityId) {
+    if (sameEntity) {
       // Same entity: adjust both segments
       // Read fresh endpoints after first adjustment
       scaleSegment(entityMap.get(c.entityId)!, c.segmentIndex, ep1);
       const freshEntity = entityMap.get(c.targetEntityId)!;
       const freshEp2 = getSegmentEndpoints(freshEntity, c.targetSegmentIndex);
       if (freshEp2) scaleSegment(freshEntity, c.targetSegmentIndex, freshEp2);
+    } else if (e1Fixed) {
+      // entity1 fixed: adjust entity2 to match entity1
+      scaleSegment(entity2, c.targetSegmentIndex, ep2);
     } else {
-      // Different entities: adjust entity2's segment to match entity1's
+      // entity1 not fixed (entity2 may or may not be fixed, but not both):
+      // adjust entity2's segment to match entity1's
       scaleSegment(entity2, c.targetSegmentIndex, ep2);
     }
   }
@@ -556,8 +570,11 @@ function enforceEqual(
     if (c.segmentIndex !== undefined && c.targetSegmentIndex !== undefined) continue;
     if (visited.has(c.entityId) && visited.has(c.targetEntityId)) continue;
 
-    // Start BFS from the first entity we haven't visited
-    const startId = !visited.has(c.entityId) ? c.entityId : c.targetEntityId;
+    // Prefer starting from a fixed entity so its size is the reference
+    const startId = fixedIds.has(c.entityId) ? c.entityId
+      : fixedIds.has(c.targetEntityId) ? c.targetEntityId
+      : !visited.has(c.entityId) ? c.entityId
+      : c.targetEntityId;
     if (visited.has(startId)) continue;
 
     const queue = [startId];
@@ -577,6 +594,9 @@ function enforceEqual(
 
         visited.add(otherId);
         queue.push(otherId);
+
+        // Don't modify fixed entities
+        if (fixedIds.has(otherId)) continue;
 
         const other = entityMap.get(otherId);
         if (!other) continue;

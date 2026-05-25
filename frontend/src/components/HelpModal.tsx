@@ -42,6 +42,8 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
       ['M', 'Mirror selection'],
       ['A', 'Circular copy'],
       ['G', 'Grid copy'],
+      ['Q', 'Copy selected entities JSON'],
+      ['Shift + Q', 'Copy document JSON'],
     ],
   },
   {
@@ -51,7 +53,7 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
       ['Ctrl + Shift + Z', 'Redo'],
       ['Home', 'Center on origin'],
       ['Shift + F', 'Fit all entities'],
-      ['Alt (hold)', 'Show all dimensions'],
+      ['Alt (hold)', 'Show all dimensions / free draw (no snap)'],
       ['?', 'This help'],
     ],
   },

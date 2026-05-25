@@ -34,7 +34,7 @@ export function createPolygonTool(): Tool {
   return {
     onMouseDown(worldPos: Point, _screenPos: Point, ctx: ToolContext) {
       const doc = useDocumentStore.getState().document;
-      const snap = snapPosition(worldPos, ctx.viewport, doc);
+      const snap = ctx.altKey ? { point: worldPos, type: 'grid' as const } : snapPosition(worldPos, ctx.viewport, doc);
       const ts = getToolState();
       if (!ts) return;
 

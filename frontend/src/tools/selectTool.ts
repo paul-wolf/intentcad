@@ -334,7 +334,9 @@ export function createSelectTool(): Tool {
         };
 
         // Snap the target position (exclude selected entities from snap targets)
-        const snap = snapPosition(targetAnchor, ctx.viewport, doc, selectedIds);
+        const snap = ctx.altKey
+          ? { point: targetAnchor, type: 'grid' as const }
+          : snapPosition(targetAnchor, ctx.viewport, doc, selectedIds);
         currentMoveSnap = snap;
 
         // Calculate delta from current position to snapped target
@@ -517,9 +519,14 @@ export function createSelectTool(): Tool {
               } else if (hit.type === 'dimension') {
                 useEditorStore.getState().setEditingDimensionId(hit.id);
               } else {
+                const traceEntities = dblEntities.filter(
+                  (e) => e.type !== 'dimension' && !('construction' in e && e.construction),
+                );
+                const contourIds = traceContour(hit, traceEntities);
                 useEditorStore.getState().setSelectedPoints([]);
                 useEditorStore.getState().setSelectedSegments([]);
-                useEditorStore.getState().setSelectedEntityIds(new Set([hit.id]));
+                useEditorStore.getState().setSelectedEntityIds(contourIds);
+                addLog('info', `Selected chain: ${contourIds.size} entities`);
               }
               resetDrag();
               return;
@@ -879,12 +886,36 @@ export function createSelectTool(): Tool {
         }
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        const ids = useEditorStore.getState().selectedEntityIds;
-        if (ids.size > 0) {
-          useDocumentStore.getState().beginTransaction('Delete entities');
-          useDocumentStore.getState().removeEntities([...ids]);
-          useEditorStore.getState().clearSelection();
+        const es = useEditorStore.getState();
+        const segs = es.selectedSegments;
+        const pts = es.selectedPoints;
+
+        if (segs.length > 0) {
+          useDocumentStore.getState().beginTransaction('Delete segment');
+          for (const seg of segs) {
+            useDocumentStore.getState().deleteSegmentFromPolyline(seg.entityId, seg.segmentIndex);
+          }
+          es.clearSelection();
           requestSave();
+        } else if (pts.length > 0) {
+          useDocumentStore.getState().beginTransaction('Delete vertex');
+          // Process in reverse point-index order so earlier deletions don't shift later indices
+          const sorted = [...pts].sort((a, b) =>
+            a.entityId === b.entityId ? b.pointIndex - a.pointIndex : 0,
+          );
+          for (const pt of sorted) {
+            useDocumentStore.getState().deleteVertexFromPolyline(pt.entityId, pt.pointIndex);
+          }
+          es.clearSelection();
+          requestSave();
+        } else {
+          const ids = es.selectedEntityIds;
+          if (ids.size > 0) {
+            useDocumentStore.getState().beginTransaction('Delete entities');
+            useDocumentStore.getState().removeEntities([...ids]);
+            es.clearSelection();
+            requestSave();
+          }
         }
       }
     },
