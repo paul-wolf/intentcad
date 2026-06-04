@@ -18,6 +18,7 @@ import { createPolygonTool } from '@/tools/polygonTool';
 import { createPointTool } from '@/tools/pointTool';
 import { createDimensionTool } from '@/tools/dimensionTool';
 import { createRect2ptTool } from '@/tools/rect2ptTool';
+import { createAxisRectTool } from '@/tools/axisRectTool';
 import { createBezierTool } from '@/tools/bezierTool';
 
 interface InlineSketchOverlayProps {
@@ -35,6 +36,7 @@ function createTool(type: ToolType): Tool {
     case 'circle': return createCircleTool();
     case 'rectangle': return createRectangleTool();
     case 'rect2pt': return createRect2ptTool();
+    case 'axisrect': return createAxisRectTool();
     case 'polygon': return createPolygonTool();
     case 'select': return createSelectTool();
     case 'dimension': return createDimensionTool();

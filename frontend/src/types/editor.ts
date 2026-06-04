@@ -1,6 +1,6 @@
 import type { Point } from './document';
 
-export type ToolType = 'select' | 'line' | 'point' | 'circle' | 'rectangle' | 'rect2pt' | 'polygon' | 'dimension' | 'bezier';
+export type ToolType = 'select' | 'line' | 'point' | 'circle' | 'rectangle' | 'rect2pt' | 'axisrect' | 'polygon' | 'dimension' | 'bezier';
 
 export interface LineToolState {
   type: 'line';
@@ -44,12 +44,18 @@ export interface DimensionToolState {
   type: 'dimension';
 }
 
+export interface AxisRectToolState {
+  type: 'axisrect';
+  axisStart: Point | null;
+  axisEnd: Point | null;
+}
+
 export interface BezierToolState {
   type: 'bezier';
   points: Point[];
 }
 
-export type ToolState = LineToolState | SelectToolState | PointToolState | CircleToolState | RectangleToolState | Rect2ptToolState | PolygonToolState | DimensionToolState | BezierToolState;
+export type ToolState = LineToolState | SelectToolState | PointToolState | CircleToolState | RectangleToolState | Rect2ptToolState | AxisRectToolState | PolygonToolState | DimensionToolState | BezierToolState;
 
 export interface EditorState {
   activeTool: ToolType;

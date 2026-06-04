@@ -24,6 +24,7 @@ import { createPolygonTool } from '@/tools/polygonTool';
 import { createPointTool } from '@/tools/pointTool';
 import { createDimensionTool } from '@/tools/dimensionTool';
 import { createRect2ptTool } from '@/tools/rect2ptTool';
+import { createAxisRectTool } from '@/tools/axisRectTool';
 import { createBezierTool } from '@/tools/bezierTool';
 import { startAutoSave, setBackendId, getBackendId, setProjectContext } from '@/api/autoSave';
 import { api } from '@/api/cachedClient';
@@ -286,6 +287,8 @@ export function EditorPage() {
         return createRectangleTool();
       case 'rect2pt':
         return createRect2ptTool();
+      case 'axisrect':
+        return createAxisRectTool();
       case 'polygon':
         return createPolygonTool();
       case 'select':
@@ -363,6 +366,7 @@ export function EditorPage() {
       if (e.key === 'c' || e.key === 'C') setActiveTool('circle');
       if (e.key === 'r') setActiveTool('rectangle');
       if (e.key === 'R') setActiveTool('rect2pt');
+      if (e.key === 'e' || e.key === 'E') setActiveTool('axisrect');
       if (e.key === 'p' || e.key === 'P') setActiveTool('polygon');
       if (e.key === 'd' || e.key === 'D') setActiveTool('dimension');
       if (e.key === 's' || e.key === 'S') setActiveTool('bezier');
