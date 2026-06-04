@@ -269,6 +269,10 @@ export class ThreeJSRenderer implements Renderer {
     });
   }
 
+  fillPolygon(_points: Point[], _color: string): void {
+    // Fill is not rendered in 3D overlay mode
+  }
+
   drawRect(topLeft: Point, size: Point, _fillColor: string, strokeStyle?: LineStyle): void {
     // In 3D we only draw the stroke — fill is not meaningful on a plane overlay
     if (!strokeStyle) return;

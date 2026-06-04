@@ -30,6 +30,7 @@ export interface Renderer {
   drawCircle(center: Point, radius: number, style: LineStyle): void;
   drawArc(center: Point, radius: number, startAngle: number, endAngle: number, counterClockwise: boolean, style: LineStyle): void;
   fillCircle(center: Point, radius: number, color: string): void;
+  fillPolygon(points: Point[], color: string): void;
   drawRect(topLeft: Point, size: Point, fillColor: string, strokeStyle?: LineStyle): void;
   drawText(text: string, position: Point, style: TextStyle): void;
   measureText(text: string, style: TextStyle): { width: number; height: number };

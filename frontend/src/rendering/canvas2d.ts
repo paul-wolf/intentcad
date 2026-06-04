@@ -70,6 +70,19 @@ export class Canvas2DRenderer implements Renderer {
     ctx.fill();
   }
 
+  fillPolygon(points: Point[], color: string): void {
+    if (points.length < 3) return;
+    const { ctx } = this;
+    ctx.beginPath();
+    ctx.moveTo(points[0]!.x, points[0]!.y);
+    for (let i = 1; i < points.length; i++) {
+      ctx.lineTo(points[i]!.x, points[i]!.y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+  }
+
   drawRect(topLeft: Point, size: Point, fillColor: string, strokeStyle?: LineStyle): void {
     const { ctx } = this;
     ctx.fillStyle = fillColor;

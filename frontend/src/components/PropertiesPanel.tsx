@@ -425,6 +425,18 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
           <span style={{ fontSize: '12px', color: palette.text }}>Construction</span>
         </div>
       )}
+
+      {(entity.type === 'circle' || entity.type === 'rectangle' || (entity.type === 'line' && entity.closed)) && (
+        <div style={{ marginTop: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <input
+            type="checkbox"
+            checked={!!entity.fill}
+            disabled={isDerived}
+            onChange={() => update({ ...entity, fill: !entity.fill })}
+          />
+          <span style={{ fontSize: '12px', color: palette.text }}>Fill</span>
+        </div>
+      )}
       </div>
     </div>
   );

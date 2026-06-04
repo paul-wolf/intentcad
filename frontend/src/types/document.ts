@@ -16,6 +16,7 @@ export interface LineEntity {
   bulge?: number[];
   polygonCenter?: Point;
   construction?: boolean;
+  fill?: boolean;
   sourceId?: string;
   sourceTransform?: SourceTransform;
 }
@@ -26,6 +27,7 @@ export interface CircleEntity {
   center: Point;
   radius: number;
   construction?: boolean;
+  fill?: boolean;
   sourceId?: string;
   sourceTransform?: SourceTransform;
 }
@@ -38,6 +40,7 @@ export interface RectangleEntity {
   height: number;
   anchor?: 'center' | 'corner';
   construction?: boolean;
+  fill?: boolean;
   sourceId?: string;
   sourceTransform?: SourceTransform;
 }

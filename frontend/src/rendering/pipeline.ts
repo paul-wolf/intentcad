@@ -283,7 +283,7 @@ function renderActiveSketch(ctx: RenderContext) {
       case 'line': {
         const isConstrained = dofMap.get(entity.id) === 0;
         const style = camStyle ?? pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
-        renderEntity(renderer, viewport, entity, style);
+        renderEntity(renderer, viewport, entity, style, !!(entity.fill && entity.closed && !entity.construction));
         break;
       }
       case 'circle': {
@@ -291,6 +291,11 @@ function renderActiveSketch(ctx: RenderContext) {
         const style = camStyle ?? pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
         const screenCenter = viewport.worldToScreen(entity.center);
         const screenRadius = entity.radius * viewport.scale;
+        if (entity.fill && !entity.construction) {
+          renderer.setGlobalAlpha(0.25);
+          renderer.fillCircle(screenCenter, screenRadius, style.color);
+          renderer.resetGlobalAlpha();
+        }
         renderer.drawCircle(screenCenter, screenRadius, style);
         renderer.fillCircle(screenCenter, ENDPOINT_RADIUS, style.color);
         break;
@@ -298,7 +303,7 @@ function renderActiveSketch(ctx: RenderContext) {
       case 'rectangle': {
         const isConstrained = dofMap.get(entity.id) === 0;
         const style = camStyle ?? pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
-        renderEntity(renderer, viewport, entity, style);
+        renderEntity(renderer, viewport, entity, style, !!(entity.fill && !entity.construction));
         break;
       }
       case 'point': {
@@ -624,9 +629,16 @@ function renderEntity(
   viewport: Viewport,
   entity: Entity,
   style: LineStyle,
+  fillShape = false,
 ) {
   switch (entity.type) {
     case 'line': {
+      if (fillShape) {
+        const screenPoints = entity.points.map((p) => viewport.worldToScreen(p));
+        renderer.setGlobalAlpha(0.25);
+        renderer.fillPolygon(screenPoints, style.color);
+        renderer.resetGlobalAlpha();
+      }
       const segCount = getSegmentCount(entity);
       for (let i = 0; i < segCount; i++) {
         const [i1, i2] = getSegmentPointIndices(entity, i);
@@ -663,6 +675,11 @@ function renderEntity(
         viewport.worldToScreen({ x: c.x + hw, y: c.y - hh }),
         viewport.worldToScreen({ x: c.x - hw, y: c.y - hh }),
       ];
+      if (fillShape) {
+        renderer.setGlobalAlpha(0.25);
+        renderer.fillPolygon(corners, style.color);
+        renderer.resetGlobalAlpha();
+      }
       for (let i = 0; i < 4; i++) {
         renderer.drawLine(corners[i]!, corners[(i + 1) % 4]!, style);
       }
