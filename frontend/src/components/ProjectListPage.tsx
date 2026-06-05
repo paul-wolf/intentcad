@@ -32,6 +32,7 @@ export function ProjectListPage() {
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sharingProject, setSharingProject] = useState<Project | null>(null);
 
@@ -42,13 +43,11 @@ export function ProjectListPage() {
         projectApi.listProjects(),
         api.listDocuments(),
       ]);
-
       let finalProjects = projectList;
       if (projectList.length === 0) {
         await projectApi.createProject('Default Project');
         finalProjects = await projectApi.listProjects();
       }
-
       setProjects(finalProjects);
       setRecentDocs(
         [...docList].sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 8)
@@ -90,21 +89,15 @@ export function ProjectListPage() {
   };
 
   const commitRename = async () => {
-    if (!editingId || !editName.trim()) {
-      setEditingId(null);
-      return;
-    }
+    if (!editingId || !editName.trim()) { setEditingId(null); return; }
     const trimmed = editName.trim();
-    const duplicate = projects.some((p) => p.id !== editingId && p.name === trimmed);
-    if (duplicate) {
-      setEditingId(null);
-      return;
-    }
-    try {
-      await projectApi.updateProject(editingId, { name: trimmed });
-      setProjects((prev) => prev.map((p) => (p.id === editingId ? { ...p, name: trimmed } : p)));
-    } catch (err) {
-      console.error('Failed to rename project:', err);
+    if (!projects.some((p) => p.id !== editingId && p.name === trimmed)) {
+      try {
+        await projectApi.updateProject(editingId, { name: trimmed });
+        setProjects((prev) => prev.map((p) => (p.id === editingId ? { ...p, name: trimmed } : p)));
+      } catch (err) {
+        console.error('Failed to rename project:', err);
+      }
     }
     setEditingId(null);
   };
@@ -114,7 +107,6 @@ export function ProjectListPage() {
       const full = await api.getDocument(id);
       setDocument(migrateDocument(full.data as unknown as Document));
       setBackendId(full.id);
-      // Resolve project context for the document
       if (full.project_id) {
         const proj = projects.find((p) => p.id === full.project_id);
         setProjectContext(full.project_id, proj?.name ?? null);
@@ -132,221 +124,254 @@ export function ProjectListPage() {
     navigate('/login');
   };
 
-  const btnStyle: React.CSSProperties = {
-    padding: '8px 18px',
-    background: palette.primaryBtn,
-    color: '#fff',
+  const navLink: React.CSSProperties = {
+    background: 'none',
     border: 'none',
-    borderRadius: '6px',
-    fontSize: '14px',
+    color: palette.textSecondary,
     cursor: 'pointer',
+    fontSize: '13px',
+    padding: '0',
+    textDecoration: 'none',
   };
 
   return (
-    <div style={{ height: '100%', overflow: 'auto' }}>
-      <div style={{ maxWidth: '720px', margin: '0 auto', padding: '32px 24px' }}>
-        {/* Top bar */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'baseline',
-          justifyContent: 'space-between',
-          marginBottom: '8px',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
-            <span style={{ fontSize: '20px', fontWeight: 700, color: palette.text }}>IntentCAD</span>
-            <span style={{ fontSize: '13px', color: palette.textSecondary }}>v0.1</span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '14px' }}>
-            <span
-              style={{ color: palette.textSecondary, cursor: 'pointer' }}
-              onClick={() => navigate('/profile')}
-            >
-              {user?.username}
-              {user?.organisation && <> &middot; {user.organisation.name}</>}
-            </span>
-            <button
-              onClick={handleLogout}
-              style={{ background: 'none', border: 'none', color: palette.danger, cursor: 'pointer', fontSize: '14px' }}
-            >
-              Logout
-            </button>
-          </div>
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
+      {/* ── Top navbar ── */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        padding: '0 24px',
+        height: '48px',
+        flexShrink: 0,
+        background: palette.panelBg,
+        borderBottom: `1px solid ${palette.border}`,
+        gap: '20px',
+      }}>
+        {/* Brand */}
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', marginRight: '8px' }}>
+          <span style={{ fontSize: '16px', fontWeight: 700, color: palette.text, letterSpacing: '-0.3px' }}>
+            IntentCAD
+          </span>
+          <span style={{ fontSize: '11px', color: palette.textMuted }}>v0.1</span>
         </div>
-        <div style={{ borderBottom: `1px solid ${palette.textSecondary}`, marginBottom: '24px', opacity: 0.3 }} />
 
-        {/* Admin section */}
-        {!loading && (user?.is_staff || user?.is_superuser) && (
-          <div style={{ marginBottom: '24px', display: 'flex', gap: '12px' }}>
-            <button style={btnStyle} onClick={() => navigate('/manage/users')}>Users</button>
+        <div style={{ flex: 1 }} />
+
+        {/* Admin links */}
+        {(user?.is_staff || user?.is_superuser) && (
+          <>
+            <button style={navLink} onClick={() => navigate('/manage/users')}>Users</button>
             {user?.is_superuser && (
-              <button style={btnStyle} onClick={() => navigate('/manage/organisations')}>Organisations</button>
+              <button style={navLink} onClick={() => navigate('/manage/organisations')}>Organisations</button>
             )}
-          </div>
+            <span style={{ color: palette.border }}>|</span>
+          </>
         )}
 
-        {/* Two-column body */}
-        {!loading && (
-          <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start' }}>
-            {/* Projects column */}
-            <div style={{ flex: '55 1 0%', minWidth: 0 }}>
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                marginBottom: '8px',
-              }}>
-                <span style={{ fontSize: '13px', color: palette.textSecondary, fontWeight: 600, textTransform: 'uppercase' as const, letterSpacing: '0.5px' }}>
-                  Projects
-                </span>
-                <button style={btnStyle} onClick={handleNew}>+ New</button>
-              </div>
+        {/* User */}
+        <button
+          style={{ ...navLink, color: palette.text }}
+          onClick={() => navigate('/profile')}
+          title="Profile"
+        >
+          {user?.username}
+          {user?.organisation && (
+            <span style={{ color: palette.textMuted }}> · {user.organisation.name}</span>
+          )}
+        </button>
 
-              <div style={{ display: 'flex', flexDirection: 'column' as const, gap: '4px' }}>
-                {projects.map((p) => (
-                  <div
-                    key={p.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      padding: '10px 12px',
-                      background: palette.panelBg,
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                    }}
-                    onClick={() => {
-                      if (editingId === p.id) return;
-                      if (clickTimer.current) clearTimeout(clickTimer.current);
-                      clickTimer.current = setTimeout(() => {
-                        clickTimer.current = null;
-                        navigate(`/project/${p.id}`);
-                      }, 250);
-                    }}
-                    onDoubleClick={() => {
-                      if (clickTimer.current) { clearTimeout(clickTimer.current); clickTimer.current = null; }
-                      startRename(p.id, p.name);
-                    }}
-                  >
-                    {editingId === p.id ? (
-                      <input
-                        style={{
-                          flex: 1,
-                          background: palette.panelBg,
-                          border: `1px solid ${palette.textSecondary}`,
-                          borderRadius: '2px',
-                          color: palette.text,
-                          fontSize: '14px',
-                          padding: '2px 6px',
-                          outline: 'none',
-                        }}
-                        value={editName}
-                        onChange={(e) => setEditName(e.target.value)}
-                        onBlur={commitRename}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') commitRename();
-                          if (e.key === 'Escape') setEditingId(null);
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                        autoFocus
-                      />
-                    ) : (
-                      <span style={{ flex: 1, color: palette.text, fontSize: '14px', fontWeight: 500 }}>
-                        {p.name}
-                      </span>
-                    )}
-                    <span style={{ fontSize: '13px', color: palette.textSecondary, whiteSpace: 'nowrap' }}>
-                      {p.document_count}
-                    </span>
-                    <button
-                      style={{
-                        background: 'none',
-                        border: 'none',
-                        color: palette.textSecondary,
-                        cursor: 'pointer',
-                        fontSize: '14px',
-                        padding: '0 4px',
-                        lineHeight: 1,
-                      }}
-                      title="Share project"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSharingProject(p);
-                      }}
-                    >
-                      &#x1F517;
-                    </button>
-                    <span style={{ fontSize: '18px', color: palette.textSecondary, lineHeight: 1 }}>&#9656;</span>
-                    {p.document_count === 0 && (
-                      <button
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          color: palette.danger,
-                          cursor: 'pointer',
-                          fontSize: '18px',
-                          padding: '0 4px',
-                          lineHeight: 1,
-                        }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDelete(p.id);
-                        }}
-                      >
-                        &times;
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Recent Sketches column */}
-            <div style={{ flex: '45 1 0%', minWidth: 0 }}>
-              <div style={{ marginBottom: '8px' }}>
-                <span style={{ fontSize: '13px', color: palette.textSecondary, fontWeight: 600, textTransform: 'uppercase' as const, letterSpacing: '0.5px' }}>
-                  Recent Sketches
-                </span>
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column' as const, gap: '4px' }}>
-                {recentDocs.length === 0 && (
-                  <span style={{ fontSize: '13px', color: palette.textSecondary, padding: '10px 0' }}>
-                    No sketches yet.
-                  </span>
-                )}
-                {recentDocs.map((d) => (
-                  <div
-                    key={d.id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      padding: '10px 12px',
-                      background: palette.panelBg,
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                    }}
-                    onClick={() => handleOpenDoc(d.id)}
-                  >
-                    <span style={{ fontSize: '14px', color: palette.text }}>&#9656;</span>
-                    <span style={{ flex: 1, color: palette.text, fontSize: '14px', minWidth: 0 }}>
-                      {d.name}
-                      {d.project_id && (() => {
-                        const proj = projects.find((p) => p.id === d.project_id);
-                        return proj ? <span style={{ fontSize: '12px', color: palette.textSecondary, marginLeft: '6px' }}>{proj.name}</span> : null;
-                      })()}
-                    </span>
-                    <span style={{ fontSize: '12px', color: palette.textSecondary, whiteSpace: 'nowrap' }}>
-                      {relativeTime(d.updated_at)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
+        {/* Logout */}
+        <button
+          onClick={handleLogout}
+          style={{ ...navLink, color: palette.danger }}
+        >
+          Logout
+        </button>
       </div>
+
+      {/* ── Main content ── */}
+      <div style={{ flex: 1, overflow: 'auto' }}>
+        <div style={{ maxWidth: '900px', margin: '0 auto', padding: '32px 24px' }}>
+          {!loading && (
+            <div style={{ display: 'flex', gap: '32px', alignItems: 'flex-start' }}>
+
+              {/* ── Projects column ── */}
+              <div style={{ flex: '55 1 0%', minWidth: 0 }}>
+                <div style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  marginBottom: '12px',
+                }}>
+                  <span style={{
+                    fontSize: '12px', fontWeight: 600, color: palette.textMuted,
+                    textTransform: 'uppercase', letterSpacing: '0.6px',
+                  }}>
+                    Projects
+                  </span>
+                  <button
+                    onClick={handleNew}
+                    style={{
+                      padding: '5px 14px',
+                      background: palette.primaryBtn,
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '5px',
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    + New
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                  {projects.map((p) => (
+                    <div
+                      key={p.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        padding: '9px 12px',
+                        background: hoveredId === p.id ? palette.activeItemBg : palette.panelBg,
+                        borderRadius: '5px',
+                        cursor: 'pointer',
+                        transition: 'background 0.1s',
+                      }}
+                      onClick={() => {
+                        if (editingId === p.id) return;
+                        if (clickTimer.current) clearTimeout(clickTimer.current);
+                        clickTimer.current = setTimeout(() => {
+                          clickTimer.current = null;
+                          navigate(`/project/${p.id}`);
+                        }, 250);
+                      }}
+                      onDoubleClick={() => {
+                        if (clickTimer.current) { clearTimeout(clickTimer.current); clickTimer.current = null; }
+                        startRename(p.id, p.name);
+                      }}
+                      onMouseEnter={() => setHoveredId(p.id)}
+                      onMouseLeave={() => setHoveredId(null)}
+                    >
+                      {editingId === p.id ? (
+                        <input
+                          style={{
+                            flex: 1, background: palette.inputBg,
+                            border: `1px solid ${palette.inputBorder}`,
+                            borderRadius: '3px', color: palette.text,
+                            fontSize: '14px', padding: '2px 6px', outline: 'none',
+                          }}
+                          value={editName}
+                          onChange={(e) => setEditName(e.target.value)}
+                          onBlur={commitRename}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') commitRename();
+                            if (e.key === 'Escape') setEditingId(null);
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                          autoFocus
+                        />
+                      ) : (
+                        <>
+                          <span style={{ flex: 1, color: palette.text, fontSize: '14px', fontWeight: 500 }}>
+                            {p.name}
+                          </span>
+                          {hoveredId === p.id && editingId !== p.id && (
+                            <span style={{ fontSize: '11px', color: palette.textMuted }}>dbl-click to rename</span>
+                          )}
+                        </>
+                      )}
+                      <span style={{
+                        fontSize: '12px', color: palette.textMuted,
+                        background: palette.background, borderRadius: '10px',
+                        padding: '1px 7px', flexShrink: 0,
+                      }}>
+                        {p.document_count}
+                      </span>
+                      <button
+                        style={{ background: 'none', border: 'none', color: palette.textMuted, cursor: 'pointer', fontSize: '14px', padding: '0 2px', lineHeight: 1 }}
+                        title="Share project"
+                        onClick={(e) => { e.stopPropagation(); setSharingProject(p); }}
+                      >
+                        &#x1F517;
+                      </button>
+                      <span style={{ color: palette.textMuted, fontSize: '14px', lineHeight: 1 }}>›</span>
+                      {p.document_count === 0 && (
+                        <button
+                          style={{ background: 'none', border: 'none', color: palette.danger, cursor: 'pointer', fontSize: '16px', padding: '0 2px', lineHeight: 1 }}
+                          onClick={(e) => { e.stopPropagation(); handleDelete(p.id); }}
+                        >
+                          &times;
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* ── Recent Sketches column ── */}
+              <div style={{ flex: '45 1 0%', minWidth: 0 }}>
+                <div style={{ marginBottom: '12px' }}>
+                  <span style={{
+                    fontSize: '12px', fontWeight: 600, color: palette.textMuted,
+                    textTransform: 'uppercase', letterSpacing: '0.6px',
+                  }}>
+                    Recent Sketches
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                  {recentDocs.length === 0 && (
+                    <span style={{ fontSize: '13px', color: palette.textMuted, padding: '10px 0' }}>
+                      No sketches yet.
+                    </span>
+                  )}
+                  {recentDocs.map((d) => {
+                    const proj = projects.find((p) => p.id === d.project_id);
+                    return (
+                      <div
+                        key={d.id}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                          padding: '9px 12px',
+                          background: palette.panelBg,
+                          borderRadius: '5px',
+                          cursor: 'pointer',
+                        }}
+                        onClick={() => handleOpenDoc(d.id)}
+                      >
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{
+                            color: palette.text, fontSize: '14px',
+                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                          }}>
+                            {d.name}
+                          </div>
+                          {proj && (
+                            <div style={{
+                              fontSize: '11px', color: palette.textMuted,
+                              marginTop: '1px',
+                            }}>
+                              {proj.name}
+                            </div>
+                          )}
+                        </div>
+                        <span style={{ fontSize: '12px', color: palette.textMuted, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                          {relativeTime(d.updated_at)}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+            </div>
+          )}
+        </div>
+      </div>
+
       {sharingProject && (
         <ShareProjectModal
           projectId={sharingProject.id}
