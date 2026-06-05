@@ -12,35 +12,27 @@ export { clearCsrfToken } from './client';
 
 export const api = {
   async listDocuments(projectId?: string): Promise<DocumentListItem[]> {
-    // Return IDB data, refresh from server in background
-    const cached = projectId
-      ? await db.documents.where('project_id').equals(projectId).toArray()
-      : await db.documents.toArray();
-
-    // Background refresh
-    rawApi.listDocuments(projectId).then(async (serverList) => {
-      const tx = db.documents;
+    try {
+      const serverList = await rawApi.listDocuments(projectId);
       for (const item of serverList) {
-        await tx.put({ ...item, data: {}, project_id: item.project_id, updated_at: item.updated_at });
+        await db.documents.put({ ...item, data: {}, project_id: item.project_id, updated_at: item.updated_at });
       }
-    }).catch(() => { /* offline, ignore */ });
-
-    if (cached.length > 0) {
-      return cached.map((d) => ({
-        id: d.id,
-        name: d.name,
-        project_id: d.project_id,
-        created_at: d.updated_at, // approximate
-        updated_at: d.updated_at,
-      }));
+      return serverList;
+    } catch {
+      // Offline — fall back to IDB, sorted by updated_at descending
+      const cached = projectId
+        ? await db.documents.where('project_id').equals(projectId).toArray()
+        : await db.documents.toArray();
+      return cached
+        .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+        .map((d) => ({
+          id: d.id,
+          name: d.name,
+          project_id: d.project_id,
+          created_at: d.updated_at,
+          updated_at: d.updated_at,
+        }));
     }
-
-    // No cache — must wait for server
-    const serverList = await rawApi.listDocuments(projectId);
-    for (const item of serverList) {
-      await db.documents.put({ ...item, data: {}, project_id: item.project_id, updated_at: item.updated_at });
-    }
-    return serverList;
   },
 
   async getDocument(id: string): Promise<DocumentFull> {
@@ -171,31 +163,26 @@ export const api = {
 
 export const partApi = {
   async listParts(projectId?: string): Promise<PartListItem[]> {
-    const cached = projectId
-      ? await db.parts.where('project_id').equals(projectId).toArray()
-      : await db.parts.toArray();
-
-    rawPartApi.listParts(projectId).then(async (serverList) => {
+    try {
+      const serverList = await rawPartApi.listParts(projectId);
       for (const item of serverList) {
         await db.parts.put({ ...item, data: {}, project_id: item.project_id, updated_at: item.updated_at });
       }
-    }).catch(() => {});
-
-    if (cached.length > 0) {
-      return cached.map((p) => ({
-        id: p.id,
-        name: p.name,
-        project_id: p.project_id,
-        created_at: p.updated_at,
-        updated_at: p.updated_at,
-      }));
+      return serverList;
+    } catch {
+      const cached = projectId
+        ? await db.parts.where('project_id').equals(projectId).toArray()
+        : await db.parts.toArray();
+      return cached
+        .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+        .map((p) => ({
+          id: p.id,
+          name: p.name,
+          project_id: p.project_id,
+          created_at: p.updated_at,
+          updated_at: p.updated_at,
+        }));
     }
-
-    const serverList = await rawPartApi.listParts(projectId);
-    for (const item of serverList) {
-      await db.parts.put({ ...item, data: {}, project_id: item.project_id, updated_at: item.updated_at });
-    }
-    return serverList;
   },
 
   async getPart(id: string): Promise<PartFull> {

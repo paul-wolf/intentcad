@@ -50,7 +50,9 @@ export function ProjectListPage() {
       }
 
       setProjects(finalProjects);
-      setRecentDocs(docList.slice(0, 8));
+      setRecentDocs(
+        [...docList].sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 8)
+      );
     } catch {
       // ignore
     } finally {

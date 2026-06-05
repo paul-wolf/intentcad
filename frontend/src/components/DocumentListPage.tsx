@@ -35,6 +35,8 @@ export function DocumentListPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingType, setEditingType] = useState<'doc' | 'part'>('doc');
   const [editName, setEditName] = useState('');
+  const [editingProjectName, setEditingProjectName] = useState(false);
+  const [editProjectName, setEditProjectName] = useState('');
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchDocs = useCallback(async () => {
@@ -128,6 +130,18 @@ export function DocumentListPage() {
     setEditingId(null);
   };
 
+  const commitProjectRename = async () => {
+    setEditingProjectName(false);
+    const trimmed = editProjectName.trim();
+    if (!trimmed || trimmed === projectName || !projectId) return;
+    try {
+      await projectApi.updateProject(projectId, { name: trimmed });
+      setProjectName(trimmed);
+    } catch (err) {
+      console.error('Failed to rename project:', err);
+    }
+  };
+
   const lowerSearch = search.toLowerCase();
   const filteredDocs = lowerSearch ? docs.filter((d) => d.name.toLowerCase().includes(lowerSearch)) : docs;
   const filteredParts = lowerSearch ? parts.filter((p) => p.name.toLowerCase().includes(lowerSearch)) : parts;
@@ -162,9 +176,37 @@ export function DocumentListPage() {
             >
               &larr; Projects
             </button>
-            <span style={{ fontSize: '18px', fontWeight: 700, color: palette.text }}>
-              {projectName}
-            </span>
+            {editingProjectName ? (
+              <input
+                style={{
+                  fontSize: '18px',
+                  fontWeight: 700,
+                  color: palette.text,
+                  background: palette.inputBg,
+                  border: `1px solid ${palette.inputBorder}`,
+                  borderRadius: '4px',
+                  padding: '2px 8px',
+                  outline: 'none',
+                  minWidth: '180px',
+                }}
+                value={editProjectName}
+                onChange={(e) => setEditProjectName(e.target.value)}
+                onBlur={commitProjectRename}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') commitProjectRename();
+                  if (e.key === 'Escape') setEditingProjectName(false);
+                }}
+                autoFocus
+              />
+            ) : (
+              <span
+                style={{ fontSize: '18px', fontWeight: 700, color: palette.text, cursor: 'text' }}
+                title="Click to rename project"
+                onClick={() => { setEditProjectName(projectName); setEditingProjectName(true); }}
+              >
+                {projectName}
+              </span>
+            )}
           </div>
           <button style={btnStyle} onClick={handleNew}>+ New Sketch</button>
         </div>
