@@ -48,9 +48,13 @@ function doSave(id: string, doc: Record<string, unknown>, history?: unknown) {
     history,
   }).then(() => {
     addLog('info', 'Document saved');
-  }).catch((err) => {
-    console.error('[autoSave] PUT failed:', err);
-    addLog('error', `Save failed: ${err}`);
+  }).catch((err: unknown) => {
+    if (err instanceof Error && (err as Error & { queued?: boolean }).queued) {
+      addLog('info', 'Offline — changes saved locally, will sync when reconnected');
+    } else {
+      console.error('[autoSave] Save failed:', err);
+      addLog('error', `Save failed: ${err}`);
+    }
   });
 }
 

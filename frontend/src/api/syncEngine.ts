@@ -1,6 +1,5 @@
 import { db } from './db';
 import { api, partApi } from './client';
-import { camApi } from './camClient';
 import { projectApi } from './projectClient';
 import { addLog } from '@/stores/logStore';
 
@@ -58,7 +57,18 @@ async function processQueue() {
         // 4xx errors are not retryable (validation errors, not found, etc.)
         if (msg.includes('API 4')) {
           console.error(`[sync] Non-retryable error for ${entry.table}/${entry.entityId}:`, err);
-          addLog('error', `Sync failed (${entry.table}): ${msg}`);
+          // Try to include the entity name for a clearer error message
+          let entityLabel = entry.entityId;
+          try {
+            if (entry.table === 'documents') {
+              const doc = await db.documents.get(entry.entityId);
+              if (doc?.name) entityLabel = `"${doc.name}"`;
+            } else if (entry.table === 'parts') {
+              const part = await db.parts.get(entry.entityId);
+              if (part?.name) entityLabel = `"${part.name}"`;
+            }
+          } catch { /* ignore */ }
+          addLog('error', `Sync failed for ${entityLabel}: ${msg}. Check the document for unsupported content.`);
           await db.syncQueue
             .where('[table+entityId]')
             .equals([entry.table, entry.entityId])
@@ -107,10 +117,6 @@ async function dispatchSync(entry: { table: string; entityId: string; method: st
       if (method === 'update') await projectApi.updateProject(entityId, payload as { name?: string; description?: string });
       else if (method === 'create') await projectApi.createProject(payload.name as string, payload.description as string);
       else if (method === 'delete') await projectApi.deleteProject(entityId);
-      break;
-    case 'camJobs':
-      if (method === 'update') await camApi.updateJob(entityId, payload);
-      else if (method === 'delete') await camApi.deleteJob(entityId);
       break;
     default:
       console.warn(`[sync] Unknown table: ${table}`);

@@ -44,6 +44,7 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
       ['G', 'Grid copy'],
       ['Q', 'Copy selected entities JSON'],
       ['Shift + Q', 'Copy document JSON'],
+      ['Shift + V', 'Paste document JSON (replaces entire document)'],
     ],
   },
   {

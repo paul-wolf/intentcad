@@ -231,6 +231,8 @@ export function EditorPage() {
           useDocumentStore.getState().restoreHistory(h as never);
         }
         setBackendId(full.id);
+        // Fit all entities into view after load
+        setTimeout(() => useEditorStore.getState().setViewportCommand('fit-entities'), 0);
         // Load project context
         if (full.project_id) {
           projectApi.getProject(full.project_id)

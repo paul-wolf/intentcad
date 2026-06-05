@@ -36,29 +36,42 @@ export const api = {
   },
 
   async getDocument(id: string): Promise<DocumentFull> {
-    // If there are pending local writes, IDB is ahead of the server — use it as source of truth.
-    // Otherwise, always fetch from the server to avoid loading stale cache from another session.
-    const pending = await db.syncQueue.where('[table+entityId]').equals(['documents', id]).count();
+    const [pending, cached] = await Promise.all([
+      db.syncQueue.where('[table+entityId]').equals(['documents', id]).count(),
+      db.documents.get(id),
+    ]);
 
-    if (pending > 0) {
-      const cached = await db.documents.get(id);
-      if (cached && cached.data && Object.keys(cached.data).length > 0) {
-        triggerSync();
-        return {
-          id: cached.id,
-          name: cached.name,
-          data: cached.data,
-          history: cached.history,
-          project_id: cached.project_id,
-          created_at: cached.updated_at,
-          updated_at: cached.updated_at,
-        };
-      }
-    }
-
-    // No pending local writes — server is the source of truth.
     try {
       const server = await rawApi.getDocument(id);
+
+      // IDB has genuine unconfirmed local changes only when:
+      // 1. There are pending queue entries
+      // 2. IDB has data
+      // 3. The server hasn't changed since our last confirmed save
+      //    (server_confirmed_updated_at is the timestamp of the last save the server acknowledged;
+      //     if it's undefined the entry pre-dates this field — treat server as authoritative)
+      const confirmedAt = cached?.server_confirmed_updated_at;
+      const idbHasLocalChanges =
+        pending > 0 &&
+        cached != null &&
+        Object.keys(cached.data ?? {}).length > 0 &&
+        confirmedAt != null &&
+        confirmedAt >= server.updated_at;
+
+      if (idbHasLocalChanges) {
+        triggerSync();
+        return {
+          id: cached!.id,
+          name: cached!.name,
+          data: cached!.data,
+          history: cached!.history,
+          project_id: cached!.project_id,
+          created_at: cached!.updated_at,
+          updated_at: cached!.updated_at,
+        };
+      }
+
+      // Server is authoritative — update IDB and discard any stale queue entries
       await db.documents.put({
         id: server.id,
         name: server.name,
@@ -66,11 +79,14 @@ export const api = {
         history: server.history,
         project_id: server.project_id,
         updated_at: server.updated_at,
+        server_confirmed_updated_at: server.updated_at,
       });
+      if (pending > 0) {
+        await db.syncQueue.where('[table+entityId]').equals(['documents', id]).delete();
+      }
       return server;
     } catch {
-      // Offline — fall back to IDB cache
-      const cached = await db.documents.get(id);
+      // Offline — fall back to IDB
       if (cached && cached.data && Object.keys(cached.data).length > 0) {
         return {
           id: cached.id,
@@ -120,10 +136,8 @@ export const api = {
 
   async updateDocument(id: string, payload: { name?: string; data?: Record<string, unknown>; history?: unknown }): Promise<DocumentFull> {
     const now = new Date().toISOString();
-
-    // Write to IDB immediately
     const existing = await db.documents.get(id);
-    const updated = {
+    const optimistic = {
       id,
       name: payload.name ?? existing?.name ?? '',
       data: payload.data ?? existing?.data ?? {},
@@ -131,19 +145,42 @@ export const api = {
       project_id: existing?.project_id ?? null,
       updated_at: now,
     };
-    await db.documents.put(updated);
 
-    // Enqueue for server sync
-    await db.syncQueue.add({
-      table: 'documents',
-      entityId: id,
-      method: 'update',
-      payload,
-      timestamp: Date.now(),
-    });
-    triggerSync();
+    // Write to IDB immediately so offline edits are never lost
+    await db.documents.put(optimistic);
 
-    return { ...updated, created_at: now };
+    try {
+      const result = await rawApi.updateDocument(id, payload);
+      // Update IDB with the server's confirmed timestamp
+      await db.documents.put({
+        id: result.id,
+        name: result.name,
+        data: result.data ?? optimistic.data,
+        history: result.history ?? optimistic.history,
+        project_id: result.project_id,
+        updated_at: result.updated_at,
+        server_confirmed_updated_at: result.updated_at,
+      });
+      // Clear any stale pending queue entries now that the server has the latest
+      await db.syncQueue.where('[table+entityId]').equals(['documents', id]).delete();
+      return result;
+    } catch (err) {
+      const msg = String(err);
+      if (msg.includes('API 4')) {
+        // 4xx — validation/auth error, queuing would not help
+        throw err;
+      }
+      // Network error — queue for sync when back online
+      await db.syncQueue.add({
+        table: 'documents',
+        entityId: id,
+        method: 'update',
+        payload,
+        timestamp: Date.now(),
+      });
+      triggerSync();
+      throw Object.assign(new Error('offline'), { queued: true });
+    }
   },
 
   async deleteDocument(id: string): Promise<void> {
@@ -186,26 +223,35 @@ export const partApi = {
   },
 
   async getPart(id: string): Promise<PartFull> {
-    const pending = await db.syncQueue.where('[table+entityId]').equals(['parts', id]).count();
-
-    if (pending > 0) {
-      const cached = await db.parts.get(id);
-      if (cached && cached.data && Object.keys(cached.data).length > 0) {
-        triggerSync();
-        return {
-          id: cached.id,
-          name: cached.name,
-          data: cached.data,
-          history: cached.history,
-          project_id: cached.project_id,
-          created_at: cached.updated_at,
-          updated_at: cached.updated_at,
-        };
-      }
-    }
+    const [pending, cached] = await Promise.all([
+      db.syncQueue.where('[table+entityId]').equals(['parts', id]).count(),
+      db.parts.get(id),
+    ]);
 
     try {
       const server = await rawPartApi.getPart(id);
+
+      const confirmedAt = cached?.server_confirmed_updated_at;
+      const idbHasLocalChanges =
+        pending > 0 &&
+        cached != null &&
+        Object.keys(cached.data ?? {}).length > 0 &&
+        confirmedAt != null &&
+        confirmedAt >= server.updated_at;
+
+      if (idbHasLocalChanges) {
+        triggerSync();
+        return {
+          id: cached!.id,
+          name: cached!.name,
+          data: cached!.data,
+          history: cached!.history,
+          project_id: cached!.project_id,
+          created_at: cached!.updated_at,
+          updated_at: cached!.updated_at,
+        };
+      }
+
       await db.parts.put({
         id: server.id,
         name: server.name,
@@ -213,10 +259,13 @@ export const partApi = {
         history: server.history,
         project_id: server.project_id,
         updated_at: server.updated_at,
+        server_confirmed_updated_at: server.updated_at,
       });
+      if (pending > 0) {
+        await db.syncQueue.where('[table+entityId]').equals(['parts', id]).delete();
+      }
       return server;
     } catch {
-      const cached = await db.parts.get(id);
       if (cached && cached.data && Object.keys(cached.data).length > 0) {
         return {
           id: cached.id,
@@ -264,7 +313,7 @@ export const partApi = {
   async updatePart(id: string, payload: { name?: string; data?: Record<string, unknown>; history?: unknown }): Promise<PartFull> {
     const now = new Date().toISOString();
     const existing = await db.parts.get(id);
-    const updated = {
+    const optimistic = {
       id,
       name: payload.name ?? existing?.name ?? '',
       data: payload.data ?? existing?.data ?? {},
@@ -272,18 +321,37 @@ export const partApi = {
       project_id: existing?.project_id ?? null,
       updated_at: now,
     };
-    await db.parts.put(updated);
 
-    await db.syncQueue.add({
-      table: 'parts',
-      entityId: id,
-      method: 'update',
-      payload,
-      timestamp: Date.now(),
-    });
-    triggerSync();
+    await db.parts.put(optimistic);
 
-    return { ...updated, created_at: now };
+    try {
+      const result = await rawPartApi.updatePart(id, payload);
+      await db.parts.put({
+        id: result.id,
+        name: result.name,
+        data: result.data ?? optimistic.data,
+        history: result.history ?? optimistic.history,
+        project_id: result.project_id,
+        updated_at: result.updated_at,
+        server_confirmed_updated_at: result.updated_at,
+      });
+      await db.syncQueue.where('[table+entityId]').equals(['parts', id]).delete();
+      return result;
+    } catch (err) {
+      const msg = String(err);
+      if (msg.includes('API 4')) {
+        throw err;
+      }
+      await db.syncQueue.add({
+        table: 'parts',
+        entityId: id,
+        method: 'update',
+        payload,
+        timestamp: Date.now(),
+      });
+      triggerSync();
+      throw Object.assign(new Error('offline'), { queued: true });
+    }
   },
 
   async deletePart(id: string): Promise<void> {

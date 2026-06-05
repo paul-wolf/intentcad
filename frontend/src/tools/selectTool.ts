@@ -18,6 +18,8 @@ import { getSegmentCount, getSegmentPointIndices, getSegmentBulge } from '@/util
 import { bulgeFromMidpoint, arcIntersectsRect } from '@/utils/arcGeometry';
 import { resolveDimensionEndpoints, resolveDimensionAngleIntersection } from '@/utils/dimensionGeom';
 import type { DimensionEntity } from '@/types/document';
+import { migrateDocument } from '@/utils/document';
+import { useClipboardStore } from '@/stores/clipboardStore';
 import { snapPosition, type SnapResult } from '@/snap/snap';
 import { getStyles } from '@/rendering/styles';
 import { SNAP_INDICATOR_RADIUS } from '@/config';
@@ -868,11 +870,45 @@ export function createSelectTool(): Tool {
           requestSave();
         }
       }
-      if (e.key === 'Q' && e.shiftKey) {
+      if (e.key === 'V' && e.shiftKey) {
+        const cached = useClipboardStore.getState().entry;
+        const tryPaste = (text: string) => {
+          try {
+            const parsed = JSON.parse(text);
+            if (parsed && typeof parsed === 'object' && Array.isArray(parsed.sketches) && typeof parsed.activeSketchId === 'string') {
+              useDocumentStore.getState().beginTransaction('Paste document');
+              useDocumentStore.getState().setDocument(migrateDocument(parsed));
+              requestSave();
+              addLog('info', 'Document restored from clipboard');
+              setTimeout(() => useEditorStore.getState().setViewportCommand('fit-entities'), 0);
+            } else {
+              addLog('warn', 'Clipboard does not contain a full document (use Shift+Q to copy one)');
+            }
+          } catch {
+            addLog('warn', 'Clipboard content is not valid JSON');
+          }
+        };
+        if (cached?.type === 'document') {
+          tryPaste(cached.json);
+        } else {
+          navigator.clipboard.readText().then(tryPaste).catch(() => {
+            addLog('warn', 'Could not read clipboard — check browser permissions');
+          });
+        }
+      } else if (e.key === 'Q' && e.shiftKey) {
         const doc = useDocumentStore.getState().document;
         const json = JSON.stringify(doc, null, 2);
         navigator.clipboard.writeText(json);
-        addLog('info', 'Copied document to clipboard');
+        const totalEntities = doc.sketches.reduce((n, sk) => n + sk.entities.length, 0);
+        useClipboardStore.getState().set({
+          type: 'document',
+          name: doc.name,
+          sketchCount: doc.sketches.length,
+          entityCount: totalEntities,
+          json,
+          timestamp: Date.now(),
+        });
+        addLog('info', 'Copied document to clipboard — use Shift+V to paste/restore');
       } else if (e.key === 'q') {
         const ids = useEditorStore.getState().selectedEntityIds;
         if (ids.size > 0) {
@@ -881,6 +917,13 @@ export function createSelectTool(): Tool {
             const selected = activeSketch.entities.filter((ent) => ids.has(ent.id));
             const json = JSON.stringify(selected, null, 2);
             navigator.clipboard.writeText(json);
+            useClipboardStore.getState().set({
+              type: 'entities',
+              count: selected.length,
+              kinds: selected.map((e) => e.type),
+              json,
+              timestamp: Date.now(),
+            });
             addLog('info', `Copied ${selected.length} entities to clipboard`);
           }
         }

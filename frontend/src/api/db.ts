@@ -7,6 +7,7 @@ export interface CachedDocument {
   history?: unknown;
   project_id: string | null;
   updated_at: string;
+  server_confirmed_updated_at?: string; // set only when server confirms a save
 }
 
 export interface CachedPart {
@@ -16,22 +17,13 @@ export interface CachedPart {
   history?: unknown;
   project_id: string | null;
   updated_at: string;
+  server_confirmed_updated_at?: string;
 }
 
 export interface CachedProject {
   id: string;
   name: string;
   description: string;
-  updated_at: string;
-}
-
-export interface CachedCamJob {
-  id: string;
-  document_id: string;
-  name: string;
-  config: Record<string, unknown>;
-  gcode?: string;
-  errors?: unknown[];
   updated_at: string;
 }
 
@@ -48,7 +40,6 @@ class IntentDB extends Dexie {
   documents!: Table<CachedDocument, string>;
   parts!: Table<CachedPart, string>;
   projects!: Table<CachedProject, string>;
-  camJobs!: Table<CachedCamJob, string>;
   syncQueue!: Table<SyncQueueEntry, number>;
 
   constructor() {
@@ -65,6 +56,13 @@ class IntentDB extends Dexie {
       parts: 'id, project_id, updated_at',
       projects: 'id, updated_at',
       camJobs: 'id, document_id, updated_at',
+      syncQueue: '++autoId, [table+entityId], timestamp',
+    });
+    this.version(3).stores({
+      documents: 'id, project_id, updated_at',
+      parts: 'id, project_id, updated_at',
+      projects: 'id, updated_at',
+      camJobs: null,
       syncQueue: '++autoId, [table+entityId], timestamp',
     });
   }

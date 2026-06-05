@@ -32,9 +32,13 @@ function doSave(id: string, data: Record<string, unknown>, history?: unknown) {
     history,
   }).then(() => {
     addLog('info', 'Part saved');
-  }).catch((err) => {
-    console.error('[partAutoSave] PUT failed:', err);
-    addLog('error', `Part save failed: ${err}`);
+  }).catch((err: unknown) => {
+    if (err instanceof Error && (err as Error & { queued?: boolean }).queued) {
+      addLog('info', 'Offline — changes saved locally, will sync when reconnected');
+    } else {
+      console.error('[partAutoSave] Save failed:', err);
+      addLog('error', `Part save failed: ${err}`);
+    }
   });
 }
 
@@ -76,12 +80,6 @@ function schedulePartSave(data: Record<string, unknown>, history?: unknown) {
 }
 
 export function startPartAutoSave() {
-  const current = usePartStore.getState();
-  if (backendId) {
-    const history = { undo: current.undoStack, redo: current.redoStack };
-    schedulePartSave(current.part as unknown as Record<string, unknown>, history);
-  }
-
   const handleBeforeUnload = () => flushPartSave();
   window.addEventListener('beforeunload', handleBeforeUnload);
 
