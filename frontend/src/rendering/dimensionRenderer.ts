@@ -64,6 +64,7 @@ export function drawDimension(
   bgColor?: string,
   derived?: boolean,
   label?: string,
+  scale = 1,
 ): void {
   const { a, b, offset } = geom;
 
@@ -111,8 +112,8 @@ export function drawDimension(
   const duy = dly / dlLen;
 
   // V-shaped arrowheads
-  const aLen = DIMENSION_ARROW_LENGTH;
-  const aHalf = DIMENSION_ARROW_HALF_WIDTH;
+  const aLen = DIMENSION_ARROW_LENGTH * scale;
+  const aHalf = DIMENSION_ARROW_HALF_WIDTH * scale;
   // Arrow at soa pointing toward sob
   const a1 = { x: soa.x + dux * aLen + (-duy) * aHalf, y: soa.y + duy * aLen + dux * aHalf };
   const a2 = { x: soa.x + dux * aLen + (-duy) * (-aHalf), y: soa.y + duy * aLen + dux * (-aHalf) };
@@ -152,6 +153,7 @@ export function drawDiameterDimension(
   bgColor?: string,
   derived?: boolean,
   label?: string,
+  scale = 1,
 ): void {
   // Horizontal diameter endpoints in world space
   const a: Point = { x: center.x - radius, y: center.y };
@@ -200,8 +202,8 @@ export function drawDiameterDimension(
   const duy = dly / dlLen;
 
   // V-shaped arrowheads
-  const aLen = DIMENSION_ARROW_LENGTH;
-  const aHalf = DIMENSION_ARROW_HALF_WIDTH;
+  const aLen = DIMENSION_ARROW_LENGTH * scale;
+  const aHalf = DIMENSION_ARROW_HALF_WIDTH * scale;
   // Arrow at soa pointing toward sob
   const a1 = { x: soa.x + dux * aLen + (-duy) * aHalf, y: soa.y + duy * aLen + dux * aHalf };
   const a2 = { x: soa.x + dux * aLen + (-duy) * (-aHalf), y: soa.y + duy * aLen + dux * (-aHalf) };
@@ -332,6 +334,7 @@ export function drawAngleDimension(
   bgColor?: string,
   derived?: boolean,
   label?: string,
+  scale = 1,
 ): void {
   const screenCenter = viewport.worldToScreen(geom.intersection);
   const screenRadius = geom.arcRadius * viewport.scale;
@@ -367,8 +370,8 @@ export function drawAngleDimension(
   renderer.drawLine(viewport.worldToScreen(gap2World), viewport.worldToScreen(ext2World), lineStyle);
 
   // V-shaped arrowheads at arc endpoints (tangent direction)
-  const aLen = DIMENSION_ARROW_LENGTH;
-  const aHalf = DIMENSION_ARROW_HALF_WIDTH;
+  const aLen = DIMENSION_ARROW_LENGTH * scale;
+  const aHalf = DIMENSION_ARROW_HALF_WIDTH * scale;
 
   // Arrow at start angle point
   const arcPt1 = viewport.worldToScreen({

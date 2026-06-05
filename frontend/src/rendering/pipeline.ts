@@ -29,6 +29,8 @@ export interface RenderContext {
   altKeyHeld: boolean;
   palette: ThemePalette;
   camMode: boolean;
+  lineWidthScale?: number;
+  fontSizeScale?: number;
 }
 
 /** Step 1: Clear background */
@@ -39,7 +41,7 @@ function renderBackground(ctx: RenderContext) {
 /** Step 2: Draw grid */
 function renderGrid(ctx: RenderContext) {
   const { renderer, viewport } = ctx;
-  const styles = getStyles(ctx.palette);
+  const styles = getStyles(ctx.palette, ctx.lineWidthScale, ctx.fontSizeScale);
   const spacing = GRID_SPACING_MM;
   const majorSpacing = spacing * GRID_MAJOR_EVERY;
 
@@ -130,7 +132,7 @@ function renderOrigin(ctx: RenderContext) {
 /** Step 3: Draw ghosted (non-active, visible) sketches */
 function renderGhostedSketches(ctx: RenderContext) {
   const { renderer, viewport, document: doc } = ctx;
-  const styles = getStyles(ctx.palette);
+  const styles = getStyles(ctx.palette, ctx.lineWidthScale, ctx.fontSizeScale);
 
   // In CAM mode, get selected sketch IDs and operation map for differentiated rendering
   let camSelectedSketchIds: Set<string> | null = null;
@@ -222,7 +224,7 @@ const CAM_OP_COLORS = ['#ff8c00', '#00bcd4', '#8bc34a', '#e91e63', '#9c27b0', '#
 /** Step 4: Draw active sketch entities */
 function renderActiveSketch(ctx: RenderContext) {
   const { renderer, viewport, document: doc, selectedEntityIds } = ctx;
-  const styles = getStyles(ctx.palette);
+  const styles = getStyles(ctx.palette, ctx.lineWidthScale, ctx.fontSizeScale);
   const activeSketch = doc.sketches.find((s) => s.id === doc.activeSketchId);
   if (!activeSketch || activeSketch.suppressed) return;
 
@@ -365,11 +367,13 @@ function renderActiveSketch(ctx: RenderContext) {
         const lineStyle = isSelected ? styles.dimensionSelected : styles.dimensionLine;
         const textStyle = styles.dimensionText;
 
+        const ws = ctx.lineWidthScale ?? 1;
+
         // Point-to-point dimension (vertex-based)
         if (entity.pointIndex != null) {
           const endpoints = resolveDimensionEndpoints(entity, activeSketch.entities);
           if (endpoints) {
-            drawDimension(renderer, viewport, { a: endpoints.a, b: endpoints.b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression);
+            drawDimension(renderer, viewport, { a: endpoints.a, b: endpoints.b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression, ws);
           }
           break;
         }
@@ -383,7 +387,7 @@ function renderActiveSketch(ctx: RenderContext) {
 
           // Circle-to-circle center distance
           if (target.type === 'circle' && target2.type === 'circle') {
-            drawDimension(renderer, viewport, { a: target.center, b: target2.center, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression);
+            drawDimension(renderer, viewport, { a: target.center, b: target2.center, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression, ws);
             break;
           }
 
@@ -402,7 +406,7 @@ function renderActiveSketch(ctx: RenderContext) {
           if (entity.angleMode) {
             const angleGeom = computeAngleDimensionGeom(p1, p2, q1, q2, entity.offset);
             if (angleGeom) {
-              drawAngleDimension(renderer, viewport, angleGeom, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression);
+              drawAngleDimension(renderer, viewport, angleGeom, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression, ws);
             }
             break;
           }
@@ -414,12 +418,12 @@ function renderActiveSketch(ctx: RenderContext) {
           if (lenSq === 0) break;
           const t = ((a.x - q1.x) * dx + (a.y - q1.y) * dy) / lenSq;
           const b: Point = { x: q1.x + t * dx, y: q1.y + t * dy };
-          drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression);
+          drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression, ws);
           break;
         }
 
         if (target.type === 'circle') {
-          drawDiameterDimension(renderer, viewport, target.center, target.radius, entity.offset, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression);
+          drawDiameterDimension(renderer, viewport, target.center, target.radius, entity.offset, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression, ws);
           break;
         }
         if (target.type === 'rectangle') {
@@ -434,7 +438,7 @@ function renderActiveSketch(ctx: RenderContext) {
             a = { x: c.x + hw, y: c.y + hh };
             b = { x: c.x + hw, y: c.y - hh };
           }
-          drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression);
+          drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression, ws);
           break;
         }
         if (target.type !== 'line') break;
@@ -445,7 +449,7 @@ function renderActiveSketch(ctx: RenderContext) {
             x: (target.points[0]!.x + target.points[1]!.x) / 2,
             y: (target.points[0]!.y + target.points[1]!.y) / 2,
           };
-          drawDimension(renderer, viewport, { a: center, b: midA, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression);
+          drawDimension(renderer, viewport, { a: center, b: midA, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression, ws);
           break;
         }
         const idx = entity.segmentIndex;
@@ -453,7 +457,7 @@ function renderActiveSketch(ctx: RenderContext) {
         const [ai, bi] = getSegmentPointIndices(target, idx);
         const a = target.points[ai]!;
         const b = target.points[bi]!;
-        drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression);
+        drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression, ws);
         break;
       }
     }
@@ -464,7 +468,7 @@ function renderActiveSketch(ctx: RenderContext) {
 function renderDimensionOverlay(ctx: RenderContext) {
   if (!ctx.altKeyHeld) return;
   const { renderer, viewport, document: doc } = ctx;
-  const styles = getStyles(ctx.palette);
+  const styles = getStyles(ctx.palette, ctx.lineWidthScale, ctx.fontSizeScale);
   const activeSketch = doc.sketches.find((s) => s.id === doc.activeSketchId);
   if (!activeSketch || activeSketch.suppressed) return;
 
@@ -527,7 +531,7 @@ function renderSelectedPoints(ctx: RenderContext) {
 function renderSelectedSegments(ctx: RenderContext) {
   const { renderer, viewport, document: doc, selectedSegments } = ctx;
   if (selectedSegments.length === 0) return;
-  const styles = getStyles(ctx.palette);
+  const styles = getStyles(ctx.palette, ctx.lineWidthScale, ctx.fontSizeScale);
   const activeSketch = doc.sketches.find((s) => s.id === doc.activeSketchId);
   if (!activeSketch) return;
 
@@ -734,7 +738,7 @@ function renderConstraintLinks(ctx: RenderContext) {
   const activeSketch = doc.sketches.find((s) => s.id === doc.activeSketchId);
   if (!activeSketch || activeSketch.suppressed) return;
 
-  const styles = getStyles(ctx.palette);
+  const styles = getStyles(ctx.palette, ctx.lineWidthScale, ctx.fontSizeScale);
   const { links } = getConstraintPartners(selectedEntityIds, activeSketch.constraints);
 
   const entityMap = new Map(activeSketch.entities.map((e) => [e.id, e]));

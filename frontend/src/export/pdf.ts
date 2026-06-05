@@ -13,7 +13,7 @@ const PADDING_MM = 30;
  * Returns { min, max } in mm.  Falls back to a small region around the origin
  * when the document is empty.
  */
-function computeWorldBounds(doc: Document): { min: Point; max: Point } {
+export function computeWorldBounds(doc: Document): { min: Point; max: Point } {
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;

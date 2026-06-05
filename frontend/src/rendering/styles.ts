@@ -1,4 +1,4 @@
-import { STROKES, DIMENSION_FONT_SIZE, CONSTRAINT_LINK_DASH, CONSTRAINT_LINK_FONT_SIZE } from '@/config';
+import { STROKES, DIMENSION_FONT_SIZE, CONSTRAINT_LINK_DASH } from '@/config';
 import type { ThemePalette } from '@/theme';
 import type { LineStyle, TextStyle } from '@/types/renderer';
 
@@ -27,29 +27,31 @@ export interface ThemeStyles {
   constraintLinkText: TextStyle;
 }
 
-export function getStyles(palette: ThemePalette): ThemeStyles {
+export function getStyles(palette: ThemePalette, lineWidthScale = 1, fontSizeScale = lineWidthScale): ThemeStyles {
+  const s = lineWidthScale;
+  const fs = fontSizeScale;
   return {
-    line: { color: palette.line, width: STROKES.line },
-    lineSelected: { color: palette.lineSelected, width: STROKES.lineSelected },
-    construction: { color: palette.line, width: STROKES.line, dash: [6, 4] },
-    constructionSelected: { color: palette.lineSelected, width: STROKES.lineSelected, dash: [6, 4] },
-    ghosted: { color: palette.ghosted, width: STROKES.ghosted },
-    preview: { color: palette.preview, width: STROKES.preview },
-    gridMinor: { color: palette.gridMinor, width: STROKES.grid },
-    gridMajor: { color: palette.gridMajor, width: STROKES.gridMajor },
-    snap: { color: palette.snap, width: STROKES.snap },
-    dimensionLine: { color: palette.dimension, width: STROKES.dimension },
-    dimensionSelected: { color: palette.lineSelected, width: STROKES.dimension * 2 },
-    dimensionText: { color: palette.dimensionText, fontSize: DIMENSION_FONT_SIZE },
-    dimensionOverlayText: { color: palette.dimensionOverlay, fontSize: DIMENSION_FONT_SIZE },
-    lineConstrained: { color: palette.constrained, width: STROKES.line },
-    lineConstrainedSelected: { color: palette.constrained, width: STROKES.lineSelected },
-    constructionConstrained: { color: palette.constrained, width: STROKES.line, dash: [6, 4] },
-    constructionConstrainedSelected: { color: palette.constrained, width: STROKES.lineSelected, dash: [6, 4] },
-    segmentSelected: { color: palette.accent, width: 3 },
-    lineRelated: { color: palette.constraintLink, width: STROKES.line },
-    lineRelatedConstrained: { color: palette.constraintLink, width: STROKES.line },
-    constraintLinkLine: { color: palette.constraintLink, width: 0.75, dash: [...CONSTRAINT_LINK_DASH], opacity: 0.6 },
-    constraintLinkText: { color: palette.constraintLink, fontSize: CONSTRAINT_LINK_FONT_SIZE },
+    line: { color: palette.line, width: STROKES.line * s },
+    lineSelected: { color: palette.lineSelected, width: STROKES.lineSelected * s },
+    construction: { color: palette.line, width: STROKES.line * s, dash: [6, 4] },
+    constructionSelected: { color: palette.lineSelected, width: STROKES.lineSelected * s, dash: [6, 4] },
+    ghosted: { color: palette.ghosted, width: STROKES.ghosted * s },
+    preview: { color: palette.preview, width: STROKES.preview * s },
+    gridMinor: { color: palette.gridMinor, width: STROKES.grid * s },
+    gridMajor: { color: palette.gridMajor, width: STROKES.gridMajor * s },
+    snap: { color: palette.snap, width: STROKES.snap * s },
+    dimensionLine: { color: palette.dimension, width: STROKES.dimension * s },
+    dimensionSelected: { color: palette.lineSelected, width: STROKES.dimension * 2 * s },
+    dimensionText: { color: palette.dimensionText, fontSize: DIMENSION_FONT_SIZE * fs },
+    dimensionOverlayText: { color: palette.dimensionOverlay, fontSize: DIMENSION_FONT_SIZE * fs },
+    lineConstrained: { color: palette.constrained, width: STROKES.line * s },
+    lineConstrainedSelected: { color: palette.constrained, width: STROKES.lineSelected * s },
+    constructionConstrained: { color: palette.constrained, width: STROKES.line * s, dash: [6, 4] },
+    constructionConstrainedSelected: { color: palette.constrained, width: STROKES.lineSelected * s, dash: [6, 4] },
+    segmentSelected: { color: palette.accent, width: 3 * s },
+    lineRelated: { color: palette.constraintLink, width: STROKES.line * s },
+    lineRelatedConstrained: { color: palette.constraintLink, width: STROKES.line * s },
+    constraintLinkLine: { color: palette.constraintLink, width: 0.75 * s, dash: [...CONSTRAINT_LINK_DASH], opacity: 0.6 },
+    constraintLinkText: { color: palette.constraintLink, fontSize: DIMENSION_FONT_SIZE * fs },
   };
 }

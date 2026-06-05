@@ -7,6 +7,7 @@ import { useThemeStore } from '@/theme';
 import { exportDocumentToDxf } from '@/export/dxf';
 import { importDxf } from '@/export/dxfImport';
 import { exportDocumentToPdf } from '@/export/pdf';
+import { exportDocumentToImage } from '@/export/image';
 import { downloadTextFile, downloadBlob } from '@/export/download';
 import { getEntityPoint, getEntityPoints } from '@/utils/entityPoints';
 import { getSegmentCount } from '@/utils/lineSegments';
@@ -293,6 +294,20 @@ export function Toolbar() {
           title="Export visible sketches as PDF"
         >
           PDF
+        </button>
+        <button
+          onClick={() => { downloadBlob(exportDocumentToImage(doc, palette, 'png'), `${doc.name}.png`); }}
+          style={{ ...btn(palette), color: palette.textSecondary }}
+          title="Export visible sketches as PNG"
+        >
+          PNG
+        </button>
+        <button
+          onClick={() => { downloadBlob(exportDocumentToImage(doc, palette, 'jpeg'), `${doc.name}.jpg`); }}
+          style={{ ...btn(palette), color: palette.textSecondary }}
+          title="Export visible sketches as JPEG"
+        >
+          JPG
         </button>
         <Sep color={palette.border} />
         <button onClick={toggleCamPanel} style={btn(palette, camPanelOpen)} title="Toggle CAM panel for G-code generation">
