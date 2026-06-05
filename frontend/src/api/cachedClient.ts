@@ -44,49 +44,54 @@ export const api = {
   },
 
   async getDocument(id: string): Promise<DocumentFull> {
-    const cached = await db.documents.get(id);
+    // If there are pending local writes, IDB is ahead of the server — use it as source of truth.
+    // Otherwise, always fetch from the server to avoid loading stale cache from another session.
+    const pending = await db.syncQueue.where('[table+entityId]').equals(['documents', id]).count();
 
-    // Background refresh
-    rawApi.getDocument(id).then(async (server) => {
-      const local = await db.documents.get(id);
-      // Only overwrite if server is newer or no pending sync
-      const pending = await db.syncQueue.where('[table+entityId]').equals(['documents', id]).count();
-      if (!pending || !local || server.updated_at > local.updated_at) {
-        await db.documents.put({
-          id: server.id,
-          name: server.name,
-          data: server.data,
-          history: server.history,
-          project_id: server.project_id,
-          updated_at: server.updated_at,
-        });
+    if (pending > 0) {
+      const cached = await db.documents.get(id);
+      if (cached && cached.data && Object.keys(cached.data).length > 0) {
+        triggerSync();
+        return {
+          id: cached.id,
+          name: cached.name,
+          data: cached.data,
+          history: cached.history,
+          project_id: cached.project_id,
+          created_at: cached.updated_at,
+          updated_at: cached.updated_at,
+        };
       }
-    }).catch(() => { /* offline */ });
-
-    // Return cache if it has actual data
-    if (cached && cached.data && Object.keys(cached.data).length > 0) {
-      return {
-        id: cached.id,
-        name: cached.name,
-        data: cached.data,
-        history: cached.history,
-        project_id: cached.project_id,
-        created_at: cached.updated_at,
-        updated_at: cached.updated_at,
-      };
     }
 
-    // No cache with data — wait for server
-    const server = await rawApi.getDocument(id);
-    await db.documents.put({
-      id: server.id,
-      name: server.name,
-      data: server.data,
-      history: server.history,
-      project_id: server.project_id,
-      updated_at: server.updated_at,
-    });
-    return server;
+    // No pending local writes — server is the source of truth.
+    try {
+      const server = await rawApi.getDocument(id);
+      await db.documents.put({
+        id: server.id,
+        name: server.name,
+        data: server.data,
+        history: server.history,
+        project_id: server.project_id,
+        updated_at: server.updated_at,
+      });
+      return server;
+    } catch {
+      // Offline — fall back to IDB cache
+      const cached = await db.documents.get(id);
+      if (cached && cached.data && Object.keys(cached.data).length > 0) {
+        return {
+          id: cached.id,
+          name: cached.name,
+          data: cached.data,
+          history: cached.history,
+          project_id: cached.project_id,
+          created_at: cached.updated_at,
+          updated_at: cached.updated_at,
+        };
+      }
+      throw new Error('Document not available: server unreachable and no local cache');
+    }
   },
 
   async createDocument(name: string, data: Record<string, unknown>, projectId?: string): Promise<DocumentFull> {
@@ -194,45 +199,50 @@ export const partApi = {
   },
 
   async getPart(id: string): Promise<PartFull> {
-    const cached = await db.parts.get(id);
+    const pending = await db.syncQueue.where('[table+entityId]').equals(['parts', id]).count();
 
-    rawPartApi.getPart(id).then(async (server) => {
-      const pending = await db.syncQueue.where('[table+entityId]').equals(['parts', id]).count();
-      const local = await db.parts.get(id);
-      if (!pending || !local || server.updated_at > local.updated_at) {
-        await db.parts.put({
-          id: server.id,
-          name: server.name,
-          data: server.data,
-          history: server.history,
-          project_id: server.project_id,
-          updated_at: server.updated_at,
-        });
+    if (pending > 0) {
+      const cached = await db.parts.get(id);
+      if (cached && cached.data && Object.keys(cached.data).length > 0) {
+        triggerSync();
+        return {
+          id: cached.id,
+          name: cached.name,
+          data: cached.data,
+          history: cached.history,
+          project_id: cached.project_id,
+          created_at: cached.updated_at,
+          updated_at: cached.updated_at,
+        };
       }
-    }).catch(() => {});
-
-    if (cached && cached.data && Object.keys(cached.data).length > 0) {
-      return {
-        id: cached.id,
-        name: cached.name,
-        data: cached.data,
-        history: cached.history,
-        project_id: cached.project_id,
-        created_at: cached.updated_at,
-        updated_at: cached.updated_at,
-      };
     }
 
-    const server = await rawPartApi.getPart(id);
-    await db.parts.put({
-      id: server.id,
-      name: server.name,
-      data: server.data,
-      history: server.history,
-      project_id: server.project_id,
-      updated_at: server.updated_at,
-    });
-    return server;
+    try {
+      const server = await rawPartApi.getPart(id);
+      await db.parts.put({
+        id: server.id,
+        name: server.name,
+        data: server.data,
+        history: server.history,
+        project_id: server.project_id,
+        updated_at: server.updated_at,
+      });
+      return server;
+    } catch {
+      const cached = await db.parts.get(id);
+      if (cached && cached.data && Object.keys(cached.data).length > 0) {
+        return {
+          id: cached.id,
+          name: cached.name,
+          data: cached.data,
+          history: cached.history,
+          project_id: cached.project_id,
+          created_at: cached.updated_at,
+          updated_at: cached.updated_at,
+        };
+      }
+      throw new Error('Part not available: server unreachable and no local cache');
+    }
   },
 
   async createPart(name: string, data: Record<string, unknown>, projectId?: string): Promise<PartFull> {

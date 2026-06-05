@@ -60,6 +60,13 @@ class IntentDB extends Dexie {
       camJobs: 'id, document_id, updated_at',
       syncQueue: '++autoId, [table+entityId]',
     });
+    this.version(2).stores({
+      documents: 'id, project_id, updated_at',
+      parts: 'id, project_id, updated_at',
+      projects: 'id, updated_at',
+      camJobs: 'id, document_id, updated_at',
+      syncQueue: '++autoId, [table+entityId], timestamp',
+    });
   }
 }
 
