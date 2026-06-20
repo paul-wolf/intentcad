@@ -877,7 +877,7 @@ export function createSelectTool(): Tool {
             const parsed = JSON.parse(text);
             if (parsed && typeof parsed === 'object' && Array.isArray(parsed.sketches) && typeof parsed.activeSketchId === 'string') {
               useDocumentStore.getState().beginTransaction('Paste document');
-              useDocumentStore.getState().setDocument(migrateDocument(parsed));
+              useDocumentStore.getState().setDocument(migrateDocument({ ...parsed, name: `${parsed.name} copy` }));
               requestSave();
               addLog('info', 'Document restored from clipboard');
               setTimeout(() => useEditorStore.getState().setViewportCommand('fit-entities'), 0);

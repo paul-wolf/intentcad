@@ -11,7 +11,8 @@ import { exportDocumentToImage } from '@/export/image';
 import { downloadTextFile, downloadBlob } from '@/export/download';
 import { getEntityPoint, getEntityPoints } from '@/utils/entityPoints';
 import { getSegmentCount } from '@/utils/lineSegments';
-import { requestSave, getBackendId, flushSaveAsync } from '@/api/autoSave';
+import { requestSave, getBackendId, flushSaveAsync, getProjectId, getProjectName, setBackendId, setProjectContext } from '@/api/autoSave';
+import { createEmptyDocument, generateDateName } from '@/utils/document';
 import { addLog } from '@/stores/logStore';
 import { api, partApi } from '@/api/cachedClient';
 import type { ToolType } from '@/types/editor';
@@ -119,18 +120,31 @@ export function Toolbar() {
   const showToolpathPreview = useCamStore((s) => s.showToolpathPreview);
   const toggleToolpathPreview = useCamStore((s) => s.toggleToolpathPreview);
 
+  const handleNewSketch = async () => {
+    const projId = getProjectId();
+    const projName = getProjectName();
+    const newDoc = createEmptyDocument(generateDateName([]));
+    try {
+      const saved = await api.createDocument(newDoc.name, newDoc as unknown as Record<string, unknown>, projId ?? undefined);
+      setBackendId(saved.id);
+      setProjectContext(projId, projName);
+      navigate(`/edit/${saved.id}`);
+    } catch {
+      setBackendId(null);
+      navigate(`/edit/${newDoc.id}`);
+    }
+  };
+
   // In CAM mode, show a simplified toolbar
   if (camPanelOpen) {
     return (
       <div style={{ background: palette.panelBg, borderBottom: `1px solid ${palette.border}`, padding: '4px 8px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
         <div style={rowStyle}>
-          <button
-            onClick={() => navigate('/')}
-            style={btn(palette)}
-            title="Back to document list"
-          >
-            Home
-          </button>
+          <button onClick={() => navigate('/')} style={btn(palette)} title="Back to project list">Home</button>
+          {getProjectId() && (
+            <button onClick={() => navigate(`/project/${getProjectId()}`)} style={btn(palette)} title="Back to project sketches">Project</button>
+          )}
+          <button onClick={handleNewSketch} style={btn(palette)} title="Create a new sketch in this project">New Sketch</button>
           <Sep color={palette.border} />
           <button
             onClick={toggleCamPanel}
@@ -181,13 +195,11 @@ export function Toolbar() {
 
       {/* ── Row 1: Draw ── */}
       <div style={rowStyle}>
-        <button
-          onClick={() => navigate('/')}
-          style={btn(palette)}
-          title="Back to document list"
-        >
-          Home
-        </button>
+        <button onClick={() => navigate('/')} style={btn(palette)} title="Back to project list">Home</button>
+        {getProjectId() && (
+          <button onClick={() => navigate(`/project/${getProjectId()}`)} style={btn(palette)} title="Back to project sketches">Project</button>
+        )}
+        <button onClick={handleNewSketch} style={btn(palette)} title="Create a new sketch in this project">New Sketch</button>
         <Sep color={palette.border} />
         <button
           onClick={toggleDrawer}

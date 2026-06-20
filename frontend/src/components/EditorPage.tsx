@@ -26,11 +26,12 @@ import { createDimensionTool } from '@/tools/dimensionTool';
 import { createRect2ptTool } from '@/tools/rect2ptTool';
 import { createAxisRectTool } from '@/tools/axisRectTool';
 import { createBezierTool } from '@/tools/bezierTool';
-import { startAutoSave, setBackendId, getBackendId, setProjectContext } from '@/api/autoSave';
+import { startAutoSave, setBackendId, getBackendId, setProjectContext, requestSave } from '@/api/autoSave';
 import { api } from '@/api/cachedClient';
 import { projectApi } from '@/api/projectClient';
 import { migrateDocument } from '@/utils/document';
 import type { Document } from '@/types/document';
+import { addLog } from '@/stores/logStore';
 import type { Tool } from '@/tools/types';
 
 function SimDepthIndicator() {
@@ -374,8 +375,30 @@ export function EditorPage() {
       if (e.key === 's' || e.key === 'S') setActiveTool('bezier');
       if (e.key === '?') setShowHelp((v) => !v);
     };
+    const pasteHandler = (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+      const text = e.clipboardData?.getData('text');
+      if (!text) return;
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === 'object' && Array.isArray(parsed.sketches) && typeof parsed.activeSketchId === 'string') {
+          e.preventDefault();
+          useDocumentStore.getState().beginTransaction('Paste document');
+          useDocumentStore.getState().setDocument(migrateDocument({ ...(parsed as Document), name: `${(parsed as Document).name} copy` }));
+          requestSave();
+          addLog('info', 'Document pasted from clipboard');
+          setTimeout(() => useEditorStore.getState().setViewportCommand('fit-entities'), 0);
+        }
+      } catch { /* not JSON — ignore */ }
+    };
+
     window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    window.addEventListener('paste', pasteHandler);
+    return () => {
+      window.removeEventListener('keydown', handler);
+      window.removeEventListener('paste', pasteHandler);
+    };
   }, [setActiveTool]);
 
   const handleSketchOnFaceDone = () => {

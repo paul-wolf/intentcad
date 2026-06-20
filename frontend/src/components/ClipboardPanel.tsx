@@ -24,7 +24,7 @@ export function ClipboardPanel() {
     try {
       const parsed = JSON.parse(entry.json) as Document;
       useDocumentStore.getState().beginTransaction('Paste document');
-      useDocumentStore.getState().setDocument(migrateDocument(parsed));
+      useDocumentStore.getState().setDocument(migrateDocument({ ...parsed, name: `${parsed.name} copy` }));
       requestSave();
       addLog('info', 'Document restored from clipboard');
       setTimeout(() => useEditorStore.getState().setViewportCommand('fit-entities'), 0);
