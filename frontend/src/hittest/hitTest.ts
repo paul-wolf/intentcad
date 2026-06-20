@@ -3,7 +3,7 @@ import type { Viewport } from '@/types/renderer';
 import { distance, pointToSegmentDist } from '@/utils/geometry';
 import { computeAngleDimensionGeom } from '@/rendering/dimensionRenderer';
 import { HIT_TOL } from '@/config';
-import { getSegmentCount, getSegmentPointIndices, getSegmentBulge } from '@/utils/lineSegments';
+import { getSegmentCount, getSegmentPointIndices, getSegmentBulge, getEntitySegmentEndpoints } from '@/utils/lineSegments';
 import { arcFromBulge, pointToArcDist, arcMidpoint } from '@/utils/arcGeometry';
 import { pointToBezierDist } from '@/utils/bezierGeometry';
 import { resolveDimensionEndpoints } from '@/utils/dimensionGeom';
@@ -255,27 +255,19 @@ export function hitTestEntities(
           continue;
         }
 
-        if (target.type !== 'line' || target2.type !== 'line') continue;
-        const idx1 = entity.segmentIndex;
-        const idx2 = entity.segmentIndex2!;
-        if (idx1 < 0 || idx1 >= getSegmentCount(target)) continue;
-        if (idx2 < 0 || idx2 >= getSegmentCount(target2)) continue;
-        const [pi1, pi2] = getSegmentPointIndices(target, idx1);
-        const [qi1, qi2] = getSegmentPointIndices(target2, idx2);
-        const p1 = target.points[pi1]!;
-        const p2 = target.points[pi2]!;
-        const q1 = target2.points[qi1]!;
-        const q2 = target2.points[qi2]!;
+        const ep1 = getEntitySegmentEndpoints(target, entity.segmentIndex);
+        const ep2 = getEntitySegmentEndpoints(target2, entity.segmentIndex2 ?? 0);
+        if (!ep1 || !ep2) continue;
+        const [p1, p2] = ep1;
+        const [q1, q2] = ep2;
 
-        if (entity.angleMode) {
+        if (entity.angleMode && target.type === 'line' && target2.type === 'line') {
           const angleGeom = computeAngleDimensionGeom(p1, p2, q1, q2, entity.offset);
           if (!angleGeom) continue;
           const screenCenter = viewport.worldToScreen(angleGeom.intersection);
           const screenArcRadius = angleGeom.arcRadius * viewport.scale;
           const distToArc = Math.abs(distance(screenPos, screenCenter) - screenArcRadius);
           if (distToArc < bestDist) {
-            // Also verify cursor angle falls within the arc sweep
-            // No Y-flip in worldToScreen, so screen angles = world angles
             const cursorAngle = Math.atan2(screenPos.y - screenCenter.y, screenPos.x - screenCenter.x);
             let sweep = angleGeom.endAngle - angleGeom.startAngle;
             while (sweep > Math.PI) sweep -= 2 * Math.PI;

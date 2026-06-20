@@ -1,5 +1,5 @@
 import type { Point, DimensionEntity, Entity, LineEntity } from '@/types/document';
-import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
+import { getSegmentCount, getSegmentPointIndices, getEntitySegmentEndpoints } from '@/utils/lineSegments';
 import { lineLineIntersection } from '@/utils/geometry';
 import { getEntityPoint } from '@/utils/entityPoints';
 
@@ -33,6 +33,20 @@ export function resolveDimensionEndpoints(
       const b = getEntityPoint(target, dim.pointIndex2);
       if (!b) return null;
       return { a, b };
+    }
+    // Point-to-segment: a = point, b = foot of perpendicular from a onto the segment
+    if (dim.targetEntityId2 != null) {
+      const target2 = allEntities.find((e) => e.id === dim.targetEntityId2);
+      if (!target2) return null;
+      const ep2 = getEntitySegmentEndpoints(target2, dim.segmentIndex2 ?? 0);
+      if (!ep2) return null;
+      const [q1, q2] = ep2;
+      const dx = q2.x - q1.x;
+      const dy = q2.y - q1.y;
+      const lenSq = dx * dx + dy * dy;
+      if (lenSq === 0) return null;
+      const t = ((a.x - q1.x) * dx + (a.y - q1.y) * dy) / lenSq;
+      return { a, b: { x: q1.x + t * dx, y: q1.y + t * dy } };
     }
     return null;
   }

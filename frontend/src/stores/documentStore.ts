@@ -9,7 +9,7 @@ import { generateId } from '@/utils/id';
 import { computeDerivedDimensionIds } from '@/utils/dof';
 import { addLog } from '@/stores/logStore';
 import type { SelectedPoint } from '@/stores/editorStore';
-import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
+import { getSegmentCount, getSegmentPointIndices, getEntitySegmentEndpoints } from '@/utils/lineSegments';
 import { evaluateExpression } from '@/utils/expression';
 
 const UNDO_STACK_LIMIT = 100;
@@ -1924,27 +1924,83 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
       return;
     }
 
+    // Point-to-segment dimension
+    if (dim.pointIndex != null && dim.pointIndex2 == null && dim.targetEntityId2 != null) {
+      const target2 = sketch.entities.find((e) => e.id === dim.targetEntityId2);
+      if (!target2) return;
+
+      const a = getEntityPoint(target, dim.pointIndex);
+      if (!a) return;
+      const ep2 = getEntitySegmentEndpoints(target2, dim.segmentIndex2 ?? 0);
+      if (!ep2) return;
+      const [q1, q2] = ep2;
+      const sdx = q2.x - q1.x; const sdy = q2.y - q1.y;
+      const sLenSq = sdx * sdx + sdy * sdy;
+      if (sLenSq === 0) return;
+      const tProj = ((a.x - q1.x) * sdx + (a.y - q1.y) * sdy) / sLenSq;
+      const foot: Point = { x: q1.x + tProj * sdx, y: q1.y + tProj * sdy };
+      const dist = Math.sqrt((foot.x - a.x) ** 2 + (foot.y - a.y) ** 2);
+      if (dist === 0) return;
+      const nx = (foot.x - a.x) / dist;
+      const ny = (foot.y - a.y) / dist;
+      const delta = newValue - dist;
+
+      const target1Fixed = sketch.constraints.some((c) => c.type === 'fixed' && c.entityId === target.id);
+      const target2Fixed = sketch.constraints.some((c) => c.type === 'fixed' && c.entityId === target2.id);
+      if (target1Fixed && target2Fixed) return;
+
+      let move1 = -delta / 2;
+      let move2 = delta / 2;
+      if (target1Fixed) { move1 = 0; move2 = delta; }
+      if (target2Fixed) { move2 = 0; move1 = -delta; }
+
+      if (!skipTransaction) get().beginTransaction('Edit dimension');
+
+      const movedIds = new Set<string>();
+      const updatedEntities = sketch.entities.map((e) => {
+        if (e.id === target.id && move1 !== 0) {
+          movedIds.add(e.id);
+          if (e.type === 'circle') return { ...e, center: { x: e.center.x + nx * move1, y: e.center.y + ny * move1 } };
+          if (e.type === 'point') return { ...e, position: { x: e.position.x + nx * move1, y: e.position.y + ny * move1 } };
+          if (e.type === 'rectangle') return { ...e, center: { x: e.center.x + nx * move1, y: e.center.y + ny * move1 } };
+        }
+        if (e.id === target2.id && move2 !== 0) {
+          movedIds.add(e.id);
+          if (e.type === 'rectangle') return { ...e, center: { x: e.center.x + nx * move2, y: e.center.y + ny * move2 } };
+          if (e.type === 'line') {
+            const [qi1, qi2] = getSegmentPointIndices(target2 as import('@/types/document').LineEntity, dim.segmentIndex2 ?? 0);
+            return { ...e, points: (e as import('@/types/document').LineEntity).points.map((pt, i) =>
+              (i === qi1 || i === qi2) ? { x: pt.x + nx * move2, y: pt.y + ny * move2 } : pt,
+            ) };
+          }
+        }
+        return e;
+      });
+      const solved = solveConstraints(updatedEntities, sketch.constraints, { movedIds });
+      set({ document: updateActiveSketch(document, () => ({ entities: solved.entities })) });
+      return;
+    }
+
     // Two-segment dimension (distance or angle)
     if (dim.targetEntityId2 != null) {
       const target2 = sketch.entities.find((e) => e.id === dim.targetEntityId2);
-      if (!target2 || target.type !== 'line' || target2.type !== 'line') return;
-      const idx1 = dim.segmentIndex;
-      const idx2 = dim.segmentIndex2!;
-      if (idx1 < 0 || idx1 >= getSegmentCount(target)) return;
-      if (idx2 < 0 || idx2 >= getSegmentCount(target2)) return;
-      const [pi1, pi2] = getSegmentPointIndices(target, idx1);
-      const [qi1, qi2] = getSegmentPointIndices(target2, idx2);
-      const p1 = target.points[pi1]!;
-      const p2 = target.points[pi2]!;
-      const q1 = target2.points[qi1]!;
-      const q2 = target2.points[qi2]!;
+      if (!target2) return;
 
-      // Angle dimension: rotate segments to match new angle
-      if (dim.angleMode) {
+      const ep1 = getEntitySegmentEndpoints(target, dim.segmentIndex);
+      const ep2 = getEntitySegmentEndpoints(target2, dim.segmentIndex2 ?? 0);
+      if (!ep1 || !ep2) return;
+      const [p1, p2] = ep1;
+      const [q1, q2] = ep2;
+
+      // Angle dimension: rotate segments to match new angle (line+line only)
+      if (dim.angleMode && target.type === 'line' && target2.type === 'line') {
+        const idx1 = dim.segmentIndex;
+        const idx2 = dim.segmentIndex2!;
+        const [pi1, pi2] = getSegmentPointIndices(target, idx1);
+        const [qi1, qi2] = getSegmentPointIndices(target2, idx2);
         const ix = lineLineIntersection(p1, p2, q1, q2);
         if (!ix) return;
 
-        // Direction vectors oriented toward each segment's midpoint (away from intersection)
         const mid1x = (p1.x + p2.x) / 2 - ix.x;
         const mid1y = (p1.y + p2.y) / 2 - ix.y;
         const mid2x = (q1.x + q2.x) / 2 - ix.x;
@@ -1956,14 +2012,12 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
         while (sweep < -Math.PI) sweep += 2 * Math.PI;
         const currentAngleDeg = Math.abs(sweep) * 180 / Math.PI;
         const deltaRad = (newValue - currentAngleDeg) * Math.PI / 180;
-        // Preserve the sign of sweep for rotation direction
         const signedDelta = sweep >= 0 ? deltaRad : -deltaRad;
 
         const target1Fixed = sketch.constraints.some((c) => c.type === 'fixed' && c.entityId === target.id);
         const target2Fixed = sketch.constraints.some((c) => c.type === 'fixed' && c.entityId === target2.id);
         if (target1Fixed && target2Fixed) return;
 
-        // Symmetric rotation: each segment rotates half the delta around intersection
         let rot1 = -signedDelta / 2;
         let rot2 = signedDelta / 2;
         if (target1Fixed) { rot1 = 0; rot2 = signedDelta; }
@@ -2026,7 +2080,6 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
       const b = { x: q1.x + t * dx, y: q1.y + t * dy };
       const dist = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
       if (dist === 0) return;
-      // Direction from target1's segment toward target2's segment
       const nx = (b.x - a.x) / dist;
       const ny = (b.y - a.y) / dist;
       const delta = newValue - dist;
@@ -2035,8 +2088,6 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
       const target2Fixed = sketch.constraints.some((c) => c.type === 'fixed' && c.entityId === target2.id);
       if (target1Fixed && target2Fixed) return;
 
-      // Split movement symmetrically; if one is fixed the other takes the full delta
-      // target1 moves in -n direction (away from target2), target2 moves in +n direction
       let move1 = -delta / 2;
       let move2 = delta / 2;
       if (target1Fixed) { move1 = 0; move2 = delta; }
@@ -2044,49 +2095,63 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
 
       if (!skipTransaction) get().beginTransaction('Edit dimension');
 
-      const sameEntity = target.id === target2.id;
-      const movedIds = new Set<string>();
-      const updatedEntities = sketch.entities.map((e) => {
-        if (e.type !== 'line') return e;
-        if ('sourceId' in e && e.sourceId) return e;
-
-        // Same entity: apply both segment movements in one pass
-        if (sameEntity && e.id === target.id && (move1 !== 0 || move2 !== 0)) {
-          movedIds.add(e.id);
-          return {
-            ...e,
-            points: e.points.map((pt, i) => {
-              if ((i === pi1 || i === pi2) && move1 !== 0)
-                return { x: pt.x + nx * move1, y: pt.y + ny * move1 };
-              if ((i === qi1 || i === qi2) && move2 !== 0)
-                return { x: pt.x + nx * move2, y: pt.y + ny * move2 };
-              return pt;
-            }),
-          };
-        }
-
-        // Different entities: move each separately
-        if (!sameEntity && e.id === target.id && move1 !== 0) {
-          movedIds.add(e.id);
+      /** Translate a single entity by (nx*move, ny*move). For lines, only the
+       *  two segment-endpoint indices are shifted; for rectangles the whole center moves. */
+      const translateEntity = (e: Entity, move: number, segPointIndices: [number, number]): Entity => {
+        if ('sourceId' in e && (e as { sourceId?: unknown }).sourceId) return e;
+        if (e.type === 'line') {
+          const [i1, i2] = segPointIndices;
           return {
             ...e,
             points: e.points.map((pt, i) =>
-              (i === pi1 || i === pi2)
-                ? { x: pt.x + nx * move1, y: pt.y + ny * move1 }
-                : pt,
+              (i === i1 || i === i2) ? { x: pt.x + nx * move, y: pt.y + ny * move } : pt,
             ),
           };
+        }
+        if (e.type === 'rectangle') {
+          return { ...e, center: { x: e.center.x + nx * move, y: e.center.y + ny * move } };
+        }
+        return e;
+      };
+
+      const sameEntity = target.id === target2.id;
+      const movedIds = new Set<string>();
+
+      let pi1 = 0, pi2 = 1, qi1 = 0, qi2 = 1;
+      if (target.type === 'line') {
+        [pi1, pi2] = getSegmentPointIndices(target, dim.segmentIndex);
+      }
+      if (target2.type === 'line') {
+        [qi1, qi2] = getSegmentPointIndices(target2, dim.segmentIndex2 ?? 0);
+      }
+
+      const updatedEntities = sketch.entities.map((e) => {
+        if (sameEntity && e.id === target.id && (move1 !== 0 || move2 !== 0)) {
+          movedIds.add(e.id);
+          if (e.type === 'line') {
+            return {
+              ...e,
+              points: e.points.map((pt, i) => {
+                if ((i === pi1 || i === pi2) && move1 !== 0)
+                  return { x: pt.x + nx * move1, y: pt.y + ny * move1 };
+                if ((i === qi1 || i === qi2) && move2 !== 0)
+                  return { x: pt.x + nx * move2, y: pt.y + ny * move2 };
+                return pt;
+              }),
+            };
+          }
+          // Same-entity rectangle (unusual but handle gracefully)
+          if (e.type === 'rectangle') {
+            return { ...e, center: { x: e.center.x + nx * ((move1 + move2) / 2), y: e.center.y + ny * ((move1 + move2) / 2) } };
+          }
+        }
+        if (!sameEntity && e.id === target.id && move1 !== 0) {
+          movedIds.add(e.id);
+          return translateEntity(e, move1, [pi1, pi2]);
         }
         if (!sameEntity && e.id === target2.id && move2 !== 0) {
           movedIds.add(e.id);
-          return {
-            ...e,
-            points: e.points.map((pt, i) =>
-              (i === qi1 || i === qi2)
-                ? { x: pt.x + nx * move2, y: pt.y + ny * move2 }
-                : pt,
-            ),
-          };
+          return translateEntity(e, move2, [qi1, qi2]);
         }
         return e;
       });

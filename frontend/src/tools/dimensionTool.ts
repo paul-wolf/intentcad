@@ -1,15 +1,15 @@
 import type { Tool, ToolContext } from './types';
-import type { BezierEntity, CircleEntity, DimensionEntity, LineEntity, Point } from '@/types/document';
+import type { BezierEntity, CircleEntity, DimensionEntity, LineEntity, Point, Entity } from '@/types/document';
 import type { Renderer, Viewport } from '@/types/renderer';
 import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
 import { hitTestSegment, hitTestPoint } from '@/hittest/hitTest';
 import type { SegmentHit, PointHit } from '@/hittest/hitTest';
 import { drawDimension, computeAngleDimensionGeom, drawAngleDimension } from '@/rendering/dimensionRenderer';
-import { DIMENSION_OFFSET_MM, PARALLEL_DOT_THRESHOLD, ANGLE_DIMENSION_ARC_RADIUS_MM, SELECTED_POINT_RADIUS } from '@/config';
+import { DIMENSION_OFFSET_MM, PARALLEL_DOT_THRESHOLD, ANGLE_DIMENSION_ARC_RADIUS_MM, SELECTED_POINT_RADIUS, SNAP_INDICATOR_RADIUS } from '@/config';
 import { getStyles } from '@/rendering/styles';
 import { getThemePalette } from '@/theme';
-import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
+import { getSegmentCount, getSegmentPointIndices, getEntitySegmentEndpoints } from '@/utils/lineSegments';
 import { getEntityPoint } from '@/utils/entityPoints';
 
 type DimTarget =
@@ -29,30 +29,33 @@ function areSegmentsParallel(p1: Point, p2: Point, q1: Point, q2: Point): boolea
   return Math.abs(dot) > PARALLEL_DOT_THRESHOLD;
 }
 
-/** Compute the two-segment distance dimension geometry: a = midpoint of S1, b = perpendicular projection of a onto the line through S2. */
-function twoSegmentGeom(
-  target1Points: Point[],
+/** Compute the two-segment distance dimension geometry using any entity types (line or rectangle). */
+function twoSegmentGeomForEntities(
+  entity1: import('@/types/document').Entity,
   seg1Idx: number,
-  target2Points: Point[],
+  entity2: import('@/types/document').Entity,
   seg2Idx: number,
 ): { a: Point; b: Point } | null {
-  const p1 = target1Points[seg1Idx];
-  const p2 = target1Points[seg1Idx + 1];
-  const q1 = target2Points[seg2Idx];
-  const q2 = target2Points[seg2Idx + 1];
-  if (!p1 || !p2 || !q1 || !q2) return null;
+  const ep1 = getEntitySegmentEndpoints(entity1, seg1Idx);
+  const ep2 = getEntitySegmentEndpoints(entity2, seg2Idx);
+  if (!ep1 || !ep2) return null;
+  const [p1, p2] = ep1;
+  const [q1, q2] = ep2;
 
   const a = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
-
-  // Project a onto infinite line through q1-q2
   const dx = q2.x - q1.x;
   const dy = q2.y - q1.y;
   const lenSq = dx * dx + dy * dy;
   if (lenSq === 0) return null;
   const t = ((a.x - q1.x) * dx + (a.y - q1.y) * dy) / lenSq;
-  const b = { x: q1.x + t * dx, y: q1.y + t * dy };
+  return { a, b: { x: q1.x + t * dx, y: q1.y + t * dy } };
+}
 
-  return { a, b };
+function areEntitiesParallelSegs(entity1: import('@/types/document').Entity, seg1Idx: number, entity2: import('@/types/document').Entity, seg2Idx: number): boolean {
+  const ep1 = getEntitySegmentEndpoints(entity1, seg1Idx);
+  const ep2 = getEntitySegmentEndpoints(entity2, seg2Idx);
+  if (!ep1 || !ep2) return false;
+  return areSegmentsParallel(ep1[0], ep1[1], ep2[0], ep2[1]);
 }
 
 /** Try to hit-test a point first, then fall back to segment. Returns a DimTarget or null. */
@@ -262,7 +265,7 @@ export function createDimensionTool(): Tool {
         }
 
         // Different entity: two-segment dimension
-        if (firstEntity.type !== 'line' && firstEntity.type !== 'circle') {
+        if (firstEntity.type !== 'line' && firstEntity.type !== 'circle' && firstEntity.type !== 'rectangle') {
           firstTarget = null;
           return;
         }
@@ -305,7 +308,9 @@ export function createDimensionTool(): Tool {
           return;
         }
 
-        if (firstEntity.type !== 'line' || targetEntity.type !== 'line') {
+        // Support line + line, line + rectangle, rectangle + line, rectangle + rectangle
+        if ((firstEntity.type !== 'line' && firstEntity.type !== 'rectangle') ||
+            (targetEntity.type !== 'line' && targetEntity.type !== 'rectangle')) {
           firstTarget = null;
           return;
         }
@@ -329,38 +334,37 @@ export function createDimensionTool(): Tool {
           return;
         }
 
-        const [fs1, fs2] = getSegmentPointIndices(firstEntity, firstHit.segmentIndex);
-        const seg1p1 = firstEntity.points[fs1]!;
-        const seg1p2 = firstEntity.points[fs2]!;
-        const [hs1, hs2] = getSegmentPointIndices(targetEntity as LineEntity, hit.segmentIndex);
-        const seg2p1 = (targetEntity as LineEntity).points[hs1]!;
-        const seg2p2 = (targetEntity as LineEntity).points[hs2]!;
-        const parallel = areSegmentsParallel(seg1p1, seg1p2, seg2p1, seg2p2);
+        const parallel = areEntitiesParallelSegs(firstEntity, firstHit.segmentIndex, targetEntity, hit.segmentIndex);
+
+        if (!parallel && firstEntity.type === 'line' && targetEntity.type === 'line') {
+          // Angle dimension (only meaningful for two lines)
+          const ep1 = getEntitySegmentEndpoints(firstEntity, firstHit.segmentIndex);
+          const ep2 = getEntitySegmentEndpoints(targetEntity, hit.segmentIndex);
+          if (ep1 && ep2) {
+            useDocumentStore.getState().beginTransaction('Add dimension');
+            useDocumentStore.getState().addEntity({
+              id: crypto.randomUUID(),
+              type: 'dimension',
+              targetEntityId: firstHit.entityId,
+              segmentIndex: firstHit.segmentIndex,
+              offset: ANGLE_DIMENSION_ARC_RADIUS_MM,
+              targetEntityId2: hit.entityId,
+              segmentIndex2: hit.segmentIndex,
+              angleMode: true,
+            } as DimensionEntity);
+          }
+          firstTarget = null;
+          return;
+        }
 
         if (!parallel) {
-          // Angle dimension
-          useDocumentStore.getState().beginTransaction('Add dimension');
-          useDocumentStore.getState().addEntity({
-            id: crypto.randomUUID(),
-            type: 'dimension',
-            targetEntityId: firstHit.entityId,
-            segmentIndex: firstHit.segmentIndex,
-            offset: ANGLE_DIMENSION_ARC_RADIUS_MM,
-            targetEntityId2: hit.entityId,
-            segmentIndex2: hit.segmentIndex,
-            angleMode: true,
-          } as DimensionEntity);
+          // Non-parallel rectangle combos — skip for now
           firstTarget = null;
           return;
         }
 
         // Parallel: distance dimension
-        const geom = twoSegmentGeom(
-          firstEntity.points,
-          firstHit.segmentIndex,
-          (targetEntity as LineEntity).points,
-          hit.segmentIndex,
-        );
+        const geom = twoSegmentGeomForEntities(firstEntity, firstHit.segmentIndex, targetEntity, hit.segmentIndex);
         if (!geom) {
           firstTarget = null;
           return;
@@ -386,7 +390,46 @@ export function createDimensionTool(): Tool {
       }
 
       // === MIXED: POINT + SEGMENT or SEGMENT + POINT ===
-      // Not supported for now — reset
+      // Normalise so ptTarget is the point side and segTarget is the segment side
+      const ptTarget = firstTarget.kind === 'point' ? firstTarget : target.kind === 'point' ? target : null;
+      const segTarget = firstTarget.kind === 'segment' ? firstTarget : target.kind === 'segment' ? target : null;
+      if (!ptTarget || !segTarget) { firstTarget = null; return; }
+
+      const ptHit = ptTarget.hit as PointHit;
+      const segHit = segTarget.hit as SegmentHit;
+
+      const ptEntity = activeSketch.entities.find((e) => e.id === ptHit.entityId);
+      const segEntity = activeSketch.entities.find((e) => e.id === segHit.entityId);
+      if (!ptEntity || !segEntity) { firstTarget = null; return; }
+
+      const ptPos = getEntityPoint(ptEntity, ptHit.pointIndex);
+      const ep = getEntitySegmentEndpoints(segEntity, segHit.segmentIndex);
+      if (!ptPos || !ep) { firstTarget = null; return; }
+
+      const [q1, q2] = ep;
+      const sdx = q2.x - q1.x;
+      const sdy = q2.y - q1.y;
+      const lenSq = sdx * sdx + sdy * sdy;
+      if (lenSq === 0) { firstTarget = null; return; }
+      const tProj = ((ptPos.x - q1.x) * sdx + (ptPos.y - q1.y) * sdy) / lenSq;
+      const foot = { x: q1.x + tProj * sdx, y: q1.y + tProj * sdy };
+
+      const abDx = foot.x - ptPos.x;
+      const abDy = foot.y - ptPos.y;
+      const cross = abDx * (worldPos.y - ptPos.y) - abDy * (worldPos.x - ptPos.x);
+      const sign = cross >= 0 ? 1 : -1;
+
+      useDocumentStore.getState().beginTransaction('Add dimension');
+      useDocumentStore.getState().addEntity({
+        id: crypto.randomUUID(),
+        type: 'dimension',
+        targetEntityId: ptHit.entityId,
+        segmentIndex: 0,
+        pointIndex: ptHit.pointIndex,
+        offset: DIMENSION_OFFSET_MM * sign,
+        targetEntityId2: segHit.entityId,
+        segmentIndex2: segHit.segmentIndex,
+      } as DimensionEntity);
       firstTarget = null;
     },
 
@@ -416,7 +459,13 @@ export function createDimensionTool(): Tool {
       const palette = getThemePalette();
       const styles = getStyles(palette);
 
-      // Draw highlight on first selected target
+      // Status hint
+      const statusText = firstTarget
+        ? 'Click second segment or endpoint — Esc to cancel'
+        : 'Click segment or endpoint to start dimension';
+      renderer.drawText(statusText, { x: 12, y: 18 }, { color: palette.textMuted, fontSize: 11, textAlign: 'left', textBaseline: 'top' });
+
+      // Highlight first selected target
       if (firstTarget) {
         if (firstTarget.kind === 'point') {
           const entity1 = activeSketch.entities.find((e) => e.id === firstTarget!.hit.entityId);
@@ -424,28 +473,26 @@ export function createDimensionTool(): Tool {
             const pt = getEntityPoint(entity1, (firstTarget.hit as PointHit).pointIndex);
             if (pt) {
               const sp = viewport.worldToScreen(pt);
-              renderer.drawCircle(sp, SELECTED_POINT_RADIUS + 2, { color: palette.accent, width: 2 });
+              renderer.fillCircle(sp, SNAP_INDICATOR_RADIUS, palette.accent);
+              renderer.drawCircle(sp, SELECTED_POINT_RADIUS + 4, { color: palette.accent, width: 2 });
             }
           }
         } else {
           const entity1 = activeSketch.entities.find((e) => e.id === firstTarget!.hit.entityId);
           const segHit = firstTarget.hit as SegmentHit;
-          if (entity1 && entity1.type === 'line') {
-            const idx = segHit.segmentIndex;
-            if (idx >= 0 && idx < getSegmentCount(entity1)) {
-              const [dti1, dti2] = getSegmentPointIndices(entity1, idx);
-              const sa = viewport.worldToScreen(entity1.points[dti1]!);
-              const sb = viewport.worldToScreen(entity1.points[dti2]!);
-              renderer.drawLine(sa, sb, { color: palette.accent, width: 2.5 });
+          if (entity1) {
+            const ep = getEntitySegmentEndpoints(entity1, segHit.segmentIndex);
+            if (ep) {
+              renderer.drawLine(viewport.worldToScreen(ep[0]), viewport.worldToScreen(ep[1]), { color: palette.accent, width: 3 });
+            } else if (entity1.type === 'circle') {
+              const sc = viewport.worldToScreen(entity1.center);
+              const sr = entity1.radius * viewport.scale;
+              renderer.drawArc(sc, sr, 0, Math.PI * 2, false, { color: palette.accent, width: 2.5 });
+            } else if (entity1.type === 'bezier') {
+              const bz = entity1 as BezierEntity;
+              const [p0, p1, p2, p3] = bz.controlPoints.map((p) => viewport.worldToScreen(p));
+              renderer.drawBezier(p0!, p1!, p2!, p3!, { color: palette.accent, width: 2.5 });
             }
-          } else if (entity1 && entity1.type === 'circle') {
-            const sc = viewport.worldToScreen(entity1.center);
-            const sr = entity1.radius * viewport.scale;
-            renderer.drawArc(sc, sr, 0, Math.PI * 2, false, { color: palette.accent, width: 2.5 });
-          } else if (entity1 && entity1.type === 'bezier') {
-            const bz = entity1 as BezierEntity;
-            const [p0, p1, p2, p3] = bz.controlPoints.map((p) => viewport.worldToScreen(p));
-            renderer.drawBezier(p0!, p1!, p2!, p3!, { color: palette.accent, width: 2.5 });
           }
         }
       }
@@ -486,13 +533,31 @@ export function createDimensionTool(): Tool {
           );
           renderer.resetGlobalAlpha();
         }
+
+        // If we have a first target that's a segment, preview the point-to-segment dimension
+        if (firstTarget && firstTarget.kind === 'segment') {
+          const firstSegHit = firstTarget.hit as SegmentHit;
+          const firstSegEntity = activeSketch.entities.find((e) => e.id === firstSegHit.entityId);
+          if (!firstSegEntity) return;
+          const segEp = getEntitySegmentEndpoints(firstSegEntity, firstSegHit.segmentIndex);
+          if (!segEp) return;
+          const [q1, q2] = segEp;
+          const sdx = q2.x - q1.x; const sdy = q2.y - q1.y;
+          const sLenSq = sdx * sdx + sdy * sdy;
+          if (sLenSq === 0) return;
+          const tP = ((hoverPt.x - q1.x) * sdx + (hoverPt.y - q1.y) * sdy) / sLenSq;
+          const foot = { x: q1.x + tP * sdx, y: q1.y + tP * sdy };
+          renderer.setGlobalAlpha(0.4);
+          drawDimension(renderer, viewport, { a: hoverPt, b: foot, offset: DIMENSION_OFFSET_MM }, styles.dimensionLine, styles.dimensionText, palette.background);
+          renderer.resetGlobalAlpha();
+        }
         return;
       }
 
-      // --- Segment hover (existing behavior) ---
+      // --- Segment hover ---
       const hoverSegHit = hoverTarget.hit as SegmentHit;
       const targetEntity = activeSketch.entities.find((e) => e.id === hoverSegHit.entityId);
-      if (!targetEntity || (targetEntity.type !== 'line' && targetEntity.type !== 'circle' && targetEntity.type !== 'bezier')) return;
+      if (!targetEntity || targetEntity.type === 'dimension' || targetEntity.type === 'point' || targetEntity.type === 'text') return;
 
       // Bezier hover: preview start-to-end dimension
       if (targetEntity.type === 'bezier') {
@@ -550,7 +615,7 @@ export function createDimensionTool(): Tool {
       }
 
       // Polygon: preview radius dimension (single-click behavior)
-      if ((targetEntity as LineEntity).polygonCenter) {
+      if (targetEntity.type === 'line' && (targetEntity as LineEntity).polygonCenter) {
         const exists = activeSketch.entities.some(
           (e) =>
             e.type === 'dimension' &&
@@ -559,10 +624,11 @@ export function createDimensionTool(): Tool {
         );
         if (exists) return;
 
-        const center = (targetEntity as LineEntity).polygonCenter!;
+        const lineEnt = targetEntity as LineEntity;
+        const center = lineEnt.polygonCenter!;
         const midA = {
-          x: (targetEntity.points[0]!.x + targetEntity.points[1]!.x) / 2,
-          y: (targetEntity.points[0]!.y + targetEntity.points[1]!.y) / 2,
+          x: (lineEnt.points[0]!.x + lineEnt.points[1]!.x) / 2,
+          y: (lineEnt.points[0]!.y + lineEnt.points[1]!.y) / 2,
         };
         renderer.setGlobalAlpha(0.4);
         drawDimension(
@@ -577,60 +643,76 @@ export function createDimensionTool(): Tool {
         return;
       }
 
+      // Point-to-segment preview: when firstTarget is a point, show ghost dimension to this segment
+      if (firstTarget && firstTarget.kind === 'point') {
+        const firstPtHit = firstTarget.hit as PointHit;
+        const firstPtEntity = activeSketch.entities.find((e) => e.id === firstPtHit.entityId);
+        if (firstPtEntity) {
+          const ptPos = getEntityPoint(firstPtEntity, firstPtHit.pointIndex);
+          const segEp = getEntitySegmentEndpoints(targetEntity, hoverSegHit.segmentIndex);
+          if (ptPos && segEp) {
+            const [q1, q2] = segEp;
+            const sdx = q2.x - q1.x; const sdy = q2.y - q1.y;
+            const sLenSq = sdx * sdx + sdy * sdy;
+            if (sLenSq > 0) {
+              const tP = ((ptPos.x - q1.x) * sdx + (ptPos.y - q1.y) * sdy) / sLenSq;
+              const foot = { x: q1.x + tP * sdx, y: q1.y + tP * sdy };
+              const hoverEp2 = getEntitySegmentEndpoints(targetEntity, hoverSegHit.segmentIndex);
+              if (hoverEp2) renderer.drawLine(viewport.worldToScreen(hoverEp2[0]), viewport.worldToScreen(hoverEp2[1]), { color: palette.accent, width: 2, dash: [4, 3] });
+              renderer.setGlobalAlpha(0.4);
+              drawDimension(renderer, viewport, { a: ptPos, b: foot, offset: DIMENSION_OFFSET_MM }, styles.dimensionLine, styles.dimensionText, palette.background);
+              renderer.resetGlobalAlpha();
+            }
+          }
+        }
+        return;
+      }
+
       // Two-segment preview: when firstTarget is a segment, show ghost dimension
       if (firstTarget && firstTarget.kind === 'segment') {
         const firstSegHit = firstTarget.hit as SegmentHit;
-        // Don't preview same segment
         if (firstSegHit.entityId === hoverSegHit.entityId && firstSegHit.segmentIndex === hoverSegHit.segmentIndex) return;
 
         const entity1 = activeSketch.entities.find((e) => e.id === firstSegHit.entityId);
-        if (!entity1 || entity1.type !== 'line') return;
+        if (!entity1) return;
 
-        const [rfs1, rfs2] = getSegmentPointIndices(entity1, firstSegHit.segmentIndex);
-        const seg1p1 = entity1.points[rfs1]!;
-        const seg1p2 = entity1.points[rfs2]!;
-        const [rhs1, rhs2] = getSegmentPointIndices(targetEntity as LineEntity, hoverSegHit.segmentIndex);
-        const seg2p1 = (targetEntity as LineEntity).points[rhs1]!;
-        const seg2p2 = (targetEntity as LineEntity).points[rhs2]!;
-        const parallel = areSegmentsParallel(seg1p1, seg1p2, seg2p1, seg2p2);
+        // Highlight the hovered segment so the user can see what they're about to select
+        const hoverEp = getEntitySegmentEndpoints(targetEntity, hoverSegHit.segmentIndex);
+        if (hoverEp) {
+          renderer.drawLine(viewport.worldToScreen(hoverEp[0]), viewport.worldToScreen(hoverEp[1]), { color: palette.accent, width: 2, dash: [4, 3] });
+        }
 
-        if (!parallel) {
-          // Angle preview
-          const angleGeom = computeAngleDimensionGeom(seg1p1, seg1p2, seg2p1, seg2p2, ANGLE_DIMENSION_ARC_RADIUS_MM);
-          if (angleGeom) {
-            renderer.setGlobalAlpha(0.4);
-            drawAngleDimension(
-              renderer,
-              viewport,
-              angleGeom,
-              styles.dimensionLine,
-              styles.dimensionText,
-              palette.background,
-            );
-            renderer.resetGlobalAlpha();
+        const parallel = areEntitiesParallelSegs(entity1, firstSegHit.segmentIndex, targetEntity, hoverSegHit.segmentIndex);
+
+        if (!parallel && entity1.type === 'line' && targetEntity.type === 'line') {
+          const ep1 = getEntitySegmentEndpoints(entity1, firstSegHit.segmentIndex);
+          const ep2 = getEntitySegmentEndpoints(targetEntity, hoverSegHit.segmentIndex);
+          if (ep1 && ep2) {
+            const angleGeom = computeAngleDimensionGeom(ep1[0], ep1[1], ep2[0], ep2[1], ANGLE_DIMENSION_ARC_RADIUS_MM);
+            if (angleGeom) {
+              renderer.setGlobalAlpha(0.4);
+              drawAngleDimension(renderer, viewport, angleGeom, styles.dimensionLine, styles.dimensionText, palette.background);
+              renderer.resetGlobalAlpha();
+            }
           }
           return;
         }
 
-        const geom = twoSegmentGeom(
-          entity1.points,
-          firstSegHit.segmentIndex,
-          (targetEntity as LineEntity).points,
-          hoverSegHit.segmentIndex,
-        );
+        if (!parallel) return;
+
+        const geom = twoSegmentGeomForEntities(entity1, firstSegHit.segmentIndex, targetEntity, hoverSegHit.segmentIndex);
         if (!geom) return;
 
         renderer.setGlobalAlpha(0.4);
-        drawDimension(
-          renderer,
-          viewport,
-          { a: geom.a, b: geom.b, offset: DIMENSION_OFFSET_MM },
-          styles.dimensionLine,
-          styles.dimensionText,
-          palette.background,
-        );
+        drawDimension(renderer, viewport, { a: geom.a, b: geom.b, offset: DIMENSION_OFFSET_MM }, styles.dimensionLine, styles.dimensionText, palette.background);
         renderer.resetGlobalAlpha();
         return;
+      }
+
+      // Highlight hovered segment when no first target yet
+      const hoverEpSingle = getEntitySegmentEndpoints(targetEntity as Entity, hoverSegHit.segmentIndex);
+      if (hoverEpSingle) {
+        renderer.drawLine(viewport.worldToScreen(hoverEpSingle[0]), viewport.worldToScreen(hoverEpSingle[1]), { color: palette.accent, width: 2, dash: [4, 3] });
       }
 
       // Single-segment preview (no firstTarget set yet)

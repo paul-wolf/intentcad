@@ -13,7 +13,7 @@ import { computeSketchDoF, computeDerivedDimensionIds } from '@/utils/dof';
 import { getEntityPoint } from '@/utils/entityPoints';
 import { resolveDimensionEndpoints } from '@/utils/dimensionGeom';
 import { getConstraintPartners, getEntityRepresentativePoint, CONSTRAINT_SYMBOLS } from '@/utils/constraints';
-import { getSegmentCount, getSegmentPointIndices, getSegmentBulge } from '@/utils/lineSegments';
+import { getSegmentCount, getSegmentPointIndices, getSegmentBulge, getEntitySegmentEndpoints } from '@/utils/lineSegments';
 import { arcFromBulge, arcMidpoint } from '@/utils/arcGeometry';
 import { renderToolpathOverlay, renderSimulatorOverlay } from '@/components/ToolpathOverlay';
 import { useCamStore } from '@/stores/camStore';
@@ -391,19 +391,14 @@ function renderActiveSketch(ctx: RenderContext) {
             break;
           }
 
-          if (target.type !== 'line' || target2.type !== 'line') break;
-          const idx1 = entity.segmentIndex;
-          const idx2 = entity.segmentIndex2!;
-          if (idx1 < 0 || idx1 >= getSegmentCount(target)) break;
-          if (idx2 < 0 || idx2 >= getSegmentCount(target2)) break;
-          const [pi1, pi2] = getSegmentPointIndices(target, idx1);
-          const [qi1, qi2] = getSegmentPointIndices(target2, idx2);
-          const p1 = target.points[pi1]!;
-          const p2 = target.points[pi2]!;
-          const q1 = target2.points[qi1]!;
-          const q2 = target2.points[qi2]!;
+          // Support line and rectangle segment endpoints
+          const ep1 = getEntitySegmentEndpoints(target, entity.segmentIndex);
+          const ep2 = getEntitySegmentEndpoints(target2, entity.segmentIndex2 ?? 0);
+          if (!ep1 || !ep2) break;
+          const [p1, p2] = ep1;
+          const [q1, q2] = ep2;
 
-          if (entity.angleMode) {
+          if (entity.angleMode && target.type === 'line' && target2.type === 'line') {
             const angleGeom = computeAngleDimensionGeom(p1, p2, q1, q2, entity.offset);
             if (angleGeom) {
               drawAngleDimension(renderer, viewport, angleGeom, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression, ws);

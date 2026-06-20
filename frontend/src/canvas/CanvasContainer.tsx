@@ -13,7 +13,7 @@ import type { DimensionGeom } from '@/rendering/dimensionRenderer';
 import type { Tool } from '@/tools/types';
 import type { ViewportImpl } from '@/rendering/viewport';
 import type { Point, LineEntity } from '@/types/document';
-import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
+import { getSegmentCount, getSegmentPointIndices, getEntitySegmentEndpoints } from '@/utils/lineSegments';
 import { computeDerivedDimensionIds } from '@/utils/dof';
 import { isExpression, evaluateExpression } from '@/utils/expression';
 
@@ -404,6 +404,28 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
     const target = sketch.entities.find((e) => e.id === dim.targetEntityId);
     if (!target) return null;
 
+    // Point-to-segment dimension
+    if (dim.pointIndex != null && dim.pointIndex2 == null && dim.targetEntityId2 != null) {
+      const a = target.type === 'circle' ? target.center
+        : target.type === 'point' ? target.position
+        : null;
+      if (!a) return null;
+      const target2 = sketch.entities.find((e) => e.id === dim.targetEntityId2);
+      if (!target2) return null;
+      const ep2 = getEntitySegmentEndpoints(target2, dim.segmentIndex2 ?? 0);
+      if (!ep2) return null;
+      const [q1, q2] = ep2;
+      const sdx = q2.x - q1.x; const sdy = q2.y - q1.y;
+      const sLenSq = sdx * sdx + sdy * sdy;
+      if (sLenSq === 0) return null;
+      const tP = ((a.x - q1.x) * sdx + (a.y - q1.y) * sdy) / sLenSq;
+      const b: Point = { x: q1.x + tP * sdx, y: q1.y + tP * sdy };
+      const geom: DimensionGeom = { a, b, offset: dim.offset };
+      const pos = getDimensionTextScreenPos(vp, geom);
+      const value = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
+      return { pos, value, expression: dim.expression };
+    }
+
     // Two-entity dimension (distance or angle)
     if (dim.targetEntityId2 != null) {
       const target2 = sketch.entities.find((e) => e.id === dim.targetEntityId2);
@@ -419,17 +441,11 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
         return { pos, value, expression: dim.expression };
       }
 
-      if (target.type !== 'line' || target2.type !== 'line') return null;
-      const idx1 = dim.segmentIndex;
-      const idx2 = dim.segmentIndex2!;
-      if (idx1 < 0 || idx1 >= getSegmentCount(target)) return null;
-      if (idx2 < 0 || idx2 >= getSegmentCount(target2)) return null;
-      const [cpi1, cpi2] = getSegmentPointIndices(target, idx1);
-      const [cqi1, cqi2] = getSegmentPointIndices(target2, idx2);
-      const p1 = target.points[cpi1]!;
-      const p2 = target.points[cpi2]!;
-      const q1 = target2.points[cqi1]!;
-      const q2 = target2.points[cqi2]!;
+      const ep1 = getEntitySegmentEndpoints(target, dim.segmentIndex);
+      const ep2 = getEntitySegmentEndpoints(target2, dim.segmentIndex2 ?? 0);
+      if (!ep1 || !ep2) return null;
+      const [p1, p2] = ep1;
+      const [q1, q2] = ep2;
 
       if (dim.angleMode) {
         const angleGeom = computeAngleDimensionGeom(p1, p2, q1, q2, dim.offset);
