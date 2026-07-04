@@ -175,7 +175,10 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
               {(() => {
                 const m = result.metrics;
                 const size = [0, 1, 2].map((i) => Math.round(m.bbox_max[i]! - m.bbox_min[i]!));
-                return `vol ${Math.round(m.volume).toLocaleString()} mm³ · ${size[0]}×${size[1]}×${size[2]} mm · `;
+                const counts: Record<string, number> = {};
+                for (const f of result.faces) counts[f.kind] = (counts[f.kind] ?? 0) + 1;
+                const faceStr = Object.entries(counts).map(([k, n]) => `${n} ${k}`).join(', ');
+                return `vol ${Math.round(m.volume).toLocaleString()} mm³ · ${size[0]}×${size[1]}×${size[2]} mm · ${result.faces.length} faces (${faceStr}) · `;
               })()}
               {result.mesh.triangle_count.toLocaleString()} triangles · drag to orbit · scroll to zoom
               {result.warnings.length > 0 && (

@@ -60,6 +60,31 @@ class BuilderTests(SimpleTestCase):
         for s in size:
             self.assertTrue(math.isclose(s, 10, abs_tol=1e-4))
 
+    def test_face_inventory_box(self):
+        """A box has exactly 6 planar faces of area 100."""
+        res = build(BuildRequest(
+            sketches=[SketchIn(id="s", entities=[
+                SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=10, height=10),
+            ])],
+            features=[FeatureIn(id="f", type="extrude", sketchId="s", distance=10)],
+        ))
+        self.assertEqual(len(res.faces), 6)
+        self.assertTrue(all(f["kind"] == "plane" for f in res.faces))
+        self.assertTrue(all(math.isclose(f["area"], 100, rel_tol=1e-3) for f in res.faces))
+
+    def test_face_inventory_has_cylinder(self):
+        """Revolving a rectangle offset from the axis yields cylindrical faces."""
+        res = build(BuildRequest(
+            sketches=[SketchIn(id="s", entities=[
+                SketchEntityIn(type="rectangle", center=Point(x=15, y=0), width=10, height=10),
+            ])],
+            features=[FeatureIn(
+                id="f", type="revolve", sketchId="s",
+                axis=AxisIn(start=Point(x=0, y=0), end=Point(x=0, y=1)), angle=360,
+            )],
+        ))
+        self.assertTrue(any(f["kind"] == "cylinder" for f in res.faces))
+
     def test_line_polyline_profile(self):
         req = BuildRequest(
             sketches=[

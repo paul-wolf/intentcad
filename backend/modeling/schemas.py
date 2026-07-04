@@ -87,8 +87,20 @@ class MetricsOut(Schema):
     center: list[float]    # center of mass
 
 
+class FaceOut(Schema):
+    """A face of the result with coarse descriptors. Inventory v0 — positional
+    index only; stable provenance ids come later (see docs/world-model.md)."""
+
+    index: int
+    kind: str            # 'plane' | 'cylinder' | 'cone' | 'sphere' | 'bspline' | ...
+    area: float
+    center: list[float]  # [x, y, z]
+    normal: list[float]  # local surface normal at the center
+
+
 class BuildResponse(Schema):
     mesh: MeshOut
     step: str  # STEP (AP214) as text, for download/export
     metrics: MetricsOut
+    faces: list[FaceOut] = []
     warnings: list[str] = []

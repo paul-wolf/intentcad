@@ -43,6 +43,7 @@ class BuildResult:
     triangle_count: int
     step: str
     metrics: dict = field(default_factory=dict)
+    faces: list = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -338,6 +339,22 @@ def _tessellate(shape, tolerance: float) -> tuple[list[float], list[float], int]
     return positions, normals, len(tris)
 
 
+def _faces(shape) -> list[dict]:
+    """Inventory v0: each face classified with coarse descriptors."""
+    out = []
+    for i, f in enumerate(shape.Faces()):
+        c = f.Center()
+        n = f.normalAt()
+        out.append({
+            "index": i,
+            "kind": f.geomType().lower(),
+            "area": f.Area(),
+            "center": [c.x, c.y, c.z],
+            "normal": [n.x, n.y, n.z],
+        })
+    return out
+
+
 def _metrics(shape) -> dict:
     bb = shape.BoundingBox()
     c = shape.Center()
@@ -396,6 +413,7 @@ def build(req: BuildRequest) -> BuildResult:
     positions, normals, tri_count = _tessellate(result, req.tolerance)
     step = _export_step(result)
     metrics = _metrics(result)
+    faces = _faces(result)
     # de-duplicate warnings while preserving order
     seen: dict[str, None] = {}
     for w in warnings:
@@ -406,5 +424,6 @@ def build(req: BuildRequest) -> BuildResult:
         triangle_count=tri_count,
         step=step,
         metrics=metrics,
+        faces=faces,
         warnings=list(seen),
     )
