@@ -45,6 +45,21 @@ class BuilderTests(SimpleTestCase):
         self.assertTrue(res.step.startswith("ISO-10303-21;"))
         self.assertIn("ENDSEC;", res.step)
 
+    def test_metrics_of_a_box(self):
+        """A 10x10 profile extruded 10 is a unit box: known volume, area, bbox."""
+        res = build(BuildRequest(
+            sketches=[SketchIn(id="s", entities=[
+                SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=10, height=10),
+            ])],
+            features=[FeatureIn(id="f", type="extrude", sketchId="s", distance=10)],
+        ))
+        m = res.metrics
+        self.assertTrue(math.isclose(m["volume"], 1000, rel_tol=1e-3))
+        self.assertTrue(math.isclose(m["area"], 600, rel_tol=1e-3))
+        size = [m["bbox_max"][i] - m["bbox_min"][i] for i in range(3)]
+        for s in size:
+            self.assertTrue(math.isclose(s, 10, abs_tol=1e-4))
+
     def test_line_polyline_profile(self):
         req = BuildRequest(
             sketches=[

@@ -156,6 +156,13 @@ export interface BuildRequest {
 export interface BuildResponse {
   mesh: { positions: number[]; normals: number[]; triangle_count: number };
   step: string;
+  metrics: {
+    volume: number;
+    area: number;
+    bbox_min: [number, number, number];
+    bbox_max: [number, number, number];
+    center: [number, number, number];
+  };
   warnings: string[];
 }
 

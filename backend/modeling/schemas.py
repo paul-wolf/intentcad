@@ -76,7 +76,19 @@ class MeshOut(Schema):
     triangle_count: int
 
 
+class MetricsOut(Schema):
+    """Coarse measurements of the built solid (CAD space). The first facts a
+    validator or the agent reads about a result."""
+
+    volume: float
+    area: float
+    bbox_min: list[float]  # [x, y, z]
+    bbox_max: list[float]
+    center: list[float]    # center of mass
+
+
 class BuildResponse(Schema):
     mesh: MeshOut
     step: str  # STEP (AP214) as text, for download/export
+    metrics: MetricsOut
     warnings: list[str] = []

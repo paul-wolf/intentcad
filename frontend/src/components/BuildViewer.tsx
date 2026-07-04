@@ -172,6 +172,11 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
           )}
           {status === 'done' && result && (
             <span>
+              {(() => {
+                const m = result.metrics;
+                const size = [0, 1, 2].map((i) => Math.round(m.bbox_max[i]! - m.bbox_min[i]!));
+                return `vol ${Math.round(m.volume).toLocaleString()} mm³ · ${size[0]}×${size[1]}×${size[2]} mm · `;
+              })()}
               {result.mesh.triangle_count.toLocaleString()} triangles · drag to orbit · scroll to zoom
               {result.warnings.length > 0 && (
                 <span style={{ color: palette.warning ?? '#c78a1a' }}>

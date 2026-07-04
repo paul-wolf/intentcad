@@ -42,6 +42,7 @@ class BuildResult:
     normals: list[float]
     triangle_count: int
     step: str
+    metrics: dict = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -337,6 +338,18 @@ def _tessellate(shape, tolerance: float) -> tuple[list[float], list[float], int]
     return positions, normals, len(tris)
 
 
+def _metrics(shape) -> dict:
+    bb = shape.BoundingBox()
+    c = shape.Center()
+    return {
+        "volume": shape.Volume(),
+        "area": shape.Area(),
+        "bbox_min": [bb.xmin, bb.ymin, bb.zmin],
+        "bbox_max": [bb.xmax, bb.ymax, bb.zmax],
+        "center": [c.x, c.y, c.z],
+    }
+
+
 def _export_step(shape) -> str:
     wp = cq.Workplane(obj=shape)
     with tempfile.NamedTemporaryFile(suffix=".step", mode="r+", delete=True) as fh:
@@ -382,6 +395,7 @@ def build(req: BuildRequest) -> BuildResult:
 
     positions, normals, tri_count = _tessellate(result, req.tolerance)
     step = _export_step(result)
+    metrics = _metrics(result)
     # de-duplicate warnings while preserving order
     seen: dict[str, None] = {}
     for w in warnings:
@@ -391,5 +405,6 @@ def build(req: BuildRequest) -> BuildResult:
         normals=normals,
         triangle_count=tri_count,
         step=step,
+        metrics=metrics,
         warnings=list(seen),
     )
