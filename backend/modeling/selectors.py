@@ -1,0 +1,44 @@
+"""Resolve a selector query against the face inventory (see docs/world-model.md).
+
+v0: single-criterion selectors over faces. This is the mechanism that turns the
+inventory into references — the first piece of "operations name their target".
+Stays a pure function of the inventory dicts (no kernel dependency).
+"""
+
+
+class SelectorError(ValueError):
+    """A selector query that can't be parsed."""
+
+
+def resolve_faces(query: str, faces: list[dict]) -> list[int]:
+    """Return the indices of faces matching `query`.
+
+    Grammar (v0):
+      all | *              every face
+      largest | smallest   the single face with max / min area
+      tag:<t> | face:<t>   faces whose tags contain <t>   (e.g. tag:top)
+      kind:<k>             faces of geometric kind <k>     (e.g. kind:cylinder)
+    """
+    q = query.strip().lower()
+    if not q:
+        raise SelectorError("empty selector")
+
+    if q in ("all", "*"):
+        return [f["index"] for f in faces]
+
+    if q in ("largest", "smallest"):
+        if not faces:
+            return []
+        pick = max if q == "largest" else min
+        return [pick(faces, key=lambda f: f["area"])["index"]]
+
+    if ":" in q:
+        field, _, value = q.partition(":")
+        field, value = field.strip(), value.strip()
+        if field in ("tag", "face"):
+            return [f["index"] for f in faces if value in f.get("tags", [])]
+        if field == "kind":
+            return [f["index"] for f in faces if f["kind"] == value]
+        raise SelectorError(f"unknown selector field: {field!r}")
+
+    raise SelectorError(f"unrecognized selector: {query!r}")
