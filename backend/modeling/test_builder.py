@@ -279,6 +279,28 @@ class BuilderTests(SimpleTestCase):
         self.assertLess(res.metrics["volume"], 1000)     # material removed at corners
         self.assertGreater(len(res.faces), 6)            # new rounded faces
 
+    def test_chamfer_all_edges(self):
+        """Extrude a box, then chamfer every edge: bevels corners (less volume,
+        more faces). Chamfer is fillet's twin — the FDM-robust-join primitive."""
+        res = build(BuildRequest(
+            sketches=[SketchIn(id="s", entities=[
+                SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=10, height=10),
+            ])],
+            features=[
+                FeatureIn(id="box", type="extrude", sketchId="s", distance=10),
+                FeatureIn(id="bevel", type="chamfer", sketchId="", edges="all", distance=1),
+            ],
+        ))
+        self.assertLess(res.metrics["volume"], 1000)
+        self.assertGreater(len(res.faces), 6)
+
+    def test_chamfer_without_geometry_raises(self):
+        with self.assertRaises(BuildError):
+            build(BuildRequest(
+                sketches=[],
+                features=[FeatureIn(id="bevel", type="chamfer", sketchId="", edges="all", distance=1)],
+            ))
+
     def test_fillet_without_geometry_raises(self):
         with self.assertRaises(BuildError):
             build(BuildRequest(

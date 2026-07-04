@@ -46,7 +46,7 @@ class AxisIn(Schema):
 
 class FeatureIn(Schema):
     id: str
-    type: str  # 'extrude' | 'revolve' | 'fillet'; others rejected with a warning
+    type: str  # 'extrude' | 'revolve' | 'fillet' | 'chamfer'; others rejected with a warning
     sketchId: str
     operation: str | None = None  # 'add' | 'remove'
     plane: str | None = None  # 'XY' (default) | 'XZ' | 'YZ' — base plane the sketch sits on
@@ -56,9 +56,9 @@ class FeatureIn(Schema):
     # revolve
     axis: AxisIn | None = None
     angle: float | None = None  # degrees; defaults to 360 in the builder
-    # fillet (modifies the running result; no sketch)
+    # fillet / chamfer (modify the running result; no sketch)
     edges: str | None = None    # edge selector, e.g. 'all' | 'kind:line' | 'longest'
-    radius: float | None = None
+    radius: float | None = None  # fillet radius; chamfer uses `distance`
 
 
 class BuildRequest(Schema):

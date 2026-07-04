@@ -340,6 +340,20 @@ def _fillet(shape, selector: str, radius: float | None, feat_id: str):
         raise BuildError(f"feature {feat_id}: fillet failed ({exc})") from exc
 
 
+def _chamfer(shape, selector: str, distance: float | None, feat_id: str):
+    if not distance or distance <= 0:
+        raise BuildError(f"feature {feat_id}: chamfer distance must be > 0")
+    idxs = resolve_edges(selector, _edges(shape))
+    if not idxs:
+        raise BuildError(f"feature {feat_id}: chamfer selector '{selector}' matched no edges")
+    all_edges = shape.Edges()
+    picked = [all_edges[i] for i in idxs]
+    try:
+        return shape.chamfer(distance, None, picked)
+    except Exception as exc:
+        raise BuildError(f"feature {feat_id}: chamfer failed ({exc})") from exc
+
+
 # ── base-plane placement ─────────────────────────────────────────────────
 # The 2D→wire code always builds on XY (extruding +Z). To sit a sketch on
 # another base plane, build as usual then rigidly reorient the solid: XZ swings
@@ -449,6 +463,11 @@ def build(req: BuildRequest) -> BuildResult:
             if result is None:
                 raise BuildError(f"feature {feat.id}: fillet needs existing geometry")
             result = _fillet(result, feat.edges or "all", feat.radius, feat.id)
+            continue
+        if feat.type == "chamfer":
+            if result is None:
+                raise BuildError(f"feature {feat.id}: chamfer needs existing geometry")
+            result = _chamfer(result, feat.edges or "all", feat.distance, feat.id)
             continue
 
         sketch = sketches.get(feat.sketchId)
