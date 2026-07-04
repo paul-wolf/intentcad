@@ -373,7 +373,35 @@ That is enough to (a) locate the critical spot, (b) accept a fuzzy directive, an
 They answer "did stress move the right way?" without a number. FEA can later
 *confirm* a magnitude, but is not required to be useful.
 
-## 11. The intent & fact ledger
+## 11. Manufacturing process — the design driver
+
+"Robust" has no meaning without the process. The world model carries a `process`
+and `material` (per part, overridable per body), and the qualitative rules from
+§10 are **conditioned on them**. The same intent — "make this joint robust" —
+resolves to *different geometry* depending on how the part is made:
+
+```jsonc
+"manufacturing": { "process": "fdm", "material": "PLA" }
+// or          { "process": "cnc", "material": "aluminium-6061" }
+```
+
+| intent | FDM (printed) | CNC (milled aluminium) |
+| --- | --- | --- |
+| robust joint | chamfered gusset — adds material, no overhang, prints in orientation | internal **fillet ≥ tool radius**; thicker section; no added gusset |
+| internal corner | fine as-is | **must** be filleted to ≥ tool radius (a mill can't cut a sharp inner corner) |
+| overhang / bridge | avoid, or add a support-free chamfer | irrelevant |
+| bolt head recess | modelled counterbore | counterbore or spot-face |
+| what varies strength | **print orientation** | fixturing / tool access |
+
+So the agent's move for "make that joint robust" *branches on `process`*: on FDM it
+may add a chamfer; on CNC it fillets the internal corner to the tool radius and
+thickens the web. **Chamfer and fillet are both general primitives — the choice
+between them is a process decision, not a preference.**
+
+Process/material are first-class facts, not export settings: they change which
+geometry is *correct*, and they accumulate in the ledger (§12) as durable intent.
+
+## 12. The intent & fact ledger
 
 Stress reasoning is only as good as the accumulated context. The agent keeps an
 **append-only ledger** of everything the user states across the *whole* build —
@@ -382,6 +410,7 @@ current geometry:
 
 ```jsonc
 "ledger": [
+  { "t": 0, "kind": "process",   "text": "FDM printed in PLA" },
   { "t": 1, "kind": "fact",      "text": "the leg pushes hard upward against the clamped tube" },
   { "t": 2, "kind": "intent",    "text": "the gusset is structural — primary load path" },
   { "t": 3, "kind": "objective", "text": "prefer stiffness over weight" },
@@ -400,7 +429,7 @@ The ledger is also where the **objective** for "optimal" accumulates (t=3). It's
 the memory that lets the agent say: "you told me the gusset is structural and to
 favour stiffness, so I enlarged the fillet rather than shaving weight."
 
-## 12. Worked turn: "rotate the leg 45° and redistribute the stress"
+## 13. Worked turn: "rotate the leg 45° and redistribute the stress"
 
 ```
 PERCEIVE   tree + inventory + dep-graph + environment + loads + ledger + last report
@@ -426,6 +455,7 @@ the residual risk both stated. That is the bar, and it is reachable now.
 Build-order note: this whole layer is **facts + qualitative rules**, not a solver.
 It rides on the v0 world model (inventory + selectors + dep graph). The concrete
 first structural step is data, not math: add `environment`, `loads`, `materials`,
-and the `ledger` to the IR, and the four qualitative validators above. FEA stays
-out of scope until numbers are actually needed.
+`process`, and the `ledger` to the IR, and the four qualitative validators above.
+Structural rules are conditioned on `process` (§11). FEA stays out of scope until
+numbers are actually needed.
 ```
