@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { BuildViewer } from './BuildViewer';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useUIStateStore } from '@/stores/uiStateStore';
@@ -105,6 +107,7 @@ const rowStyle: React.CSSProperties = {
 
 export function Toolbar() {
   const navigate = useNavigate();
+  const [showBuild, setShowBuild] = useState(false);
   const activeTool = useEditorStore((s) => s.activeTool);
   const setActiveTool = useEditorStore((s) => s.setActiveTool);
   const drawerOpen = useUIStateStore((s) => s.drawerOpen);
@@ -226,6 +229,14 @@ export function Toolbar() {
           Props
         </button>
         <Sep color={palette.border} />
+        <button
+          onClick={() => setShowBuild(true)}
+          style={{ ...btn(palette), color: palette.textSecondary }}
+          title="Build a 3D solid from the active sketch (server, experimental)"
+        >
+          3D
+        </button>
+        {showBuild && <BuildViewer onClose={() => setShowBuild(false)} />}
         <button
           onClick={() => { downloadTextFile(exportDocumentToDxf(doc), `${doc.name}.dxf`, 'application/dxf'); }}
           style={{ ...btn(palette), color: palette.textSecondary }}

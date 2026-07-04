@@ -1,0 +1,305 @@
+"""Turn a self-contained build request into a solid, then into a mesh + STEP.
+
+Prototype scope: extrude features only.
+
+Profile handling (the hard part) works like a real sketcher:
+  1. Circles / rectangles / closed polylines become closed loops directly.
+  2. Loose line segments are STITCHED end-to-end into closed loops (a boundary
+     is often drawn as many separate edges, not one polyline).
+  3. Loops are nested by geometric CONTAINMENT: an even-depth loop is a solid
+     region, its directly-enclosed loops are holes. (No "largest = outer"
+     guessing — that mistakes disjoint shapes for holes.)
+  4. Each region becomes a face (outer + holes), is extruded, and fused.
+
+Deliberately NOT handled yet (tracked as warnings, not errors):
+  - bulge arcs (polyline segments treated as straight)
+  - revolve / loft / fillet / chamfer / shell / construction planes
+  - per-feature sketch plane placement (everything extrudes along +Z)
+"""
+
+from __future__ import annotations
+
+import math
+import tempfile
+from dataclasses import dataclass, field
+
+import cadquery as cq
+from cadquery import Face, Solid, Vector, Wire
+
+from .schemas import BuildRequest, SketchEntityIn, SketchIn
+
+_TOL = 1e-4  # endpoint-matching / closure tolerance (world units)
+
+
+class BuildError(Exception):
+    """Unrecoverable modeling failure — surfaced to the client as HTTP 422."""
+
+
+@dataclass
+class BuildResult:
+    positions: list[float]
+    normals: list[float]
+    triangle_count: int
+    step: str
+    warnings: list[str] = field(default_factory=list)
+
+
+# ── coordinate convention ────────────────────────────────────────────────
+# Editor is Y-down (screen); CAD is Y-up (math). Flip Y, same as export/dxf.ts.
+# Containment math below stays in raw screen space — topology is flip-invariant.
+def _v(x: float, y: float, z: float = 0.0) -> Vector:
+    return Vector(x, -y, z)
+
+
+# ── a closed loop: its wire + a 2D polygon (screen space) for containment ──
+@dataclass
+class Loop:
+    wire: Wire
+    poly: list[tuple[float, float]]  # screen-space polygon
+    rep: tuple[float, float]         # a point inside `poly`
+    area: float                      # unsigned polygon area
+
+
+def _poly_area(poly: list[tuple[float, float]]) -> float:
+    s = 0.0
+    n = len(poly)
+    for i in range(n):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % n]
+        s += x1 * y2 - x2 * y1
+    return abs(s) / 2.0
+
+
+def _make_loop(wire: Wire, poly: list[tuple[float, float]], rep: tuple[float, float]) -> Loop:
+    return Loop(wire, poly, rep, _poly_area(poly))
+
+
+def _contains(outer: Loop, inner: Loop) -> bool:
+    """`outer` contains `inner`. A container is strictly larger; the area guard
+    disambiguates coincident representative points (e.g. a concentric hole)."""
+    return outer.area > inner.area and _point_in_poly(inner.rep, outer.poly)
+
+
+def _rectangle_corners(e: SketchEntityIn) -> list[tuple[float, float]]:
+    hw, hh = e.width / 2.0, e.height / 2.0
+    if e.anchor == "corner":
+        cx, cy = e.center.x + hw, e.center.y + hh
+    else:
+        cx, cy = e.center.x, e.center.y
+    return [(cx - hw, cy - hh), (cx + hw, cy - hh), (cx + hw, cy + hh), (cx - hw, cy + hh)]
+
+
+def _poly_wire(pts: list[tuple[float, float]]) -> Wire:
+    return Wire.makePolygon([_v(x, y) for x, y in pts], close=True)
+
+
+def _centroid(pts: list[tuple[float, float]]) -> tuple[float, float]:
+    return (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
+
+
+def _point_in_poly(pt: tuple[float, float], poly: list[tuple[float, float]]) -> bool:
+    """Even-odd ray cast in 2D."""
+    x, y = pt
+    inside = False
+    n = len(poly)
+    for i in range(n):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % n]
+        if (y1 > y) != (y2 > y):
+            xint = x1 + (y - y1) / (y2 - y1) * (x2 - x1)
+            if x < xint:
+                inside = not inside
+    return inside
+
+
+def _close(a: tuple[float, float], b: tuple[float, float]) -> bool:
+    return math.hypot(a[0] - b[0], a[1] - b[1]) <= _TOL
+
+
+# ── stitch open polylines/segments into closed loops ─────────────────────
+def _stitch(paths: list[list[tuple[float, float]]]) -> list[list[tuple[float, float]]]:
+    """Greedily join open paths that share endpoints into closed rings.
+
+    A path left over with >= 3 points is force-closed (assume it's an intended
+    boundary drawn as one open polyline); shorter leftovers are dropped.
+    """
+    pending = [list(p) for p in paths]
+    loops: list[list[tuple[float, float]]] = []
+
+    while pending:
+        chain = pending.pop()
+        changed = True
+        while changed and not (len(chain) >= 3 and _close(chain[0], chain[-1])):
+            changed = False
+            for i, p in enumerate(pending):
+                if _close(chain[-1], p[0]):
+                    chain += p[1:]
+                elif _close(chain[-1], p[-1]):
+                    chain += list(reversed(p))[1:]
+                elif _close(chain[0], p[-1]):
+                    chain = p[:-1] + chain
+                elif _close(chain[0], p[0]):
+                    chain = list(reversed(p))[1:] + chain
+                else:
+                    continue
+                pending.pop(i)
+                changed = True
+                break
+
+        if _close(chain[0], chain[-1]):
+            chain = chain[:-1]
+        if len(chain) >= 3:
+            loops.append(chain)
+    return loops
+
+
+# ── entities → loops ─────────────────────────────────────────────────────
+def _sketch_to_loops(sketch: SketchIn, warnings: list[str]) -> list[Loop]:
+    loops: list[Loop] = []
+    open_paths: list[list[tuple[float, float]]] = []
+
+    for e in sketch.entities:
+        if e.construction:
+            continue
+
+        if e.type == "circle" and e.center is not None and e.radius:
+            cx, cy, r = e.center.x, e.center.y, e.radius
+            poly = [(cx + r * math.cos(t), cy + r * math.sin(t))
+                    for t in (2 * math.pi * k / 48 for k in range(48))]
+            wire = Wire.makeCircle(r, _v(cx, cy), Vector(0, 0, 1))
+            loops.append(_make_loop(wire, poly, (cx, cy)))
+
+        elif e.type == "rectangle" and e.center is not None and e.width and e.height:
+            corners = _rectangle_corners(e)
+            loops.append(_make_loop(_poly_wire(corners), corners, _centroid(corners)))
+
+        elif e.type == "line" and e.points and len(e.points) >= 2:
+            if e.bulge and any(abs(b) > 1e-9 for b in e.bulge):
+                warnings.append("bulge arcs not supported yet — treated as straight segments")
+            pts = [(p.x, p.y) for p in e.points]
+            closed = bool(e.closed) or (len(pts) >= 3 and _close(pts[0], pts[-1]))
+            if closed:
+                if _close(pts[0], pts[-1]):
+                    pts = pts[:-1]
+                if len(pts) >= 3:
+                    loops.append(_make_loop(_poly_wire(pts), pts, _centroid(pts)))
+            else:
+                open_paths.append(pts)
+
+    for ring in _stitch(open_paths):
+        loops.append(_make_loop(_poly_wire(ring), ring, _centroid(ring)))
+
+    if not loops:
+        raise BuildError(f"sketch {sketch.id}: no closed profile to extrude")
+    return loops
+
+
+# ── loops → faces via containment nesting ────────────────────────────────
+def _loops_to_faces(loops: list[Loop], sketch_id: str) -> list[Face]:
+    depth = [
+        sum(1 for j, o in enumerate(loops) if j != i and _contains(o, lp))
+        for i, lp in enumerate(loops)
+    ]
+
+    faces: list[Face] = []
+    for i, lp in enumerate(loops):
+        if depth[i] % 2 != 0:
+            continue  # odd depth => this loop is a hole in some region
+        holes = [
+            o.wire for j, o in enumerate(loops)
+            if depth[j] == depth[i] + 1 and _contains(lp, o)
+        ]
+        try:
+            faces.append(Face.makeFromWires(lp.wire, holes))
+        except Exception as exc:
+            raise BuildError(f"sketch {sketch_id}: could not form a face ({exc})") from exc
+
+    if not faces:
+        raise BuildError(f"sketch {sketch_id}: no outer region found")
+    return faces
+
+
+# ── extrude ──────────────────────────────────────────────────────────────
+def _extrude_faces(faces: list[Face], distance: float, direction: str | None) -> Solid:
+    if not distance or distance <= 0:
+        raise BuildError("extrude: distance must be > 0")
+
+    def one(face: Face) -> Solid:
+        if direction == "both":
+            base = face.translate(Vector(0, 0, -distance / 2.0))
+            return Solid.extrudeLinear(base, Vector(0, 0, distance))
+        if direction == "reverse":
+            return Solid.extrudeLinear(face, Vector(0, 0, -distance))
+        return Solid.extrudeLinear(face, Vector(0, 0, distance))
+
+    solid = one(faces[0])
+    for f in faces[1:]:
+        solid = solid.fuse(one(f))
+    return solid
+
+
+# ── mesh + STEP ──────────────────────────────────────────────────────────
+def _tessellate(shape, tolerance: float) -> tuple[list[float], list[float], int]:
+    verts, tris = shape.tessellate(tolerance)
+    positions: list[float] = []
+    normals: list[float] = []
+    for a, b, c in tris:
+        va, vb, vc = verts[a], verts[b], verts[c]
+        n = (vb - va).cross(vc - va)
+        ln = n.Length
+        nx, ny, nz = (n.x / ln, n.y / ln, n.z / ln) if ln > 1e-12 else (0.0, 0.0, 1.0)
+        for v in (va, vb, vc):
+            positions.extend((v.x, v.y, v.z))
+            normals.extend((nx, ny, nz))
+    return positions, normals, len(tris)
+
+
+def _export_step(shape) -> str:
+    wp = cq.Workplane(obj=shape)
+    with tempfile.NamedTemporaryFile(suffix=".step", mode="r+", delete=True) as fh:
+        cq.exporters.export(wp, fh.name, exportType="STEP")
+        fh.seek(0)
+        return fh.read()
+
+
+# ── entry point ──────────────────────────────────────────────────────────
+def build(req: BuildRequest) -> BuildResult:
+    warnings: list[str] = []
+    sketches = {s.id: s for s in req.sketches}
+
+    result = None
+    for feat in req.features:
+        if feat.type != "extrude":
+            warnings.append(f"feature {feat.id}: type '{feat.type}' not supported yet — skipped")
+            continue
+        sketch = sketches.get(feat.sketchId)
+        if sketch is None:
+            raise BuildError(f"feature {feat.id}: sketch '{feat.sketchId}' not in request")
+
+        loops = _sketch_to_loops(sketch, warnings)
+        faces = _loops_to_faces(loops, sketch.id)
+        solid = _extrude_faces(faces, feat.distance, feat.direction)
+
+        if result is None:
+            result = solid
+        elif feat.operation == "remove":
+            result = result.cut(solid)
+        else:
+            result = result.fuse(solid)
+
+    if result is None:
+        raise BuildError("no extrude feature produced geometry")
+
+    positions, normals, tri_count = _tessellate(result, req.tolerance)
+    step = _export_step(result)
+    # de-duplicate warnings while preserving order
+    seen: dict[str, None] = {}
+    for w in warnings:
+        seen.setdefault(w, None)
+    return BuildResult(
+        positions=positions,
+        normals=normals,
+        triangle_count=tri_count,
+        step=step,
+        warnings=list(seen),
+    )

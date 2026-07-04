@@ -106,3 +106,52 @@ export const api = {
     return request(`/documents/${id}`, { method: 'DELETE' });
   },
 };
+
+// ── 3D build (server-side CadQuery, experimental) ──
+// Mirrors backend/modeling/schemas.py. The request is self-contained: sketches
+// are sent inline rather than referenced by id.
+
+export interface BuildEntity {
+  type: 'line' | 'circle' | 'rectangle';
+  construction?: boolean;
+  points?: { x: number; y: number }[];
+  closed?: boolean;
+  bulge?: number[];
+  center?: { x: number; y: number };
+  radius?: number;
+  width?: number;
+  height?: number;
+  anchor?: 'center' | 'corner';
+}
+
+export interface BuildSketch {
+  id: string;
+  entities: BuildEntity[];
+}
+
+export interface BuildFeature {
+  id: string;
+  type: 'extrude';
+  sketchId: string;
+  distance?: number;
+  direction?: 'forward' | 'reverse' | 'both';
+  operation?: 'add' | 'remove';
+}
+
+export interface BuildRequest {
+  sketches: BuildSketch[];
+  features: BuildFeature[];
+  tolerance?: number;
+}
+
+export interface BuildResponse {
+  mesh: { positions: number[]; normals: number[]; triangle_count: number };
+  step: string;
+  warnings: string[];
+}
+
+export const buildApi = {
+  build(payload: BuildRequest): Promise<BuildResponse> {
+    return request('/build/', { method: 'POST', body: JSON.stringify(payload) });
+  },
+};
