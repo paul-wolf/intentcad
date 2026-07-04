@@ -11,7 +11,7 @@ interface BuildViewerProps {
   onClose: () => void;
 }
 
-type OpType = 'extrude' | 'revolve' | 'fillet' | 'chamfer';
+type OpType = 'extrude' | 'revolve' | 'fillet' | 'chamfer' | 'hole';
 
 const newId = () => 'op-' + crypto.randomUUID().slice(0, 8);
 
@@ -33,6 +33,9 @@ function describe(f: BuildFeature, sketchName: (id: string) => string): string {
       return `Fillet ${f.edges} · r=${f.radius}`;
     case 'chamfer':
       return `Chamfer ${f.edges} · d=${f.distance}`;
+    case 'hole':
+      return `Hole “${sketchName(f.sketchId)}”${f.throughDia ? ` · Ø${f.throughDia}` : ''}` +
+             `${f.cboreDia ? ` · c'bore Ø${f.cboreDia}×${f.cboreDepth}` : ''}${place(f)}`;
   }
 }
 
@@ -61,6 +64,9 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
   const [axisKind, setAxisKind] = useState<AxisKind>('left');
   const [edges, setEdges] = useState('all');
   const [size, setSize] = useState(2);
+  const [holeThrough, setHoleThrough] = useState(0); // 0 = use the drawn circle size
+  const [cboreDia, setCboreDia] = useState(0);
+  const [cboreDepth, setCboreDepth] = useState(0);
   // placement (for extrude/revolve)
   const [opPlane, setOpPlane] = useState<'XY' | 'XZ' | 'YZ'>('XY');
   const [opTilt, setOpTilt] = useState(0);
@@ -151,6 +157,9 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
     if (f.type === 'revolve') setAngle(f.angle ?? 360);
     if (f.type === 'fillet') { setEdges(f.edges ?? 'all'); setSize(f.radius ?? 2); }
     if (f.type === 'chamfer') { setEdges(f.edges ?? 'all'); setSize(f.distance ?? 2); }
+    if (f.type === 'hole') {
+      setHoleThrough(f.throughDia ?? 0); setCboreDia(f.cboreDia ?? 0); setCboreDepth(f.cboreDepth ?? 0);
+    }
     setOpPlane(f.plane ?? 'XY');
     setOpTilt(f.tilt ?? 0);
     setOpTiltAxis(f.tiltAxis ?? 'X');
@@ -168,6 +177,11 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
                axis: sk ? axisForKind(sk, axisKind) : { start: { x: 0, y: 0 }, end: { x: 0, y: 1 } }, ...placement() };
     } else if (opType === 'fillet') {
       feat = { id, type: 'fillet', sketchId: '', edges, radius: size };
+    } else if (opType === 'hole') {
+      feat = { id, type: 'hole', sketchId: opSketchId,
+               ...(holeThrough ? { throughDia: holeThrough } : {}),
+               ...(cboreDia && cboreDepth ? { cboreDia, cboreDepth } : {}),
+               ...placement() };
     } else {
       feat = { id, type: 'chamfer', sketchId: '', edges, distance: size };
     }
@@ -264,6 +278,7 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
                 <option value="revolve">Revolve</option>
                 <option value="fillet">Fillet</option>
                 <option value="chamfer">Chamfer</option>
+                <option value="hole">Hole</option>
               </select>
             </div>
 
@@ -304,6 +319,26 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
                   <label style={{ ...lbl, width: '48px' }}>Angle°</label>
                   <input type="number" value={angle} min={1} max={360} step={5}
                          onChange={(e) => setAngle(Number(e.target.value) || 0)} style={field} />
+                </div>
+              </>
+            )}
+
+            {opType === 'hole' && (
+              <>
+                <div style={row}>
+                  <label style={{ ...lbl, width: '48px' }}>Ø thru</label>
+                  <input type="number" value={holeThrough} step={0.5} title="0 = use the drawn circle size"
+                         onChange={(e) => setHoleThrough(Number(e.target.value) || 0)} style={field} />
+                </div>
+                <div style={row}>
+                  <label style={{ ...lbl, width: '48px' }}>C'bore Ø</label>
+                  <input type="number" value={cboreDia} step={0.5}
+                         onChange={(e) => setCboreDia(Number(e.target.value) || 0)} style={field} />
+                </div>
+                <div style={row}>
+                  <label style={{ ...lbl, width: '48px' }}>C'bore ↓</label>
+                  <input type="number" value={cboreDepth} step={0.5}
+                         onChange={(e) => setCboreDepth(Number(e.target.value) || 0)} style={field} />
                 </div>
               </>
             )}

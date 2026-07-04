@@ -364,6 +364,42 @@ class BuilderTests(SimpleTestCase):
                 ],
             ))
 
+    def test_hole_through_and_counterbore(self):
+        """A hole feature cuts a through hole at each sketch circle; a counterbore
+        removes extra material (smaller volume than through-only)."""
+        plate = SketchIn(id="plate", entities=[
+            SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=40, height=40)])
+        holes = SketchIn(id="holes", entities=[
+            SketchEntityIn(type="circle", center=Point(x=-10, y=-10), radius=3),
+            SketchEntityIn(type="circle", center=Point(x=10, y=10), radius=3)])
+
+        def run(cbore):
+            feats = [
+                FeatureIn(id="p", type="extrude", sketchId="plate", distance=8, operation="add"),
+                FeatureIn(id="h", type="hole", sketchId="holes",
+                          **({"cboreDia": 8, "cboreDepth": 3} if cbore else {})),
+            ]
+            return build(BuildRequest(sketches=[plate, holes], features=feats))
+
+        through = run(False)
+        cbored = run(True)
+        # 40x40x8 plate = 12800; two Ø6 through holes remove ~2*π*9*8 ≈ 452
+        self.assertLess(through.metrics["volume"], 12800)
+        self.assertGreater(through.metrics["volume"], 12000)
+        # the counterbore removes additional material
+        self.assertLess(cbored.metrics["volume"], through.metrics["volume"])
+
+    def test_hole_needs_circles(self):
+        with self.assertRaises(BuildError):
+            build(BuildRequest(
+                sketches=[SketchIn(id="p", entities=[
+                    SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=40, height=40)])],
+                features=[
+                    FeatureIn(id="p", type="extrude", sketchId="p", distance=8),
+                    FeatureIn(id="h", type="hole", sketchId="p"),  # no circles in sketch
+                ],
+            ))
+
     def test_unsupported_feature_warns_not_fails(self):
         req = _plate_with_hole()
         req.features.append(FeatureIn(id="f2", type="sweep", sketchId="sk1"))  # not supported yet

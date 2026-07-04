@@ -46,7 +46,7 @@ class AxisIn(Schema):
 
 class FeatureIn(Schema):
     id: str
-    type: str  # 'extrude' | 'revolve' | 'fillet' | 'chamfer'; others rejected with a warning
+    type: str  # 'extrude' | 'revolve' | 'fillet' | 'chamfer' | 'hole'; others warned
     sketchId: str
     operation: str | None = None  # 'add' | 'remove'
     # placement: base plane, then optional tilt about a world axis, then offset
@@ -63,6 +63,10 @@ class FeatureIn(Schema):
     # fillet / chamfer (modify the running result; no sketch)
     edges: str | None = None    # edge selector, e.g. 'all' | 'kind:line' | 'longest'
     radius: float | None = None  # fillet radius; chamfer uses `distance`
+    # hole (placed by the sketch's circles)
+    throughDia: float | None = None  # defaults to the drawn circle diameter
+    cboreDia: float | None = None
+    cboreDepth: float | None = None
 
 
 class BuildRequest(Schema):
