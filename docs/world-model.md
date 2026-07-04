@@ -284,4 +284,148 @@ first cut that makes the agent possible:
 With just these, operations become local, edits become checkable, and the agent
 has facts to read and checks to run. Intent/constraints and richer validators
 (wall, interference) layer on after. See [../TODO.md](../TODO.md) for the backlog.
+
+---
+
+# Part II — The engineering reasoning layer
+
+Geometry is the skeleton; this is what makes the agent an *engineer* rather than a
+draughtsman. The bar is deliberately low and reachable: **qualitative, linear
+stress reasoning — no magnitudes.** The agent needs to understand load *paths* and
+*relative* consequences well enough to act on "make that gusset a bit stronger" —
+not to compute stress in MPa. Real FEA (numbers) is an optional future
+*confirmation*, explicitly out of near-term scope. The value is in the direction,
+and the direction is enough to design with.
+
+## 8. The environment (the part's neighbours)
+
+A part is never alone. The leg-brace clamps a tube, and its rear flange presses on
+a mounting surface. These are **not assemblies** — no mates, no motion. They are
+*simplified reference bodies* that each supply three kinds of fact:
+
+- **fit** — the bore must match the clamped tube;
+- **load** — where forces enter and where they react;
+- **clearance** — what the part must not collide with.
+
+```jsonc
+"environment": [
+  { "id": "env:clamped_tube", "shape": "cylinder", "dia": 30, "axis": "bore",
+    "role": "clamped", "provides": ["fit(face:bore_wall)", "reaction", "load_source"] },
+  { "id": "env:mount_surface", "shape": "plane", "at": "face:flange_back",
+    "role": "ground", "provides": ["support", "reaction"] },
+  { "id": "env:mating_tube", "shape": "cylinder", "dia": 20, "axis": "leg",
+    "role": "received", "provides": ["fit(face:leg_bore)", "load_source"] }
+]
+```
+
+This is the light-weight "poor man's assembly": enough context to constrain fit
+and anchor loads, none of the cost of real assembly modelling — and it is what
+lets the agent reason that *rotating the leg changes the angle at which it presses
+on `env:clamped_tube`.* Without that fact, the whole stress question is unanswerable.
+
+## 9. Loads & materials — kept qualitative
+
+- **Materials**: a *class* per body (`"PLA"`, `"aluminium"`) — enough to order
+  bodies by relative stiffness/strength. Exact `E`/yield are optional, needed only
+  if you ever go to numbers.
+- **Load cases**: named, located on a selector (usually an interface), with a
+  direction and a *qualitative* magnitude.
+
+```jsonc
+"loads": [
+  { "id": "service", "on": "env:mating_tube",
+    "direction": "up", "magnitude": "hard",       // qualitative, not Newtons
+    "note": "the leg pushes hard upward against the clamped tube" }
+],
+"supports": [ { "at": "env:mount_surface" }, { "at": "bolts" } ]
+```
+
+Enough to reason about the load *path* and *relative* stress — not to compute it.
+
+## 10. Qualitative structural reasoning (linear, no magnitude)
+
+The agent reasons with monotonic, direction-only rules — the fundamentals, not a
+solver:
+
+| observation | qualitative rule |
+| --- | --- |
+| load path | force flows from where it's applied to the supports |
+| moment | longer arm from load to a junction → more bending there |
+| concentration | sharper corner / smaller blend / thinner wall → higher stress |
+| mitigation | bigger blend radius, a rib along the load line, or more material on the path → lower stress |
+| stiffness | material deeper from the neutral axis resists bending best |
+
+That is enough to (a) locate the critical spot, (b) accept a fuzzy directive, and
+(c) choose a concrete geometry change:
+
+> "Make that gusset a bit stronger" → the gusset is `blend_leg`, on the primary
+> load path (leg → plate → bolts). Options, best bang-for-buck first: enlarge the
+> fillet radius; add a rib along the load line; thicken the plate locally. Propose
+> one; check it qualitatively.
+
+**Qualitative structural validators** — relative, no FEA:
+
+- material was *added on* the primary load path, not off it;
+- no *new* sharp concentrator was introduced;
+- the load path was not *lengthened* (longer path → more bending);
+- the change didn't thin a wall below `min_wall` or clash the environment.
+
+They answer "did stress move the right way?" without a number. FEA can later
+*confirm* a magnitude, but is not required to be useful.
+
+## 11. The intent & fact ledger
+
+Stress reasoning is only as good as the accumulated context. The agent keeps an
+**append-only ledger** of everything the user states across the *whole* build —
+loads, roles, preferences, directives, rationale — always in context, not just the
+current geometry:
+
+```jsonc
+"ledger": [
+  { "t": 1, "kind": "fact",      "text": "the leg pushes hard upward against the clamped tube" },
+  { "t": 2, "kind": "intent",    "text": "the gusset is structural — primary load path" },
+  { "t": 3, "kind": "objective", "text": "prefer stiffness over weight" },
+  { "t": 4, "kind": "directive", "text": "make the gusset a bit stronger" }
+]
+```
+
+Two kinds matter differently:
+
+- **durable** (facts, constraints, objectives) — persist and are re-checked on
+  every rebuild; they are *why the part is the way it is*.
+- **one-off** (directives) — executed once, then kept as rationale so a later edit
+  knows what a feature was *for*.
+
+The ledger is also where the **objective** for "optimal" accumulates (t=3). It's
+the memory that lets the agent say: "you told me the gusset is structural and to
+favour stiffness, so I enlarged the fillet rather than shaving weight."
+
+## 12. Worked turn: "rotate the leg 45° and redistribute the stress"
+
+```
+PERCEIVE   tree + inventory + dep-graph + environment + loads + ledger + last report
+REASON     env:clamped_tube says the leg presses on the horizontal tube through the
+           clamp. Load 'service' is up/hard at the leg. Rotating leg_spin 45° changes
+           the angle the leg pushes on the clamped tube and lengthens the moment arm
+           to blend_leg → more bending at the gusset, and the clamp split is loaded to
+           open. Ledger: gusset is structural; favour stiffness.
+PROPOSE    (1) params.leg_spin = 45   (2) grow blend_leg 14→20 + rib along the load line
+ACT        rebuild(tree')  →  inventory' + qualitative structural report
+OBSERVE    material added on the load path ✓; no new concentrator ✓; wall ≥ min_wall ✓;
+           no clash with env ✓; clamp-split-opening flagged as a residual concern.
+PRESENT    "Rotated the leg 45°. It now pushes on the clamped tube at a steeper angle,
+            so the gusset carries more bending — I enlarged that fillet and added a rib
+            along the new load line (you said the gusset is structural and to favour
+            stiffness). Watch out: the new angle tends to pry the clamp open; if that
+            matters we should stiffen the split or add a second bolt."
+```
+
+No magnitudes — but a decision an engineer would recognise, with the reasoning and
+the residual risk both stated. That is the bar, and it is reachable now.
+
+Build-order note: this whole layer is **facts + qualitative rules**, not a solver.
+It rides on the v0 world model (inventory + selectors + dep graph). The concrete
+first structural step is data, not math: add `environment`, `loads`, `materials`,
+and the `ledger` to the IR, and the four qualitative validators above. FEA stays
+out of scope until numbers are actually needed.
 ```
