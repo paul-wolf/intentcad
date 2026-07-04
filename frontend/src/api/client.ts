@@ -163,7 +163,7 @@ export interface BuildResponse {
     bbox_max: [number, number, number];
     center: [number, number, number];
   };
-  faces: { index: number; kind: string; area: number; center: [number, number, number]; normal: [number, number, number] }[];
+  faces: { index: number; kind: string; area: number; center: [number, number, number]; normal: [number, number, number]; tags: string[] }[];
   warnings: string[];
 }
 

@@ -96,6 +96,7 @@ class FaceOut(Schema):
     area: float
     center: list[float]  # [x, y, z]
     normal: list[float]  # local surface normal at the center
+    tags: list[str] = []  # coarse orientation tags: 'top' | 'bottom' | 'vertical'
 
 
 class BuildResponse(Schema):

@@ -340,17 +340,27 @@ def _tessellate(shape, tolerance: float) -> tuple[list[float], list[float], int]
 
 
 def _faces(shape) -> list[dict]:
-    """Inventory v0: each face classified with coarse descriptors."""
+    """Inventory v0: each face classified with coarse descriptors + orientation tags."""
     out = []
     for i, f in enumerate(shape.Faces()):
         c = f.Center()
         n = f.normalAt()
+        kind = f.geomType().lower()
+        tags: list[str] = []
+        if kind == "plane":
+            if n.z > 0.9:
+                tags.append("top")
+            elif n.z < -0.9:
+                tags.append("bottom")
+            else:
+                tags.append("vertical")
         out.append({
             "index": i,
-            "kind": f.geomType().lower(),
+            "kind": kind,
             "area": f.Area(),
             "center": [c.x, c.y, c.z],
             "normal": [n.x, n.y, n.z],
+            "tags": tags,
         })
     return out
 

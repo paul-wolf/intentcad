@@ -72,6 +72,19 @@ class BuilderTests(SimpleTestCase):
         self.assertTrue(all(f["kind"] == "plane" for f in res.faces))
         self.assertTrue(all(math.isclose(f["area"], 100, rel_tol=1e-3) for f in res.faces))
 
+    def test_face_orientation_tags(self):
+        """A box: one top face, one bottom, four vertical."""
+        res = build(BuildRequest(
+            sketches=[SketchIn(id="s", entities=[
+                SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=10, height=10),
+            ])],
+            features=[FeatureIn(id="f", type="extrude", sketchId="s", distance=10)],
+        ))
+        tags = [t for f in res.faces for t in f["tags"]]
+        self.assertEqual(tags.count("top"), 1)
+        self.assertEqual(tags.count("bottom"), 1)
+        self.assertEqual(tags.count("vertical"), 4)
+
     def test_face_inventory_has_cylinder(self):
         """Revolving a rectangle offset from the axis yields cylindrical faces."""
         res = build(BuildRequest(
