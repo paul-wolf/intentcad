@@ -364,6 +364,20 @@ class BuilderTests(SimpleTestCase):
                 ],
             ))
 
+    def test_trim_cuts_past_plane(self):
+        """Trim removes everything past an axis plane (e.g. a socket flush with a
+        face) in one op — no sketch."""
+        res = build(BuildRequest(
+            sketches=[SketchIn(id="s", entities=[
+                SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=10, height=10)])],
+            features=[
+                FeatureIn(id="e", type="extrude", sketchId="s", distance=10),  # box z 0..10
+                FeatureIn(id="t", type="trim", trimAxis="Z", at=5, keep="min", sketchId=""),
+            ],
+        ))
+        self.assertAlmostEqual(res.metrics["volume"], 500, delta=1)   # half the box
+        self.assertAlmostEqual(res.metrics["bbox_max"][2], 5, places=3)
+
     def test_counterbore_recesses_top(self):
         """A slab with two holes (circles in the extruded profile); a counterbore
         recesses the top face at those circles — removing material near the top,

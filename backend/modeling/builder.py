@@ -378,6 +378,29 @@ def _edge_op(shape, selector: str, amount: float | None, kind: str,
     return Shape(build_with(good).Shape())
 
 
+# ── trim (cut everything past an axis-aligned plane) ─────────────────────
+def _trim(shape, axis: str, at: float | None, keep: str, feat_id: str):
+    """Cut off everything on one side of an axis plane — e.g. trim a socket
+    flush with a face. One op, no sketch (the intent-level version of the
+    sketch-a-rectangle-and-cut workflow)."""
+    if at is None:
+        raise BuildError(f"feature {feat_id}: trim needs a plane position (at)")
+    ai = {"X": 0, "Y": 1, "Z": 2}.get((axis or "Z").upper())
+    if ai is None:
+        raise BuildError(f"feature {feat_id}: trim axis must be X, Y, or Z")
+    big = 1.0e4
+    lo, hi = [-big, -big, -big], [big, big, big]
+    if (keep or "min").lower().startswith("min"):
+        lo[ai] = at   # keep <= at, remove the greater side
+    else:
+        hi[ai] = at   # keep >= at, remove the lesser side
+    box = Solid.makeBox(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2], Vector(lo[0], lo[1], lo[2]))
+    try:
+        return shape.cut(box)
+    except Exception as exc:
+        raise BuildError(f"feature {feat_id}: trim failed ({exc})") from exc
+
+
 # ── counterbore (recess the top face at each of a sketch's circles) ──────
 def _counterbore(shape, sketch, feat, warnings: list[str]):
     """Recess the +Z (top) face by `cboreDepth` over `cboreDia` at each circle in
@@ -532,6 +555,11 @@ def build(req: BuildRequest) -> BuildResult:
             if result is None:
                 raise BuildError(f"feature {feat.id}: chamfer needs existing geometry")
             result = _edge_op(result, feat.edges or "all", feat.distance, "chamfer", feat.id, warnings)
+            continue
+        if feat.type == "trim":
+            if result is None:
+                raise BuildError(f"feature {feat.id}: trim needs existing geometry")
+            result = _trim(result, feat.trimAxis or "Z", feat.at, feat.keep or "min", feat.id)
             continue
         if feat.type == "counterbore":
             if result is None:

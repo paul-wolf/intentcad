@@ -46,7 +46,7 @@ class AxisIn(Schema):
 
 class FeatureIn(Schema):
     id: str
-    type: str  # 'extrude' | 'revolve' | 'fillet' | 'chamfer' | 'counterbore'; others warned
+    type: str  # extrude | revolve | fillet | chamfer | counterbore | trim; others warned
     sketchId: str
     operation: str | None = None  # 'add' | 'remove'
     # placement: base plane, then optional tilt about a world axis, then offset
@@ -66,6 +66,10 @@ class FeatureIn(Schema):
     # counterbore (recesses the top face at the sketch's circles)
     cboreDia: float | None = None
     cboreDepth: float | None = None
+    # trim (cut past an axis plane)
+    trimAxis: str | None = None   # 'X' | 'Y' | 'Z'
+    at: float | None = None       # plane position on that axis
+    keep: str | None = None       # 'min' (keep <= at) | 'max' (keep >= at)
 
 
 class BuildRequest(Schema):

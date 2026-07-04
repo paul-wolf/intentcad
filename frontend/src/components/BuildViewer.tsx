@@ -11,7 +11,7 @@ interface BuildViewerProps {
   onClose: () => void;
 }
 
-type OpType = 'extrude' | 'revolve' | 'fillet' | 'chamfer' | 'counterbore';
+type OpType = 'extrude' | 'revolve' | 'fillet' | 'chamfer' | 'counterbore' | 'trim';
 
 const newId = () => 'op-' + crypto.randomUUID().slice(0, 8);
 
@@ -35,6 +35,8 @@ function describe(f: BuildFeature, sketchName: (id: string) => string): string {
       return `Chamfer ${f.edges} · d=${f.distance}`;
     case 'counterbore':
       return `Counterbore “${sketchName(f.sketchId)}” · Ø${f.cboreDia}×${f.cboreDepth}`;
+    case 'trim':
+      return `Trim ${f.trimAxis} ${f.keep === 'min' ? '≤' : '≥'} ${f.at}`;
   }
 }
 
@@ -65,6 +67,9 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
   const [size, setSize] = useState(2);
   const [cboreDia, setCboreDia] = useState(8);
   const [cboreDepth, setCboreDepth] = useState(3);
+  const [trimAxis, setTrimAxis] = useState<'X' | 'Y' | 'Z'>('Z');
+  const [trimAt, setTrimAt] = useState(0);
+  const [trimKeep, setTrimKeep] = useState<'min' | 'max'>('min');
   // placement (for extrude/revolve)
   const [opPlane, setOpPlane] = useState<'XY' | 'XZ' | 'YZ'>('XY');
   const [opTilt, setOpTilt] = useState(0);
@@ -156,6 +161,7 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
     if (f.type === 'fillet') { setEdges(f.edges ?? 'all'); setSize(f.radius ?? 2); }
     if (f.type === 'chamfer') { setEdges(f.edges ?? 'all'); setSize(f.distance ?? 2); }
     if (f.type === 'counterbore') { setCboreDia(f.cboreDia ?? 8); setCboreDepth(f.cboreDepth ?? 3); }
+    if (f.type === 'trim') { setTrimAxis(f.trimAxis ?? 'Z'); setTrimAt(f.at ?? 0); setTrimKeep(f.keep ?? 'min'); }
     setOpPlane(f.plane ?? 'XY');
     setOpTilt(f.tilt ?? 0);
     setOpTiltAxis(f.tiltAxis ?? 'X');
@@ -175,6 +181,8 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
       feat = { id, type: 'fillet', sketchId: '', edges, radius: size };
     } else if (opType === 'counterbore') {
       feat = { id, type: 'counterbore', sketchId: opSketchId, cboreDia, cboreDepth };
+    } else if (opType === 'trim') {
+      feat = { id, type: 'trim', sketchId: '', trimAxis, at: trimAt, keep: trimKeep };
     } else {
       feat = { id, type: 'chamfer', sketchId: '', edges, distance: size };
     }
@@ -212,6 +220,7 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
   };
   const row: CSSProperties = { display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '8px' };
   const isModify = opType === 'fillet' || opType === 'chamfer';
+  const needsSketch = opType === 'extrude' || opType === 'revolve' || opType === 'counterbore';
 
   return (
     <div
@@ -272,10 +281,11 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
                 <option value="fillet">Fillet</option>
                 <option value="chamfer">Chamfer</option>
                 <option value="counterbore">Counterbore</option>
+                <option value="trim">Trim (cut past a plane)</option>
               </select>
             </div>
 
-            {!isModify && (
+            {needsSketch && (
               <div style={row}>
                 <label style={{ ...lbl, width: '48px' }}>Sketch</label>
                 <select value={opSketchId} onChange={(e) => setOpSketchId(e.target.value)} style={field}>
@@ -328,6 +338,35 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
                   <input type="number" value={cboreDepth} step={0.5}
                          onChange={(e) => setCboreDepth(Number(e.target.value) || 0)} style={field} />
                 </div>
+              </>
+            )}
+
+            {opType === 'trim' && (
+              <>
+                <div style={row}>
+                  <label style={{ ...lbl, width: '48px' }}>Axis</label>
+                  <select value={trimAxis} onChange={(e) => setTrimAxis(e.target.value as 'X' | 'Y' | 'Z')} style={field}>
+                    <option value="X">X</option><option value="Y">Y</option><option value="Z">Z</option>
+                  </select>
+                </div>
+                <div style={row}>
+                  <label style={{ ...lbl, width: '48px' }}>Keep</label>
+                  <select value={trimKeep} onChange={(e) => setTrimKeep(e.target.value as 'min' | 'max')} style={field}>
+                    <option value="min">≤ position (lower side)</option>
+                    <option value="max">≥ position (upper side)</option>
+                  </select>
+                </div>
+                <div style={row}>
+                  <label style={{ ...lbl, width: '48px' }}>At</label>
+                  <input type="number" value={trimAt} step={1}
+                         onChange={(e) => setTrimAt(Number(e.target.value) || 0)} style={field} />
+                </div>
+                {result && (() => {
+                  const i = { X: 0, Y: 1, Z: 2 }[trimAxis];
+                  return <div style={{ ...lbl, marginBottom: '8px' }}>
+                    current {trimAxis}: {Math.round(result.metrics.bbox_min[i]!)} … {Math.round(result.metrics.bbox_max[i]!)}
+                  </div>;
+                })()}
               </>
             )}
 

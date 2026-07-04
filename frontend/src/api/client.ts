@@ -136,7 +136,7 @@ export interface BuildAxis {
 
 export interface BuildFeature {
   id: string;
-  type: 'extrude' | 'revolve' | 'fillet' | 'chamfer' | 'counterbore';
+  type: 'extrude' | 'revolve' | 'fillet' | 'chamfer' | 'counterbore' | 'trim';
   sketchId: string;
   operation?: 'add' | 'remove';
   // extrude
@@ -151,6 +151,10 @@ export interface BuildFeature {
   // counterbore (recesses the top face at the sketch's circles)
   cboreDia?: number;
   cboreDepth?: number;
+  // trim (cut past an axis plane)
+  trimAxis?: 'X' | 'Y' | 'Z';
+  at?: number;
+  keep?: 'min' | 'max';
   // placement
   plane?: 'XY' | 'XZ' | 'YZ';
   tilt?: number;
