@@ -4,7 +4,7 @@ from ninja import Router
 from projects.access import require_auth
 
 from .builder import BuildError, build
-from .schemas import BuildRequest, BuildResponse, FaceOut, MeshOut, MetricsOut
+from .schemas import BuildRequest, BuildResponse, EdgeOut, FaceOut, MeshOut, MetricsOut
 
 router = Router()
 
@@ -33,5 +33,6 @@ def build_model(request, payload: BuildRequest):
         step=result.step,
         metrics=MetricsOut(**result.metrics),
         faces=[FaceOut(**f) for f in result.faces],
+        edges=[EdgeOut(**e) for e in result.edges],
         warnings=result.warnings,
     )

@@ -99,9 +99,21 @@ class FaceOut(Schema):
     tags: list[str] = []  # coarse orientation tags: 'top' | 'bottom' | 'vertical'
 
 
+class EdgeOut(Schema):
+    """An edge of the result with coarse descriptors. Inventory v0."""
+
+    index: int
+    kind: str            # 'line' | 'circle' | 'bspline' | ...
+    length: float
+    center: list[float]
+    start: list[float]
+    end: list[float]
+
+
 class BuildResponse(Schema):
     mesh: MeshOut
     step: str  # STEP (AP214) as text, for download/export
     metrics: MetricsOut
     faces: list[FaceOut] = []
+    edges: list[EdgeOut] = []
     warnings: list[str] = []

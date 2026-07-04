@@ -178,7 +178,7 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
                 const counts: Record<string, number> = {};
                 for (const f of result.faces) counts[f.kind] = (counts[f.kind] ?? 0) + 1;
                 const faceStr = Object.entries(counts).map(([k, n]) => `${n} ${k}`).join(', ');
-                return `vol ${Math.round(m.volume).toLocaleString()} mm³ · ${size[0]}×${size[1]}×${size[2]} mm · ${result.faces.length} faces (${faceStr}) · `;
+                return `vol ${Math.round(m.volume).toLocaleString()} mm³ · ${size[0]}×${size[1]}×${size[2]} mm · ${result.faces.length} faces (${faceStr}), ${result.edges.length} edges · `;
               })()}
               {result.mesh.triangle_count.toLocaleString()} triangles · drag to orbit · scroll to zoom
               {result.warnings.length > 0 && (

@@ -72,6 +72,31 @@ class BuilderTests(SimpleTestCase):
         self.assertTrue(all(f["kind"] == "plane" for f in res.faces))
         self.assertTrue(all(math.isclose(f["area"], 100, rel_tol=1e-3) for f in res.faces))
 
+    def test_edge_inventory_box(self):
+        """A box has 12 straight edges of length 10."""
+        res = build(BuildRequest(
+            sketches=[SketchIn(id="s", entities=[
+                SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=10, height=10),
+            ])],
+            features=[FeatureIn(id="f", type="extrude", sketchId="s", distance=10)],
+        ))
+        self.assertEqual(len(res.edges), 12)
+        self.assertTrue(all(e["kind"] == "line" for e in res.edges))
+        self.assertTrue(all(math.isclose(e["length"], 10, rel_tol=1e-3) for e in res.edges))
+
+    def test_edge_inventory_has_circle(self):
+        """A revolved tube has circular edges."""
+        res = build(BuildRequest(
+            sketches=[SketchIn(id="s", entities=[
+                SketchEntityIn(type="rectangle", center=Point(x=15, y=0), width=10, height=10),
+            ])],
+            features=[FeatureIn(
+                id="f", type="revolve", sketchId="s",
+                axis=AxisIn(start=Point(x=0, y=0), end=Point(x=0, y=1)), angle=360,
+            )],
+        ))
+        self.assertTrue(any(e["kind"] == "circle" for e in res.edges))
+
     def test_face_orientation_tags(self):
         """A box: one top face, one bottom, four vertical."""
         res = build(BuildRequest(

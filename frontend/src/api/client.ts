@@ -164,6 +164,7 @@ export interface BuildResponse {
     center: [number, number, number];
   };
   faces: { index: number; kind: string; area: number; center: [number, number, number]; normal: [number, number, number]; tags: string[] }[];
+  edges: { index: number; kind: string; length: number; center: [number, number, number]; start: [number, number, number]; end: [number, number, number] }[];
   warnings: string[];
 }
 

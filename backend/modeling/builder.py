@@ -44,6 +44,7 @@ class BuildResult:
     step: str
     metrics: dict = field(default_factory=dict)
     faces: list = field(default_factory=list)
+    edges: list = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -365,6 +366,27 @@ def _faces(shape) -> list[dict]:
     return out
 
 
+def _edges(shape) -> list[dict]:
+    """Inventory v0: each edge classified with coarse descriptors."""
+    out = []
+    for i, e in enumerate(shape.Edges()):
+        c = e.Center()
+        try:
+            s, en = e.startPoint(), e.endPoint()
+            start, end = [s.x, s.y, s.z], [en.x, en.y, en.z]
+        except Exception:  # closed curves (full circle) have no distinct ends
+            start = end = [c.x, c.y, c.z]
+        out.append({
+            "index": i,
+            "kind": e.geomType().lower(),
+            "length": e.Length(),
+            "center": [c.x, c.y, c.z],
+            "start": start,
+            "end": end,
+        })
+    return out
+
+
 def _metrics(shape) -> dict:
     bb = shape.BoundingBox()
     c = shape.Center()
@@ -424,6 +446,7 @@ def build(req: BuildRequest) -> BuildResult:
     step = _export_step(result)
     metrics = _metrics(result)
     faces = _faces(result)
+    edges = _edges(result)
     # de-duplicate warnings while preserving order
     seen: dict[str, None] = {}
     for w in warnings:
@@ -435,5 +458,6 @@ def build(req: BuildRequest) -> BuildResult:
         step=step,
         metrics=metrics,
         faces=faces,
+        edges=edges,
         warnings=list(seen),
     )

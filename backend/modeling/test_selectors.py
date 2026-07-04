@@ -4,7 +4,7 @@ from django.test import SimpleTestCase
 
 from modeling.builder import build
 from modeling.schemas import BuildRequest, FeatureIn, Point, SketchEntityIn, SketchIn
-from modeling.selectors import SelectorError, resolve_faces
+from modeling.selectors import SelectorError, resolve_edges, resolve_faces
 
 FACES = [
     {"index": 0, "kind": "plane", "area": 100, "tags": ["top"]},
@@ -41,6 +41,19 @@ class SelectorTests(SimpleTestCase):
         for bad in ("", "wat", "color:red"):
             with self.assertRaises(SelectorError):
                 resolve_faces(bad, FACES)
+
+    def test_edge_selectors(self):
+        edges = [
+            {"index": 0, "kind": "line", "length": 10},
+            {"index": 1, "kind": "line", "length": 4},
+            {"index": 2, "kind": "circle", "length": 31},
+        ]
+        self.assertEqual(resolve_edges("all", edges), [0, 1, 2])
+        self.assertEqual(resolve_edges("kind:circle", edges), [2])
+        self.assertEqual(resolve_edges("longest", edges), [2])
+        self.assertEqual(resolve_edges("shortest", edges), [1])
+        with self.assertRaises(SelectorError):
+            resolve_edges("tag:top", edges)  # edges have no tags in v0
 
     def test_against_real_inventory(self):
         """Resolve against a freshly built box so field names stay in sync."""

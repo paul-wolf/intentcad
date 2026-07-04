@@ -42,3 +42,34 @@ def resolve_faces(query: str, faces: list[dict]) -> list[int]:
         raise SelectorError(f"unknown selector field: {field!r}")
 
     raise SelectorError(f"unrecognized selector: {query!r}")
+
+
+def resolve_edges(query: str, edges: list[dict]) -> list[int]:
+    """Return the indices of edges matching `query`.
+
+    Grammar (v0):
+      all | *              every edge
+      longest | shortest   the single edge with max / min length
+      kind:<k>             edges of geometric kind <k>   (e.g. kind:circle)
+    """
+    q = query.strip().lower()
+    if not q:
+        raise SelectorError("empty selector")
+
+    if q in ("all", "*"):
+        return [e["index"] for e in edges]
+
+    if q in ("longest", "shortest"):
+        if not edges:
+            return []
+        pick = max if q == "longest" else min
+        return [pick(edges, key=lambda e: e["length"])["index"]]
+
+    if ":" in q:
+        field, _, value = q.partition(":")
+        field, value = field.strip(), value.strip()
+        if field == "kind":
+            return [e["index"] for e in edges if e["kind"] == value]
+        raise SelectorError(f"unknown selector field: {field!r}")
+
+    raise SelectorError(f"unrecognized selector: {query!r}")
