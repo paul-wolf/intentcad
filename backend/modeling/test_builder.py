@@ -142,6 +142,29 @@ class BuilderTests(SimpleTestCase):
         # YZ: extrude swings to X
         self.assertEqual(self._box_size("YZ"), [20, 6, 10])
 
+    def test_placement_tilt_and_offset(self):
+        # tilt 90° about X takes a Z-extrude horizontal (like XZ placement)
+        res = build(BuildRequest(
+            sketches=[SketchIn(id="s", entities=[
+                SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=6, height=4),
+            ])],
+            features=[FeatureIn(id="f", type="extrude", sketchId="s", distance=20,
+                                tilt=90, tiltAxis="X")],
+        ))
+        m = res.metrics
+        size = [round(m["bbox_max"][i] - m["bbox_min"][i], 3) for i in range(3)]
+        self.assertEqual(size, [6, 20, 4])
+
+        # offset translates the solid into position
+        res2 = build(BuildRequest(
+            sketches=[SketchIn(id="s", entities=[
+                SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=10, height=10),
+            ])],
+            features=[FeatureIn(id="f", type="extrude", sketchId="s", distance=10,
+                                offset=[100, 0, 0])],
+        ))
+        self.assertTrue(math.isclose(res2.metrics["bbox_min"][0], 95, abs_tol=1e-4))
+
     def test_line_polyline_profile(self):
         req = BuildRequest(
             sketches=[

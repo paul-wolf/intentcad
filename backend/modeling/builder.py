@@ -354,19 +354,34 @@ def _chamfer(shape, selector: str, distance: float | None, feat_id: str):
         raise BuildError(f"feature {feat_id}: chamfer failed ({exc})") from exc
 
 
-# ── base-plane placement ─────────────────────────────────────────────────
-# The 2D→wire code always builds on XY (extruding +Z). To sit a sketch on
-# another base plane, build as usual then rigidly reorient the solid: XZ swings
-# +Z to +Y, YZ swings +Z to +X. Keeps every wire builder untouched.
-def _place(solid, plane: str | None):
-    if not plane or plane.upper() == "XY":
-        return solid
-    p = plane.upper()
+# ── placement (construction-plane primitive) ─────────────────────────────
+# The 2D→wire code always builds on XY (extruding +Z). To sit a sketch elsewhere,
+# build as usual then rigidly place the solid: base plane orients it (XZ swings +Z
+# to +Y, YZ to +X), an optional `tilt` rotates it about a world axis, and an
+# optional `offset` translates it into position. Keeps every wire builder untouched.
+_AXES = {"X": (1, 0, 0), "Y": (0, 1, 0), "Z": (0, 0, 1)}
+
+
+def _place(solid, plane: str | None, tilt: float | None = None,
+           tilt_axis: str | None = None, offset: list[float] | None = None):
+    p = (plane or "XY").upper()
     if p == "XZ":
-        return solid.rotate((0, 0, 0), (1, 0, 0), -90)
-    if p == "YZ":
-        return solid.rotate((0, 0, 0), (0, 1, 0), 90)
-    raise BuildError(f"unknown plane '{plane}' (use XY, XZ, or YZ)")
+        solid = solid.rotate((0, 0, 0), (1, 0, 0), -90)
+    elif p == "YZ":
+        solid = solid.rotate((0, 0, 0), (0, 1, 0), 90)
+    elif p != "XY":
+        raise BuildError(f"unknown plane '{plane}' (use XY, XZ, or YZ)")
+
+    if tilt:
+        axis = _AXES.get((tilt_axis or "X").upper())
+        if axis is None:
+            raise BuildError(f"unknown tilt axis '{tilt_axis}' (use X, Y, or Z)")
+        solid = solid.rotate((0, 0, 0), axis, tilt)
+
+    if offset:
+        solid = solid.translate(tuple(offset))
+
+    return solid
 
 
 # ── mesh + STEP ──────────────────────────────────────────────────────────
@@ -488,7 +503,7 @@ def build(req: BuildRequest) -> BuildResult:
             warnings.append(f"feature {feat.id}: type '{feat.type}' not supported yet — skipped")
             continue
 
-        solid = _place(solid, feat.plane)
+        solid = _place(solid, feat.plane, feat.tilt, feat.tiltAxis, feat.offset)
 
         if result is None:
             result = solid

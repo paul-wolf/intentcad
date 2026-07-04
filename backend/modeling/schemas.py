@@ -49,7 +49,11 @@ class FeatureIn(Schema):
     type: str  # 'extrude' | 'revolve' | 'fillet' | 'chamfer'; others rejected with a warning
     sketchId: str
     operation: str | None = None  # 'add' | 'remove'
-    plane: str | None = None  # 'XY' (default) | 'XZ' | 'YZ' — base plane the sketch sits on
+    # placement: base plane, then optional tilt about a world axis, then offset
+    plane: str | None = None       # 'XY' (default) | 'XZ' | 'YZ'
+    tilt: float | None = None      # degrees to rotate about tiltAxis after placing
+    tiltAxis: str | None = None    # 'X' (default) | 'Y' | 'Z'
+    offset: list[float] | None = None  # [dx, dy, dz] world translation
     # extrude
     distance: float | None = None
     direction: str | None = None  # 'forward' | 'reverse' | 'both'
