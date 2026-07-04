@@ -87,6 +87,17 @@ function toBuildEntity(e: Entity): BuildEntity | null {
   }
 }
 
+/** Build a request from a feature tree: all sketches bundled, features in order. */
+export function treeToBuildRequest(sketches: Sketch[], features: BuildFeature[]): BuildRequest {
+  return {
+    sketches: sketches.map((sk) => ({
+      id: sk.id,
+      entities: sk.entities.map(toBuildEntity).filter((e): e is BuildEntity => e !== null),
+    })),
+    features,
+  };
+}
+
 /** Build a self-contained request applying one operation to a single sketch. */
 export function sketchToBuildRequest(sketch: Sketch, op: BuildOp): BuildRequest {
   const entities = sketch.entities

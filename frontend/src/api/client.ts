@@ -136,7 +136,7 @@ export interface BuildAxis {
 
 export interface BuildFeature {
   id: string;
-  type: 'extrude' | 'revolve';
+  type: 'extrude' | 'revolve' | 'fillet' | 'chamfer';
   sketchId: string;
   operation?: 'add' | 'remove';
   // extrude
@@ -145,6 +145,14 @@ export interface BuildFeature {
   // revolve
   axis?: BuildAxis;
   angle?: number;
+  // fillet / chamfer (modify the running result)
+  edges?: string;
+  radius?: number;
+  // placement
+  plane?: 'XY' | 'XZ' | 'YZ';
+  tilt?: number;
+  tiltAxis?: 'X' | 'Y' | 'Z';
+  offset?: [number, number, number];
 }
 
 export interface BuildRequest {
