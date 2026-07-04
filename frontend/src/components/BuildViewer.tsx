@@ -48,6 +48,8 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
   // the feature tree persists in a store, so closing/reopening keeps the part
   const features = useBuildStore((s) => s.features);
   const setFeatures = useBuildStore((s) => s.setFeatures);
+  const canUndo = useBuildStore((s) => s.past.length > 0);
+  const canRedo = useBuildStore((s) => s.future.length > 0);
 
   // add-operation form state
   const [opType, setOpType] = useState<OpType>('extrude');
@@ -92,7 +94,7 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
   useEffect(() => {
     useBuildStore.getState().setPanelOpen(true);
     if (useBuildStore.getState().features.length === 0 && activeSketchId) {
-      setFeatures([{ id: newId(), type: 'extrude', sketchId: activeSketchId, distance: 10, operation: 'add' }]);
+      useBuildStore.getState().initTree([{ id: newId(), type: 'extrude', sketchId: activeSketchId, distance: 10, operation: 'add' }]);
     }
     if (canvasRef.current) {
       try {
@@ -112,6 +114,22 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
 
   // rebuild whenever the tree changes (and once after the viewer exists)
   useEffect(() => { rebuild(); }, [rebuild]);
+
+  // Ctrl-Z / Ctrl-Shift-Z (Ctrl-Y) undo/redo the tree while the panel is open
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT') return;
+      const ctrl = e.ctrlKey || e.metaKey;
+      const k = e.key.toLowerCase();
+      if (!ctrl || (k !== 'z' && k !== 'y')) return;
+      e.preventDefault();
+      if (k === 'y' || e.shiftKey) useBuildStore.getState().redo();
+      else useBuildStore.getState().undo();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const placement = (): Partial<BuildFeature> => {
     const p: Partial<BuildFeature> = {};
@@ -190,6 +208,14 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
             3D Build <span style={{ color: palette.textSecondary, fontSize: '12px' }}>(server · experimental)</span>
           </h2>
           <div style={{ flex: 1 }} />
+          <button onClick={() => useBuildStore.getState().undo()} disabled={!canUndo} title="Undo (Ctrl+Z)"
+            style={{ padding: '5px 10px', background: 'none', color: palette.textSecondary,
+                     border: `1px solid ${palette.border}`, borderRadius: '4px', fontSize: '14px',
+                     cursor: canUndo ? 'pointer' : 'default', opacity: canUndo ? 1 : 0.4 }}>↶</button>
+          <button onClick={() => useBuildStore.getState().redo()} disabled={!canRedo} title="Redo (Ctrl+Shift+Z)"
+            style={{ padding: '5px 10px', background: 'none', color: palette.textSecondary,
+                     border: `1px solid ${palette.border}`, borderRadius: '4px', fontSize: '14px',
+                     cursor: canRedo ? 'pointer' : 'default', opacity: canRedo ? 1 : 0.4 }}>↷</button>
           <button onClick={rebuild} disabled={status === 'building'}
             style={{ padding: '5px 14px', background: palette.primaryBtn, color: '#fff', border: 'none',
                      borderRadius: '4px', fontSize: '13px', cursor: 'pointer', opacity: status === 'building' ? 0.6 : 1 }}>
