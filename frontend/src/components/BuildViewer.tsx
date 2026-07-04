@@ -23,12 +23,12 @@ function place(f: BuildFeature): string {
   return bits.length ? ` · ${bits.join(' ')}` : '';
 }
 
-function describe(f: BuildFeature): string {
+function describe(f: BuildFeature, sketchName: (id: string) => string): string {
   switch (f.type) {
     case 'extrude':
-      return `Extrude ${f.sketchId}${f.operation === 'remove' ? ' (cut)' : ''} · d=${f.distance}${place(f)}`;
+      return `Extrude “${sketchName(f.sketchId)}”${f.operation === 'remove' ? ' (cut)' : ''} · d=${f.distance}${place(f)}`;
     case 'revolve':
-      return `Revolve ${f.sketchId} · ${f.angle}°${place(f)}`;
+      return `Revolve “${sketchName(f.sketchId)}” · ${f.angle}°${place(f)}`;
     case 'fillet':
       return `Fillet ${f.edges} · r=${f.radius}`;
     case 'chamfer':
@@ -50,6 +50,7 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
   const setFeatures = useBuildStore((s) => s.setFeatures);
   const canUndo = useBuildStore((s) => s.past.length > 0);
   const canRedo = useBuildStore((s) => s.future.length > 0);
+  const sketchName = (id: string) => sketches.find((s) => s.id === id)?.name ?? id;
 
   // add-operation form state
   const [opType, setOpType] = useState<OpType>('extrude');
@@ -390,7 +391,7 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
               return (
                 <div key={f.id}
                   onClick={() => { setUpto(i === features.length - 1 ? Infinity : i); loadFeature(f); }}
-                  title={`${describe(f)} — click to roll here / edit`}
+                  title={`${describe(f, sketchName)} — click to roll here / edit`}
                   style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '4px 8px',
                            background: palette.inputBg, borderRadius: '4px', cursor: 'pointer', flex: '0 0 auto',
                            opacity: dimmed ? 0.4 : 1,
