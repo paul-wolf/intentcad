@@ -46,9 +46,10 @@ class AxisIn(Schema):
 
 class FeatureIn(Schema):
     id: str
-    type: str  # 'extrude' | 'revolve'; others rejected with a warning
+    type: str  # 'extrude' | 'revolve' | 'fillet'; others rejected with a warning
     sketchId: str
     operation: str | None = None  # 'add' | 'remove'
+    plane: str | None = None  # 'XY' (default) | 'XZ' | 'YZ' — base plane the sketch sits on
     # extrude
     distance: float | None = None
     direction: str | None = None  # 'forward' | 'reverse' | 'both'

@@ -340,6 +340,21 @@ def _fillet(shape, selector: str, radius: float | None, feat_id: str):
         raise BuildError(f"feature {feat_id}: fillet failed ({exc})") from exc
 
 
+# ── base-plane placement ─────────────────────────────────────────────────
+# The 2D→wire code always builds on XY (extruding +Z). To sit a sketch on
+# another base plane, build as usual then rigidly reorient the solid: XZ swings
+# +Z to +Y, YZ swings +Z to +X. Keeps every wire builder untouched.
+def _place(solid, plane: str | None):
+    if not plane or plane.upper() == "XY":
+        return solid
+    p = plane.upper()
+    if p == "XZ":
+        return solid.rotate((0, 0, 0), (1, 0, 0), -90)
+    if p == "YZ":
+        return solid.rotate((0, 0, 0), (0, 1, 0), 90)
+    raise BuildError(f"unknown plane '{plane}' (use XY, XZ, or YZ)")
+
+
 # ── mesh + STEP ──────────────────────────────────────────────────────────
 def _tessellate(shape, tolerance: float) -> tuple[list[float], list[float], int]:
     verts, tris = shape.tessellate(tolerance)
@@ -453,6 +468,8 @@ def build(req: BuildRequest) -> BuildResult:
         else:
             warnings.append(f"feature {feat.id}: type '{feat.type}' not supported yet — skipped")
             continue
+
+        solid = _place(solid, feat.plane)
 
         if result is None:
             result = solid

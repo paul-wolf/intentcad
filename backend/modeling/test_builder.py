@@ -123,6 +123,25 @@ class BuilderTests(SimpleTestCase):
         ))
         self.assertTrue(any(f["kind"] == "cylinder" for f in res.faces))
 
+    def _box_size(self, plane):
+        """Extrude a 10(x) × 6(y) rect by 20 on the given plane; return bbox sizes."""
+        res = build(BuildRequest(
+            sketches=[SketchIn(id="s", entities=[
+                SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=10, height=6),
+            ])],
+            features=[FeatureIn(id="f", type="extrude", sketchId="s", distance=20, plane=plane)],
+        ))
+        m = res.metrics
+        return [round(m["bbox_max"][i] - m["bbox_min"][i], 3) for i in range(3)]
+
+    def test_extrude_on_base_planes(self):
+        # XY: extrude runs along Z
+        self.assertEqual(self._box_size("XY"), [10, 6, 20])
+        # XZ: extrude swings to Y
+        self.assertEqual(self._box_size("XZ"), [10, 20, 6])
+        # YZ: extrude swings to X
+        self.assertEqual(self._box_size("YZ"), [20, 6, 10])
+
     def test_line_polyline_profile(self):
         req = BuildRequest(
             sketches=[
