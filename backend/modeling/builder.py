@@ -378,30 +378,28 @@ def _edge_op(shape, selector: str, amount: float | None, kind: str,
     return Shape(build_with(good).Shape())
 
 
-# ── hole (through + optional counterbore, placed by a sketch's circles) ──
-def _hole(shape, sketch, feat, warnings: list[str]):
-    """Cut a hole at each circle in the sketch: a through hole (drawn diameter,
-    or `throughDia`) plus an optional counterbore recess (`cboreDia`/`cboreDepth`)
-    on the sketch-plane side. Follows the feature's placement like an extrude."""
-    circles = [(e.center.x, e.center.y, e.radius) for e in sketch.entities
+# ── counterbore (recess the top face at each of a sketch's circles) ──────
+def _counterbore(shape, sketch, feat, warnings: list[str]):
+    """Recess the +Z (top) face by `cboreDepth` over `cboreDia` at each circle in
+    the sketch — for existing holes (e.g. from an extrude). Non-destructive: it
+    only removes a shallow pocket at the top, never a through cut."""
+    circles = [(e.center.x, e.center.y) for e in sketch.entities
                if e.type == "circle" and not e.construction and e.center and e.radius]
     if not circles:
-        raise BuildError(f"feature {feat.id}: hole sketch '{sketch.id}' has no circles for hole centers")
+        raise BuildError(f"feature {feat.id}: counterbore sketch '{sketch.id}' has no circles")
+    dia, depth = feat.cboreDia, feat.cboreDepth
+    if not dia or not depth or dia <= 0 or depth <= 0:
+        raise BuildError(f"feature {feat.id}: counterbore needs a diameter and depth")
+    if feat.offset and any(feat.offset):
+        warnings.append("counterbore recesses at the sketch circle positions; offset is ignored")
 
-    big = 1.0e4
+    top = shape.BoundingBox().zmax  # recess the top face
     result = shape
-    for cx, cy, r in circles:
-        rt = feat.throughDia / 2.0 if feat.throughDia else r
-        through = _extrude([Region(Wire.makeCircle(rt, _v(cx, cy), Vector(0, 0, 1)), [])],
-                           2 * big, "both", sketch.id)  # spans the whole part along the axis
-        through = _place(through, feat.plane, feat.tilt, feat.tiltAxis, feat.offset)
-        result = result.cut(through)
-
-        if feat.cboreDia and feat.cboreDepth:
-            cb = _extrude([Region(Wire.makeCircle(feat.cboreDia / 2.0, _v(cx, cy), Vector(0, 0, 1)), [])],
-                          feat.cboreDepth, None, sketch.id)
-            cb = _place(cb, feat.plane, feat.tilt, feat.tiltAxis, feat.offset)
-            result = result.cut(cb)
+    for cx, cy in circles:
+        pocket = _extrude([Region(Wire.makeCircle(dia / 2.0, _v(cx, cy), Vector(0, 0, 1)), [])],
+                          depth + 1.0, None, sketch.id)
+        pocket = pocket.translate((0.0, 0.0, top - depth))  # sit its top flush with the part's top
+        result = result.cut(pocket)
     return result
 
 
@@ -535,13 +533,13 @@ def build(req: BuildRequest) -> BuildResult:
                 raise BuildError(f"feature {feat.id}: chamfer needs existing geometry")
             result = _edge_op(result, feat.edges or "all", feat.distance, "chamfer", feat.id, warnings)
             continue
-        if feat.type == "hole":
+        if feat.type == "counterbore":
             if result is None:
-                raise BuildError(f"feature {feat.id}: hole needs existing geometry to cut")
+                raise BuildError(f"feature {feat.id}: counterbore needs existing geometry")
             sketch = sketches.get(feat.sketchId)
             if sketch is None:
                 raise BuildError(f"feature {feat.id}: sketch '{feat.sketchId}' not in request")
-            result = _hole(result, sketch, feat, warnings)
+            result = _counterbore(result, sketch, feat, warnings)
             continue
 
         sketch = sketches.get(feat.sketchId)

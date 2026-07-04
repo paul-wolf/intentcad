@@ -136,7 +136,7 @@ export interface BuildAxis {
 
 export interface BuildFeature {
   id: string;
-  type: 'extrude' | 'revolve' | 'fillet' | 'chamfer' | 'hole';
+  type: 'extrude' | 'revolve' | 'fillet' | 'chamfer' | 'counterbore';
   sketchId: string;
   operation?: 'add' | 'remove';
   // extrude
@@ -148,8 +148,7 @@ export interface BuildFeature {
   // fillet / chamfer (modify the running result)
   edges?: string;
   radius?: number;
-  // hole (placed by the sketch's circles)
-  throughDia?: number;
+  // counterbore (recesses the top face at the sketch's circles)
   cboreDia?: number;
   cboreDepth?: number;
   // placement
