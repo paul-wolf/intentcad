@@ -185,6 +185,19 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
     if (result) downloadTextFile(result.step, `${docName}.step`, 'application/step');
   };
 
+  // edge selector choices, derived from the current model's edges (no typing)
+  const edgeCounts: Record<string, number> = {};
+  for (const e of result?.edges ?? []) edgeCounts[e.kind] = (edgeCounts[e.kind] ?? 0) + 1;
+  const edgeChoices: { value: string; label: string }[] = [
+    { value: 'all', label: `All edges${result ? ` (${result.edges.length})` : ''}` },
+    { value: 'longest', label: 'Longest edge' },
+    { value: 'shortest', label: 'Shortest edge' },
+    ...Object.entries(edgeCounts).map(([k, n]) => ({
+      value: `kind:${k}`, label: `${k.charAt(0).toUpperCase()}${k.slice(1)}s (${n})`,
+    })),
+  ];
+  if (!edgeChoices.some((o) => o.value === edges)) edgeChoices.push({ value: edges, label: edges });
+
   const lbl: CSSProperties = { fontSize: '12px', color: palette.textSecondary };
   const field: CSSProperties = {
     padding: '4px 6px', background: palette.inputBg, border: `1px solid ${palette.inputBorder}`,
@@ -299,8 +312,9 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
               <>
                 <div style={row}>
                   <label style={{ ...lbl, width: '48px' }}>Edges</label>
-                  <input value={edges} onChange={(e) => setEdges(e.target.value)}
-                         placeholder="all | kind:circle | longest" style={field} />
+                  <select value={edges} onChange={(e) => setEdges(e.target.value)} style={field}>
+                    {edgeChoices.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
                 </div>
                 <div style={row}>
                   <label style={{ ...lbl, width: '48px' }}>{opType === 'fillet' ? 'Radius' : 'Size'}</label>
