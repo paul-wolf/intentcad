@@ -12,12 +12,20 @@ interface BuildViewerProps {
 
 type OpType = 'extrude' | 'revolve' | 'fillet' | 'chamfer';
 
+function place(f: BuildFeature): string {
+  const bits: string[] = [];
+  if (f.plane && f.plane !== 'XY') bits.push(f.plane);
+  if (f.tilt) bits.push(`tilt ${f.tilt}°${f.tiltAxis ?? 'X'}`);
+  if (f.offset && (f.offset[0] || f.offset[1] || f.offset[2])) bits.push(`@[${f.offset.join(',')}]`);
+  return bits.length ? ` · ${bits.join(' ')}` : '';
+}
+
 function describe(f: BuildFeature): string {
   switch (f.type) {
     case 'extrude':
-      return `Extrude ${f.sketchId}${f.operation === 'remove' ? ' (cut)' : ''} · d=${f.distance}`;
+      return `Extrude ${f.sketchId}${f.operation === 'remove' ? ' (cut)' : ''} · d=${f.distance}${place(f)}`;
     case 'revolve':
-      return `Revolve ${f.sketchId} · ${f.angle}°`;
+      return `Revolve ${f.sketchId} · ${f.angle}°${place(f)}`;
     case 'fillet':
       return `Fillet ${f.edges} · r=${f.radius}`;
     case 'chamfer':
@@ -49,6 +57,13 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
   const [axisKind, setAxisKind] = useState<AxisKind>('left');
   const [edges, setEdges] = useState('all');
   const [size, setSize] = useState(2);
+  // placement (for extrude/revolve)
+  const [opPlane, setOpPlane] = useState<'XY' | 'XZ' | 'YZ'>('XY');
+  const [opTilt, setOpTilt] = useState(0);
+  const [opTiltAxis, setOpTiltAxis] = useState<'X' | 'Y' | 'Z'>('X');
+  const [ox, setOx] = useState(0);
+  const [oy, setOy] = useState(0);
+  const [oz, setOz] = useState(0);
 
   const [status, setStatus] = useState<'idle' | 'building' | 'done' | 'error'>('idle');
   const [message, setMessage] = useState('');
@@ -87,15 +102,23 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
   // rebuild whenever the tree changes (and once after the viewer exists)
   useEffect(() => { rebuild(); }, [rebuild]);
 
+  const placement = (): Partial<BuildFeature> => {
+    const p: Partial<BuildFeature> = {};
+    if (opPlane !== 'XY') p.plane = opPlane;
+    if (opTilt) { p.tilt = opTilt; p.tiltAxis = opTiltAxis; }
+    if (ox || oy || oz) p.offset = [ox, oy, oz];
+    return p;
+  };
+
   const addFeature = () => {
     const id = `op-${nextId.current++}`;
     let feat: BuildFeature;
     if (opType === 'extrude') {
-      feat = { id, type: 'extrude', sketchId: opSketchId, distance, operation: opCut ? 'remove' : 'add' };
+      feat = { id, type: 'extrude', sketchId: opSketchId, distance, operation: opCut ? 'remove' : 'add', ...placement() };
     } else if (opType === 'revolve') {
       const sk = sketches.find((s) => s.id === opSketchId);
       feat = { id, type: 'revolve', sketchId: opSketchId, angle, operation: 'add',
-               axis: sk ? axisForKind(sk, axisKind) : { start: { x: 0, y: 0 }, end: { x: 0, y: 1 } } };
+               axis: sk ? axisForKind(sk, axisKind) : { start: { x: 0, y: 0 }, end: { x: 0, y: 1 } }, ...placement() };
     } else if (opType === 'fillet') {
       feat = { id, type: 'fillet', sketchId: '', edges, radius: size };
     } else {
@@ -223,6 +246,37 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
                   <label style={{ ...lbl, width: '48px' }}>{opType === 'fillet' ? 'Radius' : 'Size'}</label>
                   <input type="number" value={size} min={0.1} step={0.5}
                          onChange={(e) => setSize(Number(e.target.value) || 0)} style={field} />
+                </div>
+              </>
+            )}
+
+            {!isModify && (
+              <>
+                <div style={row}>
+                  <label style={{ ...lbl, width: '48px' }}>Plane</label>
+                  <select value={opPlane} onChange={(e) => setOpPlane(e.target.value as 'XY' | 'XZ' | 'YZ')} style={field}>
+                    <option value="XY">XY</option>
+                    <option value="XZ">XZ</option>
+                    <option value="YZ">YZ</option>
+                  </select>
+                </div>
+                <div style={row}>
+                  <label style={{ ...lbl, width: '48px' }}>Tilt°</label>
+                  <input type="number" value={opTilt} step={5}
+                         onChange={(e) => setOpTilt(Number(e.target.value) || 0)}
+                         style={{ ...field, flex: 1, width: 'auto', minWidth: 0 }} />
+                  <select value={opTiltAxis} onChange={(e) => setOpTiltAxis(e.target.value as 'X' | 'Y' | 'Z')}
+                          style={{ ...field, width: 'auto' }}>
+                    <option>X</option><option>Y</option><option>Z</option>
+                  </select>
+                </div>
+                <div style={row}>
+                  <label style={{ ...lbl, width: '48px' }}>Offset</label>
+                  {[[ox, setOx, 'X'], [oy, setOy, 'Y'], [oz, setOz, 'Z']].map(([v, set, t]) => (
+                    <input key={t as string} type="number" value={v as number} title={t as string}
+                           onChange={(e) => (set as (n: number) => void)(Number(e.target.value) || 0)}
+                           style={{ ...field, flex: 1, width: 'auto', minWidth: 0 }} />
+                  ))}
                 </div>
               </>
             )}
