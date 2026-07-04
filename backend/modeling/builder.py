@@ -27,6 +27,7 @@ import cadquery as cq
 from cadquery import Edge, Face, Solid, Vector, Wire
 
 from .schemas import BuildRequest, SketchEntityIn, SketchIn
+from .selectors import resolve_edges
 
 _TOL = 1e-4      # endpoint-matching / closure tolerance (world units)
 _ARC_MIN = 1e-4  # |bulge| below this is treated as a straight segment
@@ -324,6 +325,21 @@ def _revolve(regions: list[Region], axis_start: Vector, axis_end: Vector,
     return _fuse([one(r) for r in regions])
 
 
+# ── fillet (first selector-consuming, target-scoped operation) ───────────
+def _fillet(shape, selector: str, radius: float | None, feat_id: str):
+    if not radius or radius <= 0:
+        raise BuildError(f"feature {feat_id}: fillet radius must be > 0")
+    idxs = resolve_edges(selector, _edges(shape))
+    if not idxs:
+        raise BuildError(f"feature {feat_id}: fillet selector '{selector}' matched no edges")
+    all_edges = shape.Edges()
+    picked = [all_edges[i] for i in idxs]
+    try:
+        return shape.fillet(radius, picked)
+    except Exception as exc:
+        raise BuildError(f"feature {feat_id}: fillet failed ({exc})") from exc
+
+
 # ── mesh + STEP ──────────────────────────────────────────────────────────
 def _tessellate(shape, tolerance: float) -> tuple[list[float], list[float], int]:
     verts, tris = shape.tessellate(tolerance)
@@ -414,6 +430,12 @@ def build(req: BuildRequest) -> BuildResult:
 
     result = None
     for feat in req.features:
+        if feat.type == "fillet":
+            if result is None:
+                raise BuildError(f"feature {feat.id}: fillet needs existing geometry")
+            result = _fillet(result, feat.edges or "all", feat.radius, feat.id)
+            continue
+
         sketch = sketches.get(feat.sketchId)
         if sketch is None:
             raise BuildError(f"feature {feat.id}: sketch '{feat.sketchId}' not in request")

@@ -245,11 +245,45 @@ class BuilderTests(SimpleTestCase):
                 features=[FeatureIn(id="f", type="revolve", sketchId="s", angle=360)],
             ))
 
+    def test_fillet_all_edges(self):
+        """Extrude a box, then fillet every edge: rounds corners (less volume,
+        more faces). First operation that consumes a selector."""
+        res = build(BuildRequest(
+            sketches=[SketchIn(id="s", entities=[
+                SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=10, height=10),
+            ])],
+            features=[
+                FeatureIn(id="box", type="extrude", sketchId="s", distance=10),
+                FeatureIn(id="round", type="fillet", sketchId="", edges="all", radius=1),
+            ],
+        ))
+        self.assertLess(res.metrics["volume"], 1000)     # material removed at corners
+        self.assertGreater(len(res.faces), 6)            # new rounded faces
+
+    def test_fillet_without_geometry_raises(self):
+        with self.assertRaises(BuildError):
+            build(BuildRequest(
+                sketches=[],
+                features=[FeatureIn(id="round", type="fillet", sketchId="", edges="all", radius=1)],
+            ))
+
+    def test_fillet_selector_no_match_raises(self):
+        with self.assertRaises(BuildError):
+            build(BuildRequest(
+                sketches=[SketchIn(id="s", entities=[
+                    SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=10, height=10),
+                ])],
+                features=[
+                    FeatureIn(id="box", type="extrude", sketchId="s", distance=10),
+                    FeatureIn(id="round", type="fillet", sketchId="", edges="kind:circle", radius=1),
+                ],
+            ))
+
     def test_unsupported_feature_warns_not_fails(self):
         req = _plate_with_hole()
-        req.features.append(FeatureIn(id="f2", type="fillet", sketchId="sk1"))
+        req.features.append(FeatureIn(id="f2", type="sweep", sketchId="sk1"))  # not supported yet
         res = build(req)
-        self.assertTrue(any("fillet" in w for w in res.warnings))
+        self.assertTrue(any("sweep" in w for w in res.warnings))
 
     def test_bulge_full_circle(self):
         """Two vertices joined by two semicircular arcs (bulge 1) form a full

@@ -55,6 +55,9 @@ class FeatureIn(Schema):
     # revolve
     axis: AxisIn | None = None
     angle: float | None = None  # degrees; defaults to 360 in the builder
+    # fillet (modifies the running result; no sketch)
+    edges: str | None = None    # edge selector, e.g. 'all' | 'kind:line' | 'longest'
+    radius: float | None = None
 
 
 class BuildRequest(Schema):
