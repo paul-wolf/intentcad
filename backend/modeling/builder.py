@@ -24,11 +24,12 @@ import tempfile
 from dataclasses import dataclass, field
 
 import cadquery as cq
-from cadquery import Face, Solid, Vector, Wire
+from cadquery import Edge, Face, Solid, Vector, Wire
 
 from .schemas import BuildRequest, SketchEntityIn, SketchIn
 
-_TOL = 1e-4  # endpoint-matching / closure tolerance (world units)
+_TOL = 1e-4      # endpoint-matching / closure tolerance (world units)
+_ARC_MIN = 1e-4  # |bulge| below this is treated as a straight segment
 
 
 class BuildError(Exception):
@@ -95,6 +96,54 @@ def _poly_wire(pts: list[tuple[float, float]]) -> Wire:
 
 def _centroid(pts: list[tuple[float, float]]) -> tuple[float, float]:
     return (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
+
+
+# ── bulge arcs (matches frontend/src/utils/arcGeometry.ts) ───────────────
+# bulge = tan(theta/4); positive bulge bulges to the LEFT of p1->p2. Everything
+# here is in screen space; the Y-flip in _v reflects it into CAD space, which
+# maps a circular arc to a circular arc, so the three-point construction holds.
+def _arc_midpoint(p1: tuple[float, float], p2: tuple[float, float], bulge: float) -> tuple[float, float]:
+    dx, dy = p2[0] - p1[0], p2[1] - p1[1]
+    d = math.hypot(dx, dy)
+    if d == 0 or bulge == 0:
+        return ((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2)
+    sag = bulge * d / 2.0
+    perpx, perpy = -dy / d, dx / d  # left of p1->p2
+    return ((p1[0] + p2[0]) / 2 - sag * perpx, (p1[1] + p2[1]) / 2 - sag * perpy)
+
+
+def _arc_points(p1: tuple[float, float], p2: tuple[float, float], bulge: float,
+                depth: int = 3) -> list[tuple[float, float]]:
+    """Polyline approximation of an arc, from p1 (inclusive) toward p2 (exclusive).
+
+    Recursive bisection: half the arc has bulge tan(atan(bulge)/2). Used only for
+    2D containment/area — the wire itself uses an exact arc edge."""
+    if abs(bulge) < _ARC_MIN or depth == 0:
+        return [p1]
+    mid = _arc_midpoint(p1, p2, bulge)
+    half = math.tan(math.atan(bulge) / 2)
+    return _arc_points(p1, mid, half, depth - 1) + _arc_points(mid, p2, half, depth - 1)
+
+
+def _line_loop(verts: list[tuple[float, float]], bulges: list[float]) -> tuple[Wire, list[tuple[float, float]]]:
+    """Closed loop from ordered vertices + per-segment bulges -> (wire, polygon).
+
+    Segment i runs verts[i] -> verts[(i+1) % L] with bulge bulges[i] (0 if absent),
+    matching the frontend segment/bulge indexing."""
+    n = len(verts)
+    edges = []
+    poly: list[tuple[float, float]] = []
+    for i in range(n):
+        a, b = verts[i], verts[(i + 1) % n]
+        bulge = bulges[i] if i < len(bulges) else 0.0
+        if abs(bulge) >= _ARC_MIN:
+            amid = _arc_midpoint(a, b, bulge)
+            edges.append(Edge.makeThreePointArc(_v(*a), _v(*amid), _v(*b)))
+            poly.extend(_arc_points(a, b, bulge))
+        else:
+            edges.append(Edge.makeLine(_v(*a), _v(*b)))
+            poly.append(a)
+    return Wire.assembleEdges(edges), poly
 
 
 def _point_in_poly(pt: tuple[float, float], poly: list[tuple[float, float]]) -> bool:
@@ -174,15 +223,17 @@ def _sketch_to_loops(sketch: SketchIn, warnings: list[str]) -> list[Loop]:
             loops.append(_make_loop(_poly_wire(corners), corners, _centroid(corners)))
 
         elif e.type == "line" and e.points and len(e.points) >= 2:
-            if e.bulge and any(abs(b) > 1e-9 for b in e.bulge):
-                warnings.append("bulge arcs not supported yet — treated as straight segments")
             pts = [(p.x, p.y) for p in e.points]
-            closed = bool(e.closed) or (len(pts) >= 3 and _close(pts[0], pts[-1]))
-            if closed:
-                if _close(pts[0], pts[-1]):
-                    pts = pts[:-1]
-                if len(pts) >= 3:
-                    loops.append(_make_loop(_poly_wire(pts), pts, _centroid(pts)))
+            bulges = list(e.bulge) if e.bulge else []
+            has_arc = any(abs(b) >= _ARC_MIN for b in bulges)
+            if _close(pts[0], pts[-1]):
+                pts = pts[:-1]  # drop an explicit duplicate closing vertex
+            # A multi-vertex polyline is a standalone profile — close it directly so
+            # its arcs survive, even if the sketch never set `closed`. Only loose
+            # 2-point segments go to the straight-only stitcher.
+            if len(pts) >= 3 or (len(pts) == 2 and has_arc):
+                wire, poly = _line_loop(pts, bulges)
+                loops.append(_make_loop(wire, poly, _centroid(poly)))
             else:
                 open_paths.append(pts)
 

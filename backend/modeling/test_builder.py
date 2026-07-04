@@ -104,21 +104,61 @@ class BuilderTests(SimpleTestCase):
         res = build(req)
         self.assertTrue(any("fillet" in w for w in res.warnings))
 
-    def test_bulge_arc_warns(self):
-        req = BuildRequest(
-            sketches=[
-                SketchIn(id="sk", entities=[
-                    SketchEntityIn(
-                        type="line", closed=True,
-                        points=[Point(x=0, y=0), Point(x=10, y=0), Point(x=5, y=10)],
-                        bulge=[0.5, 0, 0],
-                    ),
-                ])
-            ],
+    def test_bulge_full_circle(self):
+        """Two vertices joined by two semicircular arcs (bulge 1) form a full
+        circle; extruded, it is a cylinder of diameter = chord length."""
+        res = build(BuildRequest(
+            sketches=[SketchIn(id="sk", entities=[
+                SketchEntityIn(type="line", closed=True,
+                               points=[Point(x=0, y=0), Point(x=10, y=0)],
+                               bulge=[1.0, 1.0]),
+            ])],
+            features=[FeatureIn(id="f", type="extrude", sketchId="sk", distance=4)],
+        ))
+        self.assertEqual(res.warnings, [])
+        xs, ys = res.positions[0::3], res.positions[1::3]
+        # circle radius 5 centered at (5,0) -> x in [0,10], y in [-5,5]
+        self.assertTrue(math.isclose(min(xs), 0, abs_tol=0.05))
+        self.assertTrue(math.isclose(max(xs), 10, abs_tol=0.05))
+        self.assertTrue(math.isclose(min(ys), -5, abs_tol=0.05))
+        self.assertTrue(math.isclose(max(ys), 5, abs_tol=0.05))
+
+    def test_open_polyline_arc_is_preserved(self):
+        """A multi-vertex polyline that was never marked `closed` (points don't
+        repeat) must still close as a profile with its arc intact — not get
+        flattened by the straight-only stitcher. Regression for a real sketch."""
+        pts = [Point(x=50.58, y=-28.65), Point(x=83.76, y=-44.41),
+               Point(x=86.35, y=35.25), Point(x=50.25, y=28.50)]
+
+        def run(bulge):
+            return build(BuildRequest(
+                sketches=[SketchIn(id="s", entities=[
+                    SketchEntityIn(type="line", points=pts, bulge=bulge),  # note: no closed flag
+                ])],
+                features=[FeatureIn(id="f", type="extrude", sketchId="s", distance=5)],
+            ))
+
+        arced = run([0, 0.4142, 0])
+        straight = run([0, 0, 0])
+        self.assertEqual(arced.warnings, [])
+        # a curved side face tessellates into many more triangles than a flat one
+        self.assertGreater(arced.triangle_count, straight.triangle_count + 4)
+
+    def test_bulge_arc_no_longer_warns(self):
+        """A closed profile with an arc segment builds without the old
+        'treated as straight' warning."""
+        res = build(BuildRequest(
+            sketches=[SketchIn(id="sk", entities=[
+                SketchEntityIn(
+                    type="line", closed=True,
+                    points=[Point(x=0, y=0), Point(x=20, y=0), Point(x=20, y=10), Point(x=0, y=10)],
+                    bulge=[0, 0, 0.5, 0],  # arc on the top edge
+                ),
+            ])],
             features=[FeatureIn(id="f", type="extrude", sketchId="sk", distance=5)],
-        )
-        res = build(req)
-        self.assertTrue(any("bulge" in w for w in res.warnings))
+        ))
+        self.assertGreater(res.triangle_count, 0)
+        self.assertFalse(any("straight" in w for w in res.warnings))
 
     def test_missing_sketch_raises(self):
         req = BuildRequest(
