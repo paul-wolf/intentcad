@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback, type CSSProperties } from 'react';
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
+import { useBuildStore } from '@/stores/buildStore';
 import { buildApi, type BuildResponse, type BuildFeature } from '@/api/client';
 import { treeToBuildRequest, axisForKind, AXIS_LABELS, type AxisKind } from '@/build/toBuildRequest';
 import { createViewer, type Viewer } from '@/build/webglViewer';
@@ -11,6 +12,8 @@ interface BuildViewerProps {
 }
 
 type OpType = 'extrude' | 'revolve' | 'fillet' | 'chamfer';
+
+const newId = () => 'op-' + crypto.randomUUID().slice(0, 8);
 
 function place(f: BuildFeature): string {
   const bits: string[] = [];
@@ -41,12 +44,10 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewerRef = useRef<Viewer | null>(null);
-  const nextId = useRef(1);
 
-  // the feature tree — seeded with a plain extrude of the active sketch
-  const [features, setFeatures] = useState<BuildFeature[]>(() =>
-    activeSketchId ? [{ id: 'op-0', type: 'extrude', sketchId: activeSketchId, distance: 10, operation: 'add' }] : [],
-  );
+  // the feature tree persists in a store, so closing/reopening keeps the part
+  const features = useBuildStore((s) => s.features);
+  const setFeatures = useBuildStore((s) => s.setFeatures);
 
   // add-operation form state
   const [opType, setOpType] = useState<OpType>('extrude');
@@ -86,17 +87,26 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
     }
   }, [features]);
 
-  // create the viewer once the canvas mounts
+  // create the viewer, claim the keyboard, and seed an empty tree — once on mount
   useEffect(() => {
-    if (!canvasRef.current) return;
-    try {
-      viewerRef.current = createViewer(canvasRef.current);
-    } catch (err) {
-      setStatus('error');
-      setMessage(String(err instanceof Error ? err.message : err));
-      return;
+    useBuildStore.getState().setPanelOpen(true);
+    if (useBuildStore.getState().features.length === 0 && activeSketchId) {
+      setFeatures([{ id: newId(), type: 'extrude', sketchId: activeSketchId, distance: 10, operation: 'add' }]);
     }
-    return () => { viewerRef.current?.dispose(); viewerRef.current = null; };
+    if (canvasRef.current) {
+      try {
+        viewerRef.current = createViewer(canvasRef.current);
+      } catch (err) {
+        setStatus('error');
+        setMessage(String(err instanceof Error ? err.message : err));
+      }
+    }
+    return () => {
+      useBuildStore.getState().setPanelOpen(false);
+      viewerRef.current?.dispose();
+      viewerRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // rebuild whenever the tree changes (and once after the viewer exists)
@@ -111,7 +121,7 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
   };
 
   const addFeature = () => {
-    const id = `op-${nextId.current++}`;
+    const id = newId();
     let feat: BuildFeature;
     if (opType === 'extrude') {
       feat = { id, type: 'extrude', sketchId: opSketchId, distance, operation: opCut ? 'remove' : 'add', ...placement() };
@@ -124,10 +134,10 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
     } else {
       feat = { id, type: 'chamfer', sketchId: '', edges, distance: size };
     }
-    setFeatures((prev) => [...prev, feat]);
+    setFeatures([...features, feat]);
   };
 
-  const removeFeature = (id: string) => setFeatures((prev) => prev.filter((f) => f.id !== id));
+  const removeFeature = (id: string) => setFeatures(features.filter((f) => f.id !== id));
 
   const downloadStep = () => {
     if (result) downloadTextFile(result.step, `${docName}.step`, 'application/step');

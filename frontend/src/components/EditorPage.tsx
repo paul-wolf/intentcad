@@ -15,6 +15,7 @@ import { CanvasContainer } from '@/canvas/CanvasContainer';
 import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useCamStore, setCamDocumentId } from '@/stores/camStore';
+import { useBuildStore } from '@/stores/buildStore';
 import { useThemeStore } from '@/theme';
 import { createLineTool } from '@/tools/lineTool';
 import { createSelectTool } from '@/tools/selectTool';
@@ -281,6 +282,8 @@ export function EditorPage() {
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+      // The 3D Build panel owns the keyboard while open (don't undo the sketch, etc.)
+      if (useBuildStore.getState().panelOpen) return;
 
       const ctrl = e.ctrlKey || e.metaKey;
 
