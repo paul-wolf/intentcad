@@ -65,6 +65,7 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
   const [ox, setOx] = useState(0);
   const [oy, setOy] = useState(0);
   const [oz, setOz] = useState(0);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const [status, setStatus] = useState<'idle' | 'building' | 'done' | 'error'>('idle');
   const [message, setMessage] = useState('');
@@ -120,8 +121,23 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
     return p;
   };
 
+  // load an existing feature's params into the form for editing
+  const loadFeature = (f: BuildFeature) => {
+    setEditingId(f.id);
+    setOpType(f.type);
+    if (f.sketchId) setOpSketchId(f.sketchId);
+    if (f.type === 'extrude') { setDistance(f.distance ?? 10); setOpCut(f.operation === 'remove'); }
+    if (f.type === 'revolve') setAngle(f.angle ?? 360);
+    if (f.type === 'fillet') { setEdges(f.edges ?? 'all'); setSize(f.radius ?? 2); }
+    if (f.type === 'chamfer') { setEdges(f.edges ?? 'all'); setSize(f.distance ?? 2); }
+    setOpPlane(f.plane ?? 'XY');
+    setOpTilt(f.tilt ?? 0);
+    setOpTiltAxis(f.tiltAxis ?? 'X');
+    setOx(f.offset?.[0] ?? 0); setOy(f.offset?.[1] ?? 0); setOz(f.offset?.[2] ?? 0);
+  };
+
   const addFeature = () => {
-    const id = newId();
+    const id = editingId ?? newId();
     let feat: BuildFeature;
     if (opType === 'extrude') {
       feat = { id, type: 'extrude', sketchId: opSketchId, distance, operation: opCut ? 'remove' : 'add', ...placement() };
@@ -134,10 +150,14 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
     } else {
       feat = { id, type: 'chamfer', sketchId: '', edges, distance: size };
     }
-    setFeatures([...features, feat]);
+    setFeatures(editingId ? features.map((f) => (f.id === editingId ? feat : f)) : [...features, feat]);
+    setEditingId(null);
   };
 
-  const removeFeature = (id: string) => setFeatures(features.filter((f) => f.id !== id));
+  const removeFeature = (id: string) => {
+    if (editingId === id) setEditingId(null);
+    setFeatures(features.filter((f) => f.id !== id));
+  };
 
   const downloadStep = () => {
     if (result) downloadTextFile(result.step, `${docName}.step`, 'application/step');
@@ -291,24 +311,36 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
               </>
             )}
 
-            <button onClick={addFeature}
-              style={{ padding: '6px', background: palette.panelBg, color: palette.text,
-                       border: `1px solid ${palette.border}`, borderRadius: '4px', fontSize: '13px',
-                       cursor: 'pointer', marginBottom: '14px' }}>
-              + Add to tree
-            </button>
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
+              <button onClick={addFeature}
+                style={{ flex: 1, padding: '6px', background: editingId ? palette.primaryBtn : palette.panelBg,
+                         color: editingId ? '#fff' : palette.text,
+                         border: `1px solid ${editingId ? palette.primaryBtn : palette.border}`,
+                         borderRadius: '4px', fontSize: '13px', cursor: 'pointer' }}>
+                {editingId ? 'Update' : '+ Add to tree'}
+              </button>
+              {editingId && (
+                <button onClick={() => setEditingId(null)} title="Stop editing"
+                  style={{ padding: '6px 10px', background: 'none', color: palette.textSecondary,
+                           border: `1px solid ${palette.border}`, borderRadius: '4px', fontSize: '13px', cursor: 'pointer' }}>
+                  New
+                </button>
+              )}
+            </div>
 
             <div style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.5px', textTransform: 'uppercase',
                           color: palette.textSecondary, marginBottom: '6px' }}>
               Features ({features.length})
             </div>
             {features.map((f, i) => (
-              <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 7px',
-                                       background: palette.inputBg, borderRadius: '4px', marginBottom: '4px' }}>
+              <div key={f.id} onClick={() => loadFeature(f)} title="Click to edit"
+                   style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 7px',
+                            background: palette.inputBg, borderRadius: '4px', marginBottom: '4px', cursor: 'pointer',
+                            border: `1px solid ${editingId === f.id ? palette.primaryBtn : 'transparent'}` }}>
                 <span style={{ fontSize: '11px', color: palette.textSecondary, width: '16px' }}>{i + 1}</span>
                 <span style={{ flex: 1, fontSize: '12px', color: palette.text, whiteSpace: 'nowrap',
                                overflow: 'hidden', textOverflow: 'ellipsis' }}>{describe(f)}</span>
-                <button onClick={() => removeFeature(f.id)} title="Remove"
+                <button onClick={(e) => { e.stopPropagation(); removeFeature(f.id); }} title="Remove"
                   style={{ background: 'none', border: 'none', color: palette.danger, cursor: 'pointer',
                            fontSize: '15px', lineHeight: 1, padding: '0 2px' }}>&times;</button>
               </div>
