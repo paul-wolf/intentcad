@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, type CSSProperties } from 'react';
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
 import { buildApi, type BuildResponse } from '@/api/client';
-import { sketchToBuildRequest } from '@/build/toBuildRequest';
+import { sketchToBuildRequest, axisForKind, AXIS_LABELS, type BuildOp, type AxisKind } from '@/build/toBuildRequest';
 import { createViewer, type Viewer } from '@/build/webglViewer';
 import { downloadTextFile } from '@/export/download';
 
@@ -17,7 +17,10 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewerRef = useRef<Viewer | null>(null);
+  const [operation, setOperation] = useState<'extrude' | 'revolve'>('extrude');
   const [distance, setDistance] = useState(10);
+  const [angle, setAngle] = useState(360);
+  const [axisKind, setAxisKind] = useState<AxisKind>('left');
   const [status, setStatus] = useState<'idle' | 'building' | 'done' | 'error'>('idle');
   const [message, setMessage] = useState('');
   const [result, setResult] = useState<BuildResponse | null>(null);
@@ -26,8 +29,12 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
     if (!sketch) { setStatus('error'); setMessage('No active sketch'); return; }
     setStatus('building');
     setMessage('');
+    const op: BuildOp =
+      operation === 'extrude'
+        ? { kind: 'extrude', distance }
+        : { kind: 'revolve', angle, axis: axisForKind(sketch, axisKind) };
     try {
-      const res = await buildApi.build(sketchToBuildRequest(sketch, distance));
+      const res = await buildApi.build(sketchToBuildRequest(sketch, op));
       setResult(res);
       viewerRef.current?.update(res.mesh);
       setStatus('done');
@@ -35,7 +42,7 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
       setStatus('error');
       setMessage(String(err instanceof Error ? err.message : err));
     }
-  }, [sketch, distance]);
+  }, [sketch, operation, distance, angle, axisKind]);
 
   // Create the viewer once the canvas is mounted, then kick off the first build.
   useEffect(() => {
@@ -57,6 +64,13 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
     downloadTextFile(result.step, `${docName}.step`, 'application/step');
   };
 
+  const lblStyle: CSSProperties = { fontSize: '13px', color: palette.textSecondary };
+  const fieldStyle: CSSProperties = {
+    padding: '4px 6px', background: palette.inputBg, border: `1px solid ${palette.inputBorder}`,
+    borderRadius: '4px', color: palette.text, fontSize: '13px',
+  };
+  const numStyle: CSSProperties = { ...fieldStyle, width: '64px' };
+
   return (
     <div
       style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'center',
@@ -76,14 +90,43 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
             3D Build <span style={{ color: palette.textSecondary, fontSize: '12px' }}>(server · experimental)</span>
           </h2>
           <div style={{ flex: 1 }} />
-          <label style={{ fontSize: '13px', color: palette.textSecondary }}>Distance</label>
-          <input
-            type="number" value={distance} min={0.1} step={1}
-            onChange={(e) => setDistance(Number(e.target.value) || 0)}
-            style={{ width: '70px', padding: '4px 6px', background: palette.inputBg,
-                     border: `1px solid ${palette.inputBorder}`, borderRadius: '4px',
-                     color: palette.text, fontSize: '13px' }}
-          />
+          <select
+            value={operation}
+            onChange={(e) => setOperation(e.target.value as 'extrude' | 'revolve')}
+            style={fieldStyle}
+          >
+            <option value="extrude">Extrude</option>
+            <option value="revolve">Revolve</option>
+          </select>
+          {operation === 'extrude' ? (
+            <>
+              <label style={lblStyle}>Distance</label>
+              <input
+                type="number" value={distance} min={0.1} step={1}
+                onChange={(e) => setDistance(Number(e.target.value) || 0)}
+                style={numStyle}
+              />
+            </>
+          ) : (
+            <>
+              <label style={lblStyle}>Axis</label>
+              <select
+                value={axisKind}
+                onChange={(e) => setAxisKind(e.target.value as AxisKind)}
+                style={fieldStyle}
+              >
+                {(Object.keys(AXIS_LABELS) as AxisKind[]).map((k) => (
+                  <option key={k} value={k}>{AXIS_LABELS[k]}</option>
+                ))}
+              </select>
+              <label style={lblStyle}>Angle°</label>
+              <input
+                type="number" value={angle} min={1} max={360} step={5}
+                onChange={(e) => setAngle(Number(e.target.value) || 0)}
+                style={numStyle}
+              />
+            </>
+          )}
           <button
             onClick={runBuild}
             disabled={status === 'building'}
@@ -124,6 +167,9 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
         {/* footer: stats + warnings */}
         <div style={{ padding: '8px 16px', borderTop: `1px solid ${palette.border}`,
                       fontSize: '12px', color: palette.textSecondary, minHeight: '20px' }}>
+          {operation === 'revolve' && status !== 'done' && (
+            <span>Revolve spins the profile around the <b>{AXIS_LABELS[axisKind]}</b> — the profile must sit entirely on one side of it. Edge axes (left/right/top/bottom) always satisfy that.</span>
+          )}
           {status === 'done' && result && (
             <span>
               {result.mesh.triangle_count.toLocaleString()} triangles · drag to orbit · scroll to zoom

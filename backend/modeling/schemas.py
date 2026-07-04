@@ -38,13 +38,23 @@ class SketchIn(Schema):
     entities: list[SketchEntityIn] = []
 
 
+class AxisIn(Schema):
+    """A revolve axis, as two points in sketch (screen) coordinates."""
+    start: Point
+    end: Point
+
+
 class FeatureIn(Schema):
     id: str
-    type: str  # 'extrude' supported; others rejected with a warning for now
+    type: str  # 'extrude' | 'revolve'; others rejected with a warning
     sketchId: str
+    operation: str | None = None  # 'add' | 'remove'
+    # extrude
     distance: float | None = None
     direction: str | None = None  # 'forward' | 'reverse' | 'both'
-    operation: str | None = None  # 'add' | 'remove'
+    # revolve
+    axis: AxisIn | None = None
+    angle: float | None = None  # degrees; defaults to 360 in the builder
 
 
 class BuildRequest(Schema):

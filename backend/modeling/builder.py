@@ -246,13 +246,20 @@ def _sketch_to_loops(sketch: SketchIn, warnings: list[str]) -> list[Loop]:
 
 
 # ── loops → faces via containment nesting ────────────────────────────────
-def _loops_to_faces(loops: list[Loop], sketch_id: str) -> list[Face]:
+@dataclass
+class Region:
+    """A solid-forming area: one outer boundary wire plus hole wires."""
+    outer: Wire
+    holes: list[Wire]
+
+
+def _loops_to_regions(loops: list[Loop], sketch_id: str) -> list[Region]:
     depth = [
         sum(1 for j, o in enumerate(loops) if j != i and _contains(o, lp))
         for i, lp in enumerate(loops)
     ]
 
-    faces: list[Face] = []
+    regions: list[Region] = []
     for i, lp in enumerate(loops):
         if depth[i] % 2 != 0:
             continue  # odd depth => this loop is a hole in some region
@@ -260,22 +267,30 @@ def _loops_to_faces(loops: list[Loop], sketch_id: str) -> list[Face]:
             o.wire for j, o in enumerate(loops)
             if depth[j] == depth[i] + 1 and _contains(lp, o)
         ]
-        try:
-            faces.append(Face.makeFromWires(lp.wire, holes))
-        except Exception as exc:
-            raise BuildError(f"sketch {sketch_id}: could not form a face ({exc})") from exc
+        regions.append(Region(lp.wire, holes))
 
-    if not faces:
+    if not regions:
         raise BuildError(f"sketch {sketch_id}: no outer region found")
-    return faces
+    return regions
+
+
+def _fuse(solids: list[Solid]) -> Solid:
+    result = solids[0]
+    for s in solids[1:]:
+        result = result.fuse(s)
+    return result
 
 
 # ── extrude ──────────────────────────────────────────────────────────────
-def _extrude_faces(faces: list[Face], distance: float, direction: str | None) -> Solid:
+def _extrude(regions: list[Region], distance: float, direction: str | None, sketch_id: str) -> Solid:
     if not distance or distance <= 0:
         raise BuildError("extrude: distance must be > 0")
 
-    def one(face: Face) -> Solid:
+    def one(r: Region) -> Solid:
+        try:
+            face = Face.makeFromWires(r.outer, r.holes)
+        except Exception as exc:
+            raise BuildError(f"sketch {sketch_id}: could not form a face ({exc})") from exc
         if direction == "both":
             base = face.translate(Vector(0, 0, -distance / 2.0))
             return Solid.extrudeLinear(base, Vector(0, 0, distance))
@@ -283,10 +298,27 @@ def _extrude_faces(faces: list[Face], distance: float, direction: str | None) ->
             return Solid.extrudeLinear(face, Vector(0, 0, -distance))
         return Solid.extrudeLinear(face, Vector(0, 0, distance))
 
-    solid = one(faces[0])
-    for f in faces[1:]:
-        solid = solid.fuse(one(f))
-    return solid
+    return _fuse([one(r) for r in regions])
+
+
+# ── revolve ──────────────────────────────────────────────────────────────
+def _revolve(regions: list[Region], axis_start: Vector, axis_end: Vector,
+             angle: float | None, sketch_id: str) -> Solid:
+    if (axis_start - axis_end).Length < _TOL:
+        raise BuildError("revolve: axis endpoints coincide")
+    ang = 360.0 if not angle else float(angle)
+    if ang <= 0 or ang > 360:
+        raise BuildError("revolve: angle must be in (0, 360]")
+
+    def one(r: Region) -> Solid:
+        try:
+            return Solid.revolve(r.outer, r.holes, ang, axis_start, axis_end)
+        except Exception as exc:
+            raise BuildError(
+                f"sketch {sketch_id}: revolve failed — the profile likely crosses the axis ({exc})"
+            ) from exc
+
+    return _fuse([one(r) for r in regions])
 
 
 # ── mesh + STEP ──────────────────────────────────────────────────────────
@@ -320,16 +352,23 @@ def build(req: BuildRequest) -> BuildResult:
 
     result = None
     for feat in req.features:
-        if feat.type != "extrude":
-            warnings.append(f"feature {feat.id}: type '{feat.type}' not supported yet — skipped")
-            continue
         sketch = sketches.get(feat.sketchId)
         if sketch is None:
             raise BuildError(f"feature {feat.id}: sketch '{feat.sketchId}' not in request")
 
-        loops = _sketch_to_loops(sketch, warnings)
-        faces = _loops_to_faces(loops, sketch.id)
-        solid = _extrude_faces(faces, feat.distance, feat.direction)
+        if feat.type == "extrude":
+            regions = _loops_to_regions(_sketch_to_loops(sketch, warnings), sketch.id)
+            solid = _extrude(regions, feat.distance, feat.direction, sketch.id)
+        elif feat.type == "revolve":
+            if feat.axis is None:
+                raise BuildError(f"feature {feat.id}: revolve needs an axis")
+            regions = _loops_to_regions(_sketch_to_loops(sketch, warnings), sketch.id)
+            ax_start = _v(feat.axis.start.x, feat.axis.start.y)
+            ax_end = _v(feat.axis.end.x, feat.axis.end.y)
+            solid = _revolve(regions, ax_start, ax_end, feat.angle, sketch.id)
+        else:
+            warnings.append(f"feature {feat.id}: type '{feat.type}' not supported yet — skipped")
+            continue
 
         if result is None:
             result = solid
@@ -339,7 +378,7 @@ def build(req: BuildRequest) -> BuildResult:
             result = result.fuse(solid)
 
     if result is None:
-        raise BuildError("no extrude feature produced geometry")
+        raise BuildError("no feature produced geometry")
 
     positions, normals, tri_count = _tessellate(result, req.tolerance)
     step = _export_step(result)

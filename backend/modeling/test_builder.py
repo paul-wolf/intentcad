@@ -5,7 +5,7 @@ import math
 from django.test import SimpleTestCase
 
 from modeling.builder import BuildError, build
-from modeling.schemas import BuildRequest, FeatureIn, Point, SketchEntityIn, SketchIn
+from modeling.schemas import AxisIn, BuildRequest, FeatureIn, Point, SketchEntityIn, SketchIn
 
 
 def _plate_with_hole() -> BuildRequest:
@@ -97,6 +97,75 @@ class BuilderTests(SimpleTestCase):
         xs = res.positions[0::3]
         self.assertTrue(math.isclose(min(xs), -10, abs_tol=1e-4))
         self.assertTrue(math.isclose(max(xs), 110, abs_tol=1e-4))
+
+    def test_revolve_ring(self):
+        """A rectangle offset from the Y axis, revolved 360 deg, is a ring
+        (tube): outer radius 20, inner radius 10 -> known volume/bbox."""
+        res = build(BuildRequest(
+            sketches=[SketchIn(id="s", entities=[
+                SketchEntityIn(type="rectangle", center=Point(x=15, y=0), width=10, height=10),
+            ])],
+            features=[FeatureIn(
+                id="f", type="revolve", sketchId="s",
+                axis=AxisIn(start=Point(x=0, y=0), end=Point(x=0, y=1)),  # Y axis
+                angle=360,
+            )],
+        ))
+        self.assertGreater(res.triangle_count, 0)
+        xs, zs = res.positions[0::3], res.positions[2::3]
+        # revolving about the sketch Y axis sweeps into X/Z; radius reaches 20
+        self.assertTrue(math.isclose(max(xs), 20, abs_tol=0.2))
+        self.assertTrue(math.isclose(min(xs), -20, abs_tol=0.2))
+        self.assertTrue(math.isclose(max(zs), 20, abs_tol=0.2))
+
+    def test_revolve_partial_angle(self):
+        res = build(BuildRequest(
+            sketches=[SketchIn(id="s", entities=[
+                SketchEntityIn(type="rectangle", center=Point(x=15, y=0), width=10, height=10),
+            ])],
+            features=[FeatureIn(
+                id="f", type="revolve", sketchId="s",
+                axis=AxisIn(start=Point(x=0, y=0), end=Point(x=0, y=1)), angle=90,
+            )],
+        ))
+        self.assertGreater(res.triangle_count, 0)
+
+    def test_revolve_with_edge_on_axis(self):
+        """A profile whose edge lies exactly on the axis revolves fine (solid of
+        revolution). This is what the 'edge' axis options rely on."""
+        res = build(BuildRequest(
+            sketches=[SketchIn(id="s", entities=[
+                SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=100, height=57),
+            ])],
+            features=[FeatureIn(
+                id="f", type="revolve", sketchId="s",
+                axis=AxisIn(start=Point(x=-50, y=0), end=Point(x=-50, y=1)),  # left edge
+                angle=360,
+            )],
+        ))
+        self.assertGreater(res.triangle_count, 0)
+
+    def test_revolve_profile_crossing_axis_raises(self):
+        with self.assertRaises(BuildError):
+            build(BuildRequest(
+                sketches=[SketchIn(id="s", entities=[
+                    SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=100, height=57),
+                ])],
+                features=[FeatureIn(
+                    id="f", type="revolve", sketchId="s",
+                    axis=AxisIn(start=Point(x=0, y=0), end=Point(x=0, y=1)),  # cuts the profile
+                    angle=360,
+                )],
+            ))
+
+    def test_revolve_without_axis_raises(self):
+        with self.assertRaises(BuildError):
+            build(BuildRequest(
+                sketches=[SketchIn(id="s", entities=[
+                    SketchEntityIn(type="rectangle", center=Point(x=15, y=0), width=10, height=10),
+                ])],
+                features=[FeatureIn(id="f", type="revolve", sketchId="s", angle=360)],
+            ))
 
     def test_unsupported_feature_warns_not_fails(self):
         req = _plate_with_hole()

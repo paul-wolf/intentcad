@@ -129,13 +129,22 @@ export interface BuildSketch {
   entities: BuildEntity[];
 }
 
+export interface BuildAxis {
+  start: { x: number; y: number };
+  end: { x: number; y: number };
+}
+
 export interface BuildFeature {
   id: string;
-  type: 'extrude';
+  type: 'extrude' | 'revolve';
   sketchId: string;
+  operation?: 'add' | 'remove';
+  // extrude
   distance?: number;
   direction?: 'forward' | 'reverse' | 'both';
-  operation?: 'add' | 'remove';
+  // revolve
+  axis?: BuildAxis;
+  angle?: number;
 }
 
 export interface BuildRequest {
