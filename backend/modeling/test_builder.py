@@ -317,6 +317,27 @@ class BuilderTests(SimpleTestCase):
         self.assertLess(res.metrics["volume"], 1000)
         self.assertGreater(len(res.faces), 6)
 
+    def test_chamfer_is_tolerant_of_bad_edges(self):
+        """A chamfer whose size is too big for one edge in the batch should still
+        chamfer the rest and warn — not hard-fail the whole operation."""
+        res = build(BuildRequest(
+            sketches=[
+                SketchIn(id="plate", entities=[
+                    SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=60, height=60)]),
+                SketchIn(id="ring", entities=[
+                    SketchEntityIn(type="circle", center=Point(x=0, y=0), radius=13),
+                    SketchEntityIn(type="circle", center=Point(x=0, y=0), radius=8)]),
+            ],
+            features=[
+                FeatureIn(id="plate", type="extrude", sketchId="plate", distance=8, operation="add"),
+                FeatureIn(id="sock", type="extrude", sketchId="ring", distance=50,
+                          tilt=20, tiltAxis="X", operation="add"),
+                FeatureIn(id="ch", type="chamfer", sketchId="", edges="all", distance=2),
+            ],
+        ))
+        self.assertGreater(res.triangle_count, 0)
+        self.assertTrue(any("skipped" in w for w in res.warnings))
+
     def test_chamfer_without_geometry_raises(self):
         with self.assertRaises(BuildError):
             build(BuildRequest(

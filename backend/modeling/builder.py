@@ -325,33 +325,57 @@ def _revolve(regions: list[Region], axis_start: Vector, axis_end: Vector,
     return _fuse([one(r) for r in regions])
 
 
-# ── fillet (first selector-consuming, target-scoped operation) ───────────
-def _fillet(shape, selector: str, radius: float | None, feat_id: str):
-    if not radius or radius <= 0:
-        raise BuildError(f"feature {feat_id}: fillet radius must be > 0")
+# ── fillet / chamfer (selector-consuming, target-scoped operations) ──────
+def _edge_op(shape, selector: str, amount: float | None, kind: str,
+             feat_id: str, warnings: list[str]):
+    """Apply a fillet or chamfer to the selected edges.
+
+    OCCT applies the whole edge set at once and fails the *entire* op if any one
+    edge can't take the size. So we first try the fast batch, then fall back to a
+    tolerant pass that keeps only the edges that succeed (skipping the rest with a
+    warning). That way an over-broad selection degrades instead of hard-failing."""
+    if not amount or amount <= 0:
+        raise BuildError(f"feature {feat_id}: {kind} size must be > 0")
     idxs = resolve_edges(selector, _edges(shape))
     if not idxs:
-        raise BuildError(f"feature {feat_id}: fillet selector '{selector}' matched no edges")
+        raise BuildError(f"feature {feat_id}: {kind} selector '{selector}' matched no edges")
     all_edges = shape.Edges()
     picked = [all_edges[i] for i in idxs]
-    try:
-        return shape.fillet(radius, picked)
-    except Exception as exc:
-        raise BuildError(f"feature {feat_id}: fillet failed ({exc})") from exc
 
-
-def _chamfer(shape, selector: str, distance: float | None, feat_id: str):
-    if not distance or distance <= 0:
-        raise BuildError(f"feature {feat_id}: chamfer distance must be > 0")
-    idxs = resolve_edges(selector, _edges(shape))
-    if not idxs:
-        raise BuildError(f"feature {feat_id}: chamfer selector '{selector}' matched no edges")
-    all_edges = shape.Edges()
-    picked = [all_edges[i] for i in idxs]
+    # fast path: the whole batch via cadquery
     try:
-        return shape.chamfer(distance, None, picked)
-    except Exception as exc:
-        raise BuildError(f"feature {feat_id}: chamfer failed ({exc})") from exc
+        return shape.fillet(amount, picked) if kind == "fillet" else shape.chamfer(amount, None, picked)
+    except Exception:
+        pass
+
+    # tolerant fallback: greedily keep the edges that can take it
+    from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer, BRepFilletAPI_MakeFillet
+    from cadquery import Shape
+
+    def build_with(edges):
+        mk = BRepFilletAPI_MakeFillet(shape.wrapped) if kind == "fillet" else BRepFilletAPI_MakeChamfer(shape.wrapped)
+        for e in edges:
+            mk.Add(amount, e.wrapped)
+        mk.Build()
+        return mk
+
+    good: list = []
+    for e in picked:
+        try:
+            mk = build_with(good + [e])
+            if mk.IsDone():
+                good.append(e)
+        except Exception:
+            pass
+
+    if not good:
+        raise BuildError(
+            f"feature {feat_id}: {kind} couldn't apply to any of those edges — try a smaller size"
+        )
+    skipped = len(picked) - len(good)
+    if skipped:
+        warnings.append(f"{kind}: skipped {skipped} of {len(picked)} edge(s) that couldn't take size {amount}")
+    return Shape(build_with(good).Shape())
 
 
 # ── placement (construction-plane primitive) ─────────────────────────────
@@ -477,12 +501,12 @@ def build(req: BuildRequest) -> BuildResult:
         if feat.type == "fillet":
             if result is None:
                 raise BuildError(f"feature {feat.id}: fillet needs existing geometry")
-            result = _fillet(result, feat.edges or "all", feat.radius, feat.id)
+            result = _edge_op(result, feat.edges or "all", feat.radius, "fillet", feat.id, warnings)
             continue
         if feat.type == "chamfer":
             if result is None:
                 raise BuildError(f"feature {feat.id}: chamfer needs existing geometry")
-            result = _chamfer(result, feat.edges or "all", feat.distance, feat.id)
+            result = _edge_op(result, feat.edges or "all", feat.distance, "chamfer", feat.id, warnings)
             continue
 
         sketch = sketches.get(feat.sketchId)
