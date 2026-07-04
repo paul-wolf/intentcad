@@ -68,6 +68,7 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
   const [oy, setOy] = useState(0);
   const [oz, setOz] = useState(0);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [upto, setUpto] = useState<number>(Infinity); // rollback marker: build features[0..upto]
 
   const [status, setStatus] = useState<'idle' | 'building' | 'done' | 'error'>('idle');
   const [message, setMessage] = useState('');
@@ -76,11 +77,12 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
   const rebuild = useCallback(async () => {
     if (!viewerRef.current) return;
     const sk = useDocumentStore.getState().document.sketches;
-    if (features.length === 0) { setResult(null); setStatus('idle'); return; }
+    const built = upto === Infinity ? features : features.slice(0, upto + 1);
+    if (built.length === 0) { setResult(null); setStatus('idle'); return; }
     setStatus('building');
     setMessage('');
     try {
-      const res = await buildApi.build(treeToBuildRequest(sk, features));
+      const res = await buildApi.build(treeToBuildRequest(sk, built));
       setResult(res);
       viewerRef.current.update(res.mesh);
       setStatus('done');
@@ -88,7 +90,7 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
       setStatus('error');
       setMessage(String(err instanceof Error ? err.message : err));
     }
-  }, [features]);
+  }, [features, upto]);
 
   // create the viewer, claim the keyboard, and seed an empty tree — once on mount
   useEffect(() => {
@@ -170,6 +172,7 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
     }
     setFeatures(editingId ? features.map((f) => (f.id === editingId ? feat : f)) : [...features, feat]);
     setEditingId(null);
+    setUpto(Infinity); // show the full build after an add/update
   };
 
   const removeFeature = (id: string) => {
@@ -354,25 +357,10 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
               )}
             </div>
 
-            <div style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.5px', textTransform: 'uppercase',
-                          color: palette.textSecondary, marginBottom: '6px' }}>
-              Features ({features.length})
-            </div>
-            {features.map((f, i) => (
-              <div key={f.id} onClick={() => loadFeature(f)} title="Click to edit"
-                   style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 7px',
-                            background: palette.inputBg, borderRadius: '4px', marginBottom: '4px', cursor: 'pointer',
-                            border: `1px solid ${editingId === f.id ? palette.primaryBtn : 'transparent'}` }}>
-                <span style={{ fontSize: '11px', color: palette.textSecondary, width: '16px' }}>{i + 1}</span>
-                <span style={{ flex: 1, fontSize: '12px', color: palette.text, whiteSpace: 'nowrap',
-                               overflow: 'hidden', textOverflow: 'ellipsis' }}>{describe(f)}</span>
-                <button onClick={(e) => { e.stopPropagation(); removeFeature(f.id); }} title="Remove"
-                  style={{ background: 'none', border: 'none', color: palette.danger, cursor: 'pointer',
-                           fontSize: '15px', lineHeight: 1, padding: '0 2px' }}>&times;</button>
+            {editingId && (
+              <div style={{ fontSize: '12px', color: palette.textSecondary }}>
+                Editing feature — change params and hit Update, or “New”.
               </div>
-            ))}
-            {features.length === 0 && (
-              <div style={{ fontSize: '12px', color: palette.textSecondary }}>No operations yet.</div>
             )}
           </div>
 
@@ -389,6 +377,40 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
             )}
           </div>
         </div>
+
+        {/* timeline: the feature sequence with a rollback marker */}
+        {features.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '8px 12px',
+                        borderTop: `1px solid ${palette.border}`, overflowX: 'auto' }}>
+            <span style={{ fontSize: '11px', color: palette.textSecondary, marginRight: '4px',
+                           textTransform: 'uppercase', letterSpacing: '0.5px', flex: '0 0 auto' }}>Timeline</span>
+            {features.map((f, i) => {
+              const marker = upto === Infinity ? features.length - 1 : Math.min(upto, features.length - 1);
+              const dimmed = i > marker;
+              return (
+                <div key={f.id}
+                  onClick={() => { setUpto(i === features.length - 1 ? Infinity : i); loadFeature(f); }}
+                  title={`${describe(f)} — click to roll here / edit`}
+                  style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '4px 8px',
+                           background: palette.inputBg, borderRadius: '4px', cursor: 'pointer', flex: '0 0 auto',
+                           opacity: dimmed ? 0.4 : 1,
+                           border: `1px solid ${editingId === f.id ? palette.primaryBtn : 'transparent'}` }}>
+                  <span style={{ fontSize: '11px', color: palette.textSecondary }}>{i + 1}</span>
+                  <span style={{ fontSize: '12px', color: palette.text }}>{f.type}</span>
+                  <button onClick={(e) => { e.stopPropagation(); removeFeature(f.id); }} title="Remove"
+                    style={{ background: 'none', border: 'none', color: palette.danger, cursor: 'pointer',
+                             fontSize: '13px', lineHeight: 1, padding: '0 1px' }}>&times;</button>
+                </div>
+              );
+            })}
+            {upto !== Infinity && (
+              <button onClick={() => setUpto(Infinity)} title="Show the full build"
+                style={{ marginLeft: '4px', padding: '4px 8px', background: 'none', color: palette.textSecondary,
+                         border: `1px solid ${palette.border}`, borderRadius: '4px', fontSize: '12px',
+                         cursor: 'pointer', flex: '0 0 auto', whiteSpace: 'nowrap' }}>full ▶|</button>
+            )}
+          </div>
+        )}
 
         {/* footer: stats + warnings */}
         <div style={{ padding: '8px 16px', borderTop: `1px solid ${palette.border}`,
