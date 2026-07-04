@@ -11,10 +11,10 @@ import { exportDocumentToImage } from '@/export/image';
 import { downloadTextFile, downloadBlob } from '@/export/download';
 import { getEntityPoint, getEntityPoints } from '@/utils/entityPoints';
 import { getSegmentCount } from '@/utils/lineSegments';
-import { requestSave, getBackendId, flushSaveAsync, getProjectId, getProjectName, setBackendId, setProjectContext } from '@/api/autoSave';
+import { requestSave, getProjectId, getProjectName, setBackendId, setProjectContext } from '@/api/autoSave';
 import { createEmptyDocument, generateDateName } from '@/utils/document';
 import { addLog } from '@/stores/logStore';
-import { api, partApi } from '@/api/cachedClient';
+import { api } from '@/api/cachedClient';
 import type { ToolType } from '@/types/editor';
 import type { ThemePalette } from '@/theme';
 import type { ReactNode } from 'react';
@@ -224,33 +224,6 @@ export function Toolbar() {
 
         <button onClick={toggleProperties} style={btn(palette, propertiesOpen)} title="Toggle document properties panel">
           Props
-        </button>
-        <Sep color={palette.border} />
-        <button
-          onClick={async () => {
-            const backendId = getBackendId();
-            if (!backendId) return;
-            try {
-              // Ensure latest sketch data is saved before creating the part
-              requestSave();
-              await flushSaveAsync();
-              // Fetch document to get its project_id for inheritance
-              const docData = await api.getDocument(backendId);
-              const saved = await partApi.createPart(doc.name + ' Part', {
-                id: crypto.randomUUID(),
-                name: doc.name + ' Part',
-                documentId: backendId,
-                features: [],
-              }, docData.project_id ?? undefined);
-              navigate(`/part/${saved.id}`);
-            } catch (err) {
-              console.error('Failed to create part:', err);
-            }
-          }}
-          style={{ ...btn(palette), background: palette.primaryBtn, color: '#fff', borderColor: palette.primaryBtn }}
-          title="Create a new 3D Part from this sketch"
-        >
-          New Part
         </button>
         <Sep color={palette.border} />
         <button

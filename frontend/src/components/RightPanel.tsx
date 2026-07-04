@@ -1,7 +1,6 @@
 import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useThemeStore } from '@/theme';
-import { PartsPanel } from './PartsPanel';
 import { PropertiesPanel } from './PropertiesPanel';
 import { SketchPanel } from './SketchPanel';
 import { ParametersPanel } from './ParametersPanel';
@@ -28,7 +27,6 @@ export function RightPanel() {
         overflowY: 'auto',
       }}
     >
-      <PartsPanel />
       <SketchPanel />
       <ParametersPanel />
       {singleEntity && <PropertiesPanel entity={singleEntity} />}

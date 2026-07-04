@@ -200,7 +200,7 @@ export interface Sketch {
   name: string;
   visible: boolean;
   suppressed?: boolean;
-  plane?: import('@/types/part').Plane;
+  plane?: import('@/types/geometry').Plane;
   entities: Entity[];
   constraints: Constraint[];
 }

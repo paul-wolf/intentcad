@@ -45,7 +45,7 @@ interface DocumentStore {
   restoreHistory(persisted: { undo: HistoryEntry[]; redo: HistoryEntry[] }): void;
 
   // Sketch actions
-  addSketch(name: string, plane?: import('@/types/part').Plane): string;
+  addSketch(name: string, plane?: import('@/types/geometry').Plane): string;
   renameSketch(sketchId: string, name: string): void;
   toggleSketchVisibility(sketchId: string): void;
   toggleSketchSuppressed(sketchId: string): void;

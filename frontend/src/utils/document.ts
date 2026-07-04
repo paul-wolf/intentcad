@@ -1,5 +1,5 @@
 import type { Document, Entity, Sketch, Constraint } from '@/types/document';
-import type { Plane } from '@/types/part';
+import type { Plane } from '@/types/geometry';
 import { generateId } from './id';
 
 export function generateUniqueName(baseName: string, existingNames: string[]): string {

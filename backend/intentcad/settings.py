@@ -20,7 +20,6 @@ INSTALLED_APPS = [
     "corsheaders",
     "accounts",
     "documents",
-    "parts",
     "cam",
     "projects",
     "django_extensions",

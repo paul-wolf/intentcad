@@ -3,11 +3,10 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useThemeStore } from '@/theme';
 import { createEmptyDocument, migrateDocument, generateDateName } from '@/utils/document';
-import { api, partApi, type DocumentListItem, type PartListItem } from '@/api/cachedClient';
+import { api, type DocumentListItem } from '@/api/cachedClient';
 import { setBackendId, setProjectContext } from '@/api/autoSave';
 import type { Document } from '@/types/document';
 import { DocumentThumbnail } from './DocumentThumbnail';
-import { PartListThumbnail } from './PartListThumbnail';
 import { projectApi } from '@/api/projectClient';
 
 function relativeTime(iso: string): string {
@@ -27,13 +26,11 @@ export function DocumentListPage() {
   const setDocument = useDocumentStore((s) => s.setDocument);
   const palette = useThemeStore((s) => s.palette);
   const [docs, setDocs] = useState<DocumentListItem[]>([]);
-  const [parts, setParts] = useState<PartListItem[]>([]);
   const [projectName, setProjectName] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editingType, setEditingType] = useState<'doc' | 'part'>('doc');
   const [editName, setEditName] = useState('');
   const [editingProjectName, setEditingProjectName] = useState(false);
   const [editProjectName, setEditProjectName] = useState('');
@@ -42,13 +39,11 @@ export function DocumentListPage() {
   const fetchDocs = useCallback(async () => {
     try {
       setLoading(true);
-      const [docList, partList] = await Promise.all([
+      const [docList] = await Promise.all([
         api.listDocuments(projectId),
-        partApi.listParts(projectId),
         projectId ? projectApi.getProject(projectId).then((p) => setProjectName(p.name)).catch(() => {}) : Promise.resolve(),
       ]);
       setDocs(docList);
-      setParts(partList);
       setError(null);
     } catch {
       setError('offline');
@@ -95,18 +90,8 @@ export function DocumentListPage() {
     }
   };
 
-  const handleDeletePart = async (id: string) => {
-    try {
-      await partApi.deletePart(id);
-      setParts((prev) => prev.filter((p) => p.id !== id));
-    } catch (err) {
-      console.error('Failed to delete part:', err);
-    }
-  };
-
-  const startRename = (id: string, currentName: string, type: 'doc' | 'part') => {
+  const startRename = (id: string, currentName: string) => {
     setEditingId(id);
-    setEditingType(type);
     setEditName(currentName);
   };
 
@@ -117,13 +102,8 @@ export function DocumentListPage() {
     }
     const trimmed = editName.trim();
     try {
-      if (editingType === 'doc') {
-        await api.updateDocument(editingId, { name: trimmed });
-        setDocs((prev) => prev.map((d) => (d.id === editingId ? { ...d, name: trimmed } : d)));
-      } else {
-        await partApi.updatePart(editingId, { name: trimmed });
-        setParts((prev) => prev.map((p) => (p.id === editingId ? { ...p, name: trimmed } : p)));
-      }
+      await api.updateDocument(editingId, { name: trimmed });
+      setDocs((prev) => prev.map((d) => (d.id === editingId ? { ...d, name: trimmed } : d)));
     } catch (err) {
       console.error('Failed to rename:', err);
     }
@@ -144,7 +124,6 @@ export function DocumentListPage() {
 
   const lowerSearch = search.toLowerCase();
   const filteredDocs = lowerSearch ? docs.filter((d) => d.name.toLowerCase().includes(lowerSearch)) : docs;
-  const filteredParts = lowerSearch ? parts.filter((p) => p.name.toLowerCase().includes(lowerSearch)) : parts;
 
   const btnStyle: React.CSSProperties = {
     padding: '8px 18px',
@@ -218,7 +197,7 @@ export function DocumentListPage() {
         )}
 
         {/* Search */}
-        {!loading && (docs.length > 0 || parts.length > 0) && (
+        {!loading && docs.length > 0 && (
           <input
             type="text"
             placeholder="Search..."
@@ -268,7 +247,7 @@ export function DocumentListPage() {
                   }}
                   onDoubleClick={() => {
                     if (clickTimer.current) { clearTimeout(clickTimer.current); clickTimer.current = null; }
-                    startRename(d.id, d.name, 'doc');
+                    startRename(d.id, d.name);
                   }}
                 >
                   <DocumentThumbnail
@@ -278,7 +257,7 @@ export function DocumentListPage() {
                     background={palette.background}
                     stroke={palette.line}
                   />
-                  {editingId === d.id && editingType === 'doc' ? (
+                  {editingId === d.id ? (
                     <input
                       style={{
                         flex: 1,
@@ -331,98 +310,7 @@ export function DocumentListPage() {
           </div>
         )}
 
-        {/* Parts */}
-        {!loading && filteredParts.length > 0 && (
-          <div>
-            <div style={{ fontSize: '13px', color: palette.textSecondary, fontWeight: 600, textTransform: 'uppercase' as const, letterSpacing: '0.5px', marginBottom: '8px' }}>
-              Parts
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column' as const, gap: '4px' }}>
-              {filteredParts.map((p) => (
-                <div
-                  key={p.id}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '10px',
-                    padding: '8px 12px',
-                    background: palette.panelBg,
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                  }}
-                  onClick={() => {
-                    if (editingId === p.id) return;
-                    if (clickTimer.current) clearTimeout(clickTimer.current);
-                    clickTimer.current = setTimeout(() => {
-                      clickTimer.current = null;
-                      navigate(`/part/${p.id}`);
-                    }, 250);
-                  }}
-                  onDoubleClick={() => {
-                    if (clickTimer.current) { clearTimeout(clickTimer.current); clickTimer.current = null; }
-                    startRename(p.id, p.name, 'part');
-                  }}
-                >
-                  <PartListThumbnail
-                    partId={p.id}
-                    width={56}
-                    height={42}
-                    background={palette.background}
-                  />
-                  {editingId === p.id && editingType === 'part' ? (
-                    <input
-                      style={{
-                        flex: 1,
-                        background: palette.panelBg,
-                        border: `1px solid ${palette.textSecondary}`,
-                        borderRadius: '2px',
-                        color: palette.text,
-                        fontSize: '14px',
-                        padding: '2px 6px',
-                        outline: 'none',
-                      }}
-                      value={editName}
-                      onChange={(e) => setEditName(e.target.value)}
-                      onBlur={commitRename}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') commitRename();
-                        if (e.key === 'Escape') setEditingId(null);
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                      autoFocus
-                    />
-                  ) : (
-                    <span style={{ flex: 1, color: palette.text, fontSize: '14px' }}>
-                      {p.name}
-                    </span>
-                  )}
-                  <span style={{ fontSize: '12px', color: palette.textSecondary, whiteSpace: 'nowrap' }}>
-                    {relativeTime(p.updated_at)}
-                  </span>
-                  <button
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      color: palette.danger,
-                      cursor: 'pointer',
-                      fontSize: '18px',
-                      padding: '0 4px',
-                      lineHeight: 1,
-                    }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDeletePart(p.id);
-                    }}
-                  >
-                    &times;
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {!loading && docs.length === 0 && parts.length === 0 && (
+        {!loading && docs.length === 0 && (
           <p style={{ fontSize: '13px', color: palette.textSecondary }}>
             No documents yet. Create a sketch to get started.
           </p>

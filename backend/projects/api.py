@@ -21,7 +21,6 @@ def list_projects(request):
         return err
     qs = get_accessible_projects(request.user).annotate(
         document_count=Count("documents", distinct=True),
-        part_count=Count("parts", distinct=True),
     )
     return [
         ProjectListOut(
@@ -30,7 +29,6 @@ def list_projects(request):
             description=p.description,
             updated_at=p.updated_at,
             document_count=p.document_count,
-            part_count=p.part_count,
         )
         for p in qs
     ]
