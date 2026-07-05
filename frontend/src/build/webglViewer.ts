@@ -165,6 +165,29 @@ export function createViewer(canvas: HTMLCanvasElement, color = [0.62, 0.66, 0.7
   let lineVertexCount = 0;
   const HIGHLIGHT: [number, number, number] = [1.0, 0.5, 0.05];
 
+  // coordinate frame: a ground grid on the engine's Z=0 plane + XYZ axes at the
+  // origin, so the build123d coordinate system (Z up, mm) is explicit.
+  const gridBuf = gl.createBuffer()!;
+  const axisBuf = gl.createBuffer()!;
+  let gridCount = 0;
+  function buildFrame(radius: number) {
+    const pow = Math.pow(10, Math.floor(Math.log10(radius / 4)));
+    const step = [1, 2, 5, 10].map((m) => m * pow).find((s) => radius / s <= 6) ?? 10 * pow;
+    const n = Math.ceil((radius * 1.2) / step);
+    const ext = n * step;
+    const g: number[] = [];
+    for (let i = -n; i <= n; i++) {
+      g.push(i * step, -ext, 0, i * step, ext, 0);   // lines along Y
+      g.push(-ext, i * step, 0, ext, i * step, 0);   // lines along X
+    }
+    gl!.bindBuffer(gl!.ARRAY_BUFFER, gridBuf);
+    gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array(g), gl!.STATIC_DRAW);
+    gridCount = g.length / 3;
+    const a = ext * 1.15;
+    gl!.bindBuffer(gl!.ARRAY_BUFFER, axisBuf);
+    gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array([0,0,0, a,0,0, 0,0,0, 0,a,0, 0,0,0, 0,0,a]), gl!.STATIC_DRAW);
+  }
+
   gl.enable(gl.DEPTH_TEST);
   gl.clearColor(0, 0, 0, 0);
 
@@ -181,7 +204,11 @@ export function createViewer(canvas: HTMLCanvasElement, color = [0.62, 0.66, 0.7
     gl!.bindBuffer(gl!.ARRAY_BUFFER, normBuf);
     gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array(mesh.normals), gl!.STATIC_DRAW);
     vertexCount = mesh.positions.length / 3;
-    if (vertexCount === 0) { center = [0, 0, 0]; return; }  // empty build — keep camera sane
+    if (vertexCount === 0) {  // empty build — still show the coordinate frame
+      center = [0, 0, 0]; buildFrame(40);
+      distance = 48 / Math.tan((45 * Math.PI) / 180 / 2) * 1.4;
+      return;
+    }
 
     // frame the camera on the bounding box
     const xs = mesh.positions;
@@ -198,6 +225,7 @@ export function createViewer(canvas: HTMLCanvasElement, color = [0.62, 0.66, 0.7
       0.001,
     );
     distance = radius / Math.tan((45 * Math.PI) / 180 / 2) * 1.4;
+    buildFrame(radius);
   }
 
   let raf = 0;
@@ -216,7 +244,7 @@ export function createViewer(canvas: HTMLCanvasElement, color = [0.62, 0.66, 0.7
     }
     gl!.viewport(0, 0, w, h);
     gl!.clear(gl!.COLOR_BUFFER_BIT | gl!.DEPTH_BUFFER_BIT);
-    if (!vertexCount) return;
+    // draw even with no solid, so the coordinate frame is always visible
 
     const proj = perspective((45 * Math.PI) / 180, w / h, distance * 0.01, distance * 100);
     const view = translation(0, 0, -distance);
@@ -237,22 +265,34 @@ export function createViewer(canvas: HTMLCanvasElement, color = [0.62, 0.66, 0.7
     gl!.enableVertexAttribArray(aNormal);
     gl!.vertexAttribPointer(aNormal, 3, gl!.FLOAT, false, 0, 0);
 
-    gl!.drawArrays(gl!.TRIANGLES, 0, vertexCount);
+    if (vertexCount) gl!.drawArrays(gl!.TRIANGLES, 0, vertexCount);
 
-    // highlight pass: bright lines on top of the solid (depth test off so the
-    // targeted edges are visible even when they're behind the surface)
-    if (lineVertexCount) {
-      gl!.useProgram(lineProg);
-      gl!.uniformMatrix4fv(lProj, false, proj);
-      gl!.uniformMatrix4fv(lView, false, view);
-      gl!.uniformMatrix4fv(lModel, false, model);
-      gl!.uniform3fv(lColor, HIGHLIGHT);
-      gl!.bindBuffer(gl!.ARRAY_BUFFER, lineBuf);
-      gl!.enableVertexAttribArray(lPos);
+    // coordinate frame + highlight all use the line program / same matrices
+    gl!.useProgram(lineProg);
+    gl!.uniformMatrix4fv(lProj, false, proj);
+    gl!.uniformMatrix4fv(lView, false, view);
+    gl!.uniformMatrix4fv(lModel, false, model);
+    gl!.enableVertexAttribArray(lPos);
+    const drawLines = (buf: WebGLBuffer, count: number, col: [number, number, number],
+                       first = 0, n = count) => {
+      gl!.uniform3fv(lColor, col);
+      gl!.bindBuffer(gl!.ARRAY_BUFFER, buf);
       gl!.vertexAttribPointer(lPos, 3, gl!.FLOAT, false, 0, 0);
+      gl!.drawArrays(gl!.LINES, first, n);
+    };
+
+    // ground grid + XYZ axes (Z up), occluded by the solid where it's in front
+    gl!.lineWidth(1);
+    drawLines(gridBuf, gridCount, [0.45, 0.48, 0.53]);
+    drawLines(axisBuf, 6, [0.85, 0.33, 0.33], 0, 2);  // X red
+    drawLines(axisBuf, 6, [0.40, 0.70, 0.42], 2, 2);  // Y green
+    drawLines(axisBuf, 6, [0.40, 0.55, 0.85], 4, 2);  // Z blue
+
+    // highlight pass: bright, drawn over the solid (depth off so it's visible)
+    if (lineVertexCount) {
       gl!.disable(gl!.DEPTH_TEST);
       gl!.lineWidth(2);
-      gl!.drawArrays(gl!.LINES, 0, lineVertexCount);
+      drawLines(lineBuf, lineVertexCount, HIGHLIGHT);
       gl!.enable(gl!.DEPTH_TEST);
     }
   }
@@ -307,6 +347,8 @@ export function createViewer(canvas: HTMLCanvasElement, color = [0.62, 0.66, 0.7
       gl.deleteBuffer(posBuf);
       gl.deleteBuffer(normBuf);
       gl.deleteBuffer(lineBuf);
+      gl.deleteBuffer(gridBuf);
+      gl.deleteBuffer(axisBuf);
       gl.deleteProgram(prog);
       gl.deleteProgram(lineProg);
     },
