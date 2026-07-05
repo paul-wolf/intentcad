@@ -135,9 +135,13 @@ export interface Viewer {
   dispose(): void;
 }
 
+export interface AxisLabel { name: string; x: number; y: number; color: string; visible: boolean }
+
 export interface ViewerOpts {
   color?: [number, number, number];
   onFacePick?: (face: FaceRange | null) => void;
+  /** Called each frame with the CSS-px positions of the X/Y/Z axis tips. */
+  onAxes?: (labels: AxisLabel[]) => void;
 }
 
 export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): Viewer {
@@ -184,6 +188,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   const gridBuf = gl.createBuffer()!;
   const axisBuf = gl.createBuffer()!;
   let gridCount = 0;
+  let axisLen = 40;
   function buildFrame(radius: number) {
     const pow = Math.pow(10, Math.floor(Math.log10(radius / 4)));
     const step = [1, 2, 5, 10].map((m) => m * pow).find((s) => radius / s <= 6) ?? 10 * pow;
@@ -198,6 +203,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array(g), gl!.STATIC_DRAW);
     gridCount = g.length / 3;
     const a = ext * 1.15;
+    axisLen = a;
     gl!.bindBuffer(gl!.ARRAY_BUFFER, axisBuf);
     gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array([0,0,0, a,0,0, 0,0,0, 0,a,0, 0,0,0, 0,0,a]), gl!.STATIC_DRAW);
   }
@@ -367,6 +373,24 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       gl!.lineWidth(2);
       drawLines(lineBuf, lineVertexCount, HIGHLIGHT);
       gl!.enable(gl!.DEPTH_TEST);
+    }
+
+    // report axis-tip positions (CSS px) so the UI can label X/Y/Z
+    if (opts.onAxes) {
+      const cw = canvas.clientWidth, ch = canvas.clientHeight;
+      const pv = multiply(proj, multiply(view, model));
+      const tip = (x: number, y: number, z: number) => {
+        const w4 = pv[3]! * x + pv[7]! * y + pv[11]! * z + pv[15]!;
+        const nx = (pv[0]! * x + pv[4]! * y + pv[8]! * z + pv[12]!) / w4;
+        const ny = (pv[1]! * x + pv[5]! * y + pv[9]! * z + pv[13]!) / w4;
+        return { x: (nx * 0.5 + 0.5) * cw, y: (1 - (ny * 0.5 + 0.5)) * ch, visible: w4 > 0 };
+      };
+      const L = axisLen;
+      opts.onAxes([
+        { name: 'X', ...tip(L, 0, 0), color: '#d95555' },
+        { name: 'Y', ...tip(0, L, 0), color: '#5fb36a' },
+        { name: 'Z', ...tip(0, 0, L), color: '#6a8cd9' },
+      ]);
     }
   }
 

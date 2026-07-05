@@ -3,7 +3,7 @@ import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
 import { buildApi, type RunResponse, type UsageResponse } from '@/api/client';
 import { persistModelCode, getBackendId } from '@/api/autoSave';
-import { createViewer, type Viewer, type FaceRange } from '@/build/webglViewer';
+import { createViewer, type Viewer, type FaceRange, type AxisLabel } from '@/build/webglViewer';
 import { downloadTextFile } from '@/export/download';
 
 interface Props { onClose: () => void }
@@ -30,6 +30,18 @@ export function ScriptViewer({ onClose }: Props) {
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewerRef = useRef<Viewer | null>(null);
+  const axisRefs = useRef<Record<string, HTMLSpanElement | null>>({});
+
+  // position the X/Y/Z labels each frame via refs (no React re-render on orbit)
+  const onAxes = (labels: AxisLabel[]) => {
+    for (const l of labels) {
+      const el = axisRefs.current[l.name];
+      if (!el) continue;
+      el.style.left = `${l.x}px`;
+      el.style.top = `${l.y}px`;
+      el.style.display = l.visible ? 'block' : 'none';
+    }
+  };
 
   const [code, setCode] = useState('');
   const [status, setStatus] = useState<'idle' | 'building' | 'done' | 'error'>('idle');
@@ -94,7 +106,7 @@ export function ScriptViewer({ onClose }: Props) {
     setCode(initial);
     if (canvasRef.current) {
       try {
-        viewerRef.current = createViewer(canvasRef.current, { onFacePick: onPick });
+        viewerRef.current = createViewer(canvasRef.current, { onFacePick: onPick, onAxes });
         build(initial);
       } catch (err) {
         setStatus('error');
@@ -282,9 +294,16 @@ export function ScriptViewer({ onClose }: Props) {
                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', tabSize: 4 }}
             />
           </div>
-          <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
+          <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
             <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block',
                      cursor: 'grab', touchAction: 'none' }} />
+            {(['X', 'Y', 'Z'] as const).map((n, i) => (
+              <span key={n} ref={(el) => { axisRefs.current[n] = el; }}
+                style={{ position: 'absolute', left: 0, top: 0, display: 'none',
+                         color: ['#d95555', '#5fb36a', '#6a8cd9'][i], fontSize: '13px', fontWeight: 700,
+                         pointerEvents: 'none', transform: 'translate(-50%, -50%)',
+                         textShadow: '0 0 3px rgba(0,0,0,0.7)' }}>{n}</span>
+            ))}
             {status === 'error' && (
               <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '45%',
                             overflow: 'auto', padding: '12px 14px', background: 'rgba(0,0,0,0.35)',
