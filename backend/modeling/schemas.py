@@ -223,3 +223,16 @@ class RunResponse(Schema):
     edges: list[RunEdge] = []
     step: str
     metrics: RunMetrics
+
+
+class EditRequest(Schema):
+    """Ask the assistant to edit the build123d script from an instruction, with
+    the current selection (if any) as the target."""
+    code: str
+    instruction: str
+    context: str = ""   # a description of the selected face(s)/edge
+
+
+class EditResponse(Schema):
+    code: str           # the full updated script (already validated to build)
+    note: str | None = None

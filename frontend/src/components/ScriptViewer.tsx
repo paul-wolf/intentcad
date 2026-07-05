@@ -100,6 +100,44 @@ export function ScriptViewer({ onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const [ask, setAsk] = useState('');
+  const [asking, setAsking] = useState(false);
+  const [note, setNote] = useState('');
+
+  // describe the current selection so the assistant can target it in build123d
+  const selectionContext = (): string => {
+    const res = resRef.current;
+    if (!res || sel.length === 0) return '';
+    const v = (a: [number, number, number]) => `(${a.map((n) => Math.round(n * 10) / 10).join(', ')})`;
+    const desc = (i: number) => {
+      const f = res.faces.find((x) => x.index === i)!;
+      return `${f.kind} face (center ${v(f.center)}, normal ${v(f.normal)})`;
+    };
+    if (sel.length === 1) return `the ${desc(sel[0]!)}`;
+    const shared = res.edges.filter((e) => e.faceIndices.length === 2 && e.faceIndices.includes(sel[0]!) && e.faceIndices.includes(sel[1]!));
+    const edge = shared[0] ? `the ${shared[0].kind} edge between ` : 'the geometry between ';
+    return `${edge}the ${desc(sel[0]!)} and the ${desc(sel[1]!)}`;
+  };
+
+  const sendAsk = async () => {
+    const instruction = ask.trim();
+    if (!instruction || asking) return;
+    setAsking(true);
+    setNote('');
+    try {
+      const r = await buildApi.edit({ code, instruction, context: selectionContext() });
+      setCode(r.code);
+      persistModelCode(r.code);
+      await build(r.code);
+      setAsk('');
+      setNote(r.note || 'Done.');
+    } catch (err) {
+      setNote(String(err instanceof Error ? err.message : err));
+    } finally {
+      setAsking(false);
+    }
+  };
+
   const rebuild = () => { persistModelCode(code); build(code); };
   const downloadStep = () => {
     if (status === 'done' && stepRef.current) downloadTextFile(stepRef.current, `${docName}.step`, 'application/step');
@@ -160,6 +198,29 @@ export function ScriptViewer({ onClose }: Props) {
               </div>
             )}
           </div>
+        </div>
+
+        {/* assistant bar — edit the model in words (uses the current selection) */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px',
+                      borderTop: `1px solid ${palette.border}` }}>
+          <input
+            value={ask}
+            onChange={(e) => setAsk(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') sendAsk(); }}
+            placeholder={sel.length ? 'e.g. chamfer this edge 2mm  (targets your selection)' : 'e.g. add four M4 corner bolt holes'}
+            disabled={asking}
+            style={{ flex: 1, padding: '6px 10px', background: palette.inputBg,
+                     border: `1px solid ${palette.inputBorder}`, borderRadius: '4px',
+                     color: palette.text, fontSize: '13px', outline: 'none' }}
+          />
+          <button onClick={sendAsk} disabled={asking || !ask.trim()}
+            style={{ padding: '6px 14px', background: palette.primaryBtn, color: '#fff', border: 'none',
+                     borderRadius: '4px', fontSize: '13px', cursor: ask.trim() && !asking ? 'pointer' : 'default',
+                     opacity: ask.trim() && !asking ? 1 : 0.5 }}>
+            {asking ? 'Editing…' : 'Ask'}
+          </button>
+          {note && <span style={{ fontSize: '12px', color: palette.textSecondary, maxWidth: '38%',
+                                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{note}</span>}
         </div>
 
         {/* footer */}

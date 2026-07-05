@@ -197,7 +197,12 @@ export const buildApi = {
   run(code: string): Promise<RunResponse> {
     return request('/build/run', { method: 'POST', body: JSON.stringify({ code }) });
   },
+  edit(payload: { code: string; instruction: string; context?: string }): Promise<EditResponse> {
+    return request('/build/edit', { method: 'POST', body: JSON.stringify(payload) });
+  },
 };
+
+export interface EditResponse { code: string; note?: string }
 
 // ── build123d engine (the model is a script) ──
 export interface RunFace {

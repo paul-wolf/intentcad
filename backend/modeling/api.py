@@ -3,8 +3,18 @@ from ninja import Router
 
 from projects.access import require_auth
 
+from .assistant import AssistantError, edit_script
 from .engine import EngineError, run_script
-from .schemas import MeshOut, RunEdge, RunFace, RunMetrics, RunRequest, RunResponse
+from .schemas import (
+    EditRequest,
+    EditResponse,
+    MeshOut,
+    RunEdge,
+    RunFace,
+    RunMetrics,
+    RunRequest,
+    RunResponse,
+)
 
 router = Router()
 
@@ -29,3 +39,18 @@ def run_model(request, payload: RunRequest):
         step=r["step"],
         metrics=RunMetrics(**r["metrics"]),
     )
+
+
+@router.post("/edit", response=EditResponse)
+def edit_model(request, payload: EditRequest):
+    """Edit the build123d script from a natural-language instruction (with the
+    current selection as the target). Returns a script already validated to build.
+    """
+    err = require_auth(request)
+    if err:
+        return err
+    try:
+        r = edit_script(payload.code, payload.instruction, payload.context)
+    except AssistantError as exc:
+        return JsonResponse({"message": str(exc)}, status=422)
+    return EditResponse(code=r["code"], note=r.get("note"))
