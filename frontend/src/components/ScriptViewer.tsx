@@ -106,6 +106,19 @@ export function ScriptViewer({ onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Auto-save code edits (typed by hand, not just on Build) — debounced. The
+  // first value we see is the seed we just loaded, so record it without saving.
+  const codeBaseline = useRef<string | null>(null);
+  useEffect(() => {
+    if (codeBaseline.current === null) { codeBaseline.current = code; return; }
+    if (code === codeBaseline.current) return;
+    const t = setTimeout(() => { codeBaseline.current = code; persistModelCode(code); }, 600);
+    return () => clearTimeout(t);
+  }, [code]);
+
+  // save the current code on close, so nothing typed is lost
+  const handleClose = () => { if (code.trim()) persistModelCode(code); onClose(); };
+
   const [ask, setAsk] = useState('');
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState('');
@@ -171,7 +184,7 @@ export function ScriptViewer({ onClose }: Props) {
   return (
     <div style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'center',
                   justifyContent: 'center', background: 'rgba(0,0,0,0.5)', zIndex: 1000 }}
-         onClick={onClose}>
+         onClick={handleClose}>
       <div style={{ background: palette.panelBg, border: `1px solid ${palette.border}`,
                     borderRadius: '8px', width: '88%', maxWidth: '1100px', height: '84vh',
                     display: 'flex', flexDirection: 'column', boxShadow: '0 8px 32px rgba(0,0,0,0.4)' }}
@@ -191,7 +204,7 @@ export function ScriptViewer({ onClose }: Props) {
             style={{ ...btn, background: 'none', color: palette.textSecondary,
                      border: `1px solid ${palette.border}`, opacity: status === 'done' ? 1 : 0.5,
                      cursor: status === 'done' ? 'pointer' : 'default' }}>STEP</button>
-          <button onClick={onClose} style={{ background: 'none', border: 'none',
+          <button onClick={handleClose} style={{ background: 'none', border: 'none',
                    color: palette.textSecondary, fontSize: '18px', cursor: 'pointer', padding: '0 4px' }}>&times;</button>
         </div>
 
