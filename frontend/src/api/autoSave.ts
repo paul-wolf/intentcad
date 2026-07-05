@@ -62,9 +62,11 @@ function doSave(id: string, doc: Record<string, unknown>, history?: unknown) {
  * panel so a tree edit is saved immediately rather than through the shared
  * debounce buffer (which effect ordering / fast refresh could drop). */
 export function persistBuildFeatures(features: unknown[]) {
+  // keep the in-memory document in sync, then save it directly (no debounce)
+  useDocumentStore.getState().setBuildFeatures(features as never);
   if (!backendId) return;
   const state = useDocumentStore.getState();
-  const doc = { ...state.document, buildFeatures: features } as unknown as Record<string, unknown>;
+  const doc = { ...state.document } as unknown as Record<string, unknown>;
   const history = { undo: state.undoStack, redo: state.redoStack };
   doSave(backendId, doc, history);
 }

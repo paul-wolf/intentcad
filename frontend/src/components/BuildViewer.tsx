@@ -20,15 +20,11 @@ const newId = () => 'op-' + crypto.randomUUID().slice(0, 8);
 const defaultExtrude = (sketchId: string): BuildFeature =>
   ({ id: newId(), type: 'extrude', sketchId, distance: 10, operation: 'add' });
 
-/** Seed the tree for a document, dropping features that reference a sketch the
- * document no longer has (stale/foreign ids — otherwise the build 422s). Falls
- * back to one extrude if nothing buildable survives. */
-function seedTree(saved: BuildFeature[], sketchIds: Set<string>, activeSketchId: string): BuildFeature[] {
-  const usable = saved.filter((f) =>
-    f.type === 'extrude' || f.type === 'revolve' ? sketchIds.has(f.sketchId) : true,
-  );
-  const hasBase = usable.some((f) => f.type === 'extrude' || f.type === 'revolve');
-  if (hasBase) return usable;
+/** Seed the tree for a document: load the saved tree as-is (the builder tolerates
+ * a stale sketch reference by skipping it with a warning — no need to drop it
+ * here and risk losing a legit feature). Start from one extrude if empty. */
+function seedTree(saved: BuildFeature[], activeSketchId: string): BuildFeature[] {
+  if (saved.length > 0) return saved;
   return activeSketchId ? [defaultExtrude(activeSketchId)] : [];
 }
 
@@ -137,8 +133,7 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
   useEffect(() => {
     useBuildStore.getState().setPanelOpen(true);
     const doc = useDocumentStore.getState().document;
-    const sketchIds = new Set(doc.sketches.map((s) => s.id));
-    useBuildStore.getState().initTree(seedTree(doc.buildFeatures ?? [], sketchIds, activeSketchId));
+    useBuildStore.getState().initTree(seedTree(doc.buildFeatures ?? [], activeSketchId));
     if (canvasRef.current) {
       try {
         viewerRef.current = createViewer(canvasRef.current);
@@ -158,14 +153,18 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
   // rebuild whenever the tree changes (and once after the viewer exists)
   useEffect(() => { rebuild(); }, [rebuild]);
 
-  // persist the tree the instant it changes — directly, not via the debounce.
-  // Compare against what's already stored so the initial seed (and any fast-
-  // refresh double-run) doesn't trigger a redundant save; only a real edit does.
+  // Persist the tree on a real user edit — never on load. The first non-empty
+  // value we see is the just-loaded tree: record it as the baseline WITHOUT
+  // saving (so mount / fast-refresh double-runs can't overwrite the DB). Only a
+  // subsequent, genuinely different tree is saved.
+  const lastPersisted = useRef<string | null>(null);
   useEffect(() => {
-    const saved = useDocumentStore.getState().document.buildFeatures ?? [];
-    const changed = JSON.stringify(saved) !== JSON.stringify(features);
-    useDocumentStore.getState().setBuildFeatures(features);
-    if (changed) persistBuildFeatures(features);
+    if (features.length === 0) return;
+    const key = JSON.stringify(features);
+    if (lastPersisted.current === null) { lastPersisted.current = key; return; }  // loaded baseline
+    if (lastPersisted.current === key) return;                                    // no real change
+    lastPersisted.current = key;
+    persistBuildFeatures(features);
   }, [features]);
 
   // highlight the edges the current fillet/chamfer selector targets — so you can
