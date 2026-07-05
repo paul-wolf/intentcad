@@ -158,7 +158,16 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   },
 
   setModelCode(code) {
-    set((s) => ({ document: { ...s.document, modelCode: code } }));
+    set((s) => {
+      const prev = s.document.modelCode;
+      // Keep a capped version history so an overwrite is always recoverable —
+      // record the version being replaced (when it was real and actually changes).
+      const hist = s.document.modelCodeHistory ?? [];
+      const nextHist = prev && prev.trim() && prev !== code
+        ? [...hist, { code: prev, at: Date.now() }].slice(-30)
+        : hist;
+      return { document: { ...s.document, modelCode: code, modelCodeHistory: nextHist } };
+    });
   },
 
   setMetadata(metadata) {

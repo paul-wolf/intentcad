@@ -223,4 +223,6 @@ export interface Document {
   buildFeatures?: import('@/api/client').BuildFeature[];
   /** The 3D model as a build123d script — the current modeler. */
   modelCode?: string;
+  /** Capped history of prior modelCode versions, so an overwrite is recoverable. */
+  modelCodeHistory?: { code: string; at: number }[];
 }

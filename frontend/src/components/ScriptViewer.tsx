@@ -182,22 +182,43 @@ export function ScriptViewer({ onClose }: Props) {
     }
   };
 
-  // mount: create viewer, seed code from the document (or the starter), build once
+  // Never persist the untouched STARTER seed — that is how saved work got
+  // clobbered (seeded before the document had loaded, then written back).
+  const saveCode = (c: string) => { if (c.trim() && c !== STARTER) persistModelCode(c); };
+
+  // mount: create the viewer, then seed the code — but WAIT until the document
+  // has actually loaded (getBackendId is set only after setDocument), so we
+  // never seed the starter over a document that simply hasn't arrived yet.
   useEffect(() => {
     fetchUsage();
-    const saved = useDocumentStore.getState().document.modelCode;
-    const initial = saved && saved.trim() ? saved : STARTER;
-    setCode(initial);
-    if (canvasRef.current) {
-      try {
-        viewerRef.current = createViewer(canvasRef.current, { onFacePick: onPick, onAxes, onDims });
-        build(initial);
-      } catch (err) {
-        setStatus('error');
-        setMessage(String(err instanceof Error ? err.message : err));
+    let done = false;
+    let tries = 0;
+    const start = (initial: string) => {
+      setCode(initial);
+      if (canvasRef.current && !viewerRef.current) {
+        try {
+          viewerRef.current = createViewer(canvasRef.current, { onFacePick: onPick, onAxes, onDims });
+        } catch (err) {
+          setStatus('error');
+          setMessage(String(err instanceof Error ? err.message : err));
+          return;
+        }
       }
-    }
-    return () => { viewerRef.current?.dispose(); viewerRef.current = null; };
+      build(initial);
+    };
+    const seedWhenLoaded = () => {
+      if (done) return;
+      if (getBackendId() || tries > 60) {   // loaded, or give up after ~3s (new doc)
+        done = true;
+        const saved = useDocumentStore.getState().document.modelCode;
+        start(saved && saved.trim() ? saved : STARTER);
+      } else {
+        tries += 1;
+        setTimeout(seedWhenLoaded, 50);
+      }
+    };
+    seedWhenLoaded();
+    return () => { done = true; viewerRef.current?.dispose(); viewerRef.current = null; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -207,12 +228,12 @@ export function ScriptViewer({ onClose }: Props) {
   useEffect(() => {
     if (codeBaseline.current === null) { codeBaseline.current = code; return; }
     if (code === codeBaseline.current) return;
-    const t = setTimeout(() => { codeBaseline.current = code; persistModelCode(code); }, 600);
+    const t = setTimeout(() => { codeBaseline.current = code; saveCode(code); }, 600);
     return () => clearTimeout(t);
   }, [code]);
 
   // save the current code on close, so nothing typed is lost
-  const handleClose = () => { if (code.trim()) persistModelCode(code); onClose(); };
+  const handleClose = () => { if (code.trim()) saveCode(code); onClose(); };
 
   const [ask, setAsk] = useState('');
   const [asking, setAsking] = useState(false);
@@ -269,7 +290,7 @@ export function ScriptViewer({ onClose }: Props) {
     try {
       const r = await buildApi.setParams(code, { [name]: val });
       setCode(r.code);
-      persistModelCode(r.code);
+      saveCode(r.code);
       await build(r.code);
     } catch (err) {
       setMessage(String(err instanceof Error ? err.message : err));
@@ -299,7 +320,7 @@ export function ScriptViewer({ onClose }: Props) {
     try {
       const r = await buildApi.edit({ code, instruction, context: selectionContext(), document_id: getBackendId() ?? '' });
       setCode(r.code);
-      persistModelCode(r.code);
+      saveCode(r.code);
       await build(r.code);
       setAsk('');
       const k = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
@@ -312,7 +333,7 @@ export function ScriptViewer({ onClose }: Props) {
     }
   };
 
-  const rebuild = () => { persistModelCode(code); build(code); };
+  const rebuild = () => { saveCode(code); build(code); };
   const [exporting, setExporting] = useState<'stl' | 'step' | null>(null);
   const doExport = async (format: 'stl' | 'step') => {
     if (status !== 'done' || exporting) return;
