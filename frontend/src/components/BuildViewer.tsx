@@ -219,6 +219,22 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
       value: `kind:${k}`, label: `${k.charAt(0).toUpperCase()}${k.slice(1)}s (${n})`,
     })),
   ];
+  // junction options from edge→face adjacency (e.g. "Cylinder ∩ Top")
+  {
+    const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+    const primary = (t: string[]) => t.find((x) => x !== 'plane' && x !== 'cylinder' && x !== 'bspline') ?? t[0] ?? '?';
+    const pairs = new Map<string, number>();
+    for (const e of result?.edges ?? []) {
+      if (e.faces?.length === 2) {
+        const [a, b] = [primary(e.faces[0]!), primary(e.faces[1]!)].sort();
+        if (a !== b) pairs.set(`${a},${b}`, (pairs.get(`${a},${b}`) ?? 0) + 1);
+      }
+    }
+    for (const [key, n] of pairs) {
+      const [a, b] = key.split(',');
+      edgeChoices.push({ value: `between:${key}`, label: `${cap(a!)} ∩ ${cap(b!)} (${n})` });
+    }
+  }
   if (!edgeChoices.some((o) => o.value === edges)) edgeChoices.push({ value: edges, label: edges });
 
   const lbl: CSSProperties = { fontSize: '12px', color: palette.textSecondary };

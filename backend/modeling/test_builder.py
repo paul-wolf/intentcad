@@ -6,6 +6,7 @@ from django.test import SimpleTestCase
 
 from modeling.builder import BuildError, build
 from modeling.schemas import AxisIn, BuildRequest, FeatureIn, Point, SketchEntityIn, SketchIn
+from modeling.selectors import resolve_edges
 
 
 def _plate_with_hole() -> BuildRequest:
@@ -83,6 +84,30 @@ class BuilderTests(SimpleTestCase):
         self.assertEqual(len(res.edges), 12)
         self.assertTrue(all(e["kind"] == "line" for e in res.edges))
         self.assertTrue(all(math.isclose(e["length"], 10, rel_tol=1e-3) for e in res.edges))
+
+    def test_edge_adjacency_between(self):
+        """Each edge records its two adjacent faces, so 'between:A,B' targets a
+        specific junction — and distinguishes the top junction from the bottom
+        (which the coarse kind:ellipse trick could not)."""
+        res = build(BuildRequest(
+            sketches=[
+                SketchIn(id="slab", entities=[
+                    SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=60, height=60)]),
+                SketchIn(id="ring", entities=[
+                    SketchEntityIn(type="circle", center=Point(x=0, y=0), radius=13),
+                    SketchEntityIn(type="circle", center=Point(x=0, y=0), radius=8)]),
+            ],
+            features=[
+                FeatureIn(id="p", type="extrude", sketchId="slab", distance=8),
+                FeatureIn(id="s", type="extrude", sketchId="ring", distance=40,
+                          tilt=20, tiltAxis="X", operation="add"),
+            ],
+        ))
+        self.assertTrue(all(len(e["faces"]) == 2 for e in res.edges))
+        top_j = set(resolve_edges("between:cylinder,top", res.edges))
+        bot_j = set(resolve_edges("between:cylinder,bottom", res.edges))
+        self.assertTrue(top_j and bot_j)
+        self.assertEqual(top_j & bot_j, set())  # top and bottom junctions are disjoint
 
     def test_edge_inventory_has_circle(self):
         """A revolved tube has circular edges."""

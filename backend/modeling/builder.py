@@ -518,8 +518,33 @@ def _faces(shape) -> list[dict]:
     return out
 
 
+def _face_tokens(f) -> list[str]:
+    """Descriptor tokens for a face: its kind + directional tag (planar only)."""
+    toks = [f.geomType().lower()]
+    if toks[0] == "plane":
+        n = f.normalAt()
+        ax, ay, az = abs(n.x), abs(n.y), abs(n.z)
+        if az >= ax and az >= ay:
+            toks.append("top" if n.z > 0 else "bottom")
+        elif ax >= ay:
+            toks.append("right" if n.x > 0 else "left")
+        else:
+            toks.append("back" if n.y > 0 else "front")
+    return toks
+
+
 def _edges(shape) -> list[dict]:
-    """Inventory v0: each edge classified with coarse descriptors."""
+    """Edge inventory: coarse descriptors + the tokens of the two faces each edge
+    borders (adjacency), so 'edge: A ∩ B' — e.g. the socket/plate junction — is
+    selectable."""
+    from cadquery import Face
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
+    from OCP.TopExp import TopExp
+    from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
+
+    emap = TopTools_IndexedDataMapOfShapeListOfShape()
+    TopExp.MapShapesAndAncestors_s(shape.wrapped, TopAbs_EDGE, TopAbs_FACE, emap)
+
     out = []
     for i, e in enumerate(shape.Edges()):
         c = e.Center()
@@ -528,6 +553,12 @@ def _edges(shape) -> list[dict]:
             start, end = [s.x, s.y, s.z], [en.x, en.y, en.z]
         except Exception:  # closed curves (full circle) have no distinct ends
             start = end = [c.x, c.y, c.z]
+        faces: list[list[str]] = []
+        try:
+            if emap.Contains(e.wrapped):
+                faces = [_face_tokens(Face(fw)) for fw in emap.FindFromKey(e.wrapped)]
+        except Exception:
+            pass
         out.append({
             "index": i,
             "kind": e.geomType().lower(),
@@ -535,6 +566,7 @@ def _edges(shape) -> list[dict]:
             "center": [c.x, c.y, c.z],
             "start": start,
             "end": end,
+            "faces": faces,
         })
     return out
 

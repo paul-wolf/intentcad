@@ -70,6 +70,20 @@ def resolve_edges(query: str, edges: list[dict]) -> list[int]:
         field, value = field.strip(), value.strip()
         if field == "kind":
             return [e["index"] for e in edges if e["kind"] == value]
+        if field == "between":
+            a, _, b = value.partition(",")
+            a, b = a.strip(), b.strip()
+
+            def matches(e: dict) -> bool:
+                fs = [set(t) for t in e.get("faces", [])]
+                # a on one face, b on a *different* face
+                for i, fi in enumerate(fs):
+                    for j, fj in enumerate(fs):
+                        if i != j and a in fi and b in fj:
+                            return True
+                return False
+
+            return [e["index"] for e in edges if matches(e)]
         raise SelectorError(f"unknown selector field: {field!r}")
 
     raise SelectorError(f"unrecognized selector: {query!r}")
