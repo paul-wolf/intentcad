@@ -151,10 +151,11 @@ export interface BuildFeature {
   // counterbore (recesses the top face at the sketch's circles)
   cboreDia?: number;
   cboreDepth?: number;
-  // trim (cut past an axis plane)
+  // trim (cut past a plane)
   trimAxis?: 'X' | 'Y' | 'Z';
   at?: number;
   keep?: 'min' | 'max';
+  trimFace?: string;  // face tag ('back'|'front'|…) — trim flush with that face
   // placement
   plane?: 'XY' | 'XZ' | 'YZ';
   tilt?: number;

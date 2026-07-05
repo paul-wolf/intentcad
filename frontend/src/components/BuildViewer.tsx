@@ -36,7 +36,9 @@ function describe(f: BuildFeature, sketchName: (id: string) => string): string {
     case 'counterbore':
       return `Counterbore “${sketchName(f.sketchId)}” · Ø${f.cboreDia}×${f.cboreDepth}`;
     case 'trim':
-      return `Trim ${f.trimAxis} ${f.keep === 'min' ? '≤' : '≥'} ${f.at}`;
+      return f.trimFace
+        ? `Trim @ ${f.trimFace} face`
+        : `Trim ${f.trimAxis} ${f.keep === 'min' ? '≤' : '≥'} ${f.at}`;
   }
 }
 
@@ -67,6 +69,7 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
   const [size, setSize] = useState(2);
   const [cboreDia, setCboreDia] = useState(8);
   const [cboreDepth, setCboreDepth] = useState(3);
+  const [trimFace, setTrimFace] = useState('back');  // '' = by axis + value
   const [trimAxis, setTrimAxis] = useState<'X' | 'Y' | 'Z'>('Z');
   const [trimAt, setTrimAt] = useState(0);
   const [trimKeep, setTrimKeep] = useState<'min' | 'max'>('min');
@@ -161,7 +164,10 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
     if (f.type === 'fillet') { setEdges(f.edges ?? 'all'); setSize(f.radius ?? 2); }
     if (f.type === 'chamfer') { setEdges(f.edges ?? 'all'); setSize(f.distance ?? 2); }
     if (f.type === 'counterbore') { setCboreDia(f.cboreDia ?? 8); setCboreDepth(f.cboreDepth ?? 3); }
-    if (f.type === 'trim') { setTrimAxis(f.trimAxis ?? 'Z'); setTrimAt(f.at ?? 0); setTrimKeep(f.keep ?? 'min'); }
+    if (f.type === 'trim') {
+      setTrimFace(f.trimFace ?? '');
+      setTrimAxis(f.trimAxis ?? 'Z'); setTrimAt(f.at ?? 0); setTrimKeep(f.keep ?? 'min');
+    }
     setOpPlane(f.plane ?? 'XY');
     setOpTilt(f.tilt ?? 0);
     setOpTiltAxis(f.tiltAxis ?? 'X');
@@ -182,7 +188,9 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
     } else if (opType === 'counterbore') {
       feat = { id, type: 'counterbore', sketchId: opSketchId, cboreDia, cboreDepth };
     } else if (opType === 'trim') {
-      feat = { id, type: 'trim', sketchId: '', trimAxis, at: trimAt, keep: trimKeep };
+      feat = trimFace
+        ? { id, type: 'trim', sketchId: '', trimFace }
+        : { id, type: 'trim', sketchId: '', trimAxis, at: trimAt, keep: trimKeep };
     } else {
       feat = { id, type: 'chamfer', sketchId: '', edges, distance: size };
     }
@@ -344,29 +352,45 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
             {opType === 'trim' && (
               <>
                 <div style={row}>
-                  <label style={{ ...lbl, width: '48px' }}>Axis</label>
-                  <select value={trimAxis} onChange={(e) => setTrimAxis(e.target.value as 'X' | 'Y' | 'Z')} style={field}>
-                    <option value="X">X</option><option value="Y">Y</option><option value="Z">Z</option>
+                  <label style={{ ...lbl, width: '48px' }}>Plane</label>
+                  <select value={trimFace} onChange={(e) => setTrimFace(e.target.value)} style={field}>
+                    <option value="back">Back face</option>
+                    <option value="front">Front face</option>
+                    <option value="left">Left face</option>
+                    <option value="right">Right face</option>
+                    <option value="top">Top face</option>
+                    <option value="bottom">Bottom face</option>
+                    <option value="">— by axis + value —</option>
                   </select>
                 </div>
-                <div style={row}>
-                  <label style={{ ...lbl, width: '48px' }}>Keep</label>
-                  <select value={trimKeep} onChange={(e) => setTrimKeep(e.target.value as 'min' | 'max')} style={field}>
-                    <option value="min">≤ position (lower side)</option>
-                    <option value="max">≥ position (upper side)</option>
-                  </select>
-                </div>
-                <div style={row}>
-                  <label style={{ ...lbl, width: '48px' }}>At</label>
-                  <input type="number" value={trimAt} step={1}
-                         onChange={(e) => setTrimAt(Number(e.target.value) || 0)} style={field} />
-                </div>
-                {result && (() => {
-                  const i = { X: 0, Y: 1, Z: 2 }[trimAxis];
-                  return <div style={{ ...lbl, marginBottom: '8px' }}>
-                    current {trimAxis}: {Math.round(result.metrics.bbox_min[i]!)} … {Math.round(result.metrics.bbox_max[i]!)}
-                  </div>;
-                })()}
+                {trimFace === '' && (
+                  <>
+                    <div style={row}>
+                      <label style={{ ...lbl, width: '48px' }}>Axis</label>
+                      <select value={trimAxis} onChange={(e) => setTrimAxis(e.target.value as 'X' | 'Y' | 'Z')} style={field}>
+                        <option value="X">X</option><option value="Y">Y</option><option value="Z">Z</option>
+                      </select>
+                    </div>
+                    <div style={row}>
+                      <label style={{ ...lbl, width: '48px' }}>Keep</label>
+                      <select value={trimKeep} onChange={(e) => setTrimKeep(e.target.value as 'min' | 'max')} style={field}>
+                        <option value="min">≤ position (lower side)</option>
+                        <option value="max">≥ position (upper side)</option>
+                      </select>
+                    </div>
+                    <div style={row}>
+                      <label style={{ ...lbl, width: '48px' }}>At</label>
+                      <input type="number" value={trimAt} step={1}
+                             onChange={(e) => setTrimAt(Number(e.target.value) || 0)} style={field} />
+                    </div>
+                    {result && (() => {
+                      const i = { X: 0, Y: 1, Z: 2 }[trimAxis];
+                      return <div style={{ ...lbl, marginBottom: '8px' }}>
+                        current {trimAxis}: {Math.round(result.metrics.bbox_min[i]!)} … {Math.round(result.metrics.bbox_max[i]!)}
+                      </div>;
+                    })()}
+                  </>
+                )}
               </>
             )}
 

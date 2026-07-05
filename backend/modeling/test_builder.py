@@ -97,18 +97,31 @@ class BuilderTests(SimpleTestCase):
         ))
         self.assertTrue(any(e["kind"] == "circle" for e in res.edges))
 
-    def test_face_orientation_tags(self):
-        """A box: one top face, one bottom, four vertical."""
+    def test_face_directional_tags(self):
+        """A box: one face per world direction — top/bottom/left/right/front/back."""
         res = build(BuildRequest(
             sketches=[SketchIn(id="s", entities=[
                 SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=10, height=10),
             ])],
             features=[FeatureIn(id="f", type="extrude", sketchId="s", distance=10)],
         ))
-        tags = [t for f in res.faces for t in f["tags"]]
-        self.assertEqual(tags.count("top"), 1)
-        self.assertEqual(tags.count("bottom"), 1)
-        self.assertEqual(tags.count("vertical"), 4)
+        tags = sorted(t for f in res.faces for t in f["tags"])
+        self.assertEqual(tags, ["back", "bottom", "front", "left", "right", "top"])
+
+    def test_trim_to_named_face(self):
+        """Trim referencing a face tag ('top') cuts flush with that face — no
+        coordinate typed. This is the selection subsystem paying off."""
+        slab = SketchIn(id="slab", entities=[
+            SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=10, height=10)])
+        boss = SketchIn(id="boss", entities=[
+            SketchEntityIn(type="circle", center=Point(x=0, y=0), radius=2)])
+        res = build(BuildRequest(sketches=[slab, boss], features=[
+            FeatureIn(id="e", type="extrude", sketchId="slab", distance=10),                     # box z 0..10
+            FeatureIn(id="b", type="extrude", sketchId="boss", distance=10, offset=[0, 0, 5]),   # boss z 5..15
+            FeatureIn(id="t", type="trim", trimFace="top", sketchId=""),
+        ]))
+        # 'top' resolves to the box top (z=10, the largest +Z face); the boss above is trimmed
+        self.assertAlmostEqual(res.metrics["bbox_max"][2], 10, places=2)
 
     def test_face_inventory_has_cylinder(self):
         """Revolving a rectangle offset from the axis yields cylindrical faces."""

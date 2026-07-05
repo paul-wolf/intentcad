@@ -66,10 +66,11 @@ class FeatureIn(Schema):
     # counterbore (recesses the top face at the sketch's circles)
     cboreDia: float | None = None
     cboreDepth: float | None = None
-    # trim (cut past an axis plane)
+    # trim (cut past a plane)
     trimAxis: str | None = None   # 'X' | 'Y' | 'Z'
     at: float | None = None       # plane position on that axis
     keep: str | None = None       # 'min' (keep <= at) | 'max' (keep >= at)
+    trimFace: str | None = None   # face tag ('back'|'front'|'left'|'right'|'top'|'bottom') — plane = that face
 
 
 class BuildRequest(Schema):

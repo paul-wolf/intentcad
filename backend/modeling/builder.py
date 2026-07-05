@@ -27,7 +27,7 @@ import cadquery as cq
 from cadquery import Edge, Face, Solid, Vector, Wire
 
 from .schemas import BuildRequest, SketchEntityIn, SketchIn
-from .selectors import resolve_edges
+from .selectors import resolve_edges, resolve_faces
 
 _TOL = 1e-4      # endpoint-matching / closure tolerance (world units)
 _ARC_MIN = 1e-4  # |bulge| below this is treated as a straight segment
@@ -379,12 +379,30 @@ def _edge_op(shape, selector: str, amount: float | None, kind: str,
 
 
 # ── trim (cut everything past an axis-aligned plane) ─────────────────────
-def _trim(shape, axis: str, at: float | None, keep: str, feat_id: str):
-    """Cut off everything on one side of an axis plane — e.g. trim a socket
-    flush with a face. One op, no sketch (the intent-level version of the
-    sketch-a-rectangle-and-cut workflow)."""
+def _trim(shape, axis: str, at: float | None, keep: str, feat_id: str, face_sel: str | None = None):
+    """Cut off everything on one side of a plane — e.g. trim a socket flush with
+    a face. One op, no sketch. If `face_sel` is given (a face tag like 'back'),
+    the plane is *the model's own face* — the selection-driven version, where you
+    say "the back face" instead of a coordinate."""
+    if face_sel:
+        faces = _faces(shape)
+        idxs = resolve_faces(f"tag:{face_sel}", faces)
+        cand = [faces[i] for i in idxs if faces[i]["kind"] == "plane"]
+        if not cand:
+            raise BuildError(f"feature {feat_id}: trim found no planar '{face_sel}' face")
+        f = max(cand, key=lambda ff: ff["area"])  # the dominant face of that side
+        nx, ny, nz = f["normal"]
+        ax, ay, az = abs(nx), abs(ny), abs(nz)
+        # keep the material side (opposite the outward normal); trim at the face
+        if az >= ax and az >= ay:
+            axis, at, keep = "Z", f["center"][2], ("min" if nz > 0 else "max")
+        elif ax >= ay:
+            axis, at, keep = "X", f["center"][0], ("min" if nx > 0 else "max")
+        else:
+            axis, at, keep = "Y", f["center"][1], ("min" if ny > 0 else "max")
+
     if at is None:
-        raise BuildError(f"feature {feat_id}: trim needs a plane position (at)")
+        raise BuildError(f"feature {feat_id}: trim needs a plane position (at) or a face")
     ai = {"X": 0, "Y": 1, "Z": 2}.get((axis or "Z").upper())
     if ai is None:
         raise BuildError(f"feature {feat_id}: trim axis must be X, Y, or Z")
@@ -481,12 +499,14 @@ def _faces(shape) -> list[dict]:
         kind = f.geomType().lower()
         tags: list[str] = []
         if kind == "plane":
-            if n.z > 0.9:
-                tags.append("top")
-            elif n.z < -0.9:
-                tags.append("bottom")
+            # name the face by the world direction it faces
+            ax, ay, az = abs(n.x), abs(n.y), abs(n.z)
+            if az >= ax and az >= ay:
+                tags.append("top" if n.z > 0 else "bottom")
+            elif ax >= ay:
+                tags.append("right" if n.x > 0 else "left")
             else:
-                tags.append("vertical")
+                tags.append("back" if n.y > 0 else "front")
         out.append({
             "index": i,
             "kind": kind,
@@ -559,7 +579,7 @@ def build(req: BuildRequest) -> BuildResult:
         if feat.type == "trim":
             if result is None:
                 raise BuildError(f"feature {feat.id}: trim needs existing geometry")
-            result = _trim(result, feat.trimAxis or "Z", feat.at, feat.keep or "min", feat.id)
+            result = _trim(result, feat.trimAxis or "Z", feat.at, feat.keep or "min", feat.id, feat.trimFace)
             continue
         if feat.type == "counterbore":
             if result is None:
