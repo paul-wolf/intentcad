@@ -27,6 +27,7 @@ part -= Pos(0, 0, zc) * Rot(90, 0, 0) * Cylinder(P["bolt_d"]/2, P["boss_d"]*2)
 export function ScriptViewer({ onClose }: Props) {
   const palette = useThemeStore((s) => s.palette);
   const docName = useDocumentStore((s) => s.document.name);
+  const modelHistory = useDocumentStore((s) => s.document.modelCodeHistory ?? []);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewerRef = useRef<Viewer | null>(null);
@@ -235,6 +236,27 @@ export function ScriptViewer({ onClose }: Props) {
   // save the current code on close, so nothing typed is lost
   const handleClose = () => { if (code.trim()) saveCode(code); onClose(); };
 
+  // version history: restore a prior modelCode (restoring pushes the current one
+  // into history too, via setModelCode, so it's reversible)
+  const [showHistory, setShowHistory] = useState(false);
+  const restore = (v: { code: string; at: number }) => {
+    setShowHistory(false);
+    setCode(v.code);
+    saveCode(v.code);
+    build(v.code);
+  };
+  const fmtAgo = (t: number) => {
+    const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+    if (s < 60) return `${s}s ago`;
+    const m = Math.round(s / 60); if (m < 60) return `${m}m ago`;
+    const h = Math.round(m / 60); if (h < 24) return `${h}h ago`;
+    return `${Math.round(h / 24)}d ago`;
+  };
+  const codePreview = (c: string) => {
+    const line = c.split('\n').find((l) => l.trim() && !l.trim().startsWith('#'))?.trim() ?? '';
+    return line.length > 46 ? line.slice(0, 46) + '…' : line;
+  };
+
   const [ask, setAsk] = useState('');
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState('');
@@ -371,6 +393,49 @@ export function ScriptViewer({ onClose }: Props) {
             </span>
           )}
           <div style={{ flex: 1 }} />
+          {modelHistory.length > 0 && (
+            <div style={{ position: 'relative' }}>
+              <button onClick={() => setShowHistory((v) => !v)}
+                style={{ ...btn, background: 'none', color: palette.textSecondary,
+                         border: `1px solid ${palette.border}` }}>
+                History ({modelHistory.length})
+              </button>
+              {showHistory && (
+                <>
+                  <div onClick={() => setShowHistory(false)}
+                       style={{ position: 'fixed', inset: 0, zIndex: 9 }} />
+                  <div style={{ position: 'absolute', top: '112%', right: 0, zIndex: 10, width: '340px',
+                                maxHeight: '60vh', overflowY: 'auto', background: palette.panelBg,
+                                border: `1px solid ${palette.border}`, borderRadius: '6px',
+                                boxShadow: '0 8px 24px rgba(0,0,0,0.4)' }}>
+                    <div style={{ padding: '8px 12px', fontSize: '11px', fontWeight: 600,
+                                  textTransform: 'uppercase', letterSpacing: '0.5px',
+                                  color: palette.textSecondary, borderBottom: `1px solid ${palette.border}`,
+                                  position: 'sticky', top: 0, background: palette.panelBg }}>
+                      Previous versions · click to restore
+                    </div>
+                    {[...modelHistory].reverse().map((v, i) => (
+                      <button key={`${v.at}-${i}`} onClick={() => restore(v)}
+                        style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px',
+                                 background: 'none', border: 'none',
+                                 borderBottom: `1px solid ${palette.border}`, cursor: 'pointer',
+                                 color: palette.text }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
+                          <span>{fmtAgo(v.at)}</span>
+                          <span style={{ color: palette.textSecondary }}>{v.code.length} chars</span>
+                        </div>
+                        <div style={{ fontSize: '11px', color: palette.textSecondary, marginTop: '2px',
+                                      fontFamily: 'ui-monospace, Menlo, monospace', whiteSpace: 'nowrap',
+                                      overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {codePreview(v.code) || '(no code)'}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
           <button onClick={rebuild} disabled={status === 'building'}
             style={{ ...btn, background: palette.primaryBtn, color: '#fff', opacity: status === 'building' ? 0.6 : 1 }}>
             {status === 'building' ? 'Building…' : 'Build'}
