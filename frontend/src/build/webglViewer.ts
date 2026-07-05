@@ -125,6 +125,7 @@ export interface FaceRange {
   index: number; start: number; count: number;
   kind: string; area: number; center: [number, number, number]; normal: [number, number, number];
   radius?: number | null;
+  size?: [number, number, number];
 }
 
 /** A dimension pinned to world geometry: a label at `point`, optionally a

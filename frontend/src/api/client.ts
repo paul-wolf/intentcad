@@ -236,6 +236,7 @@ export interface RunFace {
   index: number; start: number; count: number;
   kind: string; area: number; center: [number, number, number]; normal: [number, number, number];
   radius?: number | null;   // radius of a cylindrical face (hole/boss), else null
+  size?: [number, number, number];   // bounding-box extents of the face
 }
 
 export interface RunEdge {

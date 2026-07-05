@@ -79,6 +79,12 @@ def _run(code: str, export: list | None = None) -> dict:
             n = face.normal_at(c)
         except Exception:
             n = None
+        # bounding-box extents of this face (from its own vertices) — the "size"
+        if fverts:
+            xs = [v.X for v in fverts]; ys = [v.Y for v in fverts]; zs = [v.Z for v in fverts]
+            size = [max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs)]
+        else:
+            size = [0.0, 0.0, 0.0]
         faces.append({
             "index": fi, "start": vstart, "count": count,
             "kind": face.geom_type.name.lower(),
@@ -86,6 +92,7 @@ def _run(code: str, export: list | None = None) -> dict:
             "center": [c.X, c.Y, c.Z],
             "normal": [n.X, n.Y, n.Z] if n is not None else [0.0, 0.0, 1.0],
             "radius": cyl_radius(face),
+            "size": size,
         })
         vstart += count
 

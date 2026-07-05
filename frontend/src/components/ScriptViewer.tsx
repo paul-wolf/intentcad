@@ -142,8 +142,13 @@ export function ScriptViewer({ onClose }: Props) {
     const faceOf = (i: number) => res.faces.find((x) => x.index === i);
     const dia = (f?: FaceRange) => (f && f.kind === 'cylinder' && f.radius ? f.radius * 2 : null);
     if (sel.length === 1) {
-      const d = dia(faceOf(sel[0]!));
-      return d ? { single: true as const, dia: d } : null;
+      const f = faceOf(sel[0]!);
+      if (!f) return null;
+      const d = dia(f);
+      if (d) return { single: true as const, dia: d, w: null as number | null, h: null as number | null };
+      const s = f.size ? [...f.size].sort((a, b) => b - a) : null;   // two largest extents
+      if (s && s[0]! > 1e-6) return { single: true as const, dia: null as number | null, w: s[0]!, h: s[1]! };
+      return null;
     }
     const a = faceOf(sel[0]!), b = faceOf(sel[1]!);
     if (!a || !b) return null;
@@ -422,12 +427,21 @@ export function ScriptViewer({ onClose }: Props) {
                             fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
                             fontVariantNumeric: 'tabular-nums' }}>
                 {measure.single ? (
-                  <>
-                    <div style={{ fontSize: '15px', fontWeight: 600 }}>
-                      ⌀ {measure.dia.toFixed(2)} <span style={{ fontSize: '11px', opacity: 0.6 }}>mm</span>
-                    </div>
-                    <div style={{ fontSize: '11px', opacity: 0.7, marginTop: '2px' }}>diameter</div>
-                  </>
+                  measure.dia != null ? (
+                    <>
+                      <div style={{ fontSize: '15px', fontWeight: 600 }}>
+                        ⌀ {measure.dia.toFixed(2)} <span style={{ fontSize: '11px', opacity: 0.6 }}>mm</span>
+                      </div>
+                      <div style={{ fontSize: '11px', opacity: 0.7, marginTop: '2px' }}>diameter</div>
+                    </>
+                  ) : (
+                    <>
+                      <div style={{ fontSize: '15px', fontWeight: 600 }}>
+                        {measure.w!.toFixed(1)} × {measure.h!.toFixed(1)} <span style={{ fontSize: '11px', opacity: 0.6 }}>mm</span>
+                      </div>
+                      <div style={{ fontSize: '11px', opacity: 0.7, marginTop: '2px' }}>face size (bounding box)</div>
+                    </>
+                  )
                 ) : (
                   <>
                     <div style={{ fontSize: '15px', fontWeight: 600 }}>

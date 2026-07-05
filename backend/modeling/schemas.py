@@ -207,6 +207,7 @@ class RunFace(Schema):
     center: list[float]
     normal: list[float]
     radius: float | None = None   # radius of a cylindrical face (a hole/boss), else null
+    size: list[float] = []        # bounding-box extents [dx, dy, dz] of the face
 
 
 class RunEdge(Schema):
