@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
-import { buildApi, type RunResponse } from '@/api/client';
-import { persistModelCode } from '@/api/autoSave';
+import { buildApi, type RunResponse, type UsageResponse } from '@/api/client';
+import { persistModelCode, getBackendId } from '@/api/autoSave';
 import { createViewer, type Viewer, type FaceRange } from '@/build/webglViewer';
 import { downloadTextFile } from '@/export/download';
 
@@ -90,6 +90,7 @@ export function ScriptViewer({ onClose }: Props) {
 
   // mount: create viewer, seed code from the document (or the starter), build once
   useEffect(() => {
+    fetchUsage();
     const saved = useDocumentStore.getState().document.modelCode;
     const initial = saved && saved.trim() ? saved : STARTER;
     setCode(initial);
@@ -122,7 +123,8 @@ export function ScriptViewer({ onClose }: Props) {
   const [ask, setAsk] = useState('');
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState('');
-  const [spend, setSpend] = useState({ edits: 0, tin: 0, tout: 0, cost: 0 });
+  const [usage, setUsage] = useState<UsageResponse | null>(null);
+  const fetchUsage = () => buildApi.usage(getBackendId() ?? '').then(setUsage).catch(() => {});
   const [paramVals, setParamVals] = useState<Record<string, number>>({});
   const [sens, setSens] = useState<Record<string, number[]>>({});   // param -> faces it controls
 
@@ -160,14 +162,14 @@ export function ScriptViewer({ onClose }: Props) {
     setAsking(true);
     setNote('');
     try {
-      const r = await buildApi.edit({ code, instruction, context: selectionContext() });
+      const r = await buildApi.edit({ code, instruction, context: selectionContext(), document_id: getBackendId() ?? '' });
       setCode(r.code);
       persistModelCode(r.code);
       await build(r.code);
       setAsk('');
       const k = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
       setNote(`${r.note || 'Done.'} · ${k(r.tokens_in)} in / ${k(r.tokens_out)} out · $${r.cost_usd.toFixed(3)}`);
-      setSpend((s) => ({ edits: s.edits + 1, tin: s.tin + r.tokens_in, tout: s.tout + r.tokens_out, cost: s.cost + r.cost_usd }));
+      fetchUsage();
     } catch (err) {
       setNote(String(err instanceof Error ? err.message : err));
     } finally {
@@ -198,10 +200,10 @@ export function ScriptViewer({ onClose }: Props) {
           <h2 style={{ margin: 0, fontSize: '15px', color: palette.text }}>
             Model <span style={{ color: palette.textSecondary, fontSize: '12px' }}>(build123d · script)</span>
           </h2>
-          {spend.edits > 0 && (
-            <span title={`${spend.tin.toLocaleString()} input + ${spend.tout.toLocaleString()} output tokens across ${spend.edits} AI edit(s)`}
+          {usage && (usage.all_time.edits > 0) && (
+            <span title={`This model: ${usage.document.tokens_in.toLocaleString()} in / ${usage.document.tokens_out.toLocaleString()} out.  All-time: ${usage.all_time.tokens_in.toLocaleString()} in / ${usage.all_time.tokens_out.toLocaleString()} out.`}
               style={{ fontSize: '12px', color: palette.textSecondary }}>
-              Opus 4.8 · {spend.edits} edit{spend.edits > 1 ? 's' : ''} · ${spend.cost.toFixed(3)}
+              Opus 4.8 · this model ${usage.document.cost_usd.toFixed(3)} ({usage.document.edits}) · all-time ${usage.all_time.cost_usd.toFixed(2)} ({usage.all_time.edits})
             </span>
           )}
           <div style={{ flex: 1 }} />

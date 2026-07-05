@@ -243,12 +243,25 @@ class SensitivityResponse(Schema):
     params: dict[str, list[int]] = {}   # param name -> face indices it controls
 
 
+class UsageTotals(Schema):
+    edits: int = 0
+    tokens_in: int = 0
+    tokens_out: int = 0
+    cost_usd: float = 0.0
+
+
+class UsageResponse(Schema):
+    document: UsageTotals       # this document's AI spend
+    all_time: UsageTotals       # this user's AI spend across all documents
+
+
 class EditRequest(Schema):
     """Ask the assistant to edit the build123d script from an instruction, with
     the current selection (if any) as the target."""
     code: str
     instruction: str
-    context: str = ""   # a description of the selected face(s)/edge
+    context: str = ""      # a description of the selected face(s)/edge
+    document_id: str = ""  # to tally spend per document
 
 
 class EditResponse(Schema):

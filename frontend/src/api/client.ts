@@ -197,8 +197,11 @@ export const buildApi = {
   run(code: string): Promise<RunResponse> {
     return request('/build/run', { method: 'POST', body: JSON.stringify({ code }) });
   },
-  edit(payload: { code: string; instruction: string; context?: string }): Promise<EditResponse> {
+  edit(payload: { code: string; instruction: string; context?: string; document_id?: string }): Promise<EditResponse> {
     return request('/build/edit', { method: 'POST', body: JSON.stringify(payload) });
+  },
+  usage(documentId: string): Promise<UsageResponse> {
+    return request(`/build/usage?document=${encodeURIComponent(documentId)}`);
   },
   setParams(code: string, params: Record<string, number>): Promise<{ code: string }> {
     return request('/build/set_params', { method: 'POST', body: JSON.stringify({ code, params }) });
@@ -212,6 +215,9 @@ export interface EditResponse {
   code: string; note?: string;
   tokens_in: number; tokens_out: number; cost_usd: number;
 }
+
+export interface UsageTotals { edits: number; tokens_in: number; tokens_out: number; cost_usd: number }
+export interface UsageResponse { document: UsageTotals; all_time: UsageTotals }
 
 // ── build123d engine (the model is a script) ──
 export interface RunFace {

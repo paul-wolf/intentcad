@@ -43,3 +43,25 @@ class RunApiTests(TestCase):
         resp = self._post("part = Box(1, 1, 1")  # syntax error
         self.assertEqual(resp.status_code, 422)
         self.assertIn("message", resp.json())
+
+
+class UsageTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+        self.user = get_user_model().objects.create_user(
+            username="u", email="u@example.com", password="pw")
+
+    def test_usage_tallies_per_document_and_all_time(self):
+        from modeling.models import AiEdit
+        AiEdit.objects.create(user=self.user, document_id="A", tokens_in=100, tokens_out=20, cost_usd=0.01)
+        AiEdit.objects.create(user=self.user, document_id="A", tokens_in=200, tokens_out=40, cost_usd=0.02)
+        AiEdit.objects.create(user=self.user, document_id="B", tokens_in=50, tokens_out=10, cost_usd=0.005)
+        self.client.force_login(self.user)
+        data = self.client.get("/api/build/usage?document=A").json()
+        self.assertEqual(data["document"]["edits"], 2)
+        self.assertAlmostEqual(data["document"]["cost_usd"], 0.03, places=4)
+        self.assertEqual(data["all_time"]["edits"], 3)
+        self.assertAlmostEqual(data["all_time"]["cost_usd"], 0.035, places=4)
+
+    def test_usage_requires_auth(self):
+        self.assertEqual(self.client.get("/api/build/usage?document=A").status_code, 401)

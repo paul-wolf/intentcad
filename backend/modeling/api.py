@@ -1,9 +1,11 @@
+from django.db.models import Count, Sum
 from django.http import JsonResponse
 from ninja import Router
 
 from projects.access import require_auth
 
 from .assistant import AssistantError, edit_script
+from .models import AiEdit
 from .engine import EngineError, run_script
 from .paramedit import ParamError, set_params
 from .schemas import (
@@ -19,6 +21,8 @@ from .schemas import (
     SensitivityResponse,
     SetParamsRequest,
     SetParamsResponse,
+    UsageResponse,
+    UsageTotals,
 )
 from .sensitivity import sensitivity
 
@@ -88,8 +92,31 @@ def edit_model(request, payload: EditRequest):
         r = edit_script(payload.code, payload.instruction, payload.context)
     except AssistantError as exc:
         return JsonResponse({"message": str(exc)}, status=422)
+    AiEdit.objects.create(
+        user=request.user, document_id=payload.document_id,
+        instruction=payload.instruction[:500],
+        tokens_in=r.get("tokens_in", 0), tokens_out=r.get("tokens_out", 0),
+        cost_usd=r.get("cost_usd", 0.0),
+    )
     return EditResponse(
         code=r["code"], note=r.get("note"),
         tokens_in=r.get("tokens_in", 0), tokens_out=r.get("tokens_out", 0),
         cost_usd=r.get("cost_usd", 0.0),
     )
+
+
+@router.get("/usage", response=UsageResponse)
+def usage(request, document: str = ""):
+    """AI spend for this document and this user all-time (from the edit log)."""
+    err = require_auth(request)
+    if err:
+        return err
+
+    def totals(qs) -> UsageTotals:
+        a = qs.aggregate(edits=Count("id"), tin=Sum("tokens_in"),
+                         tout=Sum("tokens_out"), cost=Sum("cost_usd"))
+        return UsageTotals(edits=a["edits"] or 0, tokens_in=a["tin"] or 0,
+                           tokens_out=a["tout"] or 0, cost_usd=round(a["cost"] or 0.0, 4))
+
+    mine = AiEdit.objects.filter(user=request.user)
+    return UsageResponse(document=totals(mine.filter(document_id=document)), all_time=totals(mine))
