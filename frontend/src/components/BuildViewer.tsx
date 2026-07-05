@@ -7,6 +7,7 @@ import { treeToBuildRequest, axisForKind, AXIS_LABELS, type AxisKind } from '@/b
 import { resolveEdgesLocal, edgeSegments } from '@/build/edgeSelect';
 import { createViewer, type Viewer } from '@/build/webglViewer';
 import { downloadTextFile } from '@/export/download';
+import { flushSave } from '@/api/autoSave';
 
 interface BuildViewerProps {
   onClose: () => void;
@@ -157,8 +158,15 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
   // rebuild whenever the tree changes (and once after the viewer exists)
   useEffect(() => { rebuild(); }, [rebuild]);
 
-  // mirror the tree into the document so auto-save persists it across reloads
-  useEffect(() => { useDocumentStore.getState().setBuildFeatures(features); }, [features]);
+  // mirror the tree into the document and persist it *now* (not on the 1.5s
+  // debounce, which a page refresh cancels mid-flight — losing recent edits).
+  // 3D edits are deliberate and infrequent, so an immediate save is cheap.
+  const mirroredOnce = useRef(false);
+  useEffect(() => {
+    useDocumentStore.getState().setBuildFeatures(features);
+    if (mirroredOnce.current) flushSave();   // skip the initial seed
+    mirroredOnce.current = true;
+  }, [features]);
 
   // highlight the edges the current fillet/chamfer selector targets — so you can
   // see what 'faces:4,13' or 'between:convex,top' actually refers to
