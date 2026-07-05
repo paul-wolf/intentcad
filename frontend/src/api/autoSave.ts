@@ -58,6 +58,17 @@ function doSave(id: string, doc: Record<string, unknown>, history?: unknown) {
   });
 }
 
+/** Persist the build feature tree NOW (no debounce), directly — used by the 3D
+ * panel so a tree edit is saved immediately rather than through the shared
+ * debounce buffer (which effect ordering / fast refresh could drop). */
+export function persistBuildFeatures(features: unknown[]) {
+  if (!backendId) return;
+  const state = useDocumentStore.getState();
+  const doc = { ...state.document, buildFeatures: features } as unknown as Record<string, unknown>;
+  const history = { undo: state.undoStack, redo: state.redoStack };
+  doSave(backendId, doc, history);
+}
+
 /** Schedule a debounced save of the current document state. */
 export function requestSave() {
   const state = useDocumentStore.getState();

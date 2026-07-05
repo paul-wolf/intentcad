@@ -7,7 +7,7 @@ import { treeToBuildRequest, axisForKind, AXIS_LABELS, type AxisKind } from '@/b
 import { resolveEdgesLocal, edgeSegments } from '@/build/edgeSelect';
 import { createViewer, type Viewer } from '@/build/webglViewer';
 import { downloadTextFile } from '@/export/download';
-import { flushSave } from '@/api/autoSave';
+import { persistBuildFeatures } from '@/api/autoSave';
 
 interface BuildViewerProps {
   onClose: () => void;
@@ -158,14 +158,14 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
   // rebuild whenever the tree changes (and once after the viewer exists)
   useEffect(() => { rebuild(); }, [rebuild]);
 
-  // mirror the tree into the document and persist it *now* (not on the 1.5s
-  // debounce, which a page refresh cancels mid-flight — losing recent edits).
-  // 3D edits are deliberate and infrequent, so an immediate save is cheap.
-  const mirroredOnce = useRef(false);
+  // persist the tree the instant it changes — directly, not via the debounce.
+  // Compare against what's already stored so the initial seed (and any fast-
+  // refresh double-run) doesn't trigger a redundant save; only a real edit does.
   useEffect(() => {
+    const saved = useDocumentStore.getState().document.buildFeatures ?? [];
+    const changed = JSON.stringify(saved) !== JSON.stringify(features);
     useDocumentStore.getState().setBuildFeatures(features);
-    if (mirroredOnce.current) flushSave();   // skip the initial seed
-    mirroredOnce.current = true;
+    if (changed) persistBuildFeatures(features);
   }, [features]);
 
   // highlight the edges the current fillet/chamfer selector targets — so you can
