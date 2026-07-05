@@ -27,6 +27,24 @@ now tolerates this (auto-closes multi-vertex profiles), but the editor should
 either auto-close a clearly-ringed profile or make the `W` (close path) key
 discoverable.
 
+## AI layer / chat agent
+
+### An op that references geometry a *sibling* op creates can't see it
+When one chat instruction both creates geometry and then references it, the agent
+plans every op before any of them runs — so a later op is choosing against
+geometry that doesn't exist yet.
+
+- Repro: "extrude sketch 2 at 20° to form a socket and trim any excess on the
+  back of the plate" — the agent must pick the trim face before the socket
+  exists, so it reasons from the plate + the wording alone. Prompt heuristics
+  (tag→axis meaning, plate orientation) plus a no-op-trim warning make the common
+  cases right and catch misses, but it's still a guess.
+- Robust fixes (either/both):
+  - **"Extrude up to face" bound on the extrude itself** (OnShape-style), so the
+    excess is never created — no separate trim needed.
+  - **Apply chat ops one at a time**, rebuilding between them, so a later op sees
+    the geometry the earlier one produced (its real faces/edges, not a guess).
+
 ## 3D / modeling — deferred infra
 
 - **Drop the orphaned `parts_part` table + its recorded migration.** The `parts`
