@@ -119,17 +119,22 @@ def edit_script(
         tok_out += u.get("output", 0)
         return o
 
+    def validate(script: str) -> None:
+        r = run_script(script)  # raises EngineError if nothing builds
+        if r.get("warning"):    # an operation failed partway — treat as a build error
+            raise EngineError(r["warning"])
+
     out = call()
     new_code = out.get("code", "")
     try:
-        run_script(new_code)
+        validate(new_code)
     except EngineError as exc:
         out = call(
             f"\nYour previous script failed to build with this error:\n{exc}\n"
             "Return a corrected complete script.")
         new_code = out.get("code", "")
         try:
-            run_script(new_code)
+            validate(new_code)
         except EngineError as exc2:
             raise AssistantError(f"couldn't produce a script that builds: {exc2}") from exc2
 

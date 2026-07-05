@@ -17,11 +17,18 @@ def _run(code: str, export: list | None = None) -> dict:
     from build123d import export_step, export_stl
 
     ns: dict = {"__name__": "__cad__"}
-    exec(f"from build123d import *\n{code}", ns)  # noqa: S102 - sandboxed subprocess
+    # Run the script. If an operation fails partway (e.g. a chamfer too big),
+    # `part` still holds the model built up to that line — render THAT plus the
+    # error as a warning, instead of blanking the whole model.
+    warning = None
+    try:
+        exec(f"from build123d import *\n{code}", ns)  # noqa: S102 - sandboxed subprocess
+    except Exception as exc:
+        warning = f"{type(exc).__name__}: {exc}"
 
     part = ns.get("part") or ns.get("result")
-    if part is None:
-        return {"ok": False, "error": "script did not define `part`"}
+    if part is None or not hasattr(part, "faces"):
+        return {"ok": False, "error": warning or "script did not define `part`"}
 
     # expose the params dict (scalar entries) so the UI can offer number fields
     raw = ns.get("P")
@@ -119,7 +126,7 @@ def _run(code: str, export: list | None = None) -> dict:
             exports[fmt] = open(fh.name).read()
 
     bb = part.bounding_box()
-    return {
+    result = {
         "ok": True,
         "mesh": {"positions": positions, "normals": normals, "triangle_count": len(positions) // 9},
         "faces": faces,
@@ -133,6 +140,9 @@ def _run(code: str, export: list | None = None) -> dict:
             "bbox_max": [bb.max.X, bb.max.Y, bb.max.Z],
         },
     }
+    if warning:
+        result["warning"] = warning   # an op failed; we rendered up to it
+    return result
 
 
 def main() -> None:

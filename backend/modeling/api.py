@@ -50,6 +50,7 @@ def run_model(request, payload: RunRequest):
         edges=[RunEdge(**e) for e in r.get("edges", [])],
         params=r.get("params", {}),
         metrics=RunMetrics(**r["metrics"]),
+        warning=r.get("warning"),
     )
 
 

@@ -46,6 +46,7 @@ export function ScriptViewer({ onClose }: Props) {
   const [code, setCode] = useState('');
   const [status, setStatus] = useState<'idle' | 'building' | 'done' | 'error'>('idle');
   const [message, setMessage] = useState('');
+  const [warn, setWarn] = useState('');
   const [stats, setStats] = useState('');
   const [sel, setSel] = useState<number[]>([]);   // selected face indices (≤ 2)
   const resRef = useRef<RunResponse | null>(null);
@@ -79,6 +80,7 @@ export function ScriptViewer({ onClose }: Props) {
     setMessage('');
     try {
       const res = await buildApi.run(src);
+      setWarn(res.warning ?? '');
       viewerRef.current.update(res.mesh, res.faces);
       resRef.current = res;
       selRef.current = []; setSel([]);
@@ -343,7 +345,12 @@ export function ScriptViewer({ onClose }: Props) {
                       fontSize: '12px', color: palette.textSecondary, minHeight: '20px' }}>
           {status === 'building' && 'Building…'}
           {status === 'error' && <span style={{ color: palette.danger }}>Build failed — see the editor side.</span>}
-          {status === 'done' && (() => {
+          {status === 'done' && warn && (
+            <span style={{ color: palette.warning ?? '#c78a1a' }}>
+              ⚠ an operation failed (model shown up to it): {warn}
+            </span>
+          )}
+          {status === 'done' && !warn && (() => {
             const res = resRef.current;
             const v = (a: [number, number, number]) => `(${a.map((n) => Math.round(n * 10) / 10).join(', ')})`;
             if (!res || sel.length === 0)

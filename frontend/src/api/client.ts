@@ -238,6 +238,7 @@ export interface RunResponse {
   edges: RunEdge[];
   params: Record<string, number>;
   metrics: { volume: number; area: number; bbox_min: [number, number, number]; bbox_max: [number, number, number] };
+  warning?: string;
 }
 
 // ── chat agent (instruction → feature-tree operations) ──

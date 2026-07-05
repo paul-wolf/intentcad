@@ -19,6 +19,18 @@ class EngineTests(SimpleTestCase):
         r = run_script("part = Box(5, 5, 5)")
         self.assertEqual(r.get("exports", {}), {})
 
+    def test_failing_op_renders_up_to_it_with_a_warning(self):
+        # a chamfer far too big fails; the box before it should still render
+        r = run_script("part = Box(10, 10, 10)\npart = chamfer(part.edges(), length=100)")
+        self.assertTrue(r["ok"])
+        self.assertGreater(r["mesh"]["triangle_count"], 0)  # the box rendered
+        self.assertIsNotNone(r.get("warning"))
+        self.assertIn("chamfer", r["warning"].lower())
+
+    def test_error_before_any_part_still_fails(self):
+        with self.assertRaises(EngineError):
+            run_script("x = chamfer(nope, length=1)")  # no `part` ever bound
+
     def test_result_alias(self):
         r = run_script("result = Box(5, 5, 5)")  # `result` also accepted
         self.assertTrue(r["ok"])

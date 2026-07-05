@@ -223,6 +223,7 @@ class RunResponse(Schema):
     edges: list[RunEdge] = []
     params: dict[str, float] = {}   # editable scalar params from the script
     metrics: RunMetrics
+    warning: str | None = None      # an op failed; the model is rendered up to it
 
 
 class ExportRequest(Schema):
