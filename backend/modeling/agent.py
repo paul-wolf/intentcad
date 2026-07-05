@@ -80,8 +80,9 @@ Operations you may append (each rebuilds the running solid, in order):
                 tiltAxis "X"|"Y"|"Z", offset [dx,dy,dz]).
   fillet      — round edges. fields: edges (a selector), radius.
   chamfer     — bevel edges. fields: edges (a selector), distance (chamfer size).
-  counterbore — recess the current top face at a sketch's circles (bolt heads).
-                fields: sketch (name), cboreDia, cboreDepth.
+  counterbore — recess the top face at every hole that already pierces it
+                (bolt-head recesses); targets the solid's existing holes, so no
+                sketch is needed. fields: cboreDia, cboreDepth.
   trim        — cut the solid flush with a named face, or past an axis plane.
                 fields: either trimFace ("top"|"bottom"|"left"|"right"|"front"|
                 "back"), OR trimAxis ("X"|"Y"|"Z") + at (position) + keep ("min"
@@ -110,7 +111,7 @@ _FEATURE_SCHEMA = {
     "type": "object",
     "properties": {
         "type": {"type": "string", "enum": OP_TYPES},
-        "sketch": {"type": "string", "description": "sketch name (extrude / counterbore)"},
+        "sketch": {"type": "string", "description": "sketch name (extrude only)"},
         "operation": {"type": "string", "enum": ["add", "remove"]},
         "distance": {"type": "number", "description": "extrude distance, or chamfer size"},
         "direction": {"type": "string", "enum": ["forward", "reverse", "both"]},
@@ -194,7 +195,7 @@ def _normalize(op: dict, sketches: list[dict]) -> dict:
         feat["edges"] = op.get("edges", "all")
         feat["distance"] = op.get("distance", 2)
     elif t == "counterbore":
-        feat["sketchId"] = _resolve_sketch(op, sketches)
+        # targets existing top-face holes; no sketch reference
         feat["cboreDia"] = op.get("cboreDia", 8)
         feat["cboreDepth"] = op.get("cboreDepth", 3)
     elif t == "trim":

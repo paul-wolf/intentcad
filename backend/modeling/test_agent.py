@@ -53,6 +53,20 @@ class SketchResolutionTests(SimpleTestCase):
         self.assertEqual(op["sketchId"], "sk-ring")
         self.assertEqual(op["operation"], "add")
 
+    def test_counterbore_needs_no_sketch(self):
+        r = plan_operations(
+            "counterbore the holes 8mm wide 3mm deep", SKETCHES, TREE, FACES, EDGES,
+            llm=_fake("add_features", {
+                "reply": "Counterbored the holes.",
+                "features": [{"type": "counterbore", "cboreDia": 8, "cboreDepth": 3}],
+            }),
+        )
+        op = r["operations"][0]
+        self.assertEqual(op["type"], "counterbore")
+        self.assertEqual(op["sketchId"], "")
+        self.assertEqual(op["cboreDia"], 8)
+        self.assertEqual(op["cboreDepth"], 3)
+
     def test_unmatched_sketch_falls_back_to_first(self):
         r = plan_operations(
             "extrude it", SKETCHES, TREE, FACES, EDGES,

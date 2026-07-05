@@ -34,7 +34,7 @@ function describe(f: BuildFeature, sketchName: (id: string) => string): string {
     case 'chamfer':
       return `Chamfer ${f.edges} · d=${f.distance}`;
     case 'counterbore':
-      return `Counterbore “${sketchName(f.sketchId)}” · Ø${f.cboreDia}×${f.cboreDepth}`;
+      return `Counterbore holes · Ø${f.cboreDia}×${f.cboreDepth}`;
     case 'trim':
       return f.trimFace
         ? `Trim @ ${f.trimFace} face`
@@ -194,7 +194,7 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
     } else if (opType === 'fillet') {
       feat = { id, type: 'fillet', sketchId: '', edges, radius: size };
     } else if (opType === 'counterbore') {
-      feat = { id, type: 'counterbore', sketchId: opSketchId, cboreDia, cboreDepth };
+      feat = { id, type: 'counterbore', sketchId: '', cboreDia, cboreDepth };
     } else if (opType === 'trim') {
       feat = trimFace
         ? { id, type: 'trim', sketchId: '', trimFace }
@@ -307,7 +307,7 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
   };
   const row: CSSProperties = { display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '8px' };
   const isModify = opType === 'fillet' || opType === 'chamfer';
-  const needsSketch = opType === 'extrude' || opType === 'revolve' || opType === 'counterbore';
+  const needsSketch = opType === 'extrude' || opType === 'revolve';
 
   return (
     <div

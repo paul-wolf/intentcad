@@ -419,27 +419,55 @@ def _trim(shape, axis: str, at: float | None, keep: str, feat_id: str, face_sel:
         raise BuildError(f"feature {feat_id}: trim failed ({exc})") from exc
 
 
-# ── counterbore (recess the top face at each of a sketch's circles) ──────
-def _counterbore(shape, sketch, feat, warnings: list[str]):
-    """Recess the +Z (top) face by `cboreDepth` over `cboreDia` at each circle in
-    the sketch — for existing holes (e.g. from an extrude). Non-destructive: it
-    only removes a shallow pocket at the top, never a through cut."""
-    circles = [(e.center.x, e.center.y) for e in sketch.entities
-               if e.type == "circle" and not e.construction and e.center and e.radius]
-    if not circles:
-        raise BuildError(f"feature {feat.id}: counterbore sketch '{sketch.id}' has no circles")
+# ── counterbore (recess the top face at each hole already in the solid) ──────
+_CBORE_PLANE_TOL = 1e-3  # how close a rim's center-Z must be to the top plane
+
+
+def _top_face_holes(shape, top: float, max_radius: float) -> list[tuple[float, float]]:
+    """Centers (world x,y) of circular hole rims lying on the top face — i.e. the
+    holes that pierce the top. Rims wider than `max_radius` (the outer boundary,
+    or a boss) are skipped so a counterbore only lands on actual holes."""
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+    from OCP.GeomAbs import GeomAbs_Circle
+
+    out: list[tuple[float, float]] = []
+    for e in shape.Edges():
+        if e.geomType().lower() != "circle":
+            continue
+        curve = BRepAdaptor_Curve(e.wrapped)
+        if curve.GetType() != GeomAbs_Circle:
+            continue
+        circ = curve.Circle()
+        loc = circ.Location()
+        if abs(loc.Z() - top) > _CBORE_PLANE_TOL:  # only rims on the top plane
+            continue
+        r = circ.Radius()
+        if r <= _TOL or r >= max_radius:            # skip outer boundary / bosses
+            continue
+        out.append((loc.X(), loc.Y()))
+    return out
+
+
+def _counterbore(shape, feat, warnings: list[str]):
+    """Recess the +Z (top) face by `cboreDepth` over `cboreDia` at each hole that
+    already pierces the top face. Targets the solid's existing holes directly (no
+    sketch) — non-destructive: a shallow pocket at the top, never a through cut."""
     dia, depth = feat.cboreDia, feat.cboreDepth
     if not dia or not depth or dia <= 0 or depth <= 0:
         raise BuildError(f"feature {feat.id}: counterbore needs a diameter and depth")
-    if feat.offset and any(feat.offset):
-        warnings.append("counterbore recesses at the sketch circle positions; offset is ignored")
 
-    top = shape.BoundingBox().zmax  # recess the top face
+    top = shape.BoundingBox().zmax
+    holes = _top_face_holes(shape, top, dia / 2.0)
+    if not holes:
+        raise BuildError(
+            f"feature {feat.id}: no holes on the top face to counterbore "
+            f"(need holes narrower than Ø{dia})")
+
     result = shape
-    for cx, cy in circles:
-        pocket = _extrude([Region(Wire.makeCircle(dia / 2.0, _v(cx, cy), Vector(0, 0, 1)), [])],
-                          depth + 1.0, None, sketch.id)
-        pocket = pocket.translate((0.0, 0.0, top - depth))  # sit its top flush with the part's top
+    for cx, cy in holes:
+        pocket = _extrude([Region(Wire.makeCircle(dia / 2.0, Vector(cx, cy, 0), Vector(0, 0, 1)), [])],
+                          depth + 1.0, None, "counterbore")
+        pocket = pocket.translate((0.0, 0.0, top - depth))  # top flush with the part's top
         result = result.cut(pocket)
     return result
 
@@ -616,10 +644,7 @@ def build(req: BuildRequest) -> BuildResult:
         if feat.type == "counterbore":
             if result is None:
                 raise BuildError(f"feature {feat.id}: counterbore needs existing geometry")
-            sketch = sketches.get(feat.sketchId)
-            if sketch is None:
-                raise BuildError(f"feature {feat.id}: sketch '{feat.sketchId}' not in request")
-            result = _counterbore(result, sketch, feat, warnings)
+            result = _counterbore(result, feat, warnings)
             continue
 
         sketch = sketches.get(feat.sketchId)
