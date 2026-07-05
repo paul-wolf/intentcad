@@ -315,27 +315,31 @@ class BuilderTests(SimpleTestCase):
         ))
         self.assertGreater(res.triangle_count, 0)
 
-    def test_revolve_profile_crossing_axis_raises(self):
-        with self.assertRaises(BuildError):
-            build(BuildRequest(
-                sketches=[SketchIn(id="s", entities=[
-                    SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=100, height=57),
-                ])],
-                features=[FeatureIn(
-                    id="f", type="revolve", sketchId="s",
-                    axis=AxisIn(start=Point(x=0, y=0), end=Point(x=0, y=1)),  # cuts the profile
-                    angle=360,
-                )],
-            ))
+    def test_revolve_profile_crossing_axis_skips(self):
+        """A revolve whose profile crosses the axis can't build — it's skipped
+        with a warning, not a hard failure (empty result since it's the only op)."""
+        res = build(BuildRequest(
+            sketches=[SketchIn(id="s", entities=[
+                SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=100, height=57),
+            ])],
+            features=[FeatureIn(
+                id="f", type="revolve", sketchId="s",
+                axis=AxisIn(start=Point(x=0, y=0), end=Point(x=0, y=1)),  # cuts the profile
+                angle=360,
+            )],
+        ))
+        self.assertEqual(res.triangle_count, 0)
+        self.assertTrue(any("skipped" in w for w in res.warnings))
 
-    def test_revolve_without_axis_raises(self):
-        with self.assertRaises(BuildError):
-            build(BuildRequest(
-                sketches=[SketchIn(id="s", entities=[
-                    SketchEntityIn(type="rectangle", center=Point(x=15, y=0), width=10, height=10),
-                ])],
-                features=[FeatureIn(id="f", type="revolve", sketchId="s", angle=360)],
-            ))
+    def test_revolve_without_axis_skips(self):
+        res = build(BuildRequest(
+            sketches=[SketchIn(id="s", entities=[
+                SketchEntityIn(type="rectangle", center=Point(x=15, y=0), width=10, height=10),
+            ])],
+            features=[FeatureIn(id="f", type="revolve", sketchId="s", angle=360)],
+        ))
+        self.assertEqual(res.triangle_count, 0)
+        self.assertTrue(any("skipped" in w for w in res.warnings))
 
     def test_fillet_all_edges(self):
         """Extrude a box, then fillet every edge: rounds corners (less volume,
@@ -388,31 +392,36 @@ class BuilderTests(SimpleTestCase):
         self.assertGreater(res.triangle_count, 0)
         self.assertTrue(any("skipped" in w for w in res.warnings))
 
-    def test_chamfer_without_geometry_raises(self):
-        with self.assertRaises(BuildError):
-            build(BuildRequest(
-                sketches=[],
-                features=[FeatureIn(id="bevel", type="chamfer", sketchId="", edges="all", distance=1)],
-            ))
+    def test_chamfer_without_geometry_skips(self):
+        res = build(BuildRequest(
+            sketches=[],
+            features=[FeatureIn(id="bevel", type="chamfer", sketchId="", edges="all", distance=1)],
+        ))
+        self.assertEqual(res.triangle_count, 0)
+        self.assertTrue(any("skipped" in w for w in res.warnings))
 
-    def test_fillet_without_geometry_raises(self):
-        with self.assertRaises(BuildError):
-            build(BuildRequest(
-                sketches=[],
-                features=[FeatureIn(id="round", type="fillet", sketchId="", edges="all", radius=1)],
-            ))
+    def test_fillet_without_geometry_skips(self):
+        res = build(BuildRequest(
+            sketches=[],
+            features=[FeatureIn(id="round", type="fillet", sketchId="", edges="all", radius=1)],
+        ))
+        self.assertEqual(res.triangle_count, 0)
+        self.assertTrue(any("skipped" in w for w in res.warnings))
 
-    def test_fillet_selector_no_match_raises(self):
-        with self.assertRaises(BuildError):
-            build(BuildRequest(
-                sketches=[SketchIn(id="s", entities=[
-                    SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=10, height=10),
-                ])],
-                features=[
-                    FeatureIn(id="box", type="extrude", sketchId="s", distance=10),
-                    FeatureIn(id="round", type="fillet", sketchId="", edges="kind:circle", radius=1),
-                ],
-            ))
+    def test_fillet_selector_no_match_skips_but_keeps_solid(self):
+        """A fillet whose selector matches nothing is skipped with a warning; the
+        box it was meant to modify still builds."""
+        res = build(BuildRequest(
+            sketches=[SketchIn(id="s", entities=[
+                SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=10, height=10),
+            ])],
+            features=[
+                FeatureIn(id="box", type="extrude", sketchId="s", distance=10),
+                FeatureIn(id="round", type="fillet", sketchId="", edges="kind:circle", radius=1),
+            ],
+        ))
+        self.assertGreater(res.triangle_count, 0)  # the box survived
+        self.assertTrue(any("skipped" in w for w in res.warnings))
 
     def test_trim_cuts_past_plane(self):
         """Trim removes everything past an axis plane (e.g. a socket flush with a
@@ -447,13 +456,16 @@ class BuilderTests(SimpleTestCase):
         self.assertAlmostEqual(cbored.metrics["bbox_min"][2], plain.metrics["bbox_min"][2], places=3)
 
     def test_counterbore_needs_dims(self):
+        """A counterbore without dims is skipped with a warning; the slab still
+        builds."""
         slab = SketchIn(id="slab", entities=[
             SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=40, height=40),
             SketchEntityIn(type="circle", center=Point(x=0, y=0), radius=3)])
         base = [FeatureIn(id="e", type="extrude", sketchId="slab", distance=8)]
-        with self.assertRaises(BuildError):
-            build(BuildRequest(sketches=[slab], features=base + [
-                FeatureIn(id="cb", type="counterbore", sketchId="slab")]))  # no dia/depth
+        res = build(BuildRequest(sketches=[slab], features=base + [
+            FeatureIn(id="cb", type="counterbore", sketchId="slab")]))  # no dia/depth
+        self.assertGreater(res.triangle_count, 0)
+        self.assertTrue(any("skipped" in w for w in res.warnings))
 
     def test_missing_sketch_warns_not_fails(self):
         """A feature referencing a sketch not in the request is skipped with a
@@ -529,18 +541,20 @@ class BuilderTests(SimpleTestCase):
         self.assertGreater(res.triangle_count, 0)
         self.assertFalse(any("straight" in w for w in res.warnings))
 
-    def test_missing_sketch_raises(self):
-        req = BuildRequest(
+    def test_missing_sketch_only_feature_returns_empty(self):
+        """The only feature references a missing sketch → empty result with a
+        warning (a reload must not hard-fail)."""
+        res = build(BuildRequest(
             sketches=[],
             features=[FeatureIn(id="f", type="extrude", sketchId="nope", distance=5)],
-        )
-        with self.assertRaises(BuildError):
-            build(req)
+        ))
+        self.assertEqual(res.triangle_count, 0)
+        self.assertTrue(any("skipped" in w for w in res.warnings))
 
-    def test_no_profile_raises(self):
-        req = BuildRequest(
+    def test_no_profile_returns_empty(self):
+        res = build(BuildRequest(
             sketches=[SketchIn(id="sk", entities=[])],
             features=[FeatureIn(id="f", type="extrude", sketchId="sk", distance=5)],
-        )
-        with self.assertRaises(BuildError):
-            build(req)
+        ))
+        self.assertEqual(res.triangle_count, 0)
+        self.assertTrue(any("skipped" in w for w in res.warnings))

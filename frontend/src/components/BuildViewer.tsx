@@ -254,8 +254,9 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
     setFeatures(features.filter((f) => f.id !== id));
   };
 
+  const hasSolid = !!result && result.mesh.triangle_count > 0;
   const downloadStep = () => {
-    if (result) downloadTextFile(result.step, `${docName}.step`, 'application/step');
+    if (hasSolid) downloadTextFile(result!.step, `${docName}.step`, 'application/step');
   };
 
   // chat: turn an instruction into operations and append them to the tree
@@ -383,10 +384,10 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
                      borderRadius: '4px', fontSize: '13px', cursor: 'pointer', opacity: status === 'building' ? 0.6 : 1 }}>
             {status === 'building' ? 'Building…' : 'Rebuild'}
           </button>
-          <button onClick={downloadStep} disabled={!result}
+          <button onClick={downloadStep} disabled={!hasSolid}
             style={{ padding: '5px 14px', background: 'none', color: palette.textSecondary,
                      border: `1px solid ${palette.border}`, borderRadius: '4px', fontSize: '13px',
-                     cursor: result ? 'pointer' : 'default', opacity: result ? 1 : 0.5 }}>
+                     cursor: hasSolid ? 'pointer' : 'default', opacity: hasSolid ? 1 : 0.5 }}>
             STEP
           </button>
           <button onClick={onClose} style={{ background: 'none', border: 'none',
@@ -687,7 +688,12 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
         {/* footer: stats + warnings */}
         <div style={{ padding: '8px 16px', borderTop: `1px solid ${palette.border}`,
                       fontSize: '12px', color: palette.textSecondary, minHeight: '20px' }}>
-          {status === 'done' && result && (
+          {status === 'done' && result && result.mesh.triangle_count === 0 && (
+            <span style={{ color: palette.warning ?? '#c78a1a' }}>
+              Nothing built{result.warnings.length > 0 ? ` — ${result.warnings.join('; ')}` : '. Add or fix an operation.'}
+            </span>
+          )}
+          {status === 'done' && result && result.mesh.triangle_count > 0 && (
             <span>
               {(() => {
                 const m = result.metrics;

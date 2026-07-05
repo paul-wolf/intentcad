@@ -181,6 +181,7 @@ export function createViewer(canvas: HTMLCanvasElement, color = [0.62, 0.66, 0.7
     gl!.bindBuffer(gl!.ARRAY_BUFFER, normBuf);
     gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array(mesh.normals), gl!.STATIC_DRAW);
     vertexCount = mesh.positions.length / 3;
+    if (vertexCount === 0) { center = [0, 0, 0]; return; }  // empty build — keep camera sane
 
     // frame the camera on the bounding box
     const xs = mesh.positions;

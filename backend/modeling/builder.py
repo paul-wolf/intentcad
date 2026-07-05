@@ -695,6 +695,52 @@ def _export_step(shape) -> str:
         return fh.read()
 
 
+def _apply_feature(feat, result, sketches: dict, warnings: list[str]):
+    """Apply one feature to the running result and return the new result. Raises
+    BuildError on a feature-level failure; build() decides to skip and warn."""
+    t = feat.type
+    if t == "fillet":
+        if result is None:
+            raise BuildError("fillet needs existing geometry")
+        return _edge_op(result, feat.edges or "all", feat.radius, "fillet", feat.id, warnings)
+    if t == "chamfer":
+        if result is None:
+            raise BuildError("chamfer needs existing geometry")
+        return _edge_op(result, feat.edges or "all", feat.distance, "chamfer", feat.id, warnings)
+    if t == "trim":
+        if result is None:
+            raise BuildError("trim needs existing geometry")
+        return _trim(result, feat.trimAxis or "Z", feat.at, feat.keep or "min",
+                     feat.id, feat.trimFace, warnings)
+    if t == "counterbore":
+        if result is None:
+            raise BuildError("counterbore needs existing geometry")
+        return _counterbore(result, feat, warnings)
+
+    sketch = sketches.get(feat.sketchId)
+    if sketch is None:
+        raise BuildError(f"sketch '{feat.sketchId}' not found")
+
+    if t == "extrude":
+        regions = _loops_to_regions(_sketch_to_loops(sketch, warnings), sketch.id)
+        solid = _extrude(regions, feat.distance, feat.direction, sketch.id)
+    elif t == "revolve":
+        if feat.axis is None:
+            raise BuildError("revolve needs an axis")
+        regions = _loops_to_regions(_sketch_to_loops(sketch, warnings), sketch.id)
+        solid = _revolve(regions, _v(feat.axis.start.x, feat.axis.start.y),
+                         _v(feat.axis.end.x, feat.axis.end.y), feat.angle, sketch.id)
+    else:
+        raise BuildError(f"type '{t}' not supported yet")
+
+    solid = _place(solid, feat.plane, feat.tilt, feat.tiltAxis, feat.offset)
+    if result is None:
+        return solid
+    if feat.operation == "remove":
+        return result.cut(solid)
+    return result.fuse(solid)
+
+
 # ── entry point ──────────────────────────────────────────────────────────
 def build(req: BuildRequest) -> BuildResult:
     warnings: list[str] = []
@@ -702,60 +748,25 @@ def build(req: BuildRequest) -> BuildResult:
 
     result = None
     for feat in req.features:
-        if feat.type == "fillet":
-            if result is None:
-                raise BuildError(f"feature {feat.id}: fillet needs existing geometry")
-            result = _edge_op(result, feat.edges or "all", feat.radius, "fillet", feat.id, warnings)
-            continue
-        if feat.type == "chamfer":
-            if result is None:
-                raise BuildError(f"feature {feat.id}: chamfer needs existing geometry")
-            result = _edge_op(result, feat.edges or "all", feat.distance, "chamfer", feat.id, warnings)
-            continue
-        if feat.type == "trim":
-            if result is None:
-                raise BuildError(f"feature {feat.id}: trim needs existing geometry")
-            result = _trim(result, feat.trimAxis or "Z", feat.at, feat.keep or "min",
-                           feat.id, feat.trimFace, warnings)
-            continue
-        if feat.type == "counterbore":
-            if result is None:
-                raise BuildError(f"feature {feat.id}: counterbore needs existing geometry")
-            result = _counterbore(result, feat, warnings)
-            continue
-
-        sketch = sketches.get(feat.sketchId)
-        if sketch is None:
-            # a stale/foreign sketch reference (e.g. a deleted sketch) — skip the
-            # feature rather than failing the whole build
-            warnings.append(f"feature {feat.id}: sketch '{feat.sketchId}' not found — skipped")
-            continue
-
-        if feat.type == "extrude":
-            regions = _loops_to_regions(_sketch_to_loops(sketch, warnings), sketch.id)
-            solid = _extrude(regions, feat.distance, feat.direction, sketch.id)
-        elif feat.type == "revolve":
-            if feat.axis is None:
-                raise BuildError(f"feature {feat.id}: revolve needs an axis")
-            regions = _loops_to_regions(_sketch_to_loops(sketch, warnings), sketch.id)
-            ax_start = _v(feat.axis.start.x, feat.axis.start.y)
-            ax_end = _v(feat.axis.end.x, feat.axis.end.y)
-            solid = _revolve(regions, ax_start, ax_end, feat.angle, sketch.id)
-        else:
-            warnings.append(f"feature {feat.id}: type '{feat.type}' not supported yet — skipped")
-            continue
-
-        solid = _place(solid, feat.plane, feat.tilt, feat.tiltAxis, feat.offset)
-
-        if result is None:
-            result = solid
-        elif feat.operation == "remove":
-            result = result.cut(solid)
-        else:
-            result = result.fuse(solid)
+        # A per-feature failure (un-closed sketch, selector that matches nothing,
+        # stale reference, …) is recorded as a warning and skipped — it must not
+        # abort the whole build, or one bad feature blocks the entire model from
+        # loading. The prior result is kept; later features build on it.
+        try:
+            result = _apply_feature(feat, result, sketches, warnings)
+        except BuildError as exc:
+            warnings.append(f"{feat.type} {feat.id} skipped: {exc}")
 
     if result is None:
-        raise BuildError("no feature produced geometry")
+        # nothing buildable — return an empty result with the warnings rather than
+        # a hard error, so a reload never leaves the panel broken
+        return BuildResult(
+            positions=[], normals=[], triangle_count=0, step="",
+            metrics={"volume": 0.0, "area": 0.0, "bbox_min": [0, 0, 0],
+                     "bbox_max": [0, 0, 0], "center": [0, 0, 0]},
+            faces=[], edges=[],
+            warnings=list(dict.fromkeys(warnings)) or ["no geometry produced"],
+        )
 
     positions, normals, tri_count = _tessellate(result, req.tolerance)
     step = _export_step(result)

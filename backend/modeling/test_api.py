@@ -47,8 +47,14 @@ class BuildApiTests(TestCase):
         self.assertTrue(data["step"].startswith("ISO-10303-21;"))
         self.assertEqual(data["warnings"], [])
 
-    def test_invalid_profile_returns_422(self):
+    def test_invalid_profile_returns_empty_not_422(self):
+        """A feature that can't build is skipped with a warning (200 + empty
+        mesh), not a hard 422 — so a reload never breaks the panel."""
         self.client.force_login(self.user)
         bad = {"sketches": [{"id": "sk", "entities": []}],
                "features": [{"id": "f", "type": "extrude", "sketchId": "sk", "distance": 5}]}
-        self.assertEqual(self._post(bad).status_code, 422)
+        resp = self._post(bad)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["mesh"]["triangle_count"], 0)
+        self.assertTrue(any("skipped" in w for w in data["warnings"]))
