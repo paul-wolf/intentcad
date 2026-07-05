@@ -440,9 +440,13 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   function onMove(e: PointerEvent) {
     if (!dragging) return;
     moved += Math.abs(e.clientX - lastX) + Math.abs(e.clientY - lastY);
-    azimuth += (e.clientX - lastX) * 0.01;
+    // Full vertical orbit: rolling past the poles lets you see the bottom. When
+    // upside-down (cos < 0) horizontal drag would feel reversed, so invert it.
+    const flipped = Math.cos(elevation) < 0;
+    azimuth += (e.clientX - lastX) * 0.01 * (flipped ? -1 : 1);
     elevation += (e.clientY - lastY) * 0.01;
-    elevation = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, elevation));
+    if (elevation > Math.PI) elevation -= 2 * Math.PI;
+    else if (elevation < -Math.PI) elevation += 2 * Math.PI;
     lastX = e.clientX; lastY = e.clientY;
     scheduleRender();
   }
