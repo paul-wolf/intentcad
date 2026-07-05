@@ -37,6 +37,7 @@ interface DocumentStore {
   setDocumentName(name: string): void;
   setMetadata(metadata: Partial<DocumentMetadata>): void;
   setBuildFeatures(features: import('@/api/client').BuildFeature[]): void;
+  setModelCode(code: string): void;
 
   // Undo/Redo
   beginTransaction(label: string): void;
@@ -154,6 +155,10 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   // the document so auto-save persists it. No transaction.
   setBuildFeatures(features) {
     set((s) => ({ document: { ...s.document, buildFeatures: features } }));
+  },
+
+  setModelCode(code) {
+    set((s) => ({ document: { ...s.document, modelCode: code } }));
   },
 
   setMetadata(metadata) {

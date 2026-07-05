@@ -219,6 +219,8 @@ export interface Document {
   activeSketchId: string;
   parameters?: Record<string, number>;
   metadata?: DocumentMetadata;
-  /** The 3D build feature tree (server-side modeler). Persisted with the doc. */
+  /** The 3D build feature tree (legacy op-list modeler). */
   buildFeatures?: import('@/api/client').BuildFeature[];
+  /** The 3D model as a build123d script — the current modeler. */
+  modelCode?: string;
 }

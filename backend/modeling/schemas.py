@@ -181,3 +181,22 @@ class ChatResponse(Schema):
     reply: str | None = None
     operations: list[FeatureIn] = []     # features to append to the tree
     question: str | None = None
+
+
+# ── build123d engine (the new modeler) ──
+class RunRequest(Schema):
+    """Execute a build123d script (the model is the script)."""
+    code: str
+
+
+class RunMetrics(Schema):
+    volume: float
+    area: float
+    bbox_min: list[float]
+    bbox_max: list[float]
+
+
+class RunResponse(Schema):
+    mesh: MeshOut
+    step: str
+    metrics: RunMetrics

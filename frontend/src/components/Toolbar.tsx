@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { BuildViewer } from './BuildViewer';
+import { ScriptViewer } from './ScriptViewer';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useUIStateStore } from '@/stores/uiStateStore';
@@ -236,7 +236,7 @@ export function Toolbar() {
         >
           3D
         </button>
-        {showBuild && <BuildViewer onClose={() => setShowBuild(false)} />}
+        {showBuild && <ScriptViewer onClose={() => setShowBuild(false)} />}
         <button
           onClick={() => { downloadTextFile(exportDocumentToDxf(doc), `${doc.name}.dxf`, 'application/dxf'); }}
           style={{ ...btn(palette), color: palette.textSecondary }}

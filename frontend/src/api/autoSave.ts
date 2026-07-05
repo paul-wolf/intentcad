@@ -71,6 +71,16 @@ export function persistBuildFeatures(features: unknown[]) {
   doSave(backendId, doc, history);
 }
 
+/** Persist the build123d model script NOW (no debounce), directly. */
+export function persistModelCode(code: string) {
+  useDocumentStore.getState().setModelCode(code);
+  if (!backendId) return;
+  const state = useDocumentStore.getState();
+  const doc = { ...state.document } as unknown as Record<string, unknown>;
+  const history = { undo: state.undoStack, redo: state.redoStack };
+  doSave(backendId, doc, history);
+}
+
 /** Schedule a debounced save of the current document state. */
 export function requestSave() {
   const state = useDocumentStore.getState();

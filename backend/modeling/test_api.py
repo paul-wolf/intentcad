@@ -1,60 +1,45 @@
-"""HTTP-level tests for POST /api/build/ (auth + serialization + build)."""
+"""HTTP-level tests for the modeler endpoint POST /api/build/run (auth + artifacts).
+
+The model is a build123d script; the endpoint runs it and returns mesh + STEP.
+(The legacy op-list /build endpoint is deprecated — cadquery is being removed.)
+"""
 
 import json
 
 from django.contrib.auth import get_user_model
 from django.test import Client, TestCase
 
-BUILD_URL = "/api/build/"
+RUN_URL = "/api/build/run"
 
-PLATE_WITH_HOLE = {
-    "sketches": [
-        {
-            "id": "sk1",
-            "entities": [
-                {"type": "rectangle", "center": {"x": 0, "y": 0},
-                 "width": 40, "height": 30, "anchor": "corner"},
-                {"type": "circle", "center": {"x": 20, "y": 15}, "radius": 5},
-            ],
-        }
-    ],
-    "features": [
-        {"id": "f1", "type": "extrude", "sketchId": "sk1", "distance": 10, "operation": "add"}
-    ],
-}
+PART = 'part = Box(20, 20, 6) - Cylinder(3, 20)'
 
 
-class BuildApiTests(TestCase):
+class RunApiTests(TestCase):
     def setUp(self):
         self.client = Client()
         self.user = get_user_model().objects.create_user(
             username="tester", email="t@example.com", password="pw",
         )
 
-    def _post(self, body):
-        return self.client.post(BUILD_URL, data=json.dumps(body), content_type="application/json")
+    def _post(self, code):
+        return self.client.post(RUN_URL, data=json.dumps({"code": code}),
+                                content_type="application/json")
 
     def test_requires_auth(self):
-        self.assertEqual(self._post(PLATE_WITH_HOLE).status_code, 401)
+        self.assertEqual(self._post(PART).status_code, 401)
 
-    def test_build_returns_mesh_and_step(self):
+    def test_run_returns_mesh_and_step(self):
         self.client.force_login(self.user)
-        resp = self._post(PLATE_WITH_HOLE)
+        resp = self._post(PART)
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertGreater(data["mesh"]["triangle_count"], 0)
         self.assertEqual(len(data["mesh"]["positions"]), data["mesh"]["triangle_count"] * 9)
         self.assertTrue(data["step"].startswith("ISO-10303-21;"))
-        self.assertEqual(data["warnings"], [])
+        self.assertLess(data["metrics"]["volume"], 20 * 20 * 6)  # box minus a hole
 
-    def test_invalid_profile_returns_empty_not_422(self):
-        """A feature that can't build is skipped with a warning (200 + empty
-        mesh), not a hard 422 — so a reload never breaks the panel."""
+    def test_bad_script_returns_422(self):
         self.client.force_login(self.user)
-        bad = {"sketches": [{"id": "sk", "entities": []}],
-               "features": [{"id": "f", "type": "extrude", "sketchId": "sk", "distance": 5}]}
-        resp = self._post(bad)
-        self.assertEqual(resp.status_code, 200)
-        data = resp.json()
-        self.assertEqual(data["mesh"]["triangle_count"], 0)
-        self.assertTrue(any("skipped" in w for w in data["warnings"]))
+        resp = self._post("part = Box(1, 1, 1")  # syntax error
+        self.assertEqual(resp.status_code, 422)
+        self.assertIn("message", resp.json())

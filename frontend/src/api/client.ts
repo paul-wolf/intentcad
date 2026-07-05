@@ -194,7 +194,17 @@ export const buildApi = {
   chat(payload: ChatRequest): Promise<ChatResponse> {
     return request('/build/chat', { method: 'POST', body: JSON.stringify(payload) });
   },
+  run(code: string): Promise<RunResponse> {
+    return request('/build/run', { method: 'POST', body: JSON.stringify({ code }) });
+  },
 };
+
+// ── build123d engine (the model is a script) ──
+export interface RunResponse {
+  mesh: { positions: number[]; normals: number[]; triangle_count: number };
+  step: string;
+  metrics: { volume: number; area: number; bbox_min: [number, number, number]; bbox_max: [number, number, number] };
+}
 
 // ── chat agent (instruction → feature-tree operations) ──
 // Mirrors backend/modeling/agent.py.
