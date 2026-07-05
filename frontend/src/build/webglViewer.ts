@@ -126,12 +126,31 @@ export interface FaceRange {
   kind: string; area: number; center: [number, number, number]; normal: [number, number, number];
 }
 
+/** A dimension pinned to world geometry: a label at `point`, optionally a
+ * double-arrow along `dir` (both unit-length; see backend sensitivity). */
+export interface DimAnchor {
+  key: string;
+  label: string;
+  point: [number, number, number];
+  dir?: [number, number, number] | null;
+}
+
+/** A dimension projected into the current view, for the HTML overlay. */
+export interface PlacedDim {
+  key: string; label: string;
+  x: number; y: number;      // screen px of the anchor
+  ax: number; ay: number;    // screen px of the arrow tip (point + dir)
+  visible: boolean;
+}
+
 export interface Viewer {
   update(mesh: ViewerMesh, faces?: FaceRange[]): void;
   /** Highlight edges: flat GL_LINES vertices [x,y,z, x,y,z, ...] (pairs). */
   highlightEdges(segments: number[]): void;
   /** Highlight faces by inventory index. */
   selectFaces(indices: number[]): void;
+  /** Set the dimension overlay (empty to clear). Reported back via onDims. */
+  setDims(dims: DimAnchor[]): void;
   dispose(): void;
 }
 
@@ -144,6 +163,8 @@ export interface ViewerOpts {
   onFacePick?: (face: FaceRange | null) => void;
   /** Called each frame with the view-space directions of the X/Y/Z axes. */
   onAxes?: (dirs: AxisDir[]) => void;
+  /** Called each frame with the projected dimension overlay (see setDims). */
+  onDims?: (dims: PlacedDim[]) => void;
 }
 
 export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): Viewer {
@@ -219,6 +240,8 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   let meshPositions: number[] = [];
   let faces: FaceRange[] = [];
   let selected: number[] = [];
+  let dims: DimAnchor[] = [];
+  let modelRadius = 40;
   const SELECT: [number, number, number] = [1.0, 0.62, 0.2];
 
   function uploadMesh(mesh: ViewerMesh) {
@@ -248,6 +271,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       0.001,
     );
     distance = radius / Math.tan((45 * Math.PI) / 180 / 2) * 1.4;
+    modelRadius = radius;
     buildFrame(radius);
   }
 
@@ -377,6 +401,29 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
         { name: 'Z', x: rot[8]!, y: rot[9]!, z: rot[10]!, color: '#6a8cd9' },
       ]);
     }
+
+    // project the dimension overlay to screen space (CSS px) for the HTML layer
+    if (opts.onDims) {
+      const pv = multiply(proj, multiply(view, model));
+      const cw = canvas.clientWidth, ch = canvas.clientHeight;
+      const arm = modelRadius * 0.12;
+      const proj2 = (x: number, y: number, z: number): [number, number, boolean] => {
+        const clw = pv[3]! * x + pv[7]! * y + pv[11]! * z + pv[15]!;
+        if (clw <= 0) return [0, 0, false];
+        const cx = pv[0]! * x + pv[4]! * y + pv[8]! * z + pv[12]!;
+        const cy = pv[1]! * x + pv[5]! * y + pv[9]! * z + pv[13]!;
+        return [(cx / clw * 0.5 + 0.5) * cw, (1 - (cy / clw * 0.5 + 0.5)) * ch, true];
+      };
+      opts.onDims(dims.map((d) => {
+        const [x, y, vis] = proj2(d.point[0], d.point[1], d.point[2]);
+        let ax = x, ay = y;
+        if (d.dir) {
+          const [tx, ty] = proj2(d.point[0] + d.dir[0] * arm, d.point[1] + d.dir[1] * arm, d.point[2] + d.dir[2] * arm);
+          ax = tx; ay = ty;
+        }
+        return { key: d.key, label: d.label, x, y, ax, ay, visible: vis };
+      }));
+    }
   }
 
   // ── interaction ──
@@ -433,6 +480,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       scheduleRender();
     },
     selectFaces(indices: number[]) { selected = indices; scheduleRender(); },
+    setDims(d: DimAnchor[]) { dims = d; scheduleRender(); },
     dispose() {
       if (raf) cancelAnimationFrame(raf);
       ro.disconnect();

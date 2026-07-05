@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
-import { buildApi, type RunResponse, type UsageResponse } from '@/api/client';
+import { buildApi, type RunResponse, type UsageResponse, type DimInfo } from '@/api/client';
 import { persistModelCode, getBackendId } from '@/api/autoSave';
-import { createViewer, type Viewer, type FaceRange, type AxisDir } from '@/build/webglViewer';
+import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim } from '@/build/webglViewer';
 import { downloadTextFile } from '@/export/download';
 
 interface Props { onClose: () => void }
@@ -48,6 +48,32 @@ export function ScriptViewer({ onClose }: Props) {
         lb.setAttribute('opacity', op);
       }
     });
+  };
+
+  // dimension overlay (hold Opt/Alt): each param's value drawn on the geometry
+  // it controls. The label DOM is rendered from `dimList` (changes rarely) and
+  // positioned every frame via these refs — no React re-render on orbit.
+  const dimG = useRef<Map<string, { line: SVGLineElement | null; label: SVGTextElement | null }>>(new Map());
+  const setDimRef = (key: string, k: 'line' | 'label', el: SVGLineElement | SVGTextElement | null) => {
+    const g = dimG.current.get(key) ?? { line: null, label: null };
+    g[k] = el as never; dimG.current.set(key, g);
+  };
+  const onDims = (placed: PlacedDim[]) => {
+    for (const p of placed) {
+      const g = dimG.current.get(p.key);
+      if (!g) continue;
+      const op = p.visible ? '1' : '0';
+      if (g.line) {                          // double-arrow centered on the anchor
+        const dx = p.ax - p.x, dy = p.ay - p.y;
+        g.line.setAttribute('x1', `${p.x - dx}`); g.line.setAttribute('y1', `${p.y - dy}`);
+        g.line.setAttribute('x2', `${p.ax}`); g.line.setAttribute('y2', `${p.ay}`);
+        g.line.setAttribute('opacity', op);
+      }
+      if (g.label) {
+        g.label.setAttribute('x', `${p.x}`); g.label.setAttribute('y', `${p.y - 9}`);
+        g.label.setAttribute('opacity', op);
+      }
+    }
   };
 
   const [code, setCode] = useState('');
@@ -115,7 +141,7 @@ export function ScriptViewer({ onClose }: Props) {
     setCode(initial);
     if (canvasRef.current) {
       try {
-        viewerRef.current = createViewer(canvasRef.current, { onFacePick: onPick, onAxes });
+        viewerRef.current = createViewer(canvasRef.current, { onFacePick: onPick, onAxes, onDims });
         build(initial);
       } catch (err) {
         setStatus('error');
@@ -145,7 +171,48 @@ export function ScriptViewer({ onClose }: Props) {
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   const fetchUsage = () => buildApi.usage(getBackendId() ?? '').then(setUsage).catch(() => {});
   const [paramVals, setParamVals] = useState<Record<string, number>>({});
-  const [sens, setSens] = useState<Record<string, number[]>>({});   // param -> faces it controls
+  const [sens, setSens] = useState<Record<string, DimInfo>>({});   // param -> what it controls
+
+  // hold Opt/Alt to reveal every parameter as a dimension on the geometry it
+  // drives (like the sketch editor's dimension overlay).
+  const [dimsOn, setDimsOn] = useState(false);
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => { if (e.key === 'Alt') setDimsOn(true); };
+    const up = (e: KeyboardEvent) => { if (e.key === 'Alt') setDimsOn(false); };
+    const off = () => setDimsOn(false);
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    window.addEventListener('blur', off);
+    return () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup', up);
+      window.removeEventListener('blur', off);
+    };
+  }, []);
+
+  const dimFmt = (v: number) => `${Math.round(v * 100) / 100}`;
+  // the params that have a place to be drawn (list drives the label DOM)
+  const dimList = dimsOn
+    ? Object.entries(sens)
+        .filter(([, d]) => d.anchor)
+        .map(([name, d]) => ({ key: name, label: `${name} ${dimFmt(d.value)}`, kind: d.kind }))
+    : [];
+  useEffect(() => {
+    const v = viewerRef.current;
+    if (!v) return;
+    v.setDims(
+      dimsOn
+        ? Object.entries(sens)
+            .filter(([, d]) => d.anchor)
+            .map(([name, d]) => ({
+              key: name,
+              label: `${name} ${dimFmt(d.value)}`,
+              point: d.anchor as [number, number, number],
+              dir: d.dir,
+            }))
+        : [],
+    );
+  }, [dimsOn, sens]);
 
   // change a parameter's value: rewrite just that value in the script (comments
   // and formatting preserved), then rebuild + save.
@@ -267,7 +334,7 @@ export function ScriptViewer({ onClose }: Props) {
                 <div style={{ width: '100%', fontSize: '11px', fontWeight: 600, letterSpacing: '0.5px',
                               textTransform: 'uppercase', color: palette.textSecondary }}>Parameters</div>
                 {Object.entries(paramVals).map(([name, val]) => {
-                  const controls = sens[name] ?? [];
+                  const controls = sens[name]?.faces ?? [];
                   const active = sel.length > 0 && controls.some((i) => sel.includes(i));
                   return (
                     <label key={name}
@@ -319,6 +386,37 @@ export function ScriptViewer({ onClose }: Props) {
                 </g>
               ))}
             </svg>
+            {/* dimension overlay (hold Opt/Alt): each param drawn on its geometry */}
+            <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%',
+                          pointerEvents: 'none', overflow: 'hidden' }}>
+              <defs>
+                <marker id="dimArrow" markerWidth="8" markerHeight="8" refX="4" refY="4"
+                        orient="auto-start-reverse">
+                  <path d="M1,1 L7,4 L1,7" fill="none" stroke="#e0b24a" strokeWidth={1.3} />
+                </marker>
+              </defs>
+              {dimList.map((d) => (
+                <g key={d.key}>
+                  {d.kind === 'length' && (
+                    <line ref={(el) => setDimRef(d.key, 'line', el)} opacity={0}
+                          stroke="#e0b24a" strokeWidth={1.5}
+                          markerStart="url(#dimArrow)" markerEnd="url(#dimArrow)" />
+                  )}
+                  <text ref={(el) => setDimRef(d.key, 'label', el)} opacity={0}
+                        fontSize={12} fontWeight={600} fill="#f2ca63" textAnchor="middle"
+                        style={{ paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.65)', strokeWidth: 3 }}>
+                    {d.label}
+                  </text>
+                </g>
+              ))}
+            </svg>
+            {Object.keys(paramVals).length > 0 && status === 'done' && (
+              <div style={{ position: 'absolute', right: 10, bottom: 10, fontSize: '11px',
+                            color: dimsOn ? '#e0b24a' : palette.textSecondary, pointerEvents: 'none',
+                            opacity: 0.85 }}>
+                {dimsOn ? 'dimensions' : 'hold ⌥ for dimensions'}
+              </div>
+            )}
             {status === 'error' && (
               <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '45%',
                             overflow: 'auto', padding: '12px 14px', background: 'rgba(0,0,0,0.35)',

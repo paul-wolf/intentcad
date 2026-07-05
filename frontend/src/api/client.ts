@@ -209,10 +209,19 @@ export const buildApi = {
   setParams(code: string, params: Record<string, number>): Promise<{ code: string }> {
     return request('/build/set_params', { method: 'POST', body: JSON.stringify({ code, params }) });
   },
-  sensitivity(code: string): Promise<{ params: Record<string, number[]> }> {
+  sensitivity(code: string): Promise<{ params: Record<string, DimInfo> }> {
     return request('/build/sensitivity', { method: 'POST', body: JSON.stringify({ code }) });
   },
 };
+
+/** What a parameter controls, derived by perturbation (see backend sensitivity). */
+export interface DimInfo {
+  faces: number[];
+  value: number;
+  anchor: [number, number, number] | null;
+  dir: [number, number, number] | null;
+  kind: 'length' | 'callout';
+}
 
 export interface EditResponse {
   code: string; note?: string;

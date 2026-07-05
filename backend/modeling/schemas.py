@@ -249,8 +249,16 @@ class SensitivityRequest(Schema):
     code: str
 
 
+class DimInfo(Schema):
+    faces: list[int] = []               # face indices the param controls
+    value: float = 0.0                  # its current value
+    anchor: list[float] | None = None   # a world point on the controlled geometry
+    dir: list[float] | None = None      # unit direction it moves as the param grows
+    kind: str = "callout"               # "length" (has dir) or "callout"
+
+
 class SensitivityResponse(Schema):
-    params: dict[str, list[int]] = {}   # param name -> face indices it controls
+    params: dict[str, DimInfo] = {}     # param name -> what it controls + its dimension
 
 
 class UsageTotals(Schema):
