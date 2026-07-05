@@ -124,7 +124,8 @@ class EdgeOut(Schema):
     center: list[float]
     start: list[float]
     end: list[float]
-    faces: list[list[str]] = []  # tokens of the two faces this edge borders (adjacency)
+    faces: list[list[str]] = []       # tokens of the two faces this edge borders
+    faceIndices: list[int] = []       # inventory indices of those two faces
 
 
 class BuildResponse(Schema):

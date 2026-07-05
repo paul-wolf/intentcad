@@ -527,23 +527,69 @@ def _tessellate(shape, tolerance: float) -> tuple[list[float], list[float], int]
     return positions, normals, len(tris)
 
 
+def _cyl_convexity(f) -> str | None:
+    """For a cylindrical/conical face: 'convex' (a boss's outer wall — material
+    inside) or 'concave' (a hole or bore — material outside), by whether the
+    outward normal points away from or toward the axis. None otherwise.
+
+    The face centroid sits *on* the axis for a full cylinder, so sample an actual
+    surface point (UV mid) and compare the outward normal there to the radial."""
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.BRepTools import BRepTools
+    from OCP.GeomAbs import GeomAbs_Cone, GeomAbs_Cylinder
+
+    surf = BRepAdaptor_Surface(f.wrapped)
+    st = surf.GetType()
+    if st == GeomAbs_Cylinder:
+        axis = surf.Cylinder().Axis()
+    elif st == GeomAbs_Cone:
+        axis = surf.Cone().Axis()
+    else:
+        return None
+    umin, umax, vmin, vmax = BRepTools.UVBounds_s(f.wrapped)
+    gp = surf.Value((umin + umax) / 2.0, (vmin + vmax) / 2.0)  # a point on the surface
+    p = Vector(gp.X(), gp.Y(), gp.Z())
+    loc, d = axis.Location(), axis.Direction()
+    v = Vector(p.x - loc.X(), p.y - loc.Y(), p.z - loc.Z())
+    ax = Vector(d.X(), d.Y(), d.Z())
+    s = v.dot(ax)
+    radial = Vector(v.x - ax.x * s, v.y - ax.y * s, v.z - ax.z * s)  # ⊥ to axis
+    if radial.Length < 1e-9:
+        return None
+    return "convex" if f.normalAt(p).dot(radial) > 0 else "concave"
+
+
+def _face_descriptor(f) -> tuple[str, list[str]]:
+    """A face's geometric kind + orientation/shape tags. Shared by the inventory
+    and the edge-adjacency tokens so both name a face the same way.
+
+    Planar faces get a world-direction tag (top/bottom/left/right/front/back);
+    cylindrical/conical faces get convex/concave (boss wall vs hole/bore)."""
+    kind = f.geomType().lower()
+    tags: list[str] = []
+    if kind == "plane":
+        n = f.normalAt()
+        ax, ay, az = abs(n.x), abs(n.y), abs(n.z)
+        if az >= ax and az >= ay:
+            tags.append("top" if n.z > 0 else "bottom")
+        elif ax >= ay:
+            tags.append("right" if n.x > 0 else "left")
+        else:
+            tags.append("back" if n.y > 0 else "front")
+    else:
+        cc = _cyl_convexity(f)
+        if cc:
+            tags.append(cc)
+    return kind, tags
+
+
 def _faces(shape) -> list[dict]:
-    """Inventory v0: each face classified with coarse descriptors + orientation tags."""
+    """Inventory v0: each face classified with coarse descriptors + tags."""
     out = []
     for i, f in enumerate(shape.Faces()):
         c = f.Center()
         n = f.normalAt()
-        kind = f.geomType().lower()
-        tags: list[str] = []
-        if kind == "plane":
-            # name the face by the world direction it faces
-            ax, ay, az = abs(n.x), abs(n.y), abs(n.z)
-            if az >= ax and az >= ay:
-                tags.append("top" if n.z > 0 else "bottom")
-            elif ax >= ay:
-                tags.append("right" if n.x > 0 else "left")
-            else:
-                tags.append("back" if n.y > 0 else "front")
+        kind, tags = _face_descriptor(f)
         out.append({
             "index": i,
             "kind": kind,
@@ -556,24 +602,15 @@ def _faces(shape) -> list[dict]:
 
 
 def _face_tokens(f) -> list[str]:
-    """Descriptor tokens for a face: its kind + directional tag (planar only)."""
-    toks = [f.geomType().lower()]
-    if toks[0] == "plane":
-        n = f.normalAt()
-        ax, ay, az = abs(n.x), abs(n.y), abs(n.z)
-        if az >= ax and az >= ay:
-            toks.append("top" if n.z > 0 else "bottom")
-        elif ax >= ay:
-            toks.append("right" if n.x > 0 else "left")
-        else:
-            toks.append("back" if n.y > 0 else "front")
-    return toks
+    """Descriptor tokens for a face: its kind + its tags (for edge adjacency)."""
+    kind, tags = _face_descriptor(f)
+    return [kind, *tags]
 
 
 def _edges(shape) -> list[dict]:
-    """Edge inventory: coarse descriptors + the tokens of the two faces each edge
-    borders (adjacency), so 'edge: A ∩ B' — e.g. the socket/plate junction — is
-    selectable."""
+    """Edge inventory: coarse descriptors + the two faces each edge borders, as
+    both descriptor tokens (adjacency, e.g. 'convex ∩ top') and their inventory
+    indices (so an exact junction is nameable as 'faces:i,j')."""
     from cadquery import Face
     from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
     from OCP.TopExp import TopExp
@@ -581,6 +618,14 @@ def _edges(shape) -> list[dict]:
 
     emap = TopTools_IndexedDataMapOfShapeListOfShape()
     TopExp.MapShapesAndAncestors_s(shape.wrapped, TopAbs_EDGE, TopAbs_FACE, emap)
+
+    faces_list = shape.Faces()  # same order as _faces() indices
+
+    def face_index(tface) -> int:
+        for j, fc in enumerate(faces_list):
+            if fc.wrapped.IsSame(tface):
+                return j
+        return -1
 
     out = []
     for i, e in enumerate(shape.Edges()):
@@ -591,9 +636,14 @@ def _edges(shape) -> list[dict]:
         except Exception:  # closed curves (full circle) have no distinct ends
             start = end = [c.x, c.y, c.z]
         faces: list[list[str]] = []
+        face_idx: list[int] = []
         try:
             if emap.Contains(e.wrapped):
-                faces = [_face_tokens(Face(fw)) for fw in emap.FindFromKey(e.wrapped)]
+                for fw in emap.FindFromKey(e.wrapped):
+                    faces.append(_face_tokens(Face(fw)))
+                    j = face_index(fw)
+                    if j >= 0:
+                        face_idx.append(j)
         except Exception:
             pass
         out.append({
@@ -604,6 +654,7 @@ def _edges(shape) -> list[dict]:
             "start": start,
             "end": end,
             "faces": faces,
+            "faceIndices": face_idx,
         })
     return out
 

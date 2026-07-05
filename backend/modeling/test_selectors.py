@@ -55,6 +55,37 @@ class SelectorTests(SimpleTestCase):
         with self.assertRaises(SelectorError):
             resolve_edges("tag:top", edges)  # edges have no tags in v0
 
+    def test_faces_pair_selector(self):
+        """faces:i,j names the exact edge between two specific faces — precise
+        where between:A,B is ambiguous."""
+        edges = [
+            {"index": 0, "kind": "circle", "faces": [["cylinder", "convex"], ["plane", "top"]], "faceIndices": [3, 0]},
+            {"index": 1, "kind": "circle", "faces": [["cylinder", "concave"], ["plane", "top"]], "faceIndices": [4, 0]},
+            {"index": 2, "kind": "circle", "faces": [["cylinder", "convex"], ["plane", "top"]], "faceIndices": [3, 1]},
+        ]
+        # between:cylinder,top is broad — matches all three
+        self.assertEqual(resolve_edges("between:cylinder,top", edges), [0, 1, 2])
+        # faces:0,3 names exactly the one edge between those two faces (order-free)
+        self.assertEqual(resolve_edges("faces:0,3", edges), [0])
+        self.assertEqual(resolve_edges("faces:3,0", edges), [0])
+        with self.assertRaises(SelectorError):
+            resolve_edges("faces:x,y", edges)
+
+    def test_convexity_boss_vs_hole(self):
+        """A boss (raised cylinder) is tagged convex; a bored hole through it is
+        concave — so 'the outside of the socket' is nameable."""
+        slab = SketchIn(id="slab", entities=[
+            SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=40, height=40)])
+        boss = SketchIn(id="boss", entities=[  # ring: outer wall (convex) + bore (concave)
+            SketchEntityIn(type="circle", center=Point(x=0, y=0), radius=8),
+            SketchEntityIn(type="circle", center=Point(x=0, y=0), radius=4)])
+        res = build(BuildRequest(sketches=[slab, boss], features=[
+            FeatureIn(id="e", type="extrude", sketchId="slab", distance=5),
+            FeatureIn(id="b", type="extrude", sketchId="boss", distance=10, offset=[0, 0, 5]),
+        ]))
+        self.assertGreaterEqual(len(resolve_faces("tag:convex", res.faces)), 1)
+        self.assertGreaterEqual(len(resolve_faces("tag:concave", res.faces)), 1)
+
     def test_against_real_inventory(self):
         """Resolve against a freshly built box so field names stay in sync."""
         res = build(BuildRequest(

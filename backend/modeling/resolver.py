@@ -58,8 +58,10 @@ def build_inventory_summary(faces: list[dict], edges: list[dict]) -> str:
     for e in edges:
         border = e.get("faces", [])
         border_txt = " | ".join(" ".join(t) for t in border) or "-"
+        fi = e.get("faceIndices", [])
+        fi_txt = f" [faces {','.join(map(str, fi))}]" if fi else ""
         lines.append(
-            f"  #{e['index']} {e['kind']} len={e['length']:.1f} between {border_txt}"
+            f"  #{e['index']} {e['kind']} len={e['length']:.1f} between {border_txt}{fi_txt}"
         )
         if len(border) == 2:
             for a in border[0]:
@@ -80,9 +82,10 @@ SELECTOR_REFERENCE = """\
 FACE selectors (choose one):
   all | *            every face
   largest | smallest the single face with max / min area
-  tag:<t>            faces whose orientation tag is <t> (by outward normal):
-                     top +Z (up), bottom -Z (underside), front -Y, back +Y,
-                     left -X, right +X
+  tag:<t>            faces whose orientation tag is <t>. Planar tags (by outward
+                     normal): top +Z (up), bottom -Z (underside), front -Y,
+                     back +Y, left -X, right +X. Cylindrical faces are tagged
+                     convex (a boss's outer wall) or concave (a hole or bore).
   kind:<k>           faces of a geometric kind (plane, cylinder, cone, sphere, ...)
 
 EDGE selectors (choose one):
@@ -91,8 +94,13 @@ EDGE selectors (choose one):
   kind:<k>           edges of a geometric kind (line, circle, ellipse, ...)
   between:A,B        edges where one bordering face has descriptor A and the
                      other has descriptor B (a junction). Descriptors are face
-                     kinds or orientation tags, e.g. between:cylinder,top for the
-                     rim where a cylinder meets the top face."""
+                     kinds or tags, e.g. between:convex,top for the rim where a
+                     boss's outer wall meets the top face. Matches EVERY such
+                     junction — too broad when several faces share a descriptor.
+  faces:i,j          the exact edge(s) bordering face #i and face #j — precise.
+                     Prefer this when between:A,B is ambiguous (many cylinders or
+                     several 'top' faces): pick the two specific faces from the
+                     inventory by their index, area, and position."""
 
 
 def _system_prompt() -> str:

@@ -84,6 +84,14 @@ def resolve_edges(query: str, edges: list[dict]) -> list[int]:
                 return False
 
             return [e["index"] for e in edges if matches(e)]
+        if field == "faces":
+            # precise: the edge bordering exactly these two face indices
+            a, _, b = value.partition(",")
+            try:
+                pair = {int(a.strip()), int(b.strip())}
+            except ValueError as exc:
+                raise SelectorError(f"faces: needs two integer indices, got {value!r}") from exc
+            return [e["index"] for e in edges if set(e.get("faceIndices", [])) == pair]
         raise SelectorError(f"unknown selector field: {field!r}")
 
     raise SelectorError(f"unrecognized selector: {query!r}")
