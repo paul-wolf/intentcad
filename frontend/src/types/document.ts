@@ -219,4 +219,6 @@ export interface Document {
   activeSketchId: string;
   parameters?: Record<string, number>;
   metadata?: DocumentMetadata;
+  /** The 3D build feature tree (server-side modeler). Persisted with the doc. */
+  buildFeatures?: import('@/api/client').BuildFeature[];
 }

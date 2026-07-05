@@ -113,10 +113,14 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
     }
   }, [features, upto]);
 
-  // create the viewer, claim the keyboard, and seed an empty tree — once on mount
+  // create the viewer, claim the keyboard, and seed the tree — once on mount.
+  // Prefer the tree persisted with the document; else start from one extrude.
   useEffect(() => {
     useBuildStore.getState().setPanelOpen(true);
-    if (useBuildStore.getState().features.length === 0 && activeSketchId) {
+    const saved = useDocumentStore.getState().document.buildFeatures;
+    if (saved && saved.length > 0) {
+      useBuildStore.getState().initTree(saved);
+    } else if (useBuildStore.getState().features.length === 0 && activeSketchId) {
       useBuildStore.getState().initTree([{ id: newId(), type: 'extrude', sketchId: activeSketchId, distance: 10, operation: 'add' }]);
     }
     if (canvasRef.current) {
@@ -137,6 +141,9 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
 
   // rebuild whenever the tree changes (and once after the viewer exists)
   useEffect(() => { rebuild(); }, [rebuild]);
+
+  // mirror the tree into the document so auto-save persists it across reloads
+  useEffect(() => { useDocumentStore.getState().setBuildFeatures(features); }, [features]);
 
   // Ctrl-Z / Ctrl-Shift-Z (Ctrl-Y) undo/redo the tree while the panel is open
   useEffect(() => {

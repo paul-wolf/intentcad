@@ -36,6 +36,7 @@ interface DocumentStore {
   setDocument(doc: Document): void;
   setDocumentName(name: string): void;
   setMetadata(metadata: Partial<DocumentMetadata>): void;
+  setBuildFeatures(features: import('@/api/client').BuildFeature[]): void;
 
   // Undo/Redo
   beginTransaction(label: string): void;
@@ -147,6 +148,12 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
 
   setDocumentName(name) {
     set((s) => ({ document: { ...s.document, name } }));
+  },
+
+  // The 3D feature tree has its own undo (buildStore); this just mirrors it into
+  // the document so auto-save persists it. No transaction.
+  setBuildFeatures(features) {
+    set((s) => ({ document: { ...s.document, buildFeatures: features } }));
   },
 
   setMetadata(metadata) {

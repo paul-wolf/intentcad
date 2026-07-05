@@ -40,6 +40,7 @@ export function migrateDocument(doc: Document): Document {
   return {
     ...doc,
     parameters: doc.parameters ?? {},
+    buildFeatures: doc.buildFeatures ?? [],
     sketches: doc.sketches.map((sk) => ({
       ...sk,
       constraints: (sk as unknown as { constraints?: Constraint[] }).constraints ?? [],
