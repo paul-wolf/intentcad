@@ -158,10 +158,13 @@ def _claude_llm(system: str, user: str, tools: list[dict]) -> dict:
             "the anthropic SDK is not installed (pip install anthropic)"
         ) from exc
 
-    if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
-        raise ResolverError("ANTHROPIC_API_KEY is not set")
+    # project convention is ANTHROPIC_KEY (see cam/advisor.py); fall back to the
+    # SDK's own ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN.
+    api_key = os.environ.get("ANTHROPIC_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+    if not (api_key or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
+        raise ResolverError("ANTHROPIC_KEY is not set")
 
-    client = anthropic.Anthropic()
+    client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
     try:
         resp = client.messages.create(
             model=MODEL,
