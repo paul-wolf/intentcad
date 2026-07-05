@@ -154,3 +154,28 @@ class ResolveResponse(Schema):
     rationale: str | None = None
     # when clarify:
     question: str | None = None
+
+
+class SketchMeta(Schema):
+    """Just enough about a sketch for the chat agent to reference it by name."""
+    id: str
+    name: str
+    entityCount: int = 0
+
+
+class ChatRequest(Schema):
+    """Ask the chat agent to turn an instruction into feature-tree operations,
+    grounded in the current tree + sketches + built inventory (all inline)."""
+
+    instruction: str
+    sketches: list[SketchMeta] = []
+    features: list[FeatureIn] = []   # the current tree
+    faces: list[FaceOut] = []        # inventory of the current result
+    edges: list[EdgeOut] = []
+
+
+class ChatResponse(Schema):
+    status: str                          # 'ok' | 'clarify'
+    reply: str | None = None
+    operations: list[FeatureIn] = []     # features to append to the tree
+    question: str | None = None

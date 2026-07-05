@@ -149,8 +149,10 @@ CLARIFY_TOOL = {
 
 # ── the LLM call (injected; default is Claude) ────────────────────────────────
 
-def _claude_llm(system: str, user: str, tools: list[dict]) -> dict:
-    """Default llm: one Anthropic tool-use turn. Returns {"tool", "input"}."""
+def claude_tool_call(system: str, user: str, tools: list[dict]) -> dict:
+    """One Anthropic tool-use turn (tool_choice=any). Returns {"tool", "input"}.
+
+    Shared by the reference resolver and the chat agent (modeling/agent.py)."""
     try:
         import anthropic
     except ImportError as exc:  # pragma: no cover - env issue, not logic
@@ -204,7 +206,7 @@ def resolve_reference(
     if not reference:
         raise ResolverError("empty reference")
 
-    llm = llm or _claude_llm
+    llm = llm or claude_tool_call
     summary = build_inventory_summary(faces, edges)
     user = f"INVENTORY:\n{summary}\n\nREFERENCE: {reference}"
 

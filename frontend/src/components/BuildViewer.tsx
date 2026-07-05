@@ -86,6 +86,10 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
   const [refText, setRefText] = useState('');
   const [refBusy, setRefBusy] = useState(false);
   const [refNote, setRefNote] = useState('');
+  // chat agent: an instruction → operations appended to the tree
+  const [chatText, setChatText] = useState('');
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatLog, setChatLog] = useState<{ role: 'you' | 'ai'; text: string }[]>([]);
 
   const [status, setStatus] = useState<'idle' | 'building' | 'done' | 'error'>('idle');
   const [message, setMessage] = useState('');
@@ -212,6 +216,38 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
     if (result) downloadTextFile(result.step, `${docName}.step`, 'application/step');
   };
 
+  // chat: turn an instruction into operations and append them to the tree
+  const sendChat = async () => {
+    const instruction = chatText.trim();
+    if (!instruction || chatBusy) return;
+    setChatLog((l) => [...l, { role: 'you', text: instruction }]);
+    setChatText('');
+    setChatBusy(true);
+    try {
+      const r = await buildApi.chat({
+        instruction,
+        sketches: sketches.map((s) => ({ id: s.id, name: s.name, entityCount: s.entities.length })),
+        features,
+        faces: result?.faces ?? [],
+        edges: result?.edges ?? [],
+      });
+      if (r.status === 'clarify') {
+        setChatLog((l) => [...l, { role: 'ai', text: r.question || 'Could you be more specific?' }]);
+      } else if (r.operations?.length) {
+        setFeatures([...features, ...r.operations]);
+        setUpto(Infinity);
+        const names = r.operations.map((o) => o.type).join(', ');
+        setChatLog((l) => [...l, { role: 'ai', text: `${r.reply || 'Done.'}  (+${names})` }]);
+      } else {
+        setChatLog((l) => [...l, { role: 'ai', text: r.reply || 'Nothing to do.' }]);
+      }
+    } catch (err) {
+      setChatLog((l) => [...l, { role: 'ai', text: String(err instanceof Error ? err.message : err) }]);
+    } finally {
+      setChatBusy(false);
+    }
+  };
+
   // resolve a natural-language edge reference into a selector, then apply it
   const resolveRef = async () => {
     const phrase = refText.trim();
@@ -322,6 +358,38 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
           {/* sidebar */}
           <div style={{ width: '270px', borderRight: `1px solid ${palette.border}`, padding: '12px 14px',
                         overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            {/* chat agent — natural-language edits to the tree */}
+            <div style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.5px', textTransform: 'uppercase',
+                          color: palette.textSecondary, marginBottom: '6px' }}>Assistant</div>
+            {chatLog.length > 0 && (
+              <div style={{ maxHeight: '132px', overflowY: 'auto', display: 'flex', flexDirection: 'column',
+                            gap: '4px', marginBottom: '6px' }}>
+                {chatLog.map((m, i) => (
+                  <div key={i} style={{ fontSize: '12px', lineHeight: 1.35,
+                                        color: m.role === 'you' ? palette.text : palette.textSecondary }}>
+                    <span style={{ opacity: 0.6 }}>{m.role === 'you' ? 'you' : 'ai'} · </span>{m.text}
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ ...row, marginBottom: '4px' }}>
+              <input
+                value={chatText}
+                onChange={(e) => setChatText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') sendChat(); }}
+                placeholder="e.g. chamfer the joint 3mm"
+                style={{ ...field, flex: 1, width: 'auto', minWidth: 0 }}
+              />
+              <button onClick={sendChat} disabled={chatBusy || !chatText.trim()} title="Ask the assistant (AI)"
+                style={{ padding: '4px 10px', background: palette.primaryBtn, color: '#fff', border: 'none',
+                         borderRadius: '4px', fontSize: '13px', flex: '0 0 auto',
+                         cursor: chatText.trim() && !chatBusy ? 'pointer' : 'default',
+                         opacity: chatText.trim() && !chatBusy ? 1 : 0.5 }}>
+                {chatBusy ? '…' : 'Ask'}
+              </button>
+            </div>
+            <div style={{ borderTop: `1px solid ${palette.border}`, margin: '8px 0 10px' }} />
+
             <div style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.5px', textTransform: 'uppercase',
                           color: palette.textSecondary, marginBottom: '6px' }}>Add operation</div>
 

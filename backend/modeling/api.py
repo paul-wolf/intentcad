@@ -3,11 +3,14 @@ from ninja import Router
 
 from projects.access import require_auth
 
+from .agent import plan_operations
 from .builder import BuildError, build
 from .resolver import ResolverError, resolve_reference
 from .schemas import (
     BuildRequest,
     BuildResponse,
+    ChatRequest,
+    ChatResponse,
     EdgeOut,
     FaceOut,
     MeshOut,
@@ -65,3 +68,26 @@ def resolve_model(request, payload: ResolveRequest):
     except ResolverError as exc:
         return JsonResponse({"message": str(exc)}, status=422)
     return ResolveResponse(**result)
+
+
+@router.post("/chat", response=ChatResponse)
+def chat_edit(request, payload: ChatRequest):
+    """Turn a natural-language instruction into feature-tree operations to append.
+
+    The chat agent (modeling/agent.py) reads the current tree + sketches + built
+    inventory and proposes features in the same shape the manual UI produces.
+    """
+    err = require_auth(request)
+    if err:
+        return err
+    try:
+        result = plan_operations(
+            payload.instruction,
+            [s.dict() for s in payload.sketches],
+            [f.dict() for f in payload.features],
+            [f.dict() for f in payload.faces],
+            [e.dict() for e in payload.edges],
+        )
+    except ResolverError as exc:
+        return JsonResponse({"message": str(exc)}, status=422)
+    return ChatResponse(**result)

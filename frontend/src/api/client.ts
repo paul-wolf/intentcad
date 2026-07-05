@@ -191,7 +191,34 @@ export const buildApi = {
   resolve(payload: ResolveRequest): Promise<ResolveResponse> {
     return request('/build/resolve', { method: 'POST', body: JSON.stringify(payload) });
   },
+  chat(payload: ChatRequest): Promise<ChatResponse> {
+    return request('/build/chat', { method: 'POST', body: JSON.stringify(payload) });
+  },
 };
+
+// ── chat agent (instruction → feature-tree operations) ──
+// Mirrors backend/modeling/agent.py.
+
+export interface ChatSketchMeta {
+  id: string;
+  name: string;
+  entityCount: number;
+}
+
+export interface ChatRequest {
+  instruction: string;
+  sketches: ChatSketchMeta[];
+  features: BuildFeature[];
+  faces: BuildResponse['faces'];
+  edges: BuildResponse['edges'];
+}
+
+export interface ChatResponse {
+  status: 'ok' | 'clarify';
+  reply?: string;
+  operations?: BuildFeature[];
+  question?: string;
+}
 
 // ── reference resolver (natural language → selector) ──
 // Mirrors backend/modeling/resolver.py. Given the inventory of an already-built
