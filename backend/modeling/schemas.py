@@ -222,8 +222,17 @@ class RunResponse(Schema):
     faces: list[RunFace] = []
     edges: list[RunEdge] = []
     params: dict[str, float] = {}   # editable scalar params from the script
-    step: str
     metrics: RunMetrics
+
+
+class ExportRequest(Schema):
+    code: str
+    format: str        # 'stl' | 'step'
+
+
+class ExportResponse(Schema):
+    format: str
+    data: str          # the exported file as text (ASCII STL / STEP)
 
 
 class SetParamsRequest(Schema):

@@ -28,15 +28,23 @@ class RunApiTests(TestCase):
     def test_requires_auth(self):
         self.assertEqual(self._post(PART).status_code, 401)
 
-    def test_run_returns_mesh_and_step(self):
+    def test_run_returns_mesh(self):
         self.client.force_login(self.user)
         resp = self._post(PART)
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertGreater(data["mesh"]["triangle_count"], 0)
         self.assertEqual(len(data["mesh"]["positions"]), data["mesh"]["triangle_count"] * 9)
-        self.assertTrue(data["step"].startswith("ISO-10303-21;"))
         self.assertLess(data["metrics"]["volume"], 20 * 20 * 6)  # box minus a hole
+
+    def test_export_stl_and_step(self):
+        self.client.force_login(self.user)
+        for fmt, head in (("stl", "solid"), ("step", "ISO-10303-21;")):
+            resp = self.client.post("/api/build/export",
+                                    data=json.dumps({"code": PART, "format": fmt}),
+                                    content_type="application/json")
+            self.assertEqual(resp.status_code, 200)
+            self.assertTrue(resp.json()["data"].lstrip().startswith(head))
 
     def test_bad_script_returns_422(self):
         self.client.force_login(self.user)

@@ -11,6 +11,8 @@ from .paramedit import ParamError, set_params
 from .schemas import (
     EditRequest,
     EditResponse,
+    ExportRequest,
+    ExportResponse,
     MeshOut,
     RunEdge,
     RunFace,
@@ -47,9 +49,24 @@ def run_model(request, payload: RunRequest):
         faces=[RunFace(**f) for f in r.get("faces", [])],
         edges=[RunEdge(**e) for e in r.get("edges", [])],
         params=r.get("params", {}),
-        step=r["step"],
         metrics=RunMetrics(**r["metrics"]),
     )
+
+
+@router.post("/export", response=ExportResponse)
+def export_model(request, payload: ExportRequest):
+    """Export the built model as STL or STEP (text), on demand."""
+    err = require_auth(request)
+    if err:
+        return err
+    fmt = payload.format.lower()
+    if fmt not in ("stl", "step"):
+        return JsonResponse({"message": f"unknown format {payload.format!r}"}, status=422)
+    try:
+        r = run_script(payload.code, export=[fmt])
+    except EngineError as exc:
+        return JsonResponse({"message": str(exc)}, status=422)
+    return ExportResponse(format=fmt, data=r.get("exports", {}).get(fmt, ""))
 
 
 @router.post("/set_params", response=SetParamsResponse)

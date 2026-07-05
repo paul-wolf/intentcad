@@ -7,12 +7,17 @@ from modeling.engine import EngineError, run_script
 
 class EngineTests(SimpleTestCase):
     def test_builds_a_solid_and_returns_artifacts(self):
-        r = run_script("part = Box(10, 10, 10) - Cylinder(3, 20)")
+        r = run_script("part = Box(10, 10, 10) - Cylinder(3, 20)", export=["step", "stl"])
         self.assertTrue(r["ok"])
         self.assertGreater(r["mesh"]["triangle_count"], 0)
         self.assertEqual(len(r["mesh"]["positions"]), r["mesh"]["triangle_count"] * 9)
-        self.assertTrue(r["step"].startswith("ISO-10303-21;"))
+        self.assertTrue(r["exports"]["step"].startswith("ISO-10303-21;"))
+        self.assertTrue(r["exports"]["stl"].lstrip().startswith("solid"))
         self.assertLess(r["metrics"]["volume"], 1000)  # box minus a hole
+
+    def test_plain_run_has_no_exports(self):
+        r = run_script("part = Box(5, 5, 5)")
+        self.assertEqual(r.get("exports", {}), {})
 
     def test_result_alias(self):
         r = run_script("result = Box(5, 5, 5)")  # `result` also accepted

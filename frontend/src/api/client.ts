@@ -197,6 +197,9 @@ export const buildApi = {
   run(code: string): Promise<RunResponse> {
     return request('/build/run', { method: 'POST', body: JSON.stringify({ code }) });
   },
+  export(code: string, format: 'stl' | 'step'): Promise<{ format: string; data: string }> {
+    return request('/build/export', { method: 'POST', body: JSON.stringify({ code, format }) });
+  },
   edit(payload: { code: string; instruction: string; context?: string; document_id?: string }): Promise<EditResponse> {
     return request('/build/edit', { method: 'POST', body: JSON.stringify(payload) });
   },
@@ -234,7 +237,6 @@ export interface RunResponse {
   faces: RunFace[];
   edges: RunEdge[];
   params: Record<string, number>;
-  step: string;
   metrics: { volume: number; area: number; bbox_min: [number, number, number]; bbox_max: [number, number, number] };
 }
 

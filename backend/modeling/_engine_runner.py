@@ -13,9 +13,8 @@ import sys
 import tempfile
 
 
-def _run(code: str) -> dict:
-    import build123d as b3d
-    from build123d import export_step
+def _run(code: str, export: list | None = None) -> dict:
+    from build123d import export_step, export_stl
 
     ns: dict = {"__name__": "__cad__"}
     exec(f"from build123d import *\n{code}", ns)  # noqa: S102 - sandboxed subprocess
@@ -106,9 +105,18 @@ def _run(code: str) -> dict:
             poly = []
         edges.append({"index": ei, "kind": kind, "faceIndices": fis, "polyline": poly})
 
-    with tempfile.NamedTemporaryFile(suffix=".step", mode="r", delete=True) as fh:
-        export_step(part, fh.name)
-        step = open(fh.name).read()
+    # export only what's asked for (STEP/STL), so a plain render stays light
+    exports: dict = {}
+    for fmt in (export or []):
+        suffix = {"step": ".step", "stl": ".stl"}.get(fmt)
+        if not suffix:
+            continue
+        with tempfile.NamedTemporaryFile(suffix=suffix, mode="r", delete=True) as fh:
+            if fmt == "step":
+                export_step(part, fh.name)
+            else:
+                export_stl(part, fh.name, ascii_format=True)
+            exports[fmt] = open(fh.name).read()
 
     bb = part.bounding_box()
     return {
@@ -117,7 +125,7 @@ def _run(code: str) -> dict:
         "faces": faces,
         "edges": edges,
         "params": params,
-        "step": step,
+        "exports": exports,
         "metrics": {
             "volume": float(part.volume),
             "area": float(part.area),
@@ -130,7 +138,7 @@ def _run(code: str) -> dict:
 def main() -> None:
     try:
         payload = json.loads(sys.stdin.read() or "{}")
-        result = _run(payload.get("code", ""))
+        result = _run(payload.get("code", ""), payload.get("export"))
     except Exception as exc:  # any script/engine error → structured, not a crash
         import traceback
         result = {"ok": False, "error": f"{type(exc).__name__}: {exc}",

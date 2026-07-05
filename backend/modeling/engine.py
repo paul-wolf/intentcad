@@ -25,14 +25,14 @@ class EngineError(RuntimeError):
     """The script failed to build (surfaced to the client with the message)."""
 
 
-def run_script(code: str, *, timeout: float = 30.0) -> dict:
+def run_script(code: str, *, export: list[str] | None = None, timeout: float = 30.0) -> dict:
     """Execute `code` (a build123d script that binds `part`) and return
-    {mesh, step, metrics}. Raises EngineError with the script's error message on
-    failure."""
+    {mesh, faces, edges, params, metrics, exports}. `export` requests STEP/STL
+    text. Raises EngineError with the script's error message on failure."""
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "modeling._engine_runner"],
-            input=json.dumps({"code": code}),
+            input=json.dumps({"code": code, "export": export or []}),
             capture_output=True, text=True, timeout=timeout, cwd=_BACKEND,
         )
     except subprocess.TimeoutExpired as exc:

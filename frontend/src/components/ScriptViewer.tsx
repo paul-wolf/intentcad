@@ -38,7 +38,6 @@ export function ScriptViewer({ onClose }: Props) {
   const [sel, setSel] = useState<number[]>([]);   // selected face indices (≤ 2)
   const resRef = useRef<RunResponse | null>(null);
   const selRef = useRef<number[]>([]);
-  const stepRef = useRef<string>('');
 
   // click a face → toggle it in the selection (keep at most 2). With two faces
   // selected, highlight the edge(s) between them (an edge = two faces meeting).
@@ -72,7 +71,6 @@ export function ScriptViewer({ onClose }: Props) {
       resRef.current = res;
       selRef.current = []; setSel([]);
       setParamVals(res.params);
-      stepRef.current = res.step;
       // derive which params control which faces (perturbation) in the background
       if (Object.keys(res.params).length > 0) {
         setSens({});
@@ -178,8 +176,19 @@ export function ScriptViewer({ onClose }: Props) {
   };
 
   const rebuild = () => { persistModelCode(code); build(code); };
-  const downloadStep = () => {
-    if (status === 'done' && stepRef.current) downloadTextFile(stepRef.current, `${docName}.step`, 'application/step');
+  const [exporting, setExporting] = useState<'stl' | 'step' | null>(null);
+  const doExport = async (format: 'stl' | 'step') => {
+    if (status !== 'done' || exporting) return;
+    setExporting(format);
+    try {
+      const r = await buildApi.export(code, format);
+      const mime = format === 'stl' ? 'model/stl' : 'application/step';
+      downloadTextFile(r.data, `${docName}.${format}`, mime);
+    } catch (err) {
+      setMessage(String(err instanceof Error ? err.message : err));
+    } finally {
+      setExporting(null);
+    }
   };
 
   const btn: CSSProperties = {
@@ -211,10 +220,17 @@ export function ScriptViewer({ onClose }: Props) {
             style={{ ...btn, background: palette.primaryBtn, color: '#fff', opacity: status === 'building' ? 0.6 : 1 }}>
             {status === 'building' ? 'Building…' : 'Build'}
           </button>
-          <button onClick={downloadStep} disabled={status !== 'done'}
-            style={{ ...btn, background: 'none', color: palette.textSecondary,
-                     border: `1px solid ${palette.border}`, opacity: status === 'done' ? 1 : 0.5,
-                     cursor: status === 'done' ? 'pointer' : 'default' }}>STEP</button>
+          {(['stl', 'step'] as const).map((f) => {
+            const enabled = status === 'done' && !exporting;
+            return (
+              <button key={f} onClick={() => doExport(f)} disabled={!enabled}
+                style={{ ...btn, background: 'none', color: palette.textSecondary,
+                         border: `1px solid ${palette.border}`, opacity: enabled ? 1 : 0.5,
+                         cursor: enabled ? 'pointer' : 'default' }}>
+                {exporting === f ? '…' : f.toUpperCase()}
+              </button>
+            );
+          })}
           <button onClick={handleClose} style={{ background: 'none', border: 'none',
                    color: palette.textSecondary, fontSize: '18px', cursor: 'pointer', padding: '0 4px' }}>&times;</button>
         </div>
