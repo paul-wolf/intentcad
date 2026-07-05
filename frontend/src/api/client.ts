@@ -203,6 +203,9 @@ export const buildApi = {
   setParams(code: string, params: Record<string, number>): Promise<{ code: string }> {
     return request('/build/set_params', { method: 'POST', body: JSON.stringify({ code, params }) });
   },
+  sensitivity(code: string): Promise<{ params: Record<string, number[]> }> {
+    return request('/build/sensitivity', { method: 'POST', body: JSON.stringify({ code }) });
+  },
 };
 
 export interface EditResponse { code: string; note?: string }

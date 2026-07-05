@@ -73,6 +73,11 @@ export function ScriptViewer({ onClose }: Props) {
       selRef.current = []; setSel([]);
       setParamVals(res.params);
       stepRef.current = res.step;
+      // derive which params control which faces (perturbation) in the background
+      if (Object.keys(res.params).length > 0) {
+        setSens({});
+        buildApi.sensitivity(src).then((r) => setSens(r.params)).catch(() => {});
+      } else setSens({});
       const m = res.metrics;
       const sz = [0, 1, 2].map((i) => Math.round(m.bbox_max[i]! - m.bbox_min[i]!));
       setStats(`vol ${Math.round(m.volume).toLocaleString()} mm³ · ${sz[0]}×${sz[1]}×${sz[2]} mm · ${res.mesh.triangle_count.toLocaleString()} triangles`);
@@ -105,6 +110,7 @@ export function ScriptViewer({ onClose }: Props) {
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState('');
   const [paramVals, setParamVals] = useState<Record<string, number>>({});
+  const [sens, setSens] = useState<Record<string, number[]>>({});   // param -> faces it controls
 
   // change a parameter's value: rewrite just that value in the script (comments
   // and formatting preserved), then rebuild + save.
@@ -199,21 +205,30 @@ export function ScriptViewer({ onClose }: Props) {
                             overflowY: 'auto', alignContent: 'flex-start' }}>
                 <div style={{ width: '100%', fontSize: '11px', fontWeight: 600, letterSpacing: '0.5px',
                               textTransform: 'uppercase', color: palette.textSecondary }}>Parameters</div>
-                {Object.entries(paramVals).map(([name, val]) => (
-                  <label key={name} style={{ display: 'flex', alignItems: 'center', gap: '5px',
-                                             fontSize: '12px', color: palette.textSecondary }}>
-                    {name}
-                    <input
-                      type="number" value={val} step="any"
-                      onChange={(e) => setParamVals((p) => ({ ...p, [name]: Number(e.target.value) }))}
-                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyParam(name, paramVals[name]!); } }}
-                      onBlur={() => { if (paramVals[name] !== resRef.current?.params[name]) applyParam(name, paramVals[name]!); }}
-                      style={{ width: '64px', padding: '3px 6px', background: palette.inputBg,
-                               border: `1px solid ${palette.inputBorder}`, borderRadius: '4px',
-                               color: palette.text, fontSize: '12px' }}
-                    />
-                  </label>
-                ))}
+                {Object.entries(paramVals).map(([name, val]) => {
+                  const controls = sens[name] ?? [];
+                  const active = sel.length > 0 && controls.some((i) => sel.includes(i));
+                  return (
+                    <label key={name}
+                      onMouseEnter={() => { if (controls.length) viewerRef.current?.selectFaces(controls); }}
+                      onMouseLeave={() => viewerRef.current?.selectFaces(sel)}
+                      title={controls.length ? `controls ${controls.length} face(s) — hover to preview` : ''}
+                      style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px',
+                               color: active ? palette.text : palette.textSecondary,
+                               fontWeight: active ? 600 : 400 }}>
+                      {name}
+                      <input
+                        type="number" value={val} step="any"
+                        onChange={(e) => setParamVals((p) => ({ ...p, [name]: Number(e.target.value) }))}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyParam(name, paramVals[name]!); } }}
+                        onBlur={() => { if (paramVals[name] !== resRef.current?.params[name]) applyParam(name, paramVals[name]!); }}
+                        style={{ width: '64px', padding: '3px 6px', background: palette.inputBg,
+                                 border: `1px solid ${active ? palette.primaryBtn : palette.inputBorder}`,
+                                 borderRadius: '4px', color: palette.text, fontSize: '12px' }}
+                      />
+                    </label>
+                  );
+                })}
               </div>
             )}
             <textarea

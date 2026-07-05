@@ -235,6 +235,14 @@ class SetParamsResponse(Schema):
     code: str                       # the script with those values changed
 
 
+class SensitivityRequest(Schema):
+    code: str
+
+
+class SensitivityResponse(Schema):
+    params: dict[str, list[int]] = {}   # param name -> face indices it controls
+
+
 class EditRequest(Schema):
     """Ask the assistant to edit the build123d script from an instruction, with
     the current selection (if any) as the target."""

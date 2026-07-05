@@ -15,9 +15,12 @@ from .schemas import (
     RunMetrics,
     RunRequest,
     RunResponse,
+    SensitivityRequest,
+    SensitivityResponse,
     SetParamsRequest,
     SetParamsResponse,
 )
+from .sensitivity import sensitivity
 
 router = Router()
 
@@ -57,6 +60,20 @@ def set_params_endpoint(request, payload: SetParamsRequest):
     except (ParamError, SyntaxError) as exc:
         return JsonResponse({"message": str(exc)}, status=422)
     return SetParamsResponse(code=code)
+
+
+@router.post("/sensitivity", response=SensitivityResponse)
+def sensitivity_endpoint(request, payload: SensitivityRequest):
+    """Which parameters control which faces (by perturbation). Lets the UI light
+    up the parameters relevant to a selected face."""
+    err = require_auth(request)
+    if err:
+        return err
+    try:
+        m = sensitivity(payload.code)
+    except EngineError as exc:
+        return JsonResponse({"message": str(exc)}, status=422)
+    return SensitivityResponse(params=m)
 
 
 @router.post("/edit", response=EditResponse)
