@@ -8,6 +8,10 @@ import { downloadTextFile } from '@/export/download';
 
 interface Props { onClose: () => void }
 
+// stable empty reference so the zustand selector below doesn't return a fresh
+// array every render (which would loop: new snapshot → re-render → new snapshot)
+const NO_HISTORY: { code: string; at: number }[] = [];
+
 // A starter model so an empty document shows something buildable. The whole CAD
 // vocabulary is build123d's — this is just a seed to edit / for the AI to replace.
 const STARTER = `# build123d — the model is this script. \`part\` is what gets built.
@@ -27,7 +31,7 @@ part -= Pos(0, 0, zc) * Rot(90, 0, 0) * Cylinder(P["bolt_d"]/2, P["boss_d"]*2)
 export function ScriptViewer({ onClose }: Props) {
   const palette = useThemeStore((s) => s.palette);
   const docName = useDocumentStore((s) => s.document.name);
-  const modelHistory = useDocumentStore((s) => s.document.modelCodeHistory ?? []);
+  const modelHistory = useDocumentStore((s) => s.document.modelCodeHistory ?? NO_HISTORY);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewerRef = useRef<Viewer | null>(null);
