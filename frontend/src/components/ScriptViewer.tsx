@@ -4,6 +4,7 @@ import { useDocumentStore } from '@/stores/documentStore';
 import { buildApi, type RunResponse, type UsageResponse, type DimInfo } from '@/api/client';
 import { persistModelCode, getBackendId } from '@/api/autoSave';
 import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim } from '@/build/webglViewer';
+import { highlightPython, DARK_SYNTAX, LIGHT_SYNTAX } from '@/build/pyHighlight';
 import { downloadTextFile } from '@/export/download';
 
 interface Props { onClose: () => void }
@@ -30,11 +31,19 @@ part -= Pos(0, 0, zc) * Rot(90, 0, 0) * Cylinder(P["bolt_d"]/2, P["boss_d"]*2)
 
 export function ScriptViewer({ onClose }: Props) {
   const palette = useThemeStore((s) => s.palette);
+  const isDark = useThemeStore((s) => s.theme === 'dark');
   const docName = useDocumentStore((s) => s.document.name);
   const modelHistory = useDocumentStore((s) => s.document.modelCodeHistory ?? NO_HISTORY);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewerRef = useRef<Viewer | null>(null);
+  // syntax-highlight overlay: a highlighted <pre> behind a transparent <textarea>
+  const taRef = useRef<HTMLTextAreaElement | null>(null);
+  const preRef = useRef<HTMLPreElement | null>(null);
+  const syncScroll = () => {
+    const ta = taRef.current, pre = preRef.current;
+    if (ta && pre) { pre.scrollTop = ta.scrollTop; pre.scrollLeft = ta.scrollLeft; }
+  };
   // orientation gizmo: three labeled axes from a shared origin, updated via refs
   // each frame (no React re-render on orbit)
   const gLine = useRef<(SVGLineElement | null)[]>([]);
@@ -495,16 +504,37 @@ export function ScriptViewer({ onClose }: Props) {
                 })}
               </div>
             )}
-            <textarea
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); rebuild(); } }}
-              spellCheck={false}
-              style={{ flex: 1, resize: 'none', padding: '12px 14px', border: 'none',
-                       background: palette.inputBg, color: palette.text, fontSize: '13px',
-                       lineHeight: 1.5, outline: 'none',
-                       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', tabSize: 4 }}
-            />
+            {(() => {
+              // shared metrics so the highlighted layer sits exactly under the caret
+              const editorStyle: CSSProperties = {
+                margin: 0, padding: '12px 14px', border: 0, boxSizing: 'border-box',
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '13px',
+                lineHeight: 1.5, tabSize: 4, whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word', overflowWrap: 'break-word',
+              };
+              let html = highlightPython(code, isDark ? DARK_SYNTAX : LIGHT_SYNTAX);
+              if (code.endsWith('\n')) html += '\n';   // keep the empty last line in sync
+              return (
+                <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden',
+                              background: palette.inputBg }}>
+                  <pre ref={preRef} aria-hidden
+                    style={{ ...editorStyle, position: 'absolute', inset: 0, overflow: 'auto',
+                             color: palette.text, pointerEvents: 'none' }}
+                    dangerouslySetInnerHTML={{ __html: html }} />
+                  <textarea
+                    ref={taRef}
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    onScroll={syncScroll}
+                    onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); rebuild(); } }}
+                    spellCheck={false} autoCapitalize="off" autoCorrect="off"
+                    style={{ ...editorStyle, position: 'absolute', inset: 0, resize: 'none',
+                             background: 'transparent', color: 'transparent',
+                             caretColor: palette.text, outline: 'none', overflow: 'auto' }}
+                  />
+                </div>
+              );
+            })()}
           </div>
           <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
             <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block',
