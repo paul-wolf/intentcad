@@ -54,7 +54,8 @@ def build_inventory_summary(faces: list[dict], edges: list[dict]) -> str:
         )
 
     lines.append(f"EDGES ({len(edges)}):")
-    junctions: dict[tuple[str, str], int] = {}
+    # (i,j) -> (descriptor, edge count): the real junctions, as faces:i,j targets
+    pairs: dict[tuple[int, int], tuple[str, int]] = {}
     for e in edges:
         border = e.get("faces", [])
         border_txt = " | ".join(" ".join(t) for t in border) or "-"
@@ -63,17 +64,16 @@ def build_inventory_summary(faces: list[dict], edges: list[dict]) -> str:
         lines.append(
             f"  #{e['index']} {e['kind']} len={e['length']:.1f} between {border_txt}{fi_txt}"
         )
-        if len(border) == 2:
-            for a in border[0]:
-                for b in border[1]:
-                    if a != b:
-                        key = tuple(sorted((a, b)))
-                        junctions[key] = junctions.get(key, 0) + 1
+        if len(fi) == 2:
+            key = (min(fi), max(fi))
+            desc = " ∩ ".join(" ".join(t) for t in border)
+            _, prev = pairs.get(key, ("", 0))
+            pairs[key] = (desc, prev + 1)
 
-    if junctions:
-        lines.append("JUNCTIONS (edge counts where two face-descriptors meet):")
-        for (a, b), n in sorted(junctions.items()):
-            lines.append(f"  {a} ∩ {b}: {n}")
+    if pairs:
+        lines.append("JUNCTIONS (edge between two faces — target one with faces:i,j):")
+        for (i, j), (desc, n) in sorted(pairs.items()):
+            lines.append(f"  faces:{i},{j}  {desc}  ({n} edge{'s' if n != 1 else ''})")
 
     return "\n".join(lines)
 

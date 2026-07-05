@@ -22,6 +22,12 @@ def _fake(tool, inp):
     return lambda system, user, tools: {"tool": tool, "input": inp}
 
 
+def _seq(*calls):
+    """A stateful fake llm returning each call in turn (for retry paths)."""
+    it = iter(calls)
+    return lambda system, user, tools: next(it)
+
+
 class ChamferTests(SimpleTestCase):
     def test_chamfer_the_joint(self):
         r = plan_operations(
@@ -116,6 +122,22 @@ class MultiAndControlTests(SimpleTestCase):
         )
         self.assertEqual(r["status"], "clarify")
         self.assertEqual(r["question"], "What would you like changed?")
+
+    def test_bad_edge_selector_retries_then_succeeds(self):
+        """A faces:i,j that names no edge triggers one corrective retry."""
+        bad = {"tool": "add_features", "input": {"reply": "x",
+               "features": [{"type": "chamfer", "edges": "faces:9,9", "distance": 1}]}}
+        good = {"tool": "add_features", "input": {"reply": "Chamfered the joint.",
+                "features": [{"type": "chamfer", "edges": "between:cylinder,top", "distance": 1}]}}
+        r = plan_operations("chamfer the join", SKETCHES, TREE, FACES, EDGES, llm=_seq(bad, good))
+        self.assertEqual(r["status"], "ok")
+        self.assertEqual(r["operations"][0]["edges"], "between:cylinder,top")
+
+    def test_bad_edge_selector_exhausted_raises(self):
+        bad = {"tool": "add_features", "input": {"reply": "x",
+               "features": [{"type": "chamfer", "edges": "faces:9,9", "distance": 1}]}}
+        with self.assertRaises(ResolverError):
+            plan_operations("chamfer the join", SKETCHES, TREE, FACES, EDGES, llm=_seq(bad, bad))
 
     def test_empty_instruction_rejected(self):
         with self.assertRaises(ResolverError):

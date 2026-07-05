@@ -28,6 +28,7 @@ from .resolver import (
     build_inventory_summary,
     claude_tool_call,
 )
+from .selectors import SelectorError, resolve_edges
 
 # revolve is intentionally excluded: its axis is derived from sketch geometry the
 # agent can't see here, so it stays a manual (UI) operation for now.
@@ -252,16 +253,53 @@ def plan_operations(
         f"INSTRUCTION: {instruction}"
     )
 
-    call = llm(_system_prompt(), user, [ADD_TOOL, CLARIFY_TOOL])
-    tool, args = call.get("tool"), call.get("input", {})
+    result = _interpret(llm(_system_prompt(), user, [ADD_TOOL, CLARIFY_TOOL]), sketches)
 
+    # if an emitted edge selector names nothing, give the model one chance to fix
+    # it (a wrong faces:i,j pair is common) rather than 422-ing at build time.
+    if result["status"] == "ok" and edges:
+        bad = _bad_edge_selector(result["operations"], edges)
+        if bad:
+            retry = user + (
+                f"\n\nYour previous answer used the edge selector {bad!r}, which "
+                "matches no edges. Pick a faces:i,j from the JUNCTIONS list above, "
+                "or a valid between:/kind: selector. Try again."
+            )
+            result = _interpret(llm(_system_prompt(), retry, [ADD_TOOL, CLARIFY_TOOL]), sketches)
+            if result["status"] == "ok":
+                bad = _bad_edge_selector(result["operations"], edges)
+                if bad:
+                    raise ResolverError(
+                        f"could not target the edges — selector {bad!r} matched none")
+    return result
+
+
+def _interpret(call: dict, sketches: list[dict]) -> dict:
+    """Turn a raw tool call into a result dict (or raise)."""
+    tool, args = call.get("tool"), call.get("input", {})
     if tool == "ask_clarification":
         return {"status": "clarify", "question": args.get("question", "")}
     if tool != "add_features":
         raise ResolverError(f"unexpected tool call: {tool!r}")
-
     ops = args.get("features") or []
     if not ops:
         raise ResolverError("the model returned no operations")
-    operations = [_normalize(op, sketches) for op in ops]
-    return {"status": "ok", "reply": args.get("reply", ""), "operations": operations}
+    return {
+        "status": "ok",
+        "reply": args.get("reply", ""),
+        "operations": [_normalize(op, sketches) for op in ops],
+    }
+
+
+def _bad_edge_selector(operations: list[dict], edges: list[dict]) -> str | None:
+    """The first fillet/chamfer edge selector that resolves to no edges (or is
+    invalid), or None if all are fine."""
+    for op in operations:
+        sel = op.get("edges")
+        if op["type"] in ("fillet", "chamfer") and sel:
+            try:
+                if not resolve_edges(sel, edges):
+                    return sel
+            except SelectorError:
+                return sel
+    return None

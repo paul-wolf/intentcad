@@ -23,11 +23,11 @@ FACES = [
 ]
 EDGES = [
     {"index": 0, "kind": "line", "length": 60.0, "center": [0, 0, 0], "start": [0, 0, 0], "end": [0, 0, 0],
-     "faces": [["plane", "top"], ["plane", "back"]]},
+     "faces": [["plane", "top"], ["plane", "back"]], "faceIndices": [1, 2]},
     {"index": 1, "kind": "circle", "length": 40.0, "center": [0, 0, 10], "start": [0, 0, 0], "end": [0, 0, 0],
-     "faces": [["cylinder"], ["plane", "top"]]},
+     "faces": [["cylinder"], ["plane", "top"]], "faceIndices": [3, 1]},
     {"index": 2, "kind": "circle", "length": 40.0, "center": [0, 0, 20], "start": [0, 0, 0], "end": [0, 0, 0],
-     "faces": [["cylinder"], ["plane", "bottom"]]},
+     "faces": [["cylinder"], ["plane", "bottom"]], "faceIndices": [3, 0]},
 ]
 
 
@@ -38,11 +38,13 @@ class InventorySummaryTests(SimpleTestCase):
         self.assertIn("EDGES (3)", s)
         # a face descriptor line
         self.assertIn("#1 plane [top]", s)
-        # adjacency shown on an edge
+        # adjacency shown on an edge, with its face indices
         self.assertIn("plane top | plane back", s)
-        # the cylinder/top junction is discoverable
+        self.assertIn("[faces 1,2]", s)
+        # junctions listed as concrete faces:i,j targets
         self.assertIn("JUNCTIONS", s)
-        self.assertIn("cylinder ∩ top", s)
+        self.assertIn("faces:1,3", s)
+        self.assertIn("cylinder ∩ plane top", s)
 
 
 def _fake(tool, inp):
