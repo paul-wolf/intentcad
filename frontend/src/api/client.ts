@@ -208,7 +208,10 @@ export const buildApi = {
   },
 };
 
-export interface EditResponse { code: string; note?: string }
+export interface EditResponse {
+  code: string; note?: string;
+  tokens_in: number; tokens_out: number; cost_usd: number;
+}
 
 // ── build123d engine (the model is a script) ──
 export interface RunFace {

@@ -122,6 +122,7 @@ export function ScriptViewer({ onClose }: Props) {
   const [ask, setAsk] = useState('');
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState('');
+  const [spend, setSpend] = useState({ edits: 0, tin: 0, tout: 0, cost: 0 });
   const [paramVals, setParamVals] = useState<Record<string, number>>({});
   const [sens, setSens] = useState<Record<string, number[]>>({});   // param -> faces it controls
 
@@ -164,7 +165,9 @@ export function ScriptViewer({ onClose }: Props) {
       persistModelCode(r.code);
       await build(r.code);
       setAsk('');
-      setNote(r.note || 'Done.');
+      const k = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
+      setNote(`${r.note || 'Done.'} · ${k(r.tokens_in)} in / ${k(r.tokens_out)} out · $${r.cost_usd.toFixed(3)}`);
+      setSpend((s) => ({ edits: s.edits + 1, tin: s.tin + r.tokens_in, tout: s.tout + r.tokens_out, cost: s.cost + r.cost_usd }));
     } catch (err) {
       setNote(String(err instanceof Error ? err.message : err));
     } finally {
@@ -195,6 +198,12 @@ export function ScriptViewer({ onClose }: Props) {
           <h2 style={{ margin: 0, fontSize: '15px', color: palette.text }}>
             Model <span style={{ color: palette.textSecondary, fontSize: '12px' }}>(build123d · script)</span>
           </h2>
+          {spend.edits > 0 && (
+            <span title={`${spend.tin.toLocaleString()} input + ${spend.tout.toLocaleString()} output tokens across ${spend.edits} AI edit(s)`}
+              style={{ fontSize: '12px', color: palette.textSecondary }}>
+              Opus 4.8 · {spend.edits} edit{spend.edits > 1 ? 's' : ''} · ${spend.cost.toFixed(3)}
+            </span>
+          )}
           <div style={{ flex: 1 }} />
           <button onClick={rebuild} disabled={status === 'building'}
             style={{ ...btn, background: palette.primaryBtn, color: '#fff', opacity: status === 'building' ? 0.6 : 1 }}>

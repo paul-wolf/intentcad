@@ -15,6 +15,9 @@ from typing import Callable
 from .engine import EngineError, run_script
 
 MODEL = "claude-opus-4-8"
+# Opus 4.8 pricing, USD per token (input $5/M, output $25/M)
+_IN_PER_TOK = 5.0 / 1_000_000
+_OUT_PER_TOK = 25.0 / 1_000_000
 
 
 class AssistantError(RuntimeError):
@@ -79,7 +82,9 @@ def _anthropic_call(system: str, user: str, tools: list[dict]) -> dict:
         raise AssistantError(f"Anthropic API error: {exc}") from exc
     for block in resp.content:
         if block.type == "tool_use" and block.name == "write_script":
-            return dict(block.input)
+            out = dict(block.input)
+            out["usage"] = {"input": resp.usage.input_tokens, "output": resp.usage.output_tokens}
+            return out
     raise AssistantError("the model did not return a script")
 
 
@@ -104,17 +109,34 @@ def edit_script(
             f"{sel}INSTRUCTION: {instruction}\n{extra}"
         )
 
-    out = llm(_system(), prompt(), [WRITE_TOOL])
+    tok_in = tok_out = 0
+
+    def call(extra: str = "") -> dict:
+        nonlocal tok_in, tok_out
+        o = llm(_system(), prompt(extra), [WRITE_TOOL])
+        u = o.get("usage") or {}
+        tok_in += u.get("input", 0)
+        tok_out += u.get("output", 0)
+        return o
+
+    out = call()
     new_code = out.get("code", "")
     try:
         run_script(new_code)
     except EngineError as exc:
-        out = llm(_system(), prompt(
+        out = call(
             f"\nYour previous script failed to build with this error:\n{exc}\n"
-            "Return a corrected complete script."), [WRITE_TOOL])
+            "Return a corrected complete script.")
         new_code = out.get("code", "")
         try:
             run_script(new_code)
         except EngineError as exc2:
             raise AssistantError(f"couldn't produce a script that builds: {exc2}") from exc2
-    return {"code": new_code, "note": out.get("note", "")}
+
+    return {
+        "code": new_code,
+        "note": out.get("note", ""),
+        "tokens_in": tok_in,
+        "tokens_out": tok_out,
+        "cost_usd": round(tok_in * _IN_PER_TOK + tok_out * _OUT_PER_TOK, 4),
+    }

@@ -88,4 +88,8 @@ def edit_model(request, payload: EditRequest):
         r = edit_script(payload.code, payload.instruction, payload.context)
     except AssistantError as exc:
         return JsonResponse({"message": str(exc)}, status=422)
-    return EditResponse(code=r["code"], note=r.get("note"))
+    return EditResponse(
+        code=r["code"], note=r.get("note"),
+        tokens_in=r.get("tokens_in", 0), tokens_out=r.get("tokens_out", 0),
+        cost_usd=r.get("cost_usd", 0.0),
+    )
