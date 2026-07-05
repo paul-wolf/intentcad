@@ -266,9 +266,14 @@ export function ScriptViewer({ onClose }: Props) {
     return `${Math.round(h / 24)}d ago`;
   };
   const codePreview = (c: string) => {
-    const line = c.split('\n').find((l) => l.trim() && !l.trim().startsWith('#'))?.trim() ?? '';
-    return line.length > 46 ? line.slice(0, 46) + '…' : line;
+    // the LAST meaningful line (most recent operation) distinguishes versions —
+    // the first line is always the `P = dict(...)` params, identical everywhere
+    const lines = c.split('\n').map((l) => l.trim())
+      .filter((l) => l && !l.startsWith('#') && !l.startsWith('P ') && !l.startsWith('P='));
+    const line = lines[lines.length - 1] ?? '';
+    return line.length > 44 ? line.slice(0, 44) + '…' : line;
   };
+  const [hoverVer, setHoverVer] = useState(-1);
 
   const [ask, setAsk] = useState('');
   const [asking, setAsking] = useState(false);
@@ -429,8 +434,9 @@ export function ScriptViewer({ onClose }: Props) {
                     </div>
                     {[...modelHistory].reverse().map((v, i) => (
                       <button key={`${v.at}-${i}`} onClick={() => restore(v)}
+                        onMouseEnter={() => setHoverVer(i)} onMouseLeave={() => setHoverVer(-1)}
                         style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px',
-                                 background: 'none', border: 'none',
+                                 background: hoverVer === i ? palette.inputBg : 'none', border: 'none',
                                  borderBottom: `1px solid ${palette.border}`, cursor: 'pointer',
                                  color: palette.text }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
