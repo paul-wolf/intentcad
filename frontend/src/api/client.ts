@@ -200,6 +200,9 @@ export const buildApi = {
   edit(payload: { code: string; instruction: string; context?: string }): Promise<EditResponse> {
     return request('/build/edit', { method: 'POST', body: JSON.stringify(payload) });
   },
+  setParams(code: string, params: Record<string, number>): Promise<{ code: string }> {
+    return request('/build/set_params', { method: 'POST', body: JSON.stringify({ code, params }) });
+  },
 };
 
 export interface EditResponse { code: string; note?: string }
@@ -218,6 +221,7 @@ export interface RunResponse {
   mesh: { positions: number[]; normals: number[]; triangle_count: number };
   faces: RunFace[];
   edges: RunEdge[];
+  params: Record<string, number>;
   step: string;
   metrics: { volume: number; area: number; bbox_min: [number, number, number]; bbox_max: [number, number, number] };
 }

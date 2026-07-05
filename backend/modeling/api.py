@@ -5,6 +5,7 @@ from projects.access import require_auth
 
 from .assistant import AssistantError, edit_script
 from .engine import EngineError, run_script
+from .paramedit import ParamError, set_params
 from .schemas import (
     EditRequest,
     EditResponse,
@@ -14,6 +15,8 @@ from .schemas import (
     RunMetrics,
     RunRequest,
     RunResponse,
+    SetParamsRequest,
+    SetParamsResponse,
 )
 
 router = Router()
@@ -36,9 +39,24 @@ def run_model(request, payload: RunRequest):
         mesh=MeshOut(**r["mesh"]),
         faces=[RunFace(**f) for f in r.get("faces", [])],
         edges=[RunEdge(**e) for e in r.get("edges", [])],
+        params=r.get("params", {}),
         step=r["step"],
         metrics=RunMetrics(**r["metrics"]),
     )
+
+
+@router.post("/set_params", response=SetParamsResponse)
+def set_params_endpoint(request, payload: SetParamsRequest):
+    """Change values in the script's params dict (preserving formatting), and
+    return the updated script — the source of truth stays the script."""
+    err = require_auth(request)
+    if err:
+        return err
+    try:
+        code = set_params(payload.code, payload.params)
+    except (ParamError, SyntaxError) as exc:
+        return JsonResponse({"message": str(exc)}, status=422)
+    return SetParamsResponse(code=code)
 
 
 @router.post("/edit", response=EditResponse)

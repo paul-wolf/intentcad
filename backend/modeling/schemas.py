@@ -221,8 +221,18 @@ class RunResponse(Schema):
     mesh: MeshOut
     faces: list[RunFace] = []
     edges: list[RunEdge] = []
+    params: dict[str, float] = {}   # editable scalar params from the script
     step: str
     metrics: RunMetrics
+
+
+class SetParamsRequest(Schema):
+    code: str
+    params: dict[str, float]        # name -> new value
+
+
+class SetParamsResponse(Schema):
+    code: str                       # the script with those values changed
 
 
 class EditRequest(Schema):

@@ -71,6 +71,7 @@ export function ScriptViewer({ onClose }: Props) {
       viewerRef.current.update(res.mesh, res.faces);
       resRef.current = res;
       selRef.current = []; setSel([]);
+      setParamVals(res.params);
       stepRef.current = res.step;
       const m = res.metrics;
       const sz = [0, 1, 2].map((i) => Math.round(m.bbox_max[i]! - m.bbox_min[i]!));
@@ -103,6 +104,20 @@ export function ScriptViewer({ onClose }: Props) {
   const [ask, setAsk] = useState('');
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState('');
+  const [paramVals, setParamVals] = useState<Record<string, number>>({});
+
+  // change a parameter's value: rewrite just that value in the script (comments
+  // and formatting preserved), then rebuild + save.
+  const applyParam = async (name: string, val: number) => {
+    try {
+      const r = await buildApi.setParams(code, { [name]: val });
+      setCode(r.code);
+      persistModelCode(r.code);
+      await build(r.code);
+    } catch (err) {
+      setMessage(String(err instanceof Error ? err.message : err));
+    }
+  };
 
   // describe the current selection so the assistant can target it in build123d
   const selectionContext = (): string => {
@@ -174,18 +189,44 @@ export function ScriptViewer({ onClose }: Props) {
                    color: palette.textSecondary, fontSize: '18px', cursor: 'pointer', padding: '0 4px' }}>&times;</button>
         </div>
 
-        {/* body: code editor + viewport */}
+        {/* body: parameters + code editor (left) | viewport (right) */}
         <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
-          <textarea
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); rebuild(); } }}
-            spellCheck={false}
-            style={{ width: '46%', resize: 'none', padding: '12px 14px', border: 'none',
-                     borderRight: `1px solid ${palette.border}`, background: palette.inputBg,
-                     color: palette.text, fontSize: '13px', lineHeight: 1.5, outline: 'none',
-                     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', tabSize: 4 }}
-          />
+          <div style={{ width: '46%', display: 'flex', flexDirection: 'column', minHeight: 0,
+                        borderRight: `1px solid ${palette.border}` }}>
+            {Object.keys(paramVals).length > 0 && (
+              <div style={{ padding: '8px 12px', borderBottom: `1px solid ${palette.border}`,
+                            display: 'flex', flexWrap: 'wrap', gap: '8px 14px', maxHeight: '30%',
+                            overflowY: 'auto', alignContent: 'flex-start' }}>
+                <div style={{ width: '100%', fontSize: '11px', fontWeight: 600, letterSpacing: '0.5px',
+                              textTransform: 'uppercase', color: palette.textSecondary }}>Parameters</div>
+                {Object.entries(paramVals).map(([name, val]) => (
+                  <label key={name} style={{ display: 'flex', alignItems: 'center', gap: '5px',
+                                             fontSize: '12px', color: palette.textSecondary }}>
+                    {name}
+                    <input
+                      type="number" value={val} step="any"
+                      onChange={(e) => setParamVals((p) => ({ ...p, [name]: Number(e.target.value) }))}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyParam(name, paramVals[name]!); } }}
+                      onBlur={() => { if (paramVals[name] !== resRef.current?.params[name]) applyParam(name, paramVals[name]!); }}
+                      style={{ width: '64px', padding: '3px 6px', background: palette.inputBg,
+                               border: `1px solid ${palette.inputBorder}`, borderRadius: '4px',
+                               color: palette.text, fontSize: '12px' }}
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
+            <textarea
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); rebuild(); } }}
+              spellCheck={false}
+              style={{ flex: 1, resize: 'none', padding: '12px 14px', border: 'none',
+                       background: palette.inputBg, color: palette.text, fontSize: '13px',
+                       lineHeight: 1.5, outline: 'none',
+                       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', tabSize: 4 }}
+            />
+          </div>
           <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
             <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block',
                      cursor: 'grab', touchAction: 'none' }} />

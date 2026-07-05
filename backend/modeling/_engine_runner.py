@@ -24,6 +24,16 @@ def _run(code: str) -> dict:
     if part is None:
         return {"ok": False, "error": "script did not define `part`"}
 
+    # expose the params dict (scalar entries) so the UI can offer number fields
+    raw = ns.get("P")
+    if not isinstance(raw, dict):
+        raw = ns.get("params")
+    params: dict = {}
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            if isinstance(k, str) and isinstance(v, (int, float, bool)) and not isinstance(v, bool):
+                params[k] = v
+
     # Mesh built FACE BY FACE (each face's triangles are contiguous) so the
     # viewer can pick/highlight a face. `faces` records each face's vertex range
     # + its plane (center, normal), which is what selection & sketch-on-face need.
@@ -106,6 +116,7 @@ def _run(code: str) -> dict:
         "mesh": {"positions": positions, "normals": normals, "triangle_count": len(positions) // 9},
         "faces": faces,
         "edges": edges,
+        "params": params,
         "step": step,
         "metrics": {
             "volume": float(part.volume),
