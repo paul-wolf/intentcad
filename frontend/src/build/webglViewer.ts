@@ -120,14 +120,28 @@ precision mediump float;
 uniform vec3 uColor;
 void main() { gl_FragColor = vec4(uColor, 1.0); }`;
 
+/** A face's triangle range in the mesh + its plane (for pick / highlight). */
+export interface FaceRange {
+  index: number; start: number; count: number;
+  kind: string; area: number; center: [number, number, number]; normal: [number, number, number];
+}
+
 export interface Viewer {
-  update(mesh: ViewerMesh): void;
+  update(mesh: ViewerMesh, faces?: FaceRange[]): void;
   /** Highlight edges: flat GL_LINES vertices [x,y,z, x,y,z, ...] (pairs). */
   highlightEdges(segments: number[]): void;
+  /** Highlight one face by inventory index (null clears). */
+  selectFace(index: number | null): void;
   dispose(): void;
 }
 
-export function createViewer(canvas: HTMLCanvasElement, color = [0.62, 0.66, 0.72]): Viewer {
+export interface ViewerOpts {
+  color?: [number, number, number];
+  onFacePick?: (face: FaceRange | null) => void;
+}
+
+export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): Viewer {
+  const color = opts.color ?? [0.62, 0.66, 0.72];
   const gl = canvas.getContext('webgl', { antialias: true, depth: true });
   if (!gl) throw new Error('WebGL not available');
 
@@ -189,6 +203,7 @@ export function createViewer(canvas: HTMLCanvasElement, color = [0.62, 0.66, 0.7
   }
 
   gl.enable(gl.DEPTH_TEST);
+  gl.depthFunc(gl.LEQUAL);  // so re-drawing a selected face's own triangles passes
   gl.clearColor(0, 0, 0, 0);
 
   // orbit state
@@ -197,6 +212,12 @@ export function createViewer(canvas: HTMLCanvasElement, color = [0.62, 0.66, 0.7
   let distance = 5;
   let center: [number, number, number] = [0, 0, 0];
   let vertexCount = 0;
+
+  // face selection
+  let meshPositions: number[] = [];
+  let faces: FaceRange[] = [];
+  let selected: number | null = null;
+  const SELECT: [number, number, number] = [1.0, 0.62, 0.2];
 
   function uploadMesh(mesh: ViewerMesh) {
     gl!.bindBuffer(gl!.ARRAY_BUFFER, posBuf);
@@ -228,6 +249,50 @@ export function createViewer(canvas: HTMLCanvasElement, color = [0.62, 0.66, 0.7
     buildFrame(radius);
   }
 
+  function mvp(w: number, h: number) {
+    const proj = perspective((45 * Math.PI) / 180, w / h, distance * 0.01, distance * 100);
+    const view = translation(0, 0, -distance);
+    const rot = multiply(rotationY(azimuth), rotationX(elevation));
+    const model = multiply(rot, translation(-center[0], -center[1], -center[2]));
+    return { proj, view, model, rot };
+  }
+
+  // screen-space pick: project every triangle, return the face under (px,py)
+  function pick(px: number, py: number): FaceRange | null {
+    if (!vertexCount || faces.length === 0) return null;
+    const w = canvas.width, h = canvas.height;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const sx = px * dpr, sy = py * dpr;
+    const { proj, view, model } = mvp(w, h);
+    const pv = multiply(proj, multiply(view, model));
+    const project = (i: number): [number, number, number] | null => {
+      const x = meshPositions[i * 3]!, y = meshPositions[i * 3 + 1]!, z = meshPositions[i * 3 + 2]!;
+      const cw = pv[3]! * x + pv[7]! * y + pv[11]! * z + pv[15]!;
+      if (cw <= 0) return null;
+      const cx = pv[0]! * x + pv[4]! * y + pv[8]! * z + pv[12]!;
+      const cy = pv[1]! * x + pv[5]! * y + pv[9]! * z + pv[13]!;
+      const cz = pv[2]! * x + pv[6]! * y + pv[10]! * z + pv[14]!;
+      return [(cx / cw * 0.5 + 0.5) * w, (1 - (cy / cw * 0.5 + 0.5)) * h, cz / cw];
+    };
+    let bestDepth = Infinity, bestFace: FaceRange | null = null;
+    for (const f of faces) {
+      for (let v = f.start; v < f.start + f.count; v += 3) {
+        const a = project(v), b = project(v + 1), c = project(v + 2);
+        if (!a || !b || !c) continue;
+        // barycentric point-in-triangle in screen space
+        const d = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1]);
+        if (Math.abs(d) < 1e-6) continue;
+        const u = ((b[1] - c[1]) * (sx - c[0]) + (c[0] - b[0]) * (sy - c[1])) / d;
+        const w2 = ((c[1] - a[1]) * (sx - c[0]) + (a[0] - c[0]) * (sy - c[1])) / d;
+        const t = 1 - u - w2;
+        if (u < 0 || w2 < 0 || t < 0) continue;
+        const depth = u * a[2] + w2 * b[2] + t * c[2];
+        if (depth < bestDepth) { bestDepth = depth; bestFace = f; }
+      }
+    }
+    return bestFace;
+  }
+
   let raf = 0;
   function scheduleRender() {
     if (raf) return;
@@ -246,10 +311,7 @@ export function createViewer(canvas: HTMLCanvasElement, color = [0.62, 0.66, 0.7
     gl!.clear(gl!.COLOR_BUFFER_BIT | gl!.DEPTH_BUFFER_BIT);
     // draw even with no solid, so the coordinate frame is always visible
 
-    const proj = perspective((45 * Math.PI) / 180, w / h, distance * 0.01, distance * 100);
-    const view = translation(0, 0, -distance);
-    const rot = multiply(rotationY(azimuth), rotationX(elevation));
-    const model = multiply(rot, translation(-center[0], -center[1], -center[2]));
+    const { proj, view, model, rot } = mvp(w, h);
 
     gl!.useProgram(prog);
     gl!.uniformMatrix4fv(uProj, false, proj);
@@ -266,6 +328,13 @@ export function createViewer(canvas: HTMLCanvasElement, color = [0.62, 0.66, 0.7
     gl!.vertexAttribPointer(aNormal, 3, gl!.FLOAT, false, 0, 0);
 
     if (vertexCount) gl!.drawArrays(gl!.TRIANGLES, 0, vertexCount);
+
+    // selected face: re-draw its triangles in a tint (depthFunc LEQUAL lets the
+    // identical geometry pass)
+    if (selected !== null && faces[selected]) {
+      gl!.uniform3fv(uColor, SELECT);
+      gl!.drawArrays(gl!.TRIANGLES, faces[selected]!.start, faces[selected]!.count);
+    }
 
     // coordinate frame + highlight all use the line program / same matrices
     gl!.useProgram(lineProg);
@@ -300,12 +369,15 @@ export function createViewer(canvas: HTMLCanvasElement, color = [0.62, 0.66, 0.7
   // ── interaction ──
   let dragging = false;
   let lastX = 0, lastY = 0;
+  let downX = 0, downY = 0, moved = 0;
   function onDown(e: PointerEvent) {
     dragging = true; lastX = e.clientX; lastY = e.clientY;
+    downX = e.clientX; downY = e.clientY; moved = 0;
     canvas.setPointerCapture(e.pointerId);
   }
   function onMove(e: PointerEvent) {
     if (!dragging) return;
+    moved += Math.abs(e.clientX - lastX) + Math.abs(e.clientY - lastY);
     azimuth += (e.clientX - lastX) * 0.01;
     elevation += (e.clientY - lastY) * 0.01;
     elevation = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, elevation));
@@ -315,6 +387,13 @@ export function createViewer(canvas: HTMLCanvasElement, color = [0.62, 0.66, 0.7
   function onUp(e: PointerEvent) {
     dragging = false;
     try { canvas.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    if (moved < 4 && opts.onFacePick) {  // a click, not a drag → pick a face
+      const rect = canvas.getBoundingClientRect();
+      const f = pick(downX - rect.left, downY - rect.top);
+      selected = f ? f.index : null;
+      opts.onFacePick(f);
+      scheduleRender();
+    }
   }
   function onWheel(e: WheelEvent) {
     e.preventDefault();
@@ -330,13 +409,20 @@ export function createViewer(canvas: HTMLCanvasElement, color = [0.62, 0.66, 0.7
   ro.observe(canvas);
 
   return {
-    update(mesh: ViewerMesh) { uploadMesh(mesh); scheduleRender(); },
+    update(mesh: ViewerMesh, facesArg?: FaceRange[]) {
+      uploadMesh(mesh);
+      meshPositions = mesh.positions;
+      faces = facesArg ?? [];
+      selected = null;
+      scheduleRender();
+    },
     highlightEdges(segments: number[]) {
       gl!.bindBuffer(gl!.ARRAY_BUFFER, lineBuf);
       gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array(segments), gl!.DYNAMIC_DRAW);
       lineVertexCount = segments.length / 3;
       scheduleRender();
     },
+    selectFace(index: number | null) { selected = index; scheduleRender(); },
     dispose() {
       if (raf) cancelAnimationFrame(raf);
       ro.disconnect();

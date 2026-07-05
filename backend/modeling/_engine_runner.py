@@ -24,20 +24,39 @@ def _run(code: str) -> dict:
     if part is None:
         return {"ok": False, "error": "script did not define `part`"}
 
-    # mesh: flat triangle soup with per-triangle normals (flat shading)
-    verts, tris = part.tessellate(0.2)
+    # Mesh built FACE BY FACE (each face's triangles are contiguous) so the
+    # viewer can pick/highlight a face. `faces` records each face's vertex range
+    # + its plane (center, normal), which is what selection & sketch-on-face need.
     positions: list[float] = []
     normals: list[float] = []
-    for a, b, c in tris:
-        va, vb, vc = verts[a], verts[b], verts[c]
-        ux, uy, uz = vb.X - va.X, vb.Y - va.Y, vb.Z - va.Z
-        wx, wy, wz = vc.X - va.X, vc.Y - va.Y, vc.Z - va.Z
-        nx, ny, nz = uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx
-        ln = (nx * nx + ny * ny + nz * nz) ** 0.5 or 1.0
-        nx, ny, nz = nx / ln, ny / ln, nz / ln
-        for v in (va, vb, vc):
-            positions += [v.X, v.Y, v.Z]
-            normals += [nx, ny, nz]
+    faces: list[dict] = []
+    vstart = 0
+    for fi, face in enumerate(part.faces()):
+        fverts, ftris = face.tessellate(0.2)
+        for a, b, c in ftris:
+            va, vb, vc = fverts[a], fverts[b], fverts[c]
+            ux, uy, uz = vb.X - va.X, vb.Y - va.Y, vb.Z - va.Z
+            wx, wy, wz = vc.X - va.X, vc.Y - va.Y, vc.Z - va.Z
+            nx, ny, nz = uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx
+            ln = (nx * nx + ny * ny + nz * nz) ** 0.5 or 1.0
+            nx, ny, nz = nx / ln, ny / ln, nz / ln
+            for v in (va, vb, vc):
+                positions += [v.X, v.Y, v.Z]
+                normals += [nx, ny, nz]
+        count = len(ftris) * 3
+        c = face.center()
+        try:
+            n = face.normal_at(c)
+        except Exception:
+            n = None
+        faces.append({
+            "index": fi, "start": vstart, "count": count,
+            "kind": face.geom_type.name.lower(),
+            "area": float(face.area),
+            "center": [c.X, c.Y, c.Z],
+            "normal": [n.X, n.Y, n.Z] if n is not None else [0.0, 0.0, 1.0],
+        })
+        vstart += count
 
     with tempfile.NamedTemporaryFile(suffix=".step", mode="r", delete=True) as fh:
         export_step(part, fh.name)
@@ -46,7 +65,8 @@ def _run(code: str) -> dict:
     bb = part.bounding_box()
     return {
         "ok": True,
-        "mesh": {"positions": positions, "normals": normals, "triangle_count": len(tris)},
+        "mesh": {"positions": positions, "normals": normals, "triangle_count": len(positions) // 9},
+        "faces": faces,
         "step": step,
         "metrics": {
             "volume": float(part.volume),

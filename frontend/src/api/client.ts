@@ -200,8 +200,14 @@ export const buildApi = {
 };
 
 // ── build123d engine (the model is a script) ──
+export interface RunFace {
+  index: number; start: number; count: number;
+  kind: string; area: number; center: [number, number, number]; normal: [number, number, number];
+}
+
 export interface RunResponse {
   mesh: { positions: number[]; normals: number[]; triangle_count: number };
+  faces: RunFace[];
   step: string;
   metrics: { volume: number; area: number; bbox_min: [number, number, number]; bbox_max: [number, number, number] };
 }

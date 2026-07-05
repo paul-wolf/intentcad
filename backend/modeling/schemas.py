@@ -196,7 +196,20 @@ class RunMetrics(Schema):
     bbox_max: list[float]
 
 
+class RunFace(Schema):
+    """A face of the result: its triangle range in the mesh (for pick/highlight)
+    and its plane (center + normal) — what selection & sketch-on-face need."""
+    index: int
+    start: int          # first vertex of this face's triangles in the mesh
+    count: int          # number of vertices (3 per triangle)
+    kind: str           # 'plane' | 'cylinder' | ...
+    area: float
+    center: list[float]
+    normal: list[float]
+
+
 class RunResponse(Schema):
     mesh: MeshOut
+    faces: list[RunFace] = []
     step: str
     metrics: RunMetrics

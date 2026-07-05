@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
-import { buildApi } from '@/api/client';
+import { buildApi, type RunFace } from '@/api/client';
 import { persistModelCode } from '@/api/autoSave';
 import { createViewer, type Viewer } from '@/build/webglViewer';
 import { downloadTextFile } from '@/export/download';
@@ -35,6 +35,7 @@ export function ScriptViewer({ onClose }: Props) {
   const [status, setStatus] = useState<'idle' | 'building' | 'done' | 'error'>('idle');
   const [message, setMessage] = useState('');
   const [stats, setStats] = useState('');
+  const [picked, setPicked] = useState<RunFace | null>(null);
   const stepRef = useRef<string>('');
 
   const build = async (src: string) => {
@@ -43,7 +44,8 @@ export function ScriptViewer({ onClose }: Props) {
     setMessage('');
     try {
       const res = await buildApi.run(src);
-      viewerRef.current.update(res.mesh);
+      viewerRef.current.update(res.mesh, res.faces);
+      setPicked(null);
       stepRef.current = res.step;
       const m = res.metrics;
       const sz = [0, 1, 2].map((i) => Math.round(m.bbox_max[i]! - m.bbox_min[i]!));
@@ -62,7 +64,7 @@ export function ScriptViewer({ onClose }: Props) {
     setCode(initial);
     if (canvasRef.current) {
       try {
-        viewerRef.current = createViewer(canvasRef.current);
+        viewerRef.current = createViewer(canvasRef.current, { onFacePick: setPicked });
         build(initial);
       } catch (err) {
         setStatus('error');
@@ -138,9 +140,15 @@ export function ScriptViewer({ onClose }: Props) {
         {/* footer */}
         <div style={{ padding: '8px 16px', borderTop: `1px solid ${palette.border}`,
                       fontSize: '12px', color: palette.textSecondary, minHeight: '20px' }}>
-          {status === 'done' && `${stats} · drag to orbit · scroll to zoom · Ctrl/⌘+Enter to build`}
           {status === 'building' && 'Building…'}
           {status === 'error' && <span style={{ color: palette.danger }}>Build failed — see the editor side.</span>}
+          {status === 'done' && !picked && `${stats} · drag to orbit · scroll to zoom · click a face to select`}
+          {status === 'done' && picked && (() => {
+            const v = (a: [number, number, number]) => `(${a.map((n) => Math.round(n * 10) / 10).join(', ')})`;
+            return <span style={{ color: palette.text }}>
+              Face #{picked.index} · <b>{picked.kind}</b> · normal {v(picked.normal)} · center {v(picked.center)} · area {Math.round(picked.area)} mm²
+            </span>;
+          })()}
         </div>
       </div>
     </div>
