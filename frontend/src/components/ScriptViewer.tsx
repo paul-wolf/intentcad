@@ -53,26 +53,54 @@ export function ScriptViewer({ onClose }: Props) {
   // dimension overlay (hold Opt/Alt): each param's value drawn on the geometry
   // it controls. The label DOM is rendered from `dimList` (changes rarely) and
   // positioned every frame via these refs — no React re-render on orbit.
-  const dimG = useRef<Map<string, { line: SVGLineElement | null; label: SVGTextElement | null }>>(new Map());
-  const setDimRef = (key: string, k: 'line' | 'label', el: SVGLineElement | SVGTextElement | null) => {
-    const g = dimG.current.get(key) ?? { line: null, label: null };
+  type DimEls = { arrow: SVGLineElement | null; lead: SVGLineElement | null; label: SVGTextElement | null };
+  const dimG = useRef<Map<string, DimEls>>(new Map());
+  const setDimRef = (key: string, k: keyof DimEls, el: SVGLineElement | SVGTextElement | null) => {
+    const g = dimG.current.get(key) ?? { arrow: null, lead: null, label: null };
     g[k] = el as never; dimG.current.set(key, g);
   };
+  // Anchors cluster in the middle of a small part, so labels are pushed out to
+  // the left/right gutters and stacked so they never overlap; a thin leader ties
+  // each value back to its feature, with a small direction arrow on the feature.
   const onDims = (placed: PlacedDim[]) => {
+    const cv = canvasRef.current;
+    const cw = cv?.clientWidth ?? 0, ch = cv?.clientHeight ?? 0;
+    const cols: PlacedDim[][] = [[], []];
+    for (const p of placed) if (p.visible) cols[p.x < cw / 2 ? 0 : 1]!.push(p);
+    const GAP = 17;
+    const layout = new Map<string, { lx: number; ly: number; anchor: 'start' | 'end' }>();
+    cols.forEach((col, ci) => {
+      col.sort((a, b) => a.y - b.y);
+      const lx = ci === 0 ? 12 : cw - 12;
+      const anchor: 'start' | 'end' = ci === 0 ? 'start' : 'end';
+      let prev = -Infinity;
+      for (const p of col) {
+        const ly = Math.min(Math.max(p.y, prev + GAP, 16), ch - 6);
+        prev = ly;
+        layout.set(p.key, { lx, ly, anchor });
+      }
+    });
     for (const p of placed) {
       const g = dimG.current.get(p.key);
       if (!g) continue;
-      const op = p.visible ? '1' : '0';
-      if (g.line) {                          // double-arrow centered on the anchor
+      const lo = layout.get(p.key);
+      const op = p.visible && lo ? '1' : '0';
+      if (g.arrow) {                          // short double-arrow along the dim axis
         const dx = p.ax - p.x, dy = p.ay - p.y;
-        g.line.setAttribute('x1', `${p.x - dx}`); g.line.setAttribute('y1', `${p.y - dy}`);
-        g.line.setAttribute('x2', `${p.ax}`); g.line.setAttribute('y2', `${p.ay}`);
-        g.line.setAttribute('opacity', op);
+        g.arrow.setAttribute('x1', `${p.x - dx}`); g.arrow.setAttribute('y1', `${p.y - dy}`);
+        g.arrow.setAttribute('x2', `${p.ax}`); g.arrow.setAttribute('y2', `${p.ay}`);
+        g.arrow.setAttribute('opacity', op);
       }
-      if (g.label) {
-        g.label.setAttribute('x', `${p.x}`); g.label.setAttribute('y', `${p.y - 9}`);
+      if (g.lead && lo) {                     // leader: feature → gutter label
+        g.lead.setAttribute('x1', `${p.x}`); g.lead.setAttribute('y1', `${p.y}`);
+        g.lead.setAttribute('x2', `${lo.lx}`); g.lead.setAttribute('y2', `${lo.ly}`);
+        g.lead.setAttribute('opacity', op === '1' ? '0.5' : '0');
+      } else if (g.lead) g.lead.setAttribute('opacity', '0');
+      if (g.label && lo) {
+        g.label.setAttribute('x', `${lo.lx}`); g.label.setAttribute('y', `${lo.ly + 4}`);
+        g.label.setAttribute('text-anchor', lo.anchor);
         g.label.setAttribute('opacity', op);
-      }
+      } else if (g.label) g.label.setAttribute('opacity', '0');
     }
   };
 
@@ -397,14 +425,16 @@ export function ScriptViewer({ onClose }: Props) {
               </defs>
               {dimList.map((d) => (
                 <g key={d.key}>
+                  <line ref={(el) => setDimRef(d.key, 'lead', el)} opacity={0}
+                        stroke="#e0b24a" strokeWidth={0.75} />
                   {d.kind === 'length' && (
-                    <line ref={(el) => setDimRef(d.key, 'line', el)} opacity={0}
+                    <line ref={(el) => setDimRef(d.key, 'arrow', el)} opacity={0}
                           stroke="#e0b24a" strokeWidth={1.5}
                           markerStart="url(#dimArrow)" markerEnd="url(#dimArrow)" />
                   )}
                   <text ref={(el) => setDimRef(d.key, 'label', el)} opacity={0}
-                        fontSize={12} fontWeight={600} fill="#f2ca63" textAnchor="middle"
-                        style={{ paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.65)', strokeWidth: 3 }}>
+                        fontSize={12} fontWeight={600} fill="#f2ca63"
+                        style={{ paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.7)', strokeWidth: 3.5 }}>
                     {d.label}
                   </text>
                 </g>
