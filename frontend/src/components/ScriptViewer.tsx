@@ -307,13 +307,10 @@ export function ScriptViewer({ onClose }: Props) {
   };
 
   return (
-    <div style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'center',
-                  justifyContent: 'center', background: 'rgba(0,0,0,0.5)', zIndex: 1000 }}
-         onClick={handleClose}>
-      <div style={{ background: palette.panelBg, border: `1px solid ${palette.border}`,
-                    borderRadius: '8px', width: '88%', maxWidth: '1100px', height: '84vh',
-                    display: 'flex', flexDirection: 'column', boxShadow: '0 8px 32px rgba(0,0,0,0.4)' }}
-           onClick={(e) => e.stopPropagation()}>
+    <div style={{ position: 'fixed', inset: 0, background: palette.panelBg, zIndex: 1000,
+                  display: 'flex', flexDirection: 'column' }}>
+      <div style={{ background: palette.panelBg, flex: 1, minHeight: 0,
+                    display: 'flex', flexDirection: 'column' }}>
         {/* header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px',
                       borderBottom: `1px solid ${palette.border}` }}>
