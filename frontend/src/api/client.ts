@@ -188,4 +188,26 @@ export const buildApi = {
   build(payload: BuildRequest): Promise<BuildResponse> {
     return request('/build/', { method: 'POST', body: JSON.stringify(payload) });
   },
+  resolve(payload: ResolveRequest): Promise<ResolveResponse> {
+    return request('/build/resolve', { method: 'POST', body: JSON.stringify(payload) });
+  },
 };
+
+// ── reference resolver (natural language → selector) ──
+// Mirrors backend/modeling/resolver.py. Given the inventory of an already-built
+// result and a phrase, returns the formal selector it names.
+
+export interface ResolveRequest {
+  reference: string;
+  faces: BuildResponse['faces'];
+  edges: BuildResponse['edges'];
+}
+
+export interface ResolveResponse {
+  status: 'resolved' | 'clarify';
+  target?: 'face' | 'edge';
+  selector?: string;
+  indices?: number[];
+  rationale?: string;
+  question?: string;
+}

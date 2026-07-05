@@ -4,7 +4,17 @@ from ninja import Router
 from projects.access import require_auth
 
 from .builder import BuildError, build
-from .schemas import BuildRequest, BuildResponse, EdgeOut, FaceOut, MeshOut, MetricsOut
+from .resolver import ResolverError, resolve_reference
+from .schemas import (
+    BuildRequest,
+    BuildResponse,
+    EdgeOut,
+    FaceOut,
+    MeshOut,
+    MetricsOut,
+    ResolveRequest,
+    ResolveResponse,
+)
 
 router = Router()
 
@@ -36,3 +46,22 @@ def build_model(request, payload: BuildRequest):
         edges=[EdgeOut(**e) for e in result.edges],
         warnings=result.warnings,
     )
+
+
+@router.post("/resolve", response=ResolveResponse)
+def resolve_model(request, payload: ResolveRequest):
+    """Resolve a natural-language reference ('the joint', 'the back face') to a
+    formal selector, grounded in the inventory of an already-built result.
+
+    The AI layer's plug-in point: it maps intent onto the selection subsystem.
+    """
+    err = require_auth(request)
+    if err:
+        return err
+    faces = [f.dict() for f in payload.faces]
+    edges = [e.dict() for e in payload.edges]
+    try:
+        result = resolve_reference(payload.reference, faces, edges)
+    except ResolverError as exc:
+        return JsonResponse({"message": str(exc)}, status=422)
+    return ResolveResponse(**result)

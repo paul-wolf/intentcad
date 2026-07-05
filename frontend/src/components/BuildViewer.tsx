@@ -82,6 +82,10 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
   const [oz, setOz] = useState(0);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [upto, setUpto] = useState<number>(Infinity); // rollback marker: build features[0..upto]
+  // reference resolver: describe edges in words → a selector (the AI layer)
+  const [refText, setRefText] = useState('');
+  const [refBusy, setRefBusy] = useState(false);
+  const [refNote, setRefNote] = useState('');
 
   const [status, setStatus] = useState<'idle' | 'building' | 'done' | 'error'>('idle');
   const [message, setMessage] = useState('');
@@ -206,6 +210,29 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
 
   const downloadStep = () => {
     if (result) downloadTextFile(result.step, `${docName}.step`, 'application/step');
+  };
+
+  // resolve a natural-language edge reference into a selector, then apply it
+  const resolveRef = async () => {
+    const phrase = refText.trim();
+    if (!phrase || !result) return;
+    setRefBusy(true);
+    setRefNote('');
+    try {
+      const r = await buildApi.resolve({ reference: phrase, faces: result.faces, edges: result.edges });
+      if (r.status === 'clarify') {
+        setRefNote(r.question || 'Please be more specific.');
+      } else if (r.target === 'edge' && r.selector) {
+        setEdges(r.selector);
+        setRefNote(`→ ${r.selector} · ${r.indices?.length ?? 0} edge(s)${r.rationale ? ` — ${r.rationale}` : ''}`);
+      } else if (r.target === 'face') {
+        setRefNote(`That names a face (${r.selector}); the Edges field wants an edge. Try “the rim where…”.`);
+      }
+    } catch (err) {
+      setRefNote(String(err instanceof Error ? err.message : err));
+    } finally {
+      setRefBusy(false);
+    }
   };
 
   // edge selector choices, derived from the current model's edges (no typing)
@@ -412,6 +439,24 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
 
             {isModify && (
               <>
+                <div style={{ ...row, marginBottom: '4px' }}>
+                  <input
+                    value={refText}
+                    onChange={(e) => setRefText(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') resolveRef(); }}
+                    placeholder="describe edges…  e.g. where the socket meets the top"
+                    disabled={!result}
+                    style={{ ...field, flex: 1, width: 'auto', minWidth: 0 }}
+                  />
+                  <button onClick={resolveRef} disabled={!result || refBusy || !refText.trim()} title="Resolve to a selector (AI)"
+                    style={{ padding: '4px 10px', background: 'none', color: palette.textSecondary,
+                             border: `1px solid ${palette.border}`, borderRadius: '4px', fontSize: '13px',
+                             cursor: result && refText.trim() ? 'pointer' : 'default',
+                             opacity: result && refText.trim() && !refBusy ? 1 : 0.5, flex: '0 0 auto' }}>
+                    {refBusy ? '…' : 'Resolve'}
+                  </button>
+                </div>
+                {refNote && <div style={{ ...lbl, marginBottom: '8px' }}>{refNote}</div>}
                 <div style={row}>
                   <label style={{ ...lbl, width: '48px' }}>Edges</label>
                   <select value={edges} onChange={(e) => setEdges(e.target.value)} style={field}>

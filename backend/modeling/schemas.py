@@ -134,3 +134,23 @@ class BuildResponse(Schema):
     faces: list[FaceOut] = []
     edges: list[EdgeOut] = []
     warnings: list[str] = []
+
+
+class ResolveRequest(Schema):
+    """Ask the reference resolver to turn a phrase into a selector, grounded in
+    the inventory of an already-built result (sent inline, same as /build)."""
+
+    reference: str
+    faces: list[FaceOut] = []
+    edges: list[EdgeOut] = []
+
+
+class ResolveResponse(Schema):
+    status: str            # 'resolved' | 'clarify'
+    # when resolved:
+    target: str | None = None      # 'face' | 'edge'
+    selector: str | None = None    # the formal selector, e.g. 'between:cylinder,top'
+    indices: list[int] = []        # concrete faces/edges it names
+    rationale: str | None = None
+    # when clarify:
+    question: str | None = None
