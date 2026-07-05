@@ -235,6 +235,7 @@ export interface UsageResponse { document: UsageTotals; all_time: UsageTotals }
 export interface RunFace {
   index: number; start: number; count: number;
   kind: string; area: number; center: [number, number, number]; normal: [number, number, number];
+  radius?: number | null;   // radius of a cylindrical face (hole/boss), else null
 }
 
 export interface RunEdge {

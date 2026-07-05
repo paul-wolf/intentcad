@@ -15,6 +15,15 @@ class EngineTests(SimpleTestCase):
         self.assertTrue(r["exports"]["stl"].lstrip().startswith("solid"))
         self.assertLess(r["metrics"]["volume"], 1000)  # box minus a hole
 
+    def test_cylindrical_face_reports_its_radius(self):
+        r = run_script("part = Box(20, 20, 10) - Cylinder(3, 20)")
+        cyls = [f for f in r["faces"] if f["kind"] == "cylinder"]
+        self.assertTrue(cyls)
+        self.assertAlmostEqual(cyls[0]["radius"], 3.0, places=3)
+        # flat faces have no radius
+        planes = [f for f in r["faces"] if f["kind"] == "plane"]
+        self.assertIsNone(planes[0]["radius"])
+
     def test_plain_run_has_no_exports(self):
         r = run_script("part = Box(5, 5, 5)")
         self.assertEqual(r.get("exports", {}), {})

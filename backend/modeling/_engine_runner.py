@@ -47,6 +47,19 @@ def _run(code: str, export: list | None = None) -> dict:
     normals: list[float] = []
     faces: list[dict] = []
     face_list = part.faces()
+    # for reporting a hole/boss diameter: a cylindrical face's radius
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.GeomAbs import GeomAbs_Cylinder
+
+    def cyl_radius(f):
+        try:
+            surf = BRepAdaptor_Surface(f.wrapped)
+            if surf.GetType() == GeomAbs_Cylinder:
+                return float(surf.Cylinder().Radius())
+        except Exception:
+            pass
+        return None
+
     vstart = 0
     for fi, face in enumerate(face_list):
         fverts, ftris = face.tessellate(0.2)
@@ -72,6 +85,7 @@ def _run(code: str, export: list | None = None) -> dict:
             "area": float(face.area),
             "center": [c.X, c.Y, c.Z],
             "normal": [n.X, n.Y, n.Z] if n is not None else [0.0, 0.0, 1.0],
+            "radius": cyl_radius(face),
         })
         vstart += count
 

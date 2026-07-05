@@ -134,15 +134,21 @@ export function ScriptViewer({ onClose }: Props) {
     viewerRef.current?.highlightEdges(segs);
   };
 
-  // center-to-center measurement for the current 2-face selection
+  // readout for the current selection: a hole's diameter (1 face) or the
+  // center-to-center distance (2 faces), plus each selected hole's diameter.
   const measure = (() => {
     const res = resRef.current;
-    if (!res || sel.length < 2) return null;
-    const a = res.faces.find((x) => x.index === sel[0]);
-    const b = res.faces.find((x) => x.index === sel[1]);
+    if (!res || sel.length === 0) return null;
+    const faceOf = (i: number) => res.faces.find((x) => x.index === i);
+    const dia = (f?: FaceRange) => (f && f.kind === 'cylinder' && f.radius ? f.radius * 2 : null);
+    if (sel.length === 1) {
+      const d = dia(faceOf(sel[0]!));
+      return d ? { single: true as const, dia: d } : null;
+    }
+    const a = faceOf(sel[0]!), b = faceOf(sel[1]!);
     if (!a || !b) return null;
     const dx = b.center[0] - a.center[0], dy = b.center[1] - a.center[1], dz = b.center[2] - a.center[2];
-    return { dist: Math.hypot(dx, dy, dz), dx, dy, dz };
+    return { single: false as const, dist: Math.hypot(dx, dy, dz), dx, dy, dz, diaA: dia(a), diaB: dia(b) };
   })();
 
   const build = async (src: string) => {
@@ -415,17 +421,31 @@ export function ScriptViewer({ onClose }: Props) {
                             borderRadius: '6px', color: '#eef1f5', pointerEvents: 'none',
                             fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
                             fontVariantNumeric: 'tabular-nums' }}>
-                <div style={{ fontSize: '15px', fontWeight: 600 }}>
-                  {measure.dist.toFixed(2)} <span style={{ fontSize: '11px', opacity: 0.6 }}>mm</span>
-                </div>
-                <div style={{ fontSize: '11px', opacity: 0.7, marginTop: '2px' }}>
-                  center-to-center
-                </div>
-                <div style={{ fontSize: '12px', marginTop: '5px', display: 'flex', gap: '10px' }}>
-                  <span><span style={{ color: '#d95555' }}>X</span> {measure.dx.toFixed(1)}</span>
-                  <span><span style={{ color: '#5fb36a' }}>Y</span> {measure.dy.toFixed(1)}</span>
-                  <span><span style={{ color: '#6a8cd9' }}>Z</span> {measure.dz.toFixed(1)}</span>
-                </div>
+                {measure.single ? (
+                  <>
+                    <div style={{ fontSize: '15px', fontWeight: 600 }}>
+                      ⌀ {measure.dia.toFixed(2)} <span style={{ fontSize: '11px', opacity: 0.6 }}>mm</span>
+                    </div>
+                    <div style={{ fontSize: '11px', opacity: 0.7, marginTop: '2px' }}>diameter</div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize: '15px', fontWeight: 600 }}>
+                      {measure.dist.toFixed(2)} <span style={{ fontSize: '11px', opacity: 0.6 }}>mm</span>
+                    </div>
+                    <div style={{ fontSize: '11px', opacity: 0.7, marginTop: '2px' }}>center-to-center</div>
+                    <div style={{ fontSize: '12px', marginTop: '5px', display: 'flex', gap: '10px' }}>
+                      <span><span style={{ color: '#d95555' }}>X</span> {measure.dx.toFixed(1)}</span>
+                      <span><span style={{ color: '#5fb36a' }}>Y</span> {measure.dy.toFixed(1)}</span>
+                      <span><span style={{ color: '#6a8cd9' }}>Z</span> {measure.dz.toFixed(1)}</span>
+                    </div>
+                    {(measure.diaA || measure.diaB) && (
+                      <div style={{ fontSize: '11px', opacity: 0.7, marginTop: '5px' }}>
+                        ⌀ {measure.diaA ? measure.diaA.toFixed(1) : '—'} · ⌀ {measure.diaB ? measure.diaB.toFixed(1) : '—'}
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             )}
             {/* orientation gizmo (bottom-left): X red, Y green, Z blue from origin */}

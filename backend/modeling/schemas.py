@@ -206,6 +206,7 @@ class RunFace(Schema):
     area: float
     center: list[float]
     normal: list[float]
+    radius: float | None = None   # radius of a cylindrical face (a hole/boss), else null
 
 
 class RunEdge(Schema):

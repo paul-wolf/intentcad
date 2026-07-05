@@ -124,6 +124,7 @@ void main() { gl_FragColor = vec4(uColor, 1.0); }`;
 export interface FaceRange {
   index: number; start: number; count: number;
   kind: string; area: number; center: [number, number, number]; normal: [number, number, number];
+  radius?: number | null;
 }
 
 /** A dimension pinned to world geometry: a label at `point`, optionally a
