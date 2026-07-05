@@ -3,7 +3,7 @@ import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
 import { buildApi, type RunResponse, type UsageResponse } from '@/api/client';
 import { persistModelCode, getBackendId } from '@/api/autoSave';
-import { createViewer, type Viewer, type FaceRange, type AxisLabel } from '@/build/webglViewer';
+import { createViewer, type Viewer, type FaceRange, type AxisDir } from '@/build/webglViewer';
 import { downloadTextFile } from '@/export/download';
 
 interface Props { onClose: () => void }
@@ -30,17 +30,24 @@ export function ScriptViewer({ onClose }: Props) {
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewerRef = useRef<Viewer | null>(null);
-  const axisRefs = useRef<Record<string, HTMLSpanElement | null>>({});
-
-  // position the X/Y/Z labels each frame via refs (no React re-render on orbit)
-  const onAxes = (labels: AxisLabel[]) => {
-    for (const l of labels) {
-      const el = axisRefs.current[l.name];
-      if (!el) continue;
-      el.style.left = `${l.x}px`;
-      el.style.top = `${l.y}px`;
-      el.style.display = l.visible ? 'block' : 'none';
-    }
+  // orientation gizmo: three labeled axes from a shared origin, updated via refs
+  // each frame (no React re-render on orbit)
+  const gLine = useRef<(SVGLineElement | null)[]>([]);
+  const gLabel = useRef<(SVGTextElement | null)[]>([]);
+  const onAxes = (dirs: AxisDir[]) => {
+    const C = 34, R = 22;
+    dirs.forEach((d, i) => {
+      const op = (0.35 + 0.65 * ((d.z + 1) / 2)).toFixed(2);   // dim axes pointing away
+      const ln = gLine.current[i], lb = gLabel.current[i];
+      if (ln) {
+        ln.setAttribute('x2', `${C + d.x * R}`); ln.setAttribute('y2', `${C - d.y * R}`);
+        ln.setAttribute('opacity', op);
+      }
+      if (lb) {
+        lb.setAttribute('x', `${C + d.x * (R + 8)}`); lb.setAttribute('y', `${C - d.y * (R + 8) + 4}`);
+        lb.setAttribute('opacity', op);
+      }
+    });
   };
 
   const [code, setCode] = useState('');
@@ -299,13 +306,19 @@ export function ScriptViewer({ onClose }: Props) {
           <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
             <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block',
                      cursor: 'grab', touchAction: 'none' }} />
-            {(['X', 'Y', 'Z'] as const).map((n, i) => (
-              <span key={n} ref={(el) => { axisRefs.current[n] = el; }}
-                style={{ position: 'absolute', left: 0, top: 0, display: 'none',
-                         color: ['#d95555', '#5fb36a', '#6a8cd9'][i], fontSize: '13px', fontWeight: 700,
-                         pointerEvents: 'none', transform: 'translate(-50%, -50%)',
-                         textShadow: '0 0 3px rgba(0,0,0,0.7)' }}>{n}</span>
-            ))}
+            {/* orientation gizmo (bottom-left): X red, Y green, Z blue from origin */}
+            <svg width={68} height={68} style={{ position: 'absolute', left: 10, bottom: 10, pointerEvents: 'none' }}>
+              <circle cx={34} cy={34} r={2.5} fill={palette.textSecondary} />
+              {(['X', 'Y', 'Z'] as const).map((n, i) => (
+                <g key={n}>
+                  <line ref={(el) => { gLine.current[i] = el; }} x1={34} y1={34} x2={34} y2={34}
+                    stroke={['#d95555', '#5fb36a', '#6a8cd9'][i]} strokeWidth={2} strokeLinecap="round" />
+                  <text ref={(el) => { gLabel.current[i] = el; }} x={34} y={34}
+                    fill={['#d95555', '#5fb36a', '#6a8cd9'][i]} fontSize={12} fontWeight={700}
+                    textAnchor="middle" style={{ paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.5)', strokeWidth: 3 }}>{n}</text>
+                </g>
+              ))}
+            </svg>
             {status === 'error' && (
               <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '45%',
                             overflow: 'auto', padding: '12px 14px', background: 'rgba(0,0,0,0.35)',
