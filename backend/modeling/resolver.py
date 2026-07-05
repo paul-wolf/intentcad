@@ -80,8 +80,9 @@ SELECTOR_REFERENCE = """\
 FACE selectors (choose one):
   all | *            every face
   largest | smallest the single face with max / min area
-  tag:<t>            faces whose orientation tag is <t>
-                     tags: top, bottom, left, right, front, back
+  tag:<t>            faces whose orientation tag is <t> (by outward normal):
+                     top +Z (up), bottom -Z (underside), front -Y, back +Y,
+                     left -X, right +X
   kind:<k>           faces of a geometric kind (plane, cylinder, cone, sphere, ...)
 
 EDGE selectors (choose one):

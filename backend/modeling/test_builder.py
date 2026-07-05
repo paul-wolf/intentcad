@@ -148,6 +148,18 @@ class BuilderTests(SimpleTestCase):
         # 'top' resolves to the box top (z=10, the largest +Z face); the boss above is trimmed
         self.assertAlmostEqual(res.metrics["bbox_max"][2], 10, places=2)
 
+    def test_trim_no_op_warns(self):
+        """Trimming flush with a face that has no material beyond it removes
+        nothing — surfaced as a warning (the wrong-face case, e.g. 'back' when
+        the excess pokes out the bottom), not a silent no-op."""
+        slab = SketchIn(id="slab", entities=[
+            SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=10, height=10)])
+        res = build(BuildRequest(sketches=[slab], features=[
+            FeatureIn(id="e", type="extrude", sketchId="slab", distance=10),
+            FeatureIn(id="t", type="trim", trimFace="back", sketchId=""),  # nothing beyond +Y face
+        ]))
+        self.assertTrue(any("removed no material" in w for w in res.warnings))
+
     def test_face_inventory_has_cylinder(self):
         """Revolving a rectangle offset from the axis yields cylindrical faces."""
         res = build(BuildRequest(

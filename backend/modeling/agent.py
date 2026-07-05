@@ -86,7 +86,13 @@ Operations you may append (each rebuilds the running solid, in order):
   trim        — cut the solid flush with a named face, or past an axis plane.
                 fields: either trimFace ("top"|"bottom"|"left"|"right"|"front"|
                 "back"), OR trimAxis ("X"|"Y"|"Z") + at (position) + keep ("min"
-                keeps the lower side, "max" the upper)."""
+                keeps the lower side, "max" the upper).
+                To remove excess/overhang that protrudes past the part, trim with
+                the face it pokes out of. A flat plate lying in XY has two broad
+                faces — top (+Z) and bottom (-Z, the underside) — and thin
+                front/back/left/right side faces; so "the back", "the underside",
+                or "behind" a flat plate almost always means the bottom face, and
+                a socket/boss extruded up through it protrudes out the bottom."""
 
 
 def _system_prompt() -> str:

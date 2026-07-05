@@ -379,7 +379,8 @@ def _edge_op(shape, selector: str, amount: float | None, kind: str,
 
 
 # ── trim (cut everything past an axis-aligned plane) ─────────────────────
-def _trim(shape, axis: str, at: float | None, keep: str, feat_id: str, face_sel: str | None = None):
+def _trim(shape, axis: str, at: float | None, keep: str, feat_id: str,
+          face_sel: str | None = None, warnings: list[str] | None = None):
     """Cut off everything on one side of a plane — e.g. trim a socket flush with
     a face. One op, no sketch. If `face_sel` is given (a face tag like 'back'),
     the plane is *the model's own face* — the selection-driven version, where you
@@ -414,9 +415,17 @@ def _trim(shape, axis: str, at: float | None, keep: str, feat_id: str, face_sel:
         hi[ai] = at   # keep >= at, remove the lesser side
     box = Solid.makeBox(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2], Vector(lo[0], lo[1], lo[2]))
     try:
-        return shape.cut(box)
+        before = shape.Volume()
+        result = shape.cut(box)
     except Exception as exc:
         raise BuildError(f"feature {feat_id}: trim failed ({exc})") from exc
+    # a trim that removes nothing is almost always the wrong face/plane — surface it
+    if warnings is not None and before - result.Volume() < 1e-6 * max(before, 1.0):
+        where = f"the {face_sel} face" if face_sel else f"{axis} {keep} {at}"
+        warnings.append(
+            f"trim at {where} removed no material — the excess is likely on a "
+            f"different face (e.g. bottom vs back)")
+    return result
 
 
 # ── counterbore (recess the top face at each hole already in the solid) ──────
@@ -639,7 +648,8 @@ def build(req: BuildRequest) -> BuildResult:
         if feat.type == "trim":
             if result is None:
                 raise BuildError(f"feature {feat.id}: trim needs existing geometry")
-            result = _trim(result, feat.trimAxis or "Z", feat.at, feat.keep or "min", feat.id, feat.trimFace)
+            result = _trim(result, feat.trimAxis or "Z", feat.at, feat.keep or "min",
+                           feat.id, feat.trimFace, warnings)
             continue
         if feat.type == "counterbore":
             if result is None:
