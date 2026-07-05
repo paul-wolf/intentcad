@@ -607,6 +607,21 @@ def _face_tokens(f) -> list[str]:
     return [kind, *tags]
 
 
+def _edge_polyline(e) -> list[list[float]]:
+    """A polyline tracing the edge, for highlighting in the viewer. Lines get 2
+    points; curved edges get enough to look smooth. Cheap — sampled by length."""
+    n = 2 if e.geomType().lower() == "line" else 33
+    pts: list[list[float]] = []
+    try:
+        for k in range(n):
+            p = e.positionAt(k / (n - 1))  # fraction of length in [0,1]
+            pts.append([p.x, p.y, p.z])
+    except Exception:
+        c = e.Center()
+        return [[c.x, c.y, c.z]]
+    return pts
+
+
 def _edges(shape) -> list[dict]:
     """Edge inventory: coarse descriptors + the two faces each edge borders, as
     both descriptor tokens (adjacency, e.g. 'convex ∩ top') and their inventory
@@ -655,6 +670,7 @@ def _edges(shape) -> list[dict]:
             "end": end,
             "faces": faces,
             "faceIndices": face_idx,
+            "polyline": _edge_polyline(e),
         })
     return out
 

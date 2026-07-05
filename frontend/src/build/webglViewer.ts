@@ -106,8 +106,24 @@ function compile(gl: WebGLRenderingContext, type: number, src: string): WebGLSha
   return sh;
 }
 
+const LINE_VERT = `
+attribute vec3 aPos;
+uniform mat4 uProj;
+uniform mat4 uView;
+uniform mat4 uModel;
+void main() {
+  gl_Position = uProj * uView * uModel * vec4(aPos, 1.0);
+}`;
+
+const LINE_FRAG = `
+precision mediump float;
+uniform vec3 uColor;
+void main() { gl_FragColor = vec4(uColor, 1.0); }`;
+
 export interface Viewer {
   update(mesh: ViewerMesh): void;
+  /** Highlight edges: flat GL_LINES vertices [x,y,z, x,y,z, ...] (pairs). */
+  highlightEdges(segments: number[]): void;
   dispose(): void;
 }
 
@@ -134,6 +150,20 @@ export function createViewer(canvas: HTMLCanvasElement, color = [0.62, 0.66, 0.7
 
   const posBuf = gl.createBuffer()!;
   const normBuf = gl.createBuffer()!;
+
+  // second program: bright lines for highlighting edges (drawn over the mesh)
+  const lineProg = gl.createProgram()!;
+  gl.attachShader(lineProg, compile(gl, gl.VERTEX_SHADER, LINE_VERT));
+  gl.attachShader(lineProg, compile(gl, gl.FRAGMENT_SHADER, LINE_FRAG));
+  gl.linkProgram(lineProg);
+  const lPos = gl.getAttribLocation(lineProg, 'aPos');
+  const lProj = gl.getUniformLocation(lineProg, 'uProj');
+  const lView = gl.getUniformLocation(lineProg, 'uView');
+  const lModel = gl.getUniformLocation(lineProg, 'uModel');
+  const lColor = gl.getUniformLocation(lineProg, 'uColor');
+  const lineBuf = gl.createBuffer()!;
+  let lineVertexCount = 0;
+  const HIGHLIGHT: [number, number, number] = [1.0, 0.5, 0.05];
 
   gl.enable(gl.DEPTH_TEST);
   gl.clearColor(0, 0, 0, 0);
@@ -207,6 +237,23 @@ export function createViewer(canvas: HTMLCanvasElement, color = [0.62, 0.66, 0.7
     gl!.vertexAttribPointer(aNormal, 3, gl!.FLOAT, false, 0, 0);
 
     gl!.drawArrays(gl!.TRIANGLES, 0, vertexCount);
+
+    // highlight pass: bright lines on top of the solid (depth test off so the
+    // targeted edges are visible even when they're behind the surface)
+    if (lineVertexCount) {
+      gl!.useProgram(lineProg);
+      gl!.uniformMatrix4fv(lProj, false, proj);
+      gl!.uniformMatrix4fv(lView, false, view);
+      gl!.uniformMatrix4fv(lModel, false, model);
+      gl!.uniform3fv(lColor, HIGHLIGHT);
+      gl!.bindBuffer(gl!.ARRAY_BUFFER, lineBuf);
+      gl!.enableVertexAttribArray(lPos);
+      gl!.vertexAttribPointer(lPos, 3, gl!.FLOAT, false, 0, 0);
+      gl!.disable(gl!.DEPTH_TEST);
+      gl!.lineWidth(2);
+      gl!.drawArrays(gl!.LINES, 0, lineVertexCount);
+      gl!.enable(gl!.DEPTH_TEST);
+    }
   }
 
   // ── interaction ──
@@ -243,6 +290,12 @@ export function createViewer(canvas: HTMLCanvasElement, color = [0.62, 0.66, 0.7
 
   return {
     update(mesh: ViewerMesh) { uploadMesh(mesh); scheduleRender(); },
+    highlightEdges(segments: number[]) {
+      gl!.bindBuffer(gl!.ARRAY_BUFFER, lineBuf);
+      gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array(segments), gl!.DYNAMIC_DRAW);
+      lineVertexCount = segments.length / 3;
+      scheduleRender();
+    },
     dispose() {
       if (raf) cancelAnimationFrame(raf);
       ro.disconnect();
@@ -252,7 +305,9 @@ export function createViewer(canvas: HTMLCanvasElement, color = [0.62, 0.66, 0.7
       canvas.removeEventListener('wheel', onWheel);
       gl.deleteBuffer(posBuf);
       gl.deleteBuffer(normBuf);
+      gl.deleteBuffer(lineBuf);
       gl.deleteProgram(prog);
+      gl.deleteProgram(lineProg);
     },
   };
 }

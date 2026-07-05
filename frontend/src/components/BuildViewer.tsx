@@ -4,6 +4,7 @@ import { useDocumentStore } from '@/stores/documentStore';
 import { useBuildStore } from '@/stores/buildStore';
 import { buildApi, type BuildResponse, type BuildFeature } from '@/api/client';
 import { treeToBuildRequest, axisForKind, AXIS_LABELS, type AxisKind } from '@/build/toBuildRequest';
+import { resolveEdgesLocal, edgeSegments } from '@/build/edgeSelect';
 import { createViewer, type Viewer } from '@/build/webglViewer';
 import { downloadTextFile } from '@/export/download';
 
@@ -144,6 +145,18 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
 
   // mirror the tree into the document so auto-save persists it across reloads
   useEffect(() => { useDocumentStore.getState().setBuildFeatures(features); }, [features]);
+
+  // highlight the edges the current fillet/chamfer selector targets — so you can
+  // see what 'faces:4,13' or 'between:convex,top' actually refers to
+  useEffect(() => {
+    const v = viewerRef.current;
+    if (!v) return;
+    if ((opType === 'fillet' || opType === 'chamfer') && result) {
+      v.highlightEdges(edgeSegments(resolveEdgesLocal(edges, result.edges), result.edges));
+    } else {
+      v.highlightEdges([]);
+    }
+  }, [edges, result, opType]);
 
   // Ctrl-Z / Ctrl-Shift-Z (Ctrl-Y) undo/redo the tree while the panel is open
   useEffect(() => {

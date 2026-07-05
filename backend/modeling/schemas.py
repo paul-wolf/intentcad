@@ -126,6 +126,7 @@ class EdgeOut(Schema):
     end: list[float]
     faces: list[list[str]] = []       # tokens of the two faces this edge borders
     faceIndices: list[int] = []       # inventory indices of those two faces
+    polyline: list[list[float]] = []  # points tracing the edge (for highlighting)
 
 
 class BuildResponse(Schema):
