@@ -205,9 +205,14 @@ export interface RunFace {
   kind: string; area: number; center: [number, number, number]; normal: [number, number, number];
 }
 
+export interface RunEdge {
+  index: number; kind: string; faceIndices: number[]; polyline: [number, number, number][];
+}
+
 export interface RunResponse {
   mesh: { positions: number[]; normals: number[]; triangle_count: number };
   faces: RunFace[];
+  edges: RunEdge[];
   step: string;
   metrics: { volume: number; area: number; bbox_min: [number, number, number]; bbox_max: [number, number, number] };
 }

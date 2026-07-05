@@ -4,7 +4,7 @@ from ninja import Router
 from projects.access import require_auth
 
 from .engine import EngineError, run_script
-from .schemas import MeshOut, RunFace, RunMetrics, RunRequest, RunResponse
+from .schemas import MeshOut, RunEdge, RunFace, RunMetrics, RunRequest, RunResponse
 
 router = Router()
 
@@ -25,6 +25,7 @@ def run_model(request, payload: RunRequest):
     return RunResponse(
         mesh=MeshOut(**r["mesh"]),
         faces=[RunFace(**f) for f in r.get("faces", [])],
+        edges=[RunEdge(**e) for e in r.get("edges", [])],
         step=r["step"],
         metrics=RunMetrics(**r["metrics"]),
     )

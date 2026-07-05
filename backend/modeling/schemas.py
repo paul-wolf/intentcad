@@ -208,8 +208,18 @@ class RunFace(Schema):
     normal: list[float]
 
 
+class RunEdge(Schema):
+    """An edge: the two faces it borders (an edge = the intersection of two
+    faces) + a polyline for highlighting."""
+    index: int
+    kind: str
+    faceIndices: list[int] = []
+    polyline: list[list[float]] = []
+
+
 class RunResponse(Schema):
     mesh: MeshOut
     faces: list[RunFace] = []
+    edges: list[RunEdge] = []
     step: str
     metrics: RunMetrics

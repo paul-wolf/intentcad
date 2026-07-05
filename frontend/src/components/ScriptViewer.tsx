@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
-import { buildApi, type RunFace } from '@/api/client';
+import { buildApi, type RunResponse } from '@/api/client';
 import { persistModelCode } from '@/api/autoSave';
-import { createViewer, type Viewer } from '@/build/webglViewer';
+import { createViewer, type Viewer, type FaceRange } from '@/build/webglViewer';
 import { downloadTextFile } from '@/export/download';
 
 interface Props { onClose: () => void }
@@ -35,8 +35,32 @@ export function ScriptViewer({ onClose }: Props) {
   const [status, setStatus] = useState<'idle' | 'building' | 'done' | 'error'>('idle');
   const [message, setMessage] = useState('');
   const [stats, setStats] = useState('');
-  const [picked, setPicked] = useState<RunFace | null>(null);
+  const [sel, setSel] = useState<number[]>([]);   // selected face indices (≤ 2)
+  const resRef = useRef<RunResponse | null>(null);
+  const selRef = useRef<number[]>([]);
   const stepRef = useRef<string>('');
+
+  // click a face → toggle it in the selection (keep at most 2). With two faces
+  // selected, highlight the edge(s) between them (an edge = two faces meeting).
+  const onPick = (f: FaceRange | null) => {
+    const res = resRef.current;
+    let s = selRef.current;
+    if (!f) s = [];
+    else if (s.includes(f.index)) s = s.filter((i) => i !== f.index);
+    else s = [...s, f.index].slice(-2);
+    selRef.current = s;
+    setSel(s);
+    viewerRef.current?.selectFaces(s);
+    const segs: number[] = [];
+    if (res && s.length === 2) {
+      for (const e of res.edges) {
+        if (e.faceIndices.length === 2 && e.faceIndices.includes(s[0]!) && e.faceIndices.includes(s[1]!)) {
+          for (let i = 0; i < e.polyline.length - 1; i++) segs.push(...e.polyline[i]!, ...e.polyline[i + 1]!);
+        }
+      }
+    }
+    viewerRef.current?.highlightEdges(segs);
+  };
 
   const build = async (src: string) => {
     if (!viewerRef.current) return;
@@ -45,7 +69,8 @@ export function ScriptViewer({ onClose }: Props) {
     try {
       const res = await buildApi.run(src);
       viewerRef.current.update(res.mesh, res.faces);
-      setPicked(null);
+      resRef.current = res;
+      selRef.current = []; setSel([]);
       stepRef.current = res.step;
       const m = res.metrics;
       const sz = [0, 1, 2].map((i) => Math.round(m.bbox_max[i]! - m.bbox_min[i]!));
@@ -64,7 +89,7 @@ export function ScriptViewer({ onClose }: Props) {
     setCode(initial);
     if (canvasRef.current) {
       try {
-        viewerRef.current = createViewer(canvasRef.current, { onFacePick: setPicked });
+        viewerRef.current = createViewer(canvasRef.current, { onFacePick: onPick });
         build(initial);
       } catch (err) {
         setStatus('error');
@@ -142,11 +167,23 @@ export function ScriptViewer({ onClose }: Props) {
                       fontSize: '12px', color: palette.textSecondary, minHeight: '20px' }}>
           {status === 'building' && 'Building…'}
           {status === 'error' && <span style={{ color: palette.danger }}>Build failed — see the editor side.</span>}
-          {status === 'done' && !picked && `${stats} · drag to orbit · scroll to zoom · click a face to select`}
-          {status === 'done' && picked && (() => {
+          {status === 'done' && (() => {
+            const res = resRef.current;
             const v = (a: [number, number, number]) => `(${a.map((n) => Math.round(n * 10) / 10).join(', ')})`;
-            return <span style={{ color: palette.text }}>
-              Face #{picked.index} · <b>{picked.kind}</b> · normal {v(picked.normal)} · center {v(picked.center)} · area {Math.round(picked.area)} mm²
+            if (!res || sel.length === 0)
+              return `${stats} · drag to orbit · scroll to zoom · click a face (click two for the edge between them)`;
+            const faces = sel.map((i) => res.faces.find((f) => f.index === i)!).filter(Boolean);
+            if (sel.length === 1) {
+              const f = faces[0]!;
+              return <span style={{ color: palette.text }}>
+                Face #{f.index} · <b>{f.kind}</b> · normal {v(f.normal)} · center {v(f.center)} · area {Math.round(f.area)} mm²
+              </span>;
+            }
+            const shared = res.edges.filter((e) => e.faceIndices.length === 2 && e.faceIndices.includes(sel[0]!) && e.faceIndices.includes(sel[1]!));
+            return <span style={{ color: shared.length ? palette.text : palette.textSecondary }}>
+              {faces.map((f) => `#${f.index} ${f.kind}`).join(' ∩ ')} → {shared.length
+                ? <b>{shared.length} joining edge{shared.length > 1 ? 's' : ''} ({shared[0]!.kind})</b>
+                : 'no shared edge (faces don’t meet)'}
             </span>;
           })()}
         </div>

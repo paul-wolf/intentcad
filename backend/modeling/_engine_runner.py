@@ -30,8 +30,9 @@ def _run(code: str) -> dict:
     positions: list[float] = []
     normals: list[float] = []
     faces: list[dict] = []
+    face_list = part.faces()
     vstart = 0
-    for fi, face in enumerate(part.faces()):
+    for fi, face in enumerate(face_list):
         fverts, ftris = face.tessellate(0.2)
         for a, b, c in ftris:
             va, vb, vc = fverts[a], fverts[b], fverts[c]
@@ -58,6 +59,43 @@ def _run(code: str) -> dict:
         })
         vstart += count
 
+    # edges + adjacency: each edge records the two faces it borders (by inventory
+    # index) and a polyline, so "the edge between face A and B" is selectable.
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
+    from OCP.TopExp import TopExp
+    from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
+
+    emap = TopTools_IndexedDataMapOfShapeListOfShape()
+    TopExp.MapShapesAndAncestors_s(part.wrapped, TopAbs_EDGE, TopAbs_FACE, emap)
+
+    def face_index(tface) -> int:
+        for j, fc in enumerate(face_list):
+            if fc.wrapped.IsSame(tface):
+                return j
+        return -1
+
+    edges: list[dict] = []
+    for ei, edge in enumerate(part.edges()):
+        fis: list[int] = []
+        try:
+            if emap.Contains(edge.wrapped):
+                for fw in emap.FindFromKey(edge.wrapped):
+                    j = face_index(fw)
+                    if j >= 0:
+                        fis.append(j)
+        except Exception:
+            pass
+        kind = edge.geom_type.name.lower()
+        n = 2 if kind == "line" else 33
+        poly: list[list[float]] = []
+        try:
+            for k in range(n):
+                p = edge @ (k / (n - 1))
+                poly.append([p.X, p.Y, p.Z])
+        except Exception:
+            poly = []
+        edges.append({"index": ei, "kind": kind, "faceIndices": fis, "polyline": poly})
+
     with tempfile.NamedTemporaryFile(suffix=".step", mode="r", delete=True) as fh:
         export_step(part, fh.name)
         step = open(fh.name).read()
@@ -67,6 +105,7 @@ def _run(code: str) -> dict:
         "ok": True,
         "mesh": {"positions": positions, "normals": normals, "triangle_count": len(positions) // 9},
         "faces": faces,
+        "edges": edges,
         "step": step,
         "metrics": {
             "volume": float(part.volume),

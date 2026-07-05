@@ -130,8 +130,8 @@ export interface Viewer {
   update(mesh: ViewerMesh, faces?: FaceRange[]): void;
   /** Highlight edges: flat GL_LINES vertices [x,y,z, x,y,z, ...] (pairs). */
   highlightEdges(segments: number[]): void;
-  /** Highlight one face by inventory index (null clears). */
-  selectFace(index: number | null): void;
+  /** Highlight faces by inventory index. */
+  selectFaces(indices: number[]): void;
   dispose(): void;
 }
 
@@ -216,7 +216,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   // face selection
   let meshPositions: number[] = [];
   let faces: FaceRange[] = [];
-  let selected: number | null = null;
+  let selected: number[] = [];
   const SELECT: [number, number, number] = [1.0, 0.62, 0.2];
 
   function uploadMesh(mesh: ViewerMesh) {
@@ -329,11 +329,15 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
 
     if (vertexCount) gl!.drawArrays(gl!.TRIANGLES, 0, vertexCount);
 
-    // selected face: re-draw its triangles in a tint (depthFunc LEQUAL lets the
-    // identical geometry pass)
-    if (selected !== null && faces[selected]) {
+    // selected faces: re-draw their triangles in a tint (depthFunc LEQUAL lets
+    // the identical geometry pass)
+    if (selected.length) {
       gl!.uniform3fv(uColor, SELECT);
-      gl!.drawArrays(gl!.TRIANGLES, faces[selected]!.start, faces[selected]!.count);
+      const byIndex = new Map(faces.map((f) => [f.index, f]));
+      for (const idx of selected) {
+        const f = byIndex.get(idx);
+        if (f) gl!.drawArrays(gl!.TRIANGLES, f.start, f.count);
+      }
     }
 
     // coordinate frame + highlight all use the line program / same matrices
@@ -389,10 +393,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     try { canvas.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
     if (moved < 4 && opts.onFacePick) {  // a click, not a drag → pick a face
       const rect = canvas.getBoundingClientRect();
-      const f = pick(downX - rect.left, downY - rect.top);
-      selected = f ? f.index : null;
-      opts.onFacePick(f);
-      scheduleRender();
+      opts.onFacePick(pick(downX - rect.left, downY - rect.top));  // caller sets selection
     }
   }
   function onWheel(e: WheelEvent) {
@@ -413,7 +414,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       uploadMesh(mesh);
       meshPositions = mesh.positions;
       faces = facesArg ?? [];
-      selected = null;
+      selected = [];
       scheduleRender();
     },
     highlightEdges(segments: number[]) {
@@ -422,7 +423,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       lineVertexCount = segments.length / 3;
       scheduleRender();
     },
-    selectFace(index: number | null) { selected = index; scheduleRender(); },
+    selectFaces(indices: number[]) { selected = indices; scheduleRender(); },
     dispose() {
       if (raf) cancelAnimationFrame(raf);
       ro.disconnect();
