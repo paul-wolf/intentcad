@@ -16,6 +16,21 @@ type OpType = 'extrude' | 'revolve' | 'fillet' | 'chamfer' | 'counterbore' | 'tr
 
 const newId = () => 'op-' + crypto.randomUUID().slice(0, 8);
 
+const defaultExtrude = (sketchId: string): BuildFeature =>
+  ({ id: newId(), type: 'extrude', sketchId, distance: 10, operation: 'add' });
+
+/** Seed the tree for a document, dropping features that reference a sketch the
+ * document no longer has (stale/foreign ids — otherwise the build 422s). Falls
+ * back to one extrude if nothing buildable survives. */
+function seedTree(saved: BuildFeature[], sketchIds: Set<string>, activeSketchId: string): BuildFeature[] {
+  const usable = saved.filter((f) =>
+    f.type === 'extrude' || f.type === 'revolve' ? sketchIds.has(f.sketchId) : true,
+  );
+  const hasBase = usable.some((f) => f.type === 'extrude' || f.type === 'revolve');
+  if (hasBase) return usable;
+  return activeSketchId ? [defaultExtrude(activeSketchId)] : [];
+}
+
 function place(f: BuildFeature): string {
   const bits: string[] = [];
   if (f.plane && f.plane !== 'XY') bits.push(f.plane);
@@ -115,15 +130,14 @@ export function BuildViewer({ onClose }: BuildViewerProps) {
   }, [features, upto]);
 
   // create the viewer, claim the keyboard, and seed the tree — once on mount.
-  // Prefer the tree persisted with the document; else start from one extrude.
+  // Always reset from the CURRENT document's persisted tree (buildStore is
+  // global, so this avoids leaking one document's tree into another), sanitized
+  // against the document's sketches.
   useEffect(() => {
     useBuildStore.getState().setPanelOpen(true);
-    const saved = useDocumentStore.getState().document.buildFeatures;
-    if (saved && saved.length > 0) {
-      useBuildStore.getState().initTree(saved);
-    } else if (useBuildStore.getState().features.length === 0 && activeSketchId) {
-      useBuildStore.getState().initTree([{ id: newId(), type: 'extrude', sketchId: activeSketchId, distance: 10, operation: 'add' }]);
-    }
+    const doc = useDocumentStore.getState().document;
+    const sketchIds = new Set(doc.sketches.map((s) => s.id));
+    useBuildStore.getState().initTree(seedTree(doc.buildFeatures ?? [], sketchIds, activeSketchId));
     if (canvasRef.current) {
       try {
         viewerRef.current = createViewer(canvasRef.current);

@@ -726,7 +726,10 @@ def build(req: BuildRequest) -> BuildResult:
 
         sketch = sketches.get(feat.sketchId)
         if sketch is None:
-            raise BuildError(f"feature {feat.id}: sketch '{feat.sketchId}' not in request")
+            # a stale/foreign sketch reference (e.g. a deleted sketch) — skip the
+            # feature rather than failing the whole build
+            warnings.append(f"feature {feat.id}: sketch '{feat.sketchId}' not found — skipped")
+            continue
 
         if feat.type == "extrude":
             regions = _loops_to_regions(_sketch_to_loops(sketch, warnings), sketch.id)

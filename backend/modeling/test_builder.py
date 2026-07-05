@@ -455,6 +455,18 @@ class BuilderTests(SimpleTestCase):
             build(BuildRequest(sketches=[slab], features=base + [
                 FeatureIn(id="cb", type="counterbore", sketchId="slab")]))  # no dia/depth
 
+    def test_missing_sketch_warns_not_fails(self):
+        """A feature referencing a sketch not in the request is skipped with a
+        warning (stale/foreign id after a reload), not a hard failure."""
+        slab = SketchIn(id="slab", entities=[
+            SketchEntityIn(type="rectangle", center=Point(x=0, y=0), width=10, height=10)])
+        res = build(BuildRequest(sketches=[slab], features=[
+            FeatureIn(id="ok", type="extrude", sketchId="slab", distance=5),
+            FeatureIn(id="bad", type="extrude", sketchId="gone", distance=5),  # missing
+        ]))
+        self.assertTrue(any("not found" in w for w in res.warnings))
+        self.assertAlmostEqual(res.metrics["bbox_max"][2], 5, places=2)  # the good one built
+
     def test_unsupported_feature_warns_not_fails(self):
         req = _plate_with_hole()
         req.features.append(FeatureIn(id="f2", type="sweep", sketchId="sk1"))  # not supported yet
