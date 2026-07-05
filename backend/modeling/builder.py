@@ -23,8 +23,17 @@ import math
 import tempfile
 from dataclasses import dataclass, field
 
-import cadquery as cq
-from cadquery import Edge, Face, Solid, Vector, Wire
+# cadquery is being replaced by build123d (the model becomes an engine script).
+# Guarded so a missing/incompatible OCP doesn't take the whole backend down at
+# import time; the legacy op-list build() raises a clear error if actually used.
+try:
+    import cadquery as cq
+    from cadquery import Edge, Face, Solid, Vector, Wire
+    _CADQUERY_OK = True
+except Exception:  # pragma: no cover - transitional
+    cq = None  # type: ignore
+    Edge = Face = Solid = Vector = Wire = None  # type: ignore
+    _CADQUERY_OK = False
 
 from .schemas import BuildRequest, SketchEntityIn, SketchIn
 from .selectors import resolve_edges, resolve_faces
@@ -743,6 +752,8 @@ def _apply_feature(feat, result, sketches: dict, warnings: list[str]):
 
 # ── entry point ──────────────────────────────────────────────────────────
 def build(req: BuildRequest) -> BuildResult:
+    if not _CADQUERY_OK:
+        raise BuildError("legacy op-list builder unavailable (cadquery not loaded)")
     warnings: list[str] = []
     sketches = {s.id: s for s in req.sketches}
 
