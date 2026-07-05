@@ -185,10 +185,9 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   let lineVertexCount = 0;
   const HIGHLIGHT: [number, number, number] = [1.0, 0.5, 0.05];
 
-  // coordinate frame: a ground grid on the engine's Z=0 plane + XYZ axes at the
-  // origin, so the build123d coordinate system (Z up, mm) is explicit.
+  // coordinate frame: a ground grid on the engine's Z=0 plane. Orientation
+  // (which way is +X/+Y/+Z) is shown by the corner gizmo, not axis lines.
   const gridBuf = gl.createBuffer()!;
-  const axisBuf = gl.createBuffer()!;
   let gridCount = 0;
   function buildFrame(radius: number) {
     const pow = Math.pow(10, Math.floor(Math.log10(radius / 4)));
@@ -203,9 +202,6 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     gl!.bindBuffer(gl!.ARRAY_BUFFER, gridBuf);
     gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array(g), gl!.STATIC_DRAW);
     gridCount = g.length / 3;
-    const a = ext * 1.15;
-    gl!.bindBuffer(gl!.ARRAY_BUFFER, axisBuf);
-    gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array([0,0,0, a,0,0, 0,0,0, 0,a,0, 0,0,0, 0,0,a]), gl!.STATIC_DRAW);
   }
 
   gl.enable(gl.DEPTH_TEST);
@@ -360,12 +356,9 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       gl!.drawArrays(gl!.LINES, first, n);
     };
 
-    // ground grid + XYZ axes (Z up), occluded by the solid where it's in front
+    // ground grid on the Z=0 plane (orientation is shown by the corner gizmo)
     gl!.lineWidth(1);
     drawLines(gridBuf, gridCount, [0.45, 0.48, 0.53]);
-    drawLines(axisBuf, 6, [0.85, 0.33, 0.33], 0, 2);  // X red
-    drawLines(axisBuf, 6, [0.40, 0.70, 0.42], 2, 2);  // Y green
-    drawLines(axisBuf, 6, [0.40, 0.55, 0.85], 4, 2);  // Z blue
 
     // highlight pass: bright, drawn over the solid (depth off so it's visible)
     if (lineVertexCount) {
@@ -451,7 +444,6 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       gl.deleteBuffer(normBuf);
       gl.deleteBuffer(lineBuf);
       gl.deleteBuffer(gridBuf);
-      gl.deleteBuffer(axisBuf);
       gl.deleteProgram(prog);
       gl.deleteProgram(lineProg);
     },
