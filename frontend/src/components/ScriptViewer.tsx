@@ -126,9 +126,24 @@ export function ScriptViewer({ onClose }: Props) {
           for (let i = 0; i < e.polyline.length - 1; i++) segs.push(...e.polyline[i]!, ...e.polyline[i + 1]!);
         }
       }
+      // measurement line: straight between the two face centers (e.g. hole-to-hole)
+      const a = res.faces.find((x) => x.index === s[0]);
+      const b = res.faces.find((x) => x.index === s[1]);
+      if (a && b) segs.push(...a.center, ...b.center);
     }
     viewerRef.current?.highlightEdges(segs);
   };
+
+  // center-to-center measurement for the current 2-face selection
+  const measure = (() => {
+    const res = resRef.current;
+    if (!res || sel.length < 2) return null;
+    const a = res.faces.find((x) => x.index === sel[0]);
+    const b = res.faces.find((x) => x.index === sel[1]);
+    if (!a || !b) return null;
+    const dx = b.center[0] - a.center[0], dy = b.center[1] - a.center[1], dz = b.center[2] - a.center[2];
+    return { dist: Math.hypot(dx, dy, dz), dx, dy, dz };
+  })();
 
   const build = async (src: string) => {
     if (!viewerRef.current) return;
@@ -393,6 +408,26 @@ export function ScriptViewer({ onClose }: Props) {
           <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
             <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block',
                      cursor: 'grab', touchAction: 'none' }} />
+            {/* measure readout: center-to-center distance for a 2-face selection */}
+            {measure && (
+              <div style={{ position: 'absolute', left: 12, top: 12, padding: '8px 11px',
+                            background: 'rgba(20,22,26,0.82)', border: '1px solid rgba(255,255,255,0.12)',
+                            borderRadius: '6px', color: '#eef1f5', pointerEvents: 'none',
+                            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                            fontVariantNumeric: 'tabular-nums' }}>
+                <div style={{ fontSize: '15px', fontWeight: 600 }}>
+                  {measure.dist.toFixed(2)} <span style={{ fontSize: '11px', opacity: 0.6 }}>mm</span>
+                </div>
+                <div style={{ fontSize: '11px', opacity: 0.7, marginTop: '2px' }}>
+                  center-to-center
+                </div>
+                <div style={{ fontSize: '12px', marginTop: '5px', display: 'flex', gap: '10px' }}>
+                  <span><span style={{ color: '#d95555' }}>X</span> {measure.dx.toFixed(1)}</span>
+                  <span><span style={{ color: '#5fb36a' }}>Y</span> {measure.dy.toFixed(1)}</span>
+                  <span><span style={{ color: '#6a8cd9' }}>Z</span> {measure.dz.toFixed(1)}</span>
+                </div>
+              </div>
+            )}
             {/* orientation gizmo (bottom-left): X red, Y green, Z blue from origin */}
             <svg width={68} height={68} style={{ position: 'absolute', left: 10, bottom: 10, pointerEvents: 'none' }}>
               <circle cx={34} cy={34} r={2.5} fill={palette.textSecondary} />
