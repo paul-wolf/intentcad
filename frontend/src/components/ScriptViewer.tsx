@@ -8,6 +8,7 @@ import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim
 import { highlightPython, DARK_SYNTAX, LIGHT_SYNTAX } from '@/build/pyHighlight';
 import { downloadTextFile } from '@/export/download';
 import { buildKey, getCachedBuild, putCachedBuild, putCachedSens } from '@/build/buildCache';
+import { PartVersionsPanel } from './PartVersionsPanel';
 
 interface Props {
   onClose: () => void;
@@ -21,7 +22,6 @@ interface Props {
 const humanBytes = (b: number): string =>
   b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
 
-const NO_HISTORY: { code: string; at: number; label?: string }[] = [];
 const NO_CHAT: ChatMessage[] = [];
 
 // A starter model so an empty document shows something buildable. The whole CAD
@@ -44,7 +44,6 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   const palette = useThemeStore((s) => s.palette);
   const isDark = useThemeStore((s) => s.theme === 'dark');
   const docName = useDocumentStore((s) => s.document.name);
-  const modelHistory = useDocumentStore((s) => s.document.modelCodeHistory ?? NO_HISTORY);
   const chat = useDocumentStore((s) => s.document.chat ?? NO_CHAT);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -313,34 +312,19 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
     if (trimmed && trimmed !== docName) persistName(trimmed);
   };
 
-  // version history: restore a prior modelCode (restoring pushes the current one
-  // into history too, via setModelCode, so it's reversible)
-  const [showHistory, setShowHistory] = useState(false);
-  const loadVersion = (c: string) => {
-    setShowHistory(false);
+  // Versions: browse the immutable server-side snapshots and restore one.
+  // Restoring re-saves that code (which itself creates a new version), so the
+  // current model is never lost.
+  const [showVersions, setShowVersions] = useState(false);
+  const restoreVersion = (c: string) => {
+    setShowVersions(false);
+    if (!c.trim()) return;
     setCode(c);
-    saveCode(c, 'reverted');
+    saveCode(c, 'restored');
     build(c);
-    setFlash('Reverted to this version');
+    setFlash('Restored this version');
     setTimeout(() => setFlash(''), 2500);
   };
-  const restore = (v: { code: string; at: number }) => loadVersion(v.code);
-  const fmtAgo = (t: number) => {
-    const s = Math.max(0, Math.round((Date.now() - t) / 1000));
-    if (s < 60) return `${s}s ago`;
-    const m = Math.round(s / 60); if (m < 60) return `${m}m ago`;
-    const h = Math.round(m / 60); if (h < 24) return `${h}h ago`;
-    return `${Math.round(h / 24)}d ago`;
-  };
-  const codePreview = (c: string) => {
-    // the LAST meaningful line (most recent operation) distinguishes versions —
-    // the first line is always the `P = dict(...)` params, identical everywhere
-    const lines = c.split('\n').map((l) => l.trim())
-      .filter((l) => l && !l.startsWith('#') && !l.startsWith('P ') && !l.startsWith('P='));
-    const line = lines[lines.length - 1] ?? '';
-    return line.length > 44 ? line.slice(0, 44) + '…' : line;
-  };
-  const [hoverVer, setHoverVer] = useState(-1);
 
   const [ask, setAsk] = useState('');
   const [asking, setAsking] = useState(false);
@@ -533,51 +517,11 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
             </span>
           )}
           <div style={{ flex: 1 }} />
-          {modelHistory.length > 0 && (
-            <div style={{ position: 'relative' }}>
-              <button onClick={() => setShowHistory((v) => !v)}
-                style={{ ...btn, background: 'none', color: palette.textSecondary,
-                         border: `1px solid ${palette.border}` }}>
-                History ({modelHistory.length})
-              </button>
-              {showHistory && (
-                <>
-                  <div onClick={() => setShowHistory(false)}
-                       style={{ position: 'fixed', inset: 0, zIndex: 9 }} />
-                  <div style={{ position: 'absolute', top: '112%', right: 0, zIndex: 10, width: '340px',
-                                maxHeight: '60vh', overflowY: 'auto', background: palette.panelBg,
-                                border: `1px solid ${palette.border}`, borderRadius: '6px',
-                                boxShadow: '0 8px 24px rgba(0,0,0,0.4)' }}>
-                    <div style={{ padding: '8px 12px', fontSize: '11px', fontWeight: 600,
-                                  textTransform: 'uppercase', letterSpacing: '0.5px',
-                                  color: palette.textSecondary, borderBottom: `1px solid ${palette.border}`,
-                                  position: 'sticky', top: 0, background: palette.panelBg }}>
-                      Previous versions · click to restore
-                    </div>
-                    {[...modelHistory].reverse().map((v, i) => (
-                      <button key={`${v.at}-${i}`} onClick={() => restore(v)}
-                        onMouseEnter={() => setHoverVer(i)} onMouseLeave={() => setHoverVer(-1)}
-                        style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px',
-                                 background: hoverVer === i ? palette.inputBg : 'none', border: 'none',
-                                 borderBottom: `1px solid ${palette.border}`, cursor: 'pointer',
-                                 color: palette.text }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
-                          <span>{fmtAgo(v.at)}</span>
-                          <span style={{ color: palette.textSecondary }}>{v.code.length} chars</span>
-                        </div>
-                        <div style={{ fontSize: '12px', color: palette.text, marginTop: '2px',
-                                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                                      fontFamily: v.label ? 'inherit' : 'ui-monospace, Menlo, monospace',
-                                      opacity: v.label ? 1 : 0.7 }}>
-                          {v.label || codePreview(v.code) || '(no code)'}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-          )}
+          <button onClick={() => setShowVersions(true)} title="Browse and restore saved versions"
+            style={{ ...btn, background: 'none', color: palette.textSecondary,
+                     border: `1px solid ${palette.border}` }}>
+            Versions
+          </button>
           <button onClick={rebuild} disabled={status === 'building'}
             style={{ ...btn, background: palette.primaryBtn, color: '#fff', opacity: status === 'building' ? 0.6 : 1 }}>
             {status === 'building' ? 'Building…' : 'Build'}
@@ -795,7 +739,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
                 const isQ = m.kind === 'question';
                 return (
                   <div key={`${m.at}-${i}`} style={{ alignSelf: mine ? 'flex-end' : 'flex-start', maxWidth: '82%' }}>
-                    <div onClick={revertable ? () => loadVersion(m.code!) : undefined}
+                    <div onClick={revertable ? () => restoreVersion(m.code!) : undefined}
                       title={revertable ? 'Revert the model to this version' : undefined}
                       style={{ padding: '7px 11px', borderRadius: '10px', fontSize: '13px', lineHeight: 1.45,
                                whiteSpace: 'pre-wrap', color: mine ? '#fff' : palette.text,
@@ -884,6 +828,10 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
           })()}
         </div>
       </div>
+      {showVersions && getBackendId() && (
+        <PartVersionsPanel docId={getBackendId()!} currentCode={code}
+          onRestore={restoreVersion} onClose={() => setShowVersions(false)} />
+      )}
     </div>
   );
 }

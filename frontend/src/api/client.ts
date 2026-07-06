@@ -97,7 +97,7 @@ export const api = {
     });
   },
 
-  updateDocument(id: string, payload: { name?: string; data?: Record<string, unknown>; history?: unknown; project_id?: string; base_updated_at?: string }): Promise<DocumentFull> {
+  updateDocument(id: string, payload: { name?: string; data?: Record<string, unknown>; history?: unknown; project_id?: string; base_updated_at?: string; version_label?: string }): Promise<DocumentFull> {
     return request(`/documents/${id}`, {
       method: 'PUT',
       body: JSON.stringify(payload),
@@ -107,7 +107,32 @@ export const api = {
   deleteDocument(id: string): Promise<void> {
     return request(`/documents/${id}`, { method: 'DELETE' });
   },
+
+  listVersions(docId: string): Promise<VersionListItem[]> {
+    return request(`/documents/${docId}/versions`);
+  },
+
+  getVersion(docId: string, versionId: string): Promise<VersionFull> {
+    return request(`/documents/${docId}/versions/${versionId}`);
+  },
 };
+
+/** Metadata for one immutable saved version (mirrors documents/schemas.VersionListOut). */
+export interface VersionListItem {
+  id: string;
+  label: string;
+  created_at: string;
+  chars: number;
+  preview: string;
+}
+
+/** A full version snapshot, including its document data (VersionOut). */
+export interface VersionFull {
+  id: string;
+  label: string;
+  created_at: string;
+  data: Record<string, unknown>;
+}
 
 // ── 3D build (server-side CadQuery, experimental) ──
 // Mirrors backend/modeling/schemas.py. The request is self-contained: sketches

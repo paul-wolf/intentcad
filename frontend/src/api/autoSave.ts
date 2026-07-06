@@ -52,7 +52,7 @@ function hasModelCode(doc: Record<string, unknown>): boolean {
   return typeof c === 'string' && c.trim().length > 0;
 }
 
-function doSave(id: string, doc: Record<string, unknown>, history?: unknown) {
+function doSave(id: string, doc: Record<string, unknown>, history?: unknown, versionLabel?: string) {
   if (hasModelCode(doc)) {
     sawModelCode = true;
   } else if (sawModelCode) {
@@ -64,6 +64,7 @@ function doSave(id: string, doc: Record<string, unknown>, history?: unknown) {
     name: (doc as { name: string }).name,
     data: doc,
     history,
+    version_label: versionLabel,
   }).then(() => {
     addLog('info', 'Document saved');
   }).catch((err: unknown) => {
@@ -103,7 +104,7 @@ export function persistModelCode(code: string, label?: string) {
   const state = useDocumentStore.getState();
   const doc = { ...state.document } as unknown as Record<string, unknown>;
   const history = { undo: state.undoStack, redo: state.redoStack };
-  doSave(backendId, doc, history);
+  doSave(backendId, doc, history, label);
 }
 
 /** Persist a document rename NOW, directly (used by the part editor header). */
