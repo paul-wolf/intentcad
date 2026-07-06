@@ -26,6 +26,7 @@ export function setBackendId(id: string | null) {
   pendingDoc = null;
   pendingHistory = null;
   backendId = id;
+  sawModelCode = false;   // new document context — re-arm the blank-save guard
 }
 
 export function getProjectId() {
@@ -41,7 +42,24 @@ export function setProjectContext(id: string | null, name: string | null) {
   projectName = name;
 }
 
+// Guard against a blank/reset store clobbering a loaded document. Once a doc has
+// shown model code this session, a save that lacks it is almost certainly a
+// reset artifact (e.g. HMR resetting the store) — refuse it. 2D-only docs never
+// set this flag, so their saves are unaffected.
+let sawModelCode = false;
+function hasModelCode(doc: Record<string, unknown>): boolean {
+  const c = (doc as { modelCode?: unknown }).modelCode;
+  return typeof c === 'string' && c.trim().length > 0;
+}
+
 function doSave(id: string, doc: Record<string, unknown>, history?: unknown) {
+  if (hasModelCode(doc)) {
+    sawModelCode = true;
+  } else if (sawModelCode) {
+    addLog('error', 'Blocked a save that would blank the model (store reset?). Reload to recover.');
+    console.warn('[autoSave] blocked a blank-model save over a document that had model code');
+    return;
+  }
   api.updateDocument(id, {
     name: (doc as { name: string }).name,
     data: doc,
@@ -127,6 +145,11 @@ export async function flushSaveAsync(): Promise<void> {
     pendingId = null;
     pendingDoc = null;
     pendingHistory = null;
+    if (hasModelCode(doc)) sawModelCode = true;
+    else if (sawModelCode) {
+      console.warn('[autoSave] blocked a blank-model flush over a document that had model code');
+      return;
+    }
     await api.updateDocument(id, {
       name: (doc as { name: string }).name,
       data: doc,

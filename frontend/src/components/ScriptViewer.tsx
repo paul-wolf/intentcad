@@ -117,6 +117,7 @@ export function ScriptViewer({ onClose }: Props) {
   };
 
   const [code, setCode] = useState('');
+  const [flash, setFlash] = useState('');
   const [status, setStatus] = useState<'idle' | 'building' | 'done' | 'error'>('idle');
   const [message, setMessage] = useState('');
   const [warn, setWarn] = useState('');
@@ -255,7 +256,14 @@ export function ScriptViewer({ onClose }: Props) {
   // version history: restore a prior modelCode (restoring pushes the current one
   // into history too, via setModelCode, so it's reversible)
   const [showHistory, setShowHistory] = useState(false);
-  const loadVersion = (c: string) => { setShowHistory(false); setCode(c); saveCode(c, 'reverted'); build(c); };
+  const loadVersion = (c: string) => {
+    setShowHistory(false);
+    setCode(c);
+    saveCode(c, 'reverted');
+    build(c);
+    setFlash('Reverted to this version');
+    setTimeout(() => setFlash(''), 2500);
+  };
   const restore = (v: { code: string; at: number }) => loadVersion(v.code);
   const fmtAgo = (t: number) => {
     const s = Math.max(0, Math.round((Date.now() - t) / 1000));
@@ -725,7 +733,8 @@ export function ScriptViewer({ onClose }: Props) {
         {/* footer */}
         <div style={{ padding: '8px 16px', borderTop: `1px solid ${palette.border}`,
                       fontSize: '12px', color: palette.textSecondary, minHeight: '20px' }}>
-          {status === 'building' && 'Building…'}
+          {flash && <span style={{ color: palette.primaryBtn, fontWeight: 600 }}>↩ {flash}</span>}
+          {!flash && status === 'building' && 'Building…'}
           {status === 'error' && <span style={{ color: palette.danger }}>Build failed — see the editor side.</span>}
           {status === 'done' && warn && (
             <span style={{ color: palette.warning ?? '#c78a1a' }}>

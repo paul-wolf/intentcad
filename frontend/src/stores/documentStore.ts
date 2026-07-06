@@ -161,13 +161,17 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   setModelCode(code, label) {
     set((s) => {
       const prev = s.document.modelCode;
+      // Unchanged code is a no-op: never overwrite the label (the debounced
+      // 'hand edit' save fires after every edit and would otherwise clobber the
+      // AI note / param label) and never create a duplicate history entry.
+      if (prev === code) return s;
       const prevLabel = s.document.modelCodeLabel;
       // Keep a capped, labeled version history so an overwrite is recoverable and
       // each entry says what produced it. Record the version being REPLACED with
       // its own label. Coalesce a run of hand edits so typing doesn't spam it.
       const hist = s.document.modelCodeHistory ?? [];
       const coalesce = prevLabel === 'hand edit' && label === 'hand edit';
-      const nextHist = prev && prev.trim() && prev !== code && !coalesce
+      const nextHist = prev && prev.trim() && !coalesce
         ? [...hist, { code: prev, at: Date.now(), label: prevLabel }].slice(-40)
         : hist;
       return { document: { ...s.document, modelCode: code, modelCodeLabel: label, modelCodeHistory: nextHist } };
