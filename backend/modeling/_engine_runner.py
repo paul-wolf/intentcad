@@ -136,6 +136,19 @@ def _run(code: str, export: list | None = None) -> dict:
     # export only what's asked for (STEP/STL), so a plain render stays light
     exports: dict = {}
     for fmt in (export or []):
+        if fmt == "stl-parts":
+            # one STL per solid body, zipped (base64) — for printing an assembly
+            import base64
+            import io
+            import zipfile
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                for i, solid in enumerate(part.solids(), 1):
+                    with tempfile.NamedTemporaryFile(suffix=".stl", mode="r", delete=True) as fh:
+                        export_stl(solid, fh.name, ascii_format=True)
+                        zf.writestr(f"part_{i}.stl", open(fh.name).read())
+            exports[fmt] = base64.b64encode(buf.getvalue()).decode()
+            continue
         suffix = {"step": ".step", "stl": ".stl"}.get(fmt)
         if not suffix:
             continue

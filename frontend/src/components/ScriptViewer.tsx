@@ -445,14 +445,23 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   };
 
   const rebuild = () => { saveCode(code); build(code); };
-  const [exporting, setExporting] = useState<'stl' | 'step' | null>(null);
-  const doExport = async (format: 'stl' | 'step') => {
+  const [exporting, setExporting] = useState<'stl' | 'step' | 'stl-parts' | null>(null);
+  const doExport = async (format: 'stl' | 'step' | 'stl-parts') => {
     if (status !== 'done' || exporting) return;
     setExporting(format);
     try {
       const r = await buildApi.export(code, format);
-      const mime = format === 'stl' ? 'model/stl' : 'application/step';
-      downloadTextFile(r.data, `${docName}.${format}`, mime);
+      if (format === 'stl-parts') {
+        // r.data is a base64 zip of one STL per body
+        const bytes = Uint8Array.from(atob(r.data), (c) => c.charCodeAt(0));
+        const url = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }));
+        const a = document.createElement('a');
+        a.href = url; a.download = `${docName}-parts.zip`; a.click();
+        URL.revokeObjectURL(url);
+      } else {
+        const mime = format === 'stl' ? 'model/stl' : 'application/step';
+        downloadTextFile(r.data, `${docName}.${format}`, mime);
+      }
     } catch (err) {
       setMessage(String(err instanceof Error ? err.message : err));
     } finally {
@@ -545,14 +554,16 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
             style={{ ...btn, background: palette.primaryBtn, color: '#fff', opacity: status === 'building' ? 0.6 : 1 }}>
             {status === 'building' ? 'Building…' : 'Build'}
           </button>
-          {(['stl', 'step'] as const).map((f) => {
+          {(['stl', 'step', 'stl-parts'] as const).map((f) => {
             const enabled = status === 'done' && !exporting;
+            const label = f === 'stl-parts' ? 'Parts' : f.toUpperCase();
             return (
               <button key={f} onClick={() => doExport(f)} disabled={!enabled}
+                title={f === 'stl-parts' ? 'Download one STL per body, zipped (for printing an assembly)' : undefined}
                 style={{ ...btn, background: 'none', color: palette.textSecondary,
                          border: `1px solid ${palette.border}`, opacity: enabled ? 1 : 0.5,
                          cursor: enabled ? 'pointer' : 'default' }}>
-                {exporting === f ? '…' : f.toUpperCase()}
+                {exporting === f ? '…' : label}
               </button>
             );
           })}

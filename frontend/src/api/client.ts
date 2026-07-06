@@ -199,7 +199,7 @@ export const buildApi = {
   run(code: string): Promise<RunResponse> {
     return request('/build/run', { method: 'POST', body: JSON.stringify({ code }) });
   },
-  export(code: string, format: 'stl' | 'step'): Promise<{ format: string; data: string }> {
+  export(code: string, format: 'stl' | 'step' | 'stl-parts'): Promise<{ format: string; data: string }> {
     return request('/build/export', { method: 'POST', body: JSON.stringify({ code, format }) });
   },
   edit(payload: { code: string; instruction: string; context?: string; document_id?: string;
