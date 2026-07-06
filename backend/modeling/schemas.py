@@ -275,18 +275,26 @@ class UsageResponse(Schema):
     all_time: UsageTotals       # this user's AI spend across all documents
 
 
+class ChatTurn(Schema):
+    role: str           # 'user' | 'assistant'
+    text: str
+
+
 class EditRequest(Schema):
     """Ask the assistant to edit the build123d script from an instruction, with
-    the current selection (if any) as the target."""
+    the current selection (if any) as the target and recent conversation."""
     code: str
     instruction: str
-    context: str = ""      # a description of the selected face(s)/edge
-    document_id: str = ""  # to tally spend per document
+    context: str = ""              # a description of the selected face(s)/edge
+    document_id: str = ""          # to tally spend per document
+    history: list[ChatTurn] = []   # recent conversation turns
 
 
 class EditResponse(Schema):
-    code: str           # the full updated script (already validated to build)
-    note: str | None = None
+    kind: str = "edit"           # 'edit' | 'question'
+    code: str = ""               # (edit) the full updated script, validated to build
+    note: str | None = None      # (edit) one-sentence description of the change
+    question: str = ""           # (question) the assistant's clarifying question
     tokens_in: int = 0
     tokens_out: int = 0
     cost_usd: float = 0.0

@@ -81,6 +81,16 @@ export function persistModelCode(code: string) {
   doSave(backendId, doc, history);
 }
 
+/** Persist the AI modeling conversation NOW (no debounce), directly. */
+export function persistChat(chat: import('@/types/document').ChatMessage[]) {
+  useDocumentStore.getState().setChat(chat);
+  if (!backendId) return;
+  const state = useDocumentStore.getState();
+  const doc = { ...state.document } as unknown as Record<string, unknown>;
+  const history = { undo: state.undoStack, redo: state.redoStack };
+  doSave(backendId, doc, history);
+}
+
 /** Schedule a debounced save of the current document state. */
 export function requestSave() {
   const state = useDocumentStore.getState();

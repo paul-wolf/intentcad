@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
 import { buildApi, type RunResponse, type UsageResponse, type DimInfo } from '@/api/client';
-import { persistModelCode, getBackendId } from '@/api/autoSave';
+import { persistModelCode, persistChat, getBackendId } from '@/api/autoSave';
+import type { ChatMessage } from '@/types/document';
 import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim } from '@/build/webglViewer';
 import { highlightPython, DARK_SYNTAX, LIGHT_SYNTAX } from '@/build/pyHighlight';
 import { downloadTextFile } from '@/export/download';
@@ -12,6 +13,7 @@ interface Props { onClose: () => void }
 // stable empty reference so the zustand selector below doesn't return a fresh
 // array every render (which would loop: new snapshot → re-render → new snapshot)
 const NO_HISTORY: { code: string; at: number }[] = [];
+const NO_CHAT: ChatMessage[] = [];
 
 // A starter model so an empty document shows something buildable. The whole CAD
 // vocabulary is build123d's — this is just a seed to edit / for the AI to replace.
@@ -34,6 +36,7 @@ export function ScriptViewer({ onClose }: Props) {
   const isDark = useThemeStore((s) => s.theme === 'dark');
   const docName = useDocumentStore((s) => s.document.name);
   const modelHistory = useDocumentStore((s) => s.document.modelCodeHistory ?? NO_HISTORY);
+  const chat = useDocumentStore((s) => s.document.chat ?? NO_CHAT);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewerRef = useRef<Viewer | null>(null);
@@ -252,12 +255,8 @@ export function ScriptViewer({ onClose }: Props) {
   // version history: restore a prior modelCode (restoring pushes the current one
   // into history too, via setModelCode, so it's reversible)
   const [showHistory, setShowHistory] = useState(false);
-  const restore = (v: { code: string; at: number }) => {
-    setShowHistory(false);
-    setCode(v.code);
-    saveCode(v.code);
-    build(v.code);
-  };
+  const loadVersion = (c: string) => { setShowHistory(false); setCode(c); saveCode(c); build(c); };
+  const restore = (v: { code: string; at: number }) => loadVersion(v.code);
   const fmtAgo = (t: number) => {
     const s = Math.max(0, Math.round((Date.now() - t) / 1000));
     if (s < 60) return `${s}s ago`;
@@ -277,8 +276,12 @@ export function ScriptViewer({ onClose }: Props) {
 
   const [ask, setAsk] = useState('');
   const [asking, setAsking] = useState(false);
-  const [note, setNote] = useState('');
   const [usage, setUsage] = useState<UsageResponse | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = chatScrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;   // keep the latest message in view
+  }, [chat, asking]);
   const fetchUsage = () => buildApi.usage(getBackendId() ?? '').then(setUsage).catch(() => {});
   const [paramVals, setParamVals] = useState<Record<string, number>>({});
   const [sens, setSens] = useState<Record<string, DimInfo>>({});   // param -> what it controls
@@ -352,22 +355,32 @@ export function ScriptViewer({ onClose }: Props) {
     return `${edge}the ${desc(sel[0]!)} and the ${desc(sel[1]!)}`;
   };
 
-  const sendAsk = async () => {
+  const sendChat = async () => {
     const instruction = ask.trim();
     if (!instruction || asking) return;
     setAsking(true);
-    setNote('');
+    const userMsg: ChatMessage = { role: 'user', text: instruction, at: Date.now() };
+    const base = [...chat, userMsg];
+    persistChat(base);          // show the user's message immediately (and persist)
+    setAsk('');
     try {
-      const r = await buildApi.edit({ code, instruction, context: selectionContext(), document_id: getBackendId() ?? '' });
-      setCode(r.code);
-      saveCode(r.code);
-      await build(r.code);
-      setAsk('');
-      const k = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
-      setNote(`${r.note || 'Done.'} · ${k(r.tokens_in)} in / ${k(r.tokens_out)} out · $${r.cost_usd.toFixed(3)}`);
+      const history = chat.slice(-8).map((m) => ({ role: m.role, text: m.text }));
+      const r = await buildApi.edit({
+        code, instruction, context: selectionContext(),
+        document_id: getBackendId() ?? '', history,
+      });
+      if (r.kind === 'question') {
+        persistChat([...base, { role: 'assistant', kind: 'question', text: r.question, at: Date.now() }]);
+      } else {
+        persistChat([...base, { role: 'assistant', kind: 'edit', text: r.note || 'Done.', code: r.code, at: Date.now() }]);
+        setCode(r.code);
+        saveCode(r.code);
+        await build(r.code);
+      }
       fetchUsage();
     } catch (err) {
-      setNote(String(err instanceof Error ? err.message : err));
+      const msg = `⚠ ${err instanceof Error ? err.message : err}`;
+      persistChat([...base, { role: 'assistant', kind: 'question', text: msg, at: Date.now() }]);
     } finally {
       setAsking(false);
     }
@@ -645,27 +658,67 @@ export function ScriptViewer({ onClose }: Props) {
           </div>
         </div>
 
-        {/* assistant bar — edit the model in words (uses the current selection) */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px',
-                      borderTop: `1px solid ${palette.border}` }}>
+        {/* chat — the AI modeling conversation: history is fed back to the model,
+            it can ask a question instead of guessing, and each edit is a
+            checkpoint you can click to revert to */}
+        <div style={{ borderTop: `1px solid ${palette.border}`, display: 'flex', flexDirection: 'column' }}>
+          {chat.length > 0 && (
+            <div ref={chatScrollRef} style={{ maxHeight: '30vh', overflowY: 'auto', padding: '10px 16px',
+                                              display: 'flex', flexDirection: 'column', gap: '7px' }}>
+              {chat.map((m, i) => {
+                const mine = m.role === 'user';
+                const revertable = m.role === 'assistant' && m.kind === 'edit' && !!m.code;
+                const isQ = m.kind === 'question';
+                return (
+                  <div key={`${m.at}-${i}`} style={{ alignSelf: mine ? 'flex-end' : 'flex-start', maxWidth: '82%' }}>
+                    <div onClick={revertable ? () => loadVersion(m.code!) : undefined}
+                      title={revertable ? 'Revert the model to this version' : undefined}
+                      style={{ padding: '7px 11px', borderRadius: '10px', fontSize: '13px', lineHeight: 1.45,
+                               whiteSpace: 'pre-wrap', color: mine ? '#fff' : palette.text,
+                               background: mine ? palette.primaryBtn : palette.inputBg,
+                               border: `1px solid ${isQ ? (palette.warning ?? '#c78a1a') : palette.border}`,
+                               cursor: revertable ? 'pointer' : 'default' }}>
+                      {isQ && <span style={{ color: palette.warning ?? '#c78a1a', fontWeight: 700, marginRight: 5 }}>?</span>}
+                      {m.text}
+                      {revertable && (
+                        <span style={{ display: 'block', fontSize: '11px', opacity: 0.6, marginTop: 3 }}>
+                          ↩ click to revert here
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              {asking && (
+                <div style={{ alignSelf: 'flex-start', fontSize: '12px', color: palette.textSecondary }}>thinking…</div>
+              )}
+            </div>
+          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px' }}>
           <input
             value={ask}
             onChange={(e) => setAsk(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') sendAsk(); }}
-            placeholder={sel.length ? 'e.g. chamfer this edge 2mm  (targets your selection)' : 'e.g. add four M4 corner bolt holes'}
+            onKeyDown={(e) => { if (e.key === 'Enter') sendChat(); }}
+            placeholder={sel.length ? 'e.g. chamfer this edge 2mm  (targets your selection)' : 'Describe a change — e.g. add four M4 corner bolt holes'}
             disabled={asking}
             style={{ flex: 1, padding: '6px 10px', background: palette.inputBg,
                      border: `1px solid ${palette.inputBorder}`, borderRadius: '4px',
                      color: palette.text, fontSize: '13px', outline: 'none' }}
           />
-          <button onClick={sendAsk} disabled={asking || !ask.trim()}
+          <button onClick={sendChat} disabled={asking || !ask.trim()}
             style={{ padding: '6px 14px', background: palette.primaryBtn, color: '#fff', border: 'none',
                      borderRadius: '4px', fontSize: '13px', cursor: ask.trim() && !asking ? 'pointer' : 'default',
                      opacity: ask.trim() && !asking ? 1 : 0.5 }}>
             {asking ? 'Editing…' : 'Ask'}
           </button>
-          {note && <span style={{ fontSize: '12px', color: palette.textSecondary, maxWidth: '38%',
-                                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{note}</span>}
+          {chat.length > 0 && (
+            <button onClick={() => persistChat([])} title="Clear the conversation"
+              style={{ padding: '6px 10px', background: 'none', color: palette.textSecondary,
+                       border: `1px solid ${palette.border}`, borderRadius: '4px', fontSize: '12px', cursor: 'pointer' }}>
+              Clear
+            </button>
+          )}
+          </div>
         </div>
 
         {/* footer */}

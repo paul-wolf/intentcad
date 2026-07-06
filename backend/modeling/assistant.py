@@ -43,7 +43,13 @@ def _system() -> str:
         "on a face, build on Plane(face). For rounds/bevels select the edges then "
         "fillet(edges, radius=r) or chamfer(edges, length=d).\n\n"
         "If a SELECTION is given, it names the exact geometry the user means — "
-        "write a selector that resolves to it (use the given positions/kinds)."
+        "write a selector that resolves to it (use the given positions/kinds).\n\n"
+        "RECENT CONVERSATION (if shown) is prior turns with the user; use it to "
+        "resolve references like 'that hole' or 'make it bigger'. When the "
+        "instruction is genuinely ambiguous or you lack information you need "
+        "(which face? what dimension? which of several holes?), call "
+        "ask_clarification with ONE short question instead of guessing — a wrong "
+        "guess is worse than a question. Otherwise, make the edit."
     )
 
 
@@ -57,6 +63,21 @@ WRITE_TOOL = {
             "note": {"type": "string", "description": "one short sentence describing the change"},
         },
         "required": ["code", "note"],
+        "additionalProperties": False,
+    },
+}
+
+ASK_TOOL = {
+    "name": "ask_clarification",
+    "description": "Ask the user ONE short clarifying question instead of editing, when the "
+                   "instruction is ambiguous or you need information (which face, what size, "
+                   "which of several holes). Prefer this over guessing.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "question": {"type": "string", "description": "one clear, specific question for the user"},
+        },
+        "required": ["question"],
         "additionalProperties": False,
     },
 }
@@ -80,10 +101,13 @@ def _anthropic_call(system: str, user: str, tools: list[dict]) -> dict:
         )
     except anthropic.APIError as exc:
         raise AssistantError(f"Anthropic API error: {exc}") from exc
+    usage = {"input": resp.usage.input_tokens, "output": resp.usage.output_tokens}
     for block in resp.content:
         if block.type == "tool_use" and block.name == "write_script":
-            out = dict(block.input)
-            out["usage"] = {"input": resp.usage.input_tokens, "output": resp.usage.output_tokens}
+            out = dict(block.input); out["kind"] = "edit"; out["usage"] = usage
+            return out
+        if block.type == "tool_use" and block.name == "ask_clarification":
+            out = dict(block.input); out["kind"] = "question"; out["usage"] = usage
             return out
     raise AssistantError("the model did not return a script")
 
@@ -92,11 +116,16 @@ def edit_script(
     code: str,
     instruction: str,
     context: str = "",
+    history: list[dict] | None = None,
     *,
     llm: Callable[[str, str, list[dict]], dict] | None = None,
 ) -> dict:
-    """Edit `code` per `instruction` (with optional selection `context`). Returns
-    {code, note}. Validates by building it; one corrective retry on a build error."""
+    """Turn `instruction` into either an edit of `code` or a clarifying question.
+
+    `history` is recent conversation turns ([{role, text}, …]) so references
+    across turns resolve. Returns {kind: "edit", code, note, tokens…} for an
+    edit (validated to build, one corrective retry) or {kind: "question",
+    question, tokens…} when the model asks for clarification."""
     instruction = (instruction or "").strip()
     if not instruction:
         raise AssistantError("empty instruction")
@@ -104,20 +133,33 @@ def edit_script(
 
     def prompt(extra: str = "") -> str:
         sel = f"SELECTION: {context}\n\n" if context.strip() else ""
+        convo = ""
+        if history:
+            turns = []
+            for h in history[-8:]:
+                who = "USER" if h.get("role") == "user" else "ASSISTANT"
+                turns.append(f"{who}: {h.get('text', '')}")
+            convo = "RECENT CONVERSATION:\n" + "\n".join(turns) + "\n\n"
         return (
             f"CURRENT SCRIPT:\n```python\n{code}\n```\n\n"
-            f"{sel}INSTRUCTION: {instruction}\n{extra}"
+            f"{convo}{sel}INSTRUCTION: {instruction}\n{extra}"
         )
 
     tok_in = tok_out = 0
 
     def call(extra: str = "") -> dict:
         nonlocal tok_in, tok_out
-        o = llm(_system(), prompt(extra), [WRITE_TOOL])
+        o = llm(_system(), prompt(extra), [WRITE_TOOL, ASK_TOOL])
         u = o.get("usage") or {}
         tok_in += u.get("input", 0)
         tok_out += u.get("output", 0)
         return o
+
+    def cost() -> dict:
+        return {
+            "tokens_in": tok_in, "tokens_out": tok_out,
+            "cost_usd": round(tok_in * _IN_PER_TOK + tok_out * _OUT_PER_TOK, 4),
+        }
 
     def validate(script: str) -> None:
         r = run_script(script)  # raises EngineError if nothing builds
@@ -125,6 +167,9 @@ def edit_script(
             raise EngineError(r["warning"])
 
     out = call()
+    if out.get("kind") == "question":
+        return {"kind": "question", "question": out.get("question", ""), **cost()}
+
     new_code = out.get("code", "")
     try:
         validate(new_code)
@@ -132,16 +177,12 @@ def edit_script(
         out = call(
             f"\nYour previous script failed to build with this error:\n{exc}\n"
             "Return a corrected complete script.")
+        if out.get("kind") == "question":
+            return {"kind": "question", "question": out.get("question", ""), **cost()}
         new_code = out.get("code", "")
         try:
             validate(new_code)
         except EngineError as exc2:
             raise AssistantError(f"couldn't produce a script that builds: {exc2}") from exc2
 
-    return {
-        "code": new_code,
-        "note": out.get("note", ""),
-        "tokens_in": tok_in,
-        "tokens_out": tok_out,
-        "cost_usd": round(tok_in * _IN_PER_TOK + tok_out * _OUT_PER_TOK, 4),
-    }
+    return {"kind": "edit", "code": new_code, "note": out.get("note", ""), **cost()}

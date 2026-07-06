@@ -200,7 +200,8 @@ export const buildApi = {
   export(code: string, format: 'stl' | 'step'): Promise<{ format: string; data: string }> {
     return request('/build/export', { method: 'POST', body: JSON.stringify({ code, format }) });
   },
-  edit(payload: { code: string; instruction: string; context?: string; document_id?: string }): Promise<EditResponse> {
+  edit(payload: { code: string; instruction: string; context?: string; document_id?: string;
+                  history?: { role: string; text: string }[] }): Promise<EditResponse> {
     return request('/build/edit', { method: 'POST', body: JSON.stringify(payload) });
   },
   usage(documentId: string): Promise<UsageResponse> {
@@ -224,7 +225,8 @@ export interface DimInfo {
 }
 
 export interface EditResponse {
-  code: string; note?: string;
+  kind: 'edit' | 'question';
+  code: string; note?: string; question: string;
   tokens_in: number; tokens_out: number; cost_usd: number;
 }
 

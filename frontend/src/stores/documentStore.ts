@@ -38,6 +38,7 @@ interface DocumentStore {
   setMetadata(metadata: Partial<DocumentMetadata>): void;
   setBuildFeatures(features: import('@/api/client').BuildFeature[]): void;
   setModelCode(code: string): void;
+  setChat(chat: import('@/types/document').ChatMessage[]): void;
 
   // Undo/Redo
   beginTransaction(label: string): void;
@@ -168,6 +169,10 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
         : hist;
       return { document: { ...s.document, modelCode: code, modelCodeHistory: nextHist } };
     });
+  },
+
+  setChat(chat) {
+    set((s) => ({ document: { ...s.document, chat } }));
   },
 
   setMetadata(metadata) {

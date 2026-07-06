@@ -106,8 +106,9 @@ def edit_model(request, payload: EditRequest):
     err = require_auth(request)
     if err:
         return err
+    history = [{"role": t.role, "text": t.text} for t in payload.history]
     try:
-        r = edit_script(payload.code, payload.instruction, payload.context)
+        r = edit_script(payload.code, payload.instruction, payload.context, history)
     except AssistantError as exc:
         return JsonResponse({"message": str(exc)}, status=422)
     AiEdit.objects.create(
@@ -117,7 +118,8 @@ def edit_model(request, payload: EditRequest):
         cost_usd=r.get("cost_usd", 0.0),
     )
     return EditResponse(
-        code=r["code"], note=r.get("note"),
+        kind=r.get("kind", "edit"),
+        code=r.get("code", ""), note=r.get("note"), question=r.get("question", ""),
         tokens_in=r.get("tokens_in", 0), tokens_out=r.get("tokens_out", 0),
         cost_usd=r.get("cost_usd", 0.0),
     )

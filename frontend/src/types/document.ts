@@ -225,4 +225,15 @@ export interface Document {
   modelCode?: string;
   /** Capped history of prior modelCode versions, so an overwrite is recoverable. */
   modelCodeHistory?: { code: string; at: number }[];
+  /** The AI modeling conversation (persisted). Assistant 'edit' turns carry the
+   *  resulting script as a checkpoint you can revert to. */
+  chat?: ChatMessage[];
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  kind?: 'edit' | 'question';   // assistant turns
+  text: string;                 // instruction, note, or question
+  code?: string;                // (assistant edit) the resulting script — a checkpoint
+  at: number;
 }
