@@ -98,6 +98,19 @@ export function DocumentListPage() {
     catch (err) { fail("Couldn't delete project", err); }
   };
 
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const commitTitle = async () => {
+    const trimmed = titleDraft.trim();
+    setEditingTitle(false);
+    if (!projectId || !trimmed || trimmed === projectName) return;
+    try {
+      await projectApi.updateProject(projectId, { name: trimmed });
+      setProjectName(trimmed);
+      setProjectContext(projectId, trimmed);   // keep breadcrumb / autosave context in sync
+    } catch (err) { fail("Couldn't rename project", err); }
+  };
+
   const commitRename = async () => {
     if (!editingId || !editName.trim()) { setEditingId(null); return; }
     const trimmed = editName.trim();
@@ -170,7 +183,18 @@ export function DocumentListPage() {
           {/* Header */}
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 20, marginBottom: 26 }}>
             <div>
-              <h1 style={{ margin: 0, fontSize: '26px', fontWeight: 700, letterSpacing: '-0.5px', color: t.text }}>{projectName}</h1>
+              {editingTitle ? (
+                <input value={titleDraft} autoFocus
+                  onChange={(e) => setTitleDraft(e.target.value)}
+                  onBlur={commitTitle}
+                  onKeyDown={(e) => { if (e.key === 'Enter') commitTitle(); if (e.key === 'Escape') setEditingTitle(false); }}
+                  style={{ fontSize: '26px', fontWeight: 700, letterSpacing: '-0.5px', color: t.text, fontFamily: SANS,
+                           background: t.appBg, border: `1px solid ${t.accent}`, borderRadius: 8, padding: '2px 10px', outline: 'none' }} />
+              ) : (
+                <h1 onDoubleClick={() => { setTitleDraft(projectName); setEditingTitle(true); }}
+                  title="Double-click to rename"
+                  style={{ margin: 0, fontSize: '26px', fontWeight: 700, letterSpacing: '-0.5px', color: t.text, cursor: 'text' }}>{projectName}</h1>
+              )}
               <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 10, fontFamily: MONO, fontSize: '12px', color: t.textDim }}>
                 <span>{docs.length} documents</span>
                 <span style={{ color: t.border2 }}>|</span>
