@@ -36,6 +36,15 @@ export function DocumentListPage() {
   const [filter, setFilter] = useState<Filter>('all');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const fail = (what: string, err: unknown) => {
+    const m = err instanceof Error ? err.message : String(err);
+    const short = m.length > 160 ? m.slice(0, 160) + '…' : m;
+    console.error(what, err);
+    setNotice(`${what}: ${short}`);
+    setTimeout(() => setNotice(null), 7000);
+  };
 
   const ownerName = [user?.first_name, user?.last_name].filter(Boolean).join(' ') || user?.username || '';
   const ownerInitials = ((user?.first_name?.[0] ?? '') + (user?.last_name?.[0] ?? '') || user?.username?.slice(0, 2) || '?').toUpperCase();
@@ -73,12 +82,12 @@ export function DocumentListPage() {
       setBackendId(full.id);
       setProjectContext(projectId ?? null, projectName);
       navigate(d.kind === 'part' ? `/part/${d.id}` : `/edit/${d.id}`);
-    } catch (err) { console.error('Failed to load document:', err); }
+    } catch (err) { fail("Couldn't open document", err); }
   };
 
   const handleDelete = async (id: string) => {
     try { await api.deleteDocument(id); setDocs((prev) => prev.filter((d) => d.id !== id)); }
-    catch (err) { console.error('Failed to delete document:', err); }
+    catch (err) { fail("Couldn't delete document", err); }
   };
 
   const deleteProject = async () => {
@@ -86,7 +95,7 @@ export function DocumentListPage() {
     const n = docs.length;
     if (!window.confirm(`Delete project "${projectName}"${n ? ` and its ${n} document${n === 1 ? '' : 's'}` : ''}? This cannot be undone.`)) return;
     try { await projectApi.deleteProject(projectId); navigate('/'); }
-    catch (err) { console.error('Failed to delete project:', err); }
+    catch (err) { fail("Couldn't delete project", err); }
   };
 
   const commitRename = async () => {
@@ -95,7 +104,7 @@ export function DocumentListPage() {
     try {
       await api.updateDocument(editingId, { name: trimmed });
       setDocs((prev) => prev.map((d) => (d.id === editingId ? { ...d, name: trimmed } : d)));
-    } catch (err) { console.error('Failed to rename:', err); }
+    } catch (err) { fail("Couldn't rename", err); }
     setEditingId(null);
   };
 
@@ -136,6 +145,17 @@ export function DocumentListPage() {
   return (
     <div style={{ height: '100%', overflow: 'auto', background: t.appBg, color: t.text, fontFamily: SANS }}>
       <TopNav />
+
+      {notice && (
+        <div onClick={() => setNotice(null)} title="Dismiss"
+          style={{ position: 'fixed', top: 66, left: '50%', transform: 'translateX(-50%)', zIndex: 50,
+                   maxWidth: 620, padding: '11px 16px', background: t.surface, color: t.text,
+                   border: `1px solid ${t.danger}`, borderRadius: 10, boxShadow: t.shadow,
+                   fontFamily: SANS, fontSize: '13px', cursor: 'pointer', display: 'flex', gap: 10, alignItems: 'center' }}>
+          <span style={{ color: t.danger, fontWeight: 700, fontSize: '15px' }}>!</span>
+          <span>{notice}</span>
+        </div>
+      )}
 
       {!loading && (
         <div style={{ maxWidth: 1200, margin: '0 auto', padding: '28px 28px 72px' }}>

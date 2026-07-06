@@ -1,5 +1,6 @@
 from uuid import UUID
 
+from django.db import connection
 from django.db.models import Count
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
@@ -95,6 +96,14 @@ def delete_project(request, project_id: UUID):
     err = require_project_access(request, project)
     if err:
         return err
+    # `parts_part` is a legacy orphan table (pre-pivot parts) that still FK-
+    # references projects with no cascade and is not managed by any model, so
+    # project.delete() can't clean it up. Remove its rows for this project first.
+    if connection.vendor == "postgresql":
+        with connection.cursor() as cur:
+            cur.execute("SELECT to_regclass('parts_part')")
+            if cur.fetchone()[0] is not None:
+                cur.execute("DELETE FROM parts_part WHERE project_id = %s", [str(project_id)])
     project.delete()
     return 204, None
 
