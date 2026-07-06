@@ -65,3 +65,9 @@ export function createEmptyDocument(name: string): Document {
     parameters: {},
   };
 }
+
+/** A new 3D part document. It still carries an empty sketch (so it validates and
+ *  can reference sketches later); `type: 'part'` marks it for the list + routing. */
+export function createEmptyPart(name: string): Document {
+  return { ...createEmptyDocument(name), type: 'part' };
+}

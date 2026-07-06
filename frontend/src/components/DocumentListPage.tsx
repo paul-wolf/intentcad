@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useThemeStore } from '@/theme';
-import { createEmptyDocument, migrateDocument, generateDateName } from '@/utils/document';
+import { createEmptyDocument, createEmptyPart, migrateDocument, generateDateName } from '@/utils/document';
 import { api, type DocumentListItem } from '@/api/cachedClient';
 import { setBackendId, setProjectContext } from '@/api/autoSave';
 import type { Document } from '@/types/document';
@@ -54,28 +54,31 @@ export function DocumentListPage() {
 
   useEffect(() => { fetchDocs(); }, [fetchDocs]);
 
-  const handleNew = async () => {
-    const name = generateDateName(docs.map((d) => d.name));
-    const doc = createEmptyDocument(name);
+  const createAndOpen = async (doc: Document, route: (id: string) => string) => {
     setDocument(doc);
     try {
       const saved = await api.createDocument(doc.name, doc as unknown as Record<string, unknown>, projectId);
       setBackendId(saved.id);
       setProjectContext(projectId ?? null, projectName);
-      navigate(`/edit/${saved.id}`);
+      navigate(route(saved.id));
     } catch {
       setBackendId(null);
-      navigate(`/edit/${doc.id}`);
+      navigate(route(doc.id));
     }
   };
 
-  const handleOpen = async (id: string) => {
+  const handleNew = () =>
+    createAndOpen(createEmptyDocument(generateDateName(docs.map((d) => d.name))), (id) => `/edit/${id}`);
+  const handleNewPart = () =>
+    createAndOpen(createEmptyPart(generateDateName(docs.map((d) => d.name))), (id) => `/part/${id}`);
+
+  const handleOpen = async (id: string, kind?: string) => {
     try {
       const full = await api.getDocument(id);
       setDocument(migrateDocument(full.data as unknown as Document));
       setBackendId(full.id);
       setProjectContext(projectId ?? null, projectName);
-      navigate(`/edit/${id}`);
+      navigate(kind === 'part' ? `/part/${id}` : `/edit/${id}`);
     } catch (err) {
       console.error('Failed to load document:', err);
     }
@@ -124,6 +127,69 @@ export function DocumentListPage() {
 
   const lowerSearch = search.toLowerCase();
   const filteredDocs = lowerSearch ? docs.filter((d) => d.name.toLowerCase().includes(lowerSearch)) : docs;
+  const parts = filteredDocs.filter((d) => d.kind === 'part');
+  const sketches = filteredDocs.filter((d) => d.kind !== 'part');
+
+  const renderDoc = (d: DocumentListItem) => (
+    <div
+      key={d.id}
+      style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px',
+               background: palette.panelBg, borderRadius: '4px', cursor: 'pointer' }}
+      onClick={() => {
+        if (editingId === d.id) return;
+        if (clickTimer.current) clearTimeout(clickTimer.current);
+        clickTimer.current = setTimeout(() => { clickTimer.current = null; handleOpen(d.id, d.kind); }, 250);
+      }}
+      onDoubleClick={() => {
+        if (clickTimer.current) { clearTimeout(clickTimer.current); clickTimer.current = null; }
+        startRename(d.id, d.name);
+      }}
+    >
+      {d.kind === 'part' ? (
+        <div style={{ width: 56, height: 42, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: '20px', background: palette.background, borderRadius: '3px' }}>⬛</div>
+      ) : (
+        <DocumentThumbnail documentId={d.id} width={56} height={42}
+          background={palette.background} stroke={palette.line} />
+      )}
+      {editingId === d.id ? (
+        <input
+          style={{ flex: 1, background: palette.panelBg, border: `1px solid ${palette.textSecondary}`,
+                   borderRadius: '2px', color: palette.text, fontSize: '14px', padding: '2px 6px', outline: 'none' }}
+          value={editName}
+          onChange={(e) => setEditName(e.target.value)}
+          onBlur={commitRename}
+          onKeyDown={(e) => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setEditingId(null); }}
+          onClick={(e) => e.stopPropagation()}
+          autoFocus
+        />
+      ) : (
+        <span style={{ flex: 1, color: palette.text, fontSize: '14px' }}>{d.name}</span>
+      )}
+      <span style={{ fontSize: '12px', color: palette.textSecondary, whiteSpace: 'nowrap' }}>
+        {relativeTime(d.updated_at)}
+      </span>
+      <button
+        style={{ background: 'none', border: 'none', color: palette.danger, cursor: 'pointer',
+                 fontSize: '18px', padding: '0 4px', lineHeight: 1 }}
+        onClick={(e) => { e.stopPropagation(); handleDelete(d.id); }}
+      >
+        &times;
+      </button>
+    </div>
+  );
+
+  const section = (title: string, list: DocumentListItem[]) => list.length > 0 && (
+    <div style={{ marginBottom: '24px' }}>
+      <div style={{ fontSize: '13px', color: palette.textSecondary, fontWeight: 600,
+                    textTransform: 'uppercase' as const, letterSpacing: '0.5px', marginBottom: '8px' }}>
+        {title}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column' as const, gap: '4px' }}>
+        {list.map(renderDoc)}
+      </div>
+    </div>
+  );
 
   const btnStyle: React.CSSProperties = {
     padding: '8px 18px',
@@ -187,7 +253,16 @@ export function DocumentListPage() {
               </span>
             )}
           </div>
-          <button style={btnStyle} onClick={handleNew}>+ New Sketch</button>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button style={btnStyle} onClick={handleNewPart}>+ New Part</button>
+            <button
+              style={{ ...btnStyle, background: palette.panelBg, color: palette.text,
+                       border: `1px solid ${palette.textSecondary}` }}
+              onClick={handleNew}
+            >
+              + New Sketch
+            </button>
+          </div>
         </div>
 
         {error === 'offline' && (
@@ -218,101 +293,12 @@ export function DocumentListPage() {
           />
         )}
 
-        {/* Sketches */}
-        {!loading && filteredDocs.length > 0 && (
-          <div style={{ marginBottom: '24px' }}>
-            <div style={{ fontSize: '13px', color: palette.textSecondary, fontWeight: 600, textTransform: 'uppercase' as const, letterSpacing: '0.5px', marginBottom: '8px' }}>
-              Sketches
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column' as const, gap: '4px' }}>
-              {filteredDocs.map((d) => (
-                <div
-                  key={d.id}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '10px',
-                    padding: '8px 12px',
-                    background: palette.panelBg,
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                  }}
-                  onClick={() => {
-                    if (editingId === d.id) return;
-                    if (clickTimer.current) clearTimeout(clickTimer.current);
-                    clickTimer.current = setTimeout(() => {
-                      clickTimer.current = null;
-                      handleOpen(d.id);
-                    }, 250);
-                  }}
-                  onDoubleClick={() => {
-                    if (clickTimer.current) { clearTimeout(clickTimer.current); clickTimer.current = null; }
-                    startRename(d.id, d.name);
-                  }}
-                >
-                  <DocumentThumbnail
-                    documentId={d.id}
-                    width={56}
-                    height={42}
-                    background={palette.background}
-                    stroke={palette.line}
-                  />
-                  {editingId === d.id ? (
-                    <input
-                      style={{
-                        flex: 1,
-                        background: palette.panelBg,
-                        border: `1px solid ${palette.textSecondary}`,
-                        borderRadius: '2px',
-                        color: palette.text,
-                        fontSize: '14px',
-                        padding: '2px 6px',
-                        outline: 'none',
-                      }}
-                      value={editName}
-                      onChange={(e) => setEditName(e.target.value)}
-                      onBlur={commitRename}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') commitRename();
-                        if (e.key === 'Escape') setEditingId(null);
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                      autoFocus
-                    />
-                  ) : (
-                    <span style={{ flex: 1, color: palette.text, fontSize: '14px' }}>
-                      {d.name}
-                    </span>
-                  )}
-                  <span style={{ fontSize: '12px', color: palette.textSecondary, whiteSpace: 'nowrap' }}>
-                    {relativeTime(d.updated_at)}
-                  </span>
-                  <button
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      color: palette.danger,
-                      cursor: 'pointer',
-                      fontSize: '18px',
-                      padding: '0 4px',
-                      lineHeight: 1,
-                    }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDelete(d.id);
-                    }}
-                  >
-                    &times;
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        {!loading && section('Parts', parts)}
+        {!loading && section('Sketches', sketches)}
 
         {!loading && docs.length === 0 && (
           <p style={{ fontSize: '13px', color: palette.textSecondary }}>
-            No documents yet. Create a sketch to get started.
+            No documents yet. Create a part or a sketch to get started.
           </p>
         )}
       </div>

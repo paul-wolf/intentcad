@@ -34,3 +34,13 @@ class DocumentListOut(Schema):
     project_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
+    kind: str = "sketch"   # 'part' | 'sketch' — so the list can group without fetching each doc
+
+    @staticmethod
+    def resolve_kind(obj) -> str:
+        data = obj.data if isinstance(obj.data, dict) else {}
+        t = data.get("type")
+        if t in ("part", "sketch"):
+            return t
+        mc = data.get("modelCode")
+        return "part" if isinstance(mc, str) and mc.strip() else "sketch"

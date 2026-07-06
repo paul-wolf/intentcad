@@ -4,6 +4,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { ProjectListPage } from '@/components/ProjectListPage';
 import { DocumentListPage } from '@/components/DocumentListPage';
 import { EditorPage } from '@/components/EditorPage';
+import { PartEditorPage } from '@/components/PartEditorPage';
 import { LoginPage } from '@/components/LoginPage';
 import { PasswordResetPage } from '@/components/PasswordResetPage';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
@@ -26,6 +27,7 @@ export function App() {
         <Route path="/" element={<ProtectedRoute><ProjectListPage /></ProtectedRoute>} />
         <Route path="/project/:projectId" element={<ProtectedRoute><DocumentListPage /></ProtectedRoute>} />
         <Route path="/edit/:id" element={<ProtectedRoute><EditorPage /></ProtectedRoute>} />
+        <Route path="/part/:id" element={<ProtectedRoute><PartEditorPage /></ProtectedRoute>} />
         <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
         <Route path="/manage/users" element={<ProtectedRoute requireStaff><UsersPage /></ProtectedRoute>} />
         <Route path="/manage/organisations" element={<ProtectedRoute requireSuperuser><OrganisationsPage /></ProtectedRoute>} />

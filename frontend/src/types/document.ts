@@ -215,6 +215,8 @@ export interface DocumentMetadata {
 export interface Document {
   id: string;
   name: string;
+  /** Whether this document is primarily a 3D part or a 2D sketch. */
+  type?: 'sketch' | 'part';
   sketches: Sketch[];
   activeSketchId: string;
   parameters?: Record<string, number>;
