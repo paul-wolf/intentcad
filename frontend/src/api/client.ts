@@ -97,7 +97,7 @@ export const api = {
     });
   },
 
-  updateDocument(id: string, payload: { name?: string; data?: Record<string, unknown>; history?: unknown; project_id?: string }): Promise<DocumentFull> {
+  updateDocument(id: string, payload: { name?: string; data?: Record<string, unknown>; history?: unknown; project_id?: string; base_updated_at?: string }): Promise<DocumentFull> {
     return request(`/documents/${id}`, {
       method: 'PUT',
       body: JSON.stringify(payload),

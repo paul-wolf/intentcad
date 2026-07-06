@@ -67,7 +67,13 @@ function doSave(id: string, doc: Record<string, unknown>, history?: unknown) {
   }).then(() => {
     addLog('info', 'Document saved');
   }).catch((err: unknown) => {
-    if (err instanceof Error && (err as Error & { queued?: boolean }).queued) {
+    if (err instanceof Error && (err as Error & { conflict?: boolean }).conflict) {
+      // The server had a newer version (another tab saved). We did NOT overwrite it.
+      // Our local edits are preserved in this tab's memory; the store still holds them.
+      addLog('error',
+        'This part was changed in another tab/session, so this save was refused to protect that newer work. Reload to see the latest — your unsaved changes here are still on screen.');
+      console.warn('[autoSave] save refused: newer version exists on the server (conflict)');
+    } else if (err instanceof Error && (err as Error & { queued?: boolean }).queued) {
       addLog('info', 'Offline — changes saved locally, will sync when reconnected');
     } else {
       console.error('[autoSave] Save failed:', err);
@@ -186,18 +192,23 @@ function scheduleSave(doc: Record<string, unknown>, history?: unknown) {
 }
 
 export function startAutoSave() {
-  // Fire once immediately for the current state (covers migration on load)
-  const current = useDocumentStore.getState();
-  if (backendId) {
-    const history = { undo: current.undoStack, redo: current.redoStack };
-    scheduleSave(current.document as unknown as Record<string, unknown>, history);
-  }
-
+  // Deliberately NO save-on-mount and NO periodic/timer writer here.
+  //
+  // A part (the build123d model script) is persisted ONLY at explicit version
+  // boundaries — an AI edit (persistModelCode), a chat turn (persistChat), or a
+  // fresh build thumbnail (persistThumbnail). Nothing writes a part on a timer,
+  // so an idle or stale tab can never quietly overwrite newer work.
+  //
+  // The legacy 2D sketch editor still coalesces its own explicit requestSave()
+  // calls (user drawing actions) through the debounce below; those docs have no
+  // modelCode, so the subscription skips parts entirely.
   const handleBeforeUnload = () => flushSave();
   window.addEventListener('beforeunload', handleBeforeUnload);
 
   const unsub = useDocumentStore.subscribe((state) => {
     if (!backendId) return;
+    // Parts never auto-save from store changes — only via explicit persist* calls.
+    if (hasModelCode(state.document as unknown as Record<string, unknown>)) return;
     const history = { undo: state.undoStack, redo: state.redoStack };
     scheduleSave(state.document as unknown as Record<string, unknown>, history);
   });

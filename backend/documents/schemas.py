@@ -16,7 +16,9 @@ class DocumentUpdateIn(Schema):
     name: str | None = None
     data: dict[str, Any] | None = None
     history: dict[str, Any] | None = None
-    project_id: UUID | None = None   # set to move the document to another project
+    project_id: UUID | None = None       # set to move the document to another project
+    base_updated_at: str | None = None   # the updated_at the client last saw (concurrency)
+    version_label: str = ""              # optional label for the version snapshot
 
 
 class DocumentOut(Schema):
@@ -27,6 +29,37 @@ class DocumentOut(Schema):
     project_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class VersionListOut(Schema):
+    """Metadata for one immutable version (no full data — kept light for the list)."""
+    id: UUID
+    label: str
+    created_at: datetime
+    chars: int = 0
+    preview: str = ""
+
+    @staticmethod
+    def resolve_chars(obj) -> int:
+        d = obj.data if isinstance(obj.data, dict) else {}
+        return len(d.get("modelCode") or "")
+
+    @staticmethod
+    def resolve_preview(obj) -> str:
+        d = obj.data if isinstance(obj.data, dict) else {}
+        code = d.get("modelCode") or ""
+        for line in code.splitlines():
+            s = line.strip()
+            if s and not s.startswith("#") and not s.startswith("P ") and not s.startswith("P="):
+                return s[:60]
+        return ""
+
+
+class VersionOut(Schema):
+    id: UUID
+    label: str
+    created_at: datetime
+    data: dict[str, Any]
 
 
 class DocumentListOut(Schema):

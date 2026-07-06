@@ -150,7 +150,9 @@ export const api = {
     await db.documents.put(optimistic);
 
     try {
-      const result = await rawApi.updateDocument(id, payload);
+      // Send the version we last saw so the server can reject a stale overwrite.
+      const base = existing?.server_confirmed_updated_at ?? existing?.updated_at;
+      const result = await rawApi.updateDocument(id, base ? { ...payload, base_updated_at: base } : payload);
       // Update IDB with the server's confirmed timestamp
       await db.documents.put({
         id: result.id,
@@ -166,6 +168,19 @@ export const api = {
       return result;
     } catch (err) {
       const msg = String(err);
+      if (msg.includes('API 409')) {
+        // Stale write refused by the server — DON'T overwrite. Pull the server's
+        // current version into IDB so local reflects the truth, and surface it.
+        try {
+          const server = await rawApi.getDocument(id);
+          await db.documents.put({
+            id: server.id, name: server.name, data: server.data, history: server.history,
+            project_id: server.project_id, updated_at: server.updated_at,
+            server_confirmed_updated_at: server.updated_at,
+          });
+        } catch { /* ignore refetch failure */ }
+        throw Object.assign(new Error('conflict'), { conflict: true });
+      }
       if (msg.includes('API 4')) {
         // 4xx — validation/auth error, queuing would not help
         throw err;
