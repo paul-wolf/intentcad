@@ -11,6 +11,7 @@ export interface Tokens {
   text: string; textDim: string; textMute: string;
   accent: string; accentSoft: string;
   part: string; partSoft: string; sketch: string; sketchSoft: string;
+  ok: string; okSoft: string; violet: string; violetSoft: string;
   danger: string; grid: string; thumbBg: string; thumbLine: string; shadow: string;
 }
 
@@ -22,6 +23,7 @@ const DARK: Tokens = {
   border: '#243044', border2: '#33415a', text: '#e7edf6', textDim: '#98a6bd', textMute: '#5e6c83',
   accent: '#4c8dff', accentSoft: 'rgba(76,141,255,0.14)',
   part: '#e6a54c', partSoft: 'rgba(230,165,76,0.15)', sketch: '#4c8dff', sketchSoft: 'rgba(76,141,255,0.14)',
+  ok: '#3ecf8e', okSoft: 'rgba(62,207,142,0.14)', violet: '#a98bff', violetSoft: 'rgba(169,139,255,0.14)',
   danger: '#f2555a', grid: 'rgba(255,255,255,0.05)', thumbBg: '#0f1828', thumbLine: '#8aa0c4',
   shadow: '0 14px 34px -14px rgba(0,0,0,0.65)',
 };
@@ -31,6 +33,7 @@ const LIGHT: Tokens = {
   border: '#dde4ee', border2: '#c6d1e0', text: '#16212e', textDim: '#566274', textMute: '#8592a5',
   accent: '#2f6fe0', accentSoft: 'rgba(47,111,224,0.10)',
   part: '#c67d1e', partSoft: 'rgba(198,125,30,0.12)', sketch: '#2f6fe0', sketchSoft: 'rgba(47,111,224,0.10)',
+  ok: '#12a06a', okSoft: 'rgba(18,160,106,0.12)', violet: '#6d4fd6', violetSoft: 'rgba(109,79,214,0.11)',
   danger: '#d63a3f', grid: 'rgba(20,45,90,0.06)', thumbBg: '#f6f9fc', thumbLine: '#4a627f',
   shadow: '0 16px 30px -16px rgba(30,50,90,0.28)',
 };
