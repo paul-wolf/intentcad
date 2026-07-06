@@ -203,7 +203,7 @@ export const buildApi = {
     return request('/build/export', { method: 'POST', body: JSON.stringify({ code, format }) });
   },
   edit(payload: { code: string; instruction: string; context?: string; document_id?: string;
-                  history?: { role: string; text: string }[] }): Promise<EditResponse> {
+                  history?: { role: string; text: string }[]; model?: string }): Promise<EditResponse> {
     return request('/build/edit', { method: 'POST', body: JSON.stringify(payload) });
   },
   usage(documentId: string): Promise<UsageResponse> {

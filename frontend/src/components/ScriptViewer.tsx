@@ -332,6 +332,8 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
 
   const [ask, setAsk] = useState('');
   const [asking, setAsking] = useState(false);
+  const [model, setModel] = useState<string>(() => localStorage.getItem('intentcad-edit-model') || 'claude-opus-4-8');
+  const pickModel = (m: string) => { setModel(m); try { localStorage.setItem('intentcad-edit-model', m); } catch { /* ignore */ } };
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -423,7 +425,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
       const history = chat.slice(-8).map((m) => ({ role: m.role, text: m.text }));
       const r = await buildApi.edit({
         code, instruction, context: selectionContext(),
-        document_id: getBackendId() ?? '', history,
+        document_id: getBackendId() ?? '', history, model,
       });
       if (r.kind === 'question') {
         persistChat([...base, { role: 'assistant', kind: 'question', text: r.question, at: Date.now() }]);
@@ -776,6 +778,13 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
                      border: `1px solid ${palette.inputBorder}`, borderRadius: '4px',
                      color: palette.text, fontSize: '13px', outline: 'none' }}
           />
+          <select value={model} onChange={(e) => pickModel(e.target.value)} disabled={asking}
+            title="Model for AI edits — Fable 5 is stronger (and pricier); use it for hard tasks"
+            style={{ padding: '6px 8px', background: palette.inputBg, color: palette.textSecondary,
+                     border: `1px solid ${palette.inputBorder}`, borderRadius: '4px', fontSize: '12px', cursor: 'pointer' }}>
+            <option value="claude-opus-4-8">Opus 4.8</option>
+            <option value="claude-fable-5">Fable 5 ✦</option>
+          </select>
           <button onClick={sendChat} disabled={asking || !ask.trim()}
             style={{ padding: '6px 14px', background: palette.primaryBtn, color: '#fff', border: 'none',
                      borderRadius: '4px', fontSize: '13px', cursor: ask.trim() && !asking ? 'pointer' : 'default',

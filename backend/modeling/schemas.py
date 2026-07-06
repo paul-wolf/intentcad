@@ -288,6 +288,7 @@ class EditRequest(Schema):
     context: str = ""              # a description of the selected face(s)/edge
     document_id: str = ""          # to tally spend per document
     history: list[ChatTurn] = []   # recent conversation turns
+    model: str = ""                # optional LLM override (else the default)
 
 
 class EditResponse(Schema):

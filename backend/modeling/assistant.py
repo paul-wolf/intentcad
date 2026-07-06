@@ -14,10 +14,15 @@ from typing import Callable
 
 from .engine import EngineError, run_script
 
-MODEL = "claude-opus-4-8"
-# Opus 4.8 pricing, USD per token (input $5/M, output $25/M)
-_IN_PER_TOK = 5.0 / 1_000_000
-_OUT_PER_TOK = 25.0 / 1_000_000
+MODEL = "claude-opus-4-8"   # default: fast + capable
+
+# selectable models and their USD-per-token pricing (input, output).
+# Fable 5 is Anthropic's most capable model — for the occasional hard edit;
+# roughly 2x the cost and slower, so it's opt-in per request.
+_PRICING = {
+    "claude-opus-4-8": (5.0 / 1_000_000, 25.0 / 1_000_000),
+    "claude-fable-5": (10.0 / 1_000_000, 50.0 / 1_000_000),
+}
 
 
 class AssistantError(RuntimeError):
@@ -93,7 +98,7 @@ ASK_TOOL = {
 }
 
 
-def _anthropic_call(system: str, user: str, tools: list[dict]) -> dict:
+def _anthropic_call(system: str, user: str, tools: list[dict], model: str = MODEL) -> dict:
     try:
         import anthropic
     except ImportError as exc:  # pragma: no cover
@@ -109,7 +114,7 @@ def _anthropic_call(system: str, user: str, tools: list[dict]) -> dict:
         with client.messages.stream(
             # 32k output: adaptive thinking on a hard task can otherwise use up a
             # small budget before it emits the script, leaving no tool call.
-            model=MODEL, max_tokens=32000,
+            model=model, max_tokens=32000,
             thinking={"type": "adaptive"},
             system=system, tools=tools,
             messages=[{"role": "user", "content": user}],
@@ -130,6 +135,8 @@ def _anthropic_call(system: str, user: str, tools: list[dict]) -> dict:
             text += block.text
     # No tool call — don't hard-fail. Surface what the model actually said (an
     # explanation or an in-prose question), or a helpful note if it ran out of room.
+    if resp.stop_reason == "refusal":
+        return {"kind": "question", "question": "The model declined this request.", "usage": usage}
     if resp.stop_reason == "max_tokens":
         msg = ("That was too much to do in one step — I ran out of output room. "
                "Try breaking it into smaller changes.")
@@ -144,19 +151,22 @@ def edit_script(
     instruction: str,
     context: str = "",
     history: list[dict] | None = None,
+    model: str | None = None,
     *,
     llm: Callable[[str, str, list[dict]], dict] | None = None,
 ) -> dict:
     """Turn `instruction` into either an edit of `code` or a clarifying question.
 
     `history` is recent conversation turns ([{role, text}, …]) so references
-    across turns resolve. Returns {kind: "edit", code, note, tokens…} for an
-    edit (validated to build, one corrective retry) or {kind: "question",
-    question, tokens…} when the model asks for clarification."""
+    across turns resolve. `model` picks which LLM (defaults to MODEL; only known
+    models are honoured). Returns {kind: "edit", code, note, tokens…} for an edit
+    (validated to build, one corrective retry) or {kind: "question", question,
+    tokens…} when the model asks for clarification."""
     instruction = (instruction or "").strip()
     if not instruction:
         raise AssistantError("empty instruction")
-    llm = llm or _anthropic_call
+    model = model if model in _PRICING else MODEL
+    llm = llm or (lambda s, u, t: _anthropic_call(s, u, t, model=model))
 
     def prompt(extra: str = "") -> str:
         sel = f"SELECTION: {context}\n\n" if context.strip() else ""
@@ -183,9 +193,10 @@ def edit_script(
         return o
 
     def cost() -> dict:
+        pin, pout = _PRICING[model]
         return {
             "tokens_in": tok_in, "tokens_out": tok_out,
-            "cost_usd": round(tok_in * _IN_PER_TOK + tok_out * _OUT_PER_TOK, 4),
+            "cost_usd": round(tok_in * pin + tok_out * pout, 4),
         }
 
     def validate(script: str) -> None:
