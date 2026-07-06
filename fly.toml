@@ -24,7 +24,10 @@ primary_region = 'fra'
   app = "/app/start.sh"
 
 [[vm]]
-  memory = '512mb'
+  # build123d/OCP is memory-heavy: each build spawns a subprocess that loads
+  # OpenCASCADE (~0.5-0.8GB). 2GB gives headroom for a couple of concurrent
+  # builds alongside the web workers.
+  memory = '2048mb'
   cpu_kind = 'shared'
-  cpus = 1
+  cpus = 2
   processes = ["app"]

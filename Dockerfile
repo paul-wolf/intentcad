@@ -15,8 +15,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install system deps for psycopg2
-RUN apt-get update && apt-get install -y --no-install-recommends libpq5 && rm -rf /var/lib/apt/lists/*
+# System libs: psycopg2 (libpq5) + OpenCASCADE/OCP runtime deps that build123d
+# (cadquery-ocp-novtk) links against — without these `import build123d` fails.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    libgl1 libglu1-mesa \
+    libx11-6 libxext6 libxi6 libxrender1 libxfixes3 libsm6 libice6 \
+    libfontconfig1 libfreetype6 libglib2.0-0 libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install Python deps
 COPY backend/requirements.txt .
