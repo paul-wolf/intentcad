@@ -14,7 +14,7 @@ import { downloadTextFile, downloadBlob } from '@/export/download';
 import { getEntityPoint, getEntityPoints } from '@/utils/entityPoints';
 import { getSegmentCount } from '@/utils/lineSegments';
 import { requestSave, getProjectId, getProjectName, setBackendId, setProjectContext } from '@/api/autoSave';
-import { createEmptyDocument, generateDateName } from '@/utils/document';
+import { createEmptyDocument, generateNumberedName } from '@/utils/document';
 import { addLog } from '@/stores/logStore';
 import { api } from '@/api/cachedClient';
 import type { ToolType } from '@/types/editor';
@@ -126,7 +126,8 @@ export function Toolbar() {
   const handleNewSketch = async () => {
     const projId = getProjectId();
     const projName = getProjectName();
-    const newDoc = createEmptyDocument(generateDateName([]));
+    const existing = await api.listDocuments(projId ?? undefined).then((l) => l.map((d) => d.name)).catch(() => []);
+    const newDoc = createEmptyDocument(generateNumberedName('Sketch', existing));
     try {
       const saved = await api.createDocument(newDoc.name, newDoc as unknown as Record<string, unknown>, projId ?? undefined);
       setBackendId(saved.id);

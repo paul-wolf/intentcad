@@ -11,6 +11,17 @@ export function generateUniqueName(baseName: string, existingNames: string[]): s
   }
 }
 
+/** A clean, guaranteed-unique auto name like "Part 1", "Part 2", … — numbered
+ *  from the lowest free integer among the given names. Used for new documents so
+ *  two parts created the same day never share a name. */
+export function generateNumberedName(base: string, existingNames: string[]): string {
+  const taken = new Set(existingNames);
+  for (let i = 1; ; i++) {
+    const candidate = `${base} ${i}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
 export function generateDateName(existingNames: string[]): string {
   const base = new Date().toLocaleDateString('en-US', {
     month: 'short', day: 'numeric', year: 'numeric',

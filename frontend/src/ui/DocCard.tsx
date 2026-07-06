@@ -31,10 +31,11 @@ export interface DocCardEdit {
 
 /** A document card: grid-backed thumbnail with a PART/SKETCH badge, name, meta.
  *  Optional double-click rename and a hover delete. */
-export function DocCard({ d, onOpen, onDoubleClick, onDelete, onMove, editing }: {
+export function DocCard({ d, onOpen, onDoubleClick, onRename, onDelete, onMove, editing }: {
   d: DocCardData;
   onOpen: () => void;
   onDoubleClick?: () => void;
+  onRename?: () => void;
   onDelete?: () => void;
   onMove?: () => void;
   editing?: DocCardEdit;
@@ -54,6 +55,13 @@ export function DocCard({ d, onOpen, onDoubleClick, onDelete, onMove, editing }:
                              e.currentTarget.querySelectorAll('[data-act]').forEach((el) => ((el as HTMLElement).style.opacity = '0')); }}
     >
       <div style={{ position: 'absolute', top: 8, right: 8, zIndex: 3, display: 'flex', gap: 5 }}>
+        {onRename && (
+          <button data-act title="Rename" onClick={(e) => { e.stopPropagation(); onRename(); }}
+            style={{ opacity: 0, transition: 'opacity .1s', display: 'flex', width: 24, height: 24, alignItems: 'center', justifyContent: 'center',
+                     background: t.surface, border: `1px solid ${t.border2}`, borderRadius: 6, color: t.textDim, cursor: 'pointer' }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
+          </button>
+        )}
         {onMove && (
           <button data-act title="Move to another project" onClick={(e) => { e.stopPropagation(); onMove(); }}
             style={{ opacity: 0, transition: 'opacity .1s', display: 'flex', width: 24, height: 24, alignItems: 'center', justifyContent: 'center',

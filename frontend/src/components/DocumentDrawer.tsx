@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useUIStateStore } from '@/stores/uiStateStore';
 import { useThemeStore } from '@/theme';
-import { createEmptyDocument, migrateDocument, generateDateName } from '@/utils/document';
+import { createEmptyDocument, migrateDocument, generateNumberedName } from '@/utils/document';
 import { api, type DocumentListItem } from '@/api/cachedClient';
 import { setBackendId, getBackendId, getProjectId, flushSave } from '@/api/autoSave';
 import type { Document } from '@/types/document';
@@ -54,7 +54,7 @@ export function DocumentDrawer() {
 
   const handleNew = async () => {
     flushSave();
-    const name = generateDateName(docs.map((d) => d.name));
+    const name = generateNumberedName('Sketch', docs.map((d) => d.name));
     const doc = createEmptyDocument(name);
     setDocument(doc);
     try {

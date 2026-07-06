@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
 import { buildApi, type RunResponse, type UsageResponse, type DimInfo } from '@/api/client';
-import { persistModelCode, persistChat, persistThumbnail, getBackendId } from '@/api/autoSave';
+import { persistModelCode, persistChat, persistThumbnail, persistName, getBackendId } from '@/api/autoSave';
 import type { ChatMessage } from '@/types/document';
 import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim } from '@/build/webglViewer';
 import { highlightPython, DARK_SYNTAX, LIGHT_SYNTAX } from '@/build/pyHighlight';
@@ -142,6 +142,8 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   };
 
   const [code, setCode] = useState('');
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
   const [flash, setFlash] = useState('');
   const [status, setStatus] = useState<'idle' | 'building' | 'done' | 'error'>('idle');
   const [message, setMessage] = useState('');
@@ -302,6 +304,14 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   const handleClose = () => { if (code.trim()) saveCode(code, 'hand edit'); onClose(); };
   // breadcrumb nav: persist the current code, then navigate away
   const navAway = (fn: () => void) => { if (code.trim()) saveCode(code, 'hand edit'); fn(); };
+
+  // rename the part (persists immediately; a rename is not a new model version)
+  const startRename = () => { setNameDraft(docName); setEditingName(true); };
+  const commitName = () => {
+    const trimmed = nameDraft.trim();
+    setEditingName(false);
+    if (trimmed && trimmed !== docName) persistName(trimmed);
+  };
 
   // version history: restore a prior modelCode (restoring pushes the current one
   // into history too, via setModelCode, so it's reversible)
@@ -497,9 +507,25 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
               )}
             </div>
           )}
-          <h2 style={{ margin: 0, fontSize: '15px', color: palette.text }}>
-            {docName} <span style={{ color: palette.textSecondary, fontSize: '12px' }}>(build123d · script)</span>
-          </h2>
+          {editingName ? (
+            <input value={nameDraft} autoFocus
+              onChange={(e) => setNameDraft(e.target.value)}
+              onBlur={commitName}
+              onKeyDown={(e) => { if (e.key === 'Enter') commitName(); if (e.key === 'Escape') setEditingName(false); }}
+              style={{ fontSize: '15px', color: palette.text, background: palette.inputBg,
+                       border: `1px solid ${palette.accent ?? palette.border}`, borderRadius: '5px',
+                       padding: '3px 8px', outline: 'none', minWidth: '160px' }} />
+          ) : (
+            <h2 onDoubleClick={startRename} title="Double-click to rename"
+                style={{ margin: 0, fontSize: '15px', color: palette.text, cursor: 'text', display: 'flex', alignItems: 'center', gap: '7px' }}>
+              {docName}
+              <button onClick={startRename} title="Rename"
+                style={{ display: 'flex', padding: '2px', background: 'none', border: 'none', color: palette.textSecondary, cursor: 'pointer' }}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
+              </button>
+              <span style={{ color: palette.textSecondary, fontSize: '12px' }}>(build123d · script)</span>
+            </h2>
+          )}
           {usage && (usage.all_time.edits > 0) && (
             <span title={`This model: ${usage.document.tokens_in.toLocaleString()} in / ${usage.document.tokens_out.toLocaleString()} out.  All-time: ${usage.all_time.tokens_in.toLocaleString()} in / ${usage.all_time.tokens_out.toLocaleString()} out.`}
               style={{ fontSize: '12px', color: palette.textSecondary }}>

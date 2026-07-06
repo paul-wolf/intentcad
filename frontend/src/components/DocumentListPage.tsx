@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, type CSSProperties } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 import { useDocumentStore } from '@/stores/documentStore';
-import { createEmptyDocument, createEmptyPart, migrateDocument } from '@/utils/document';
+import { createEmptyDocument, createEmptyPart, generateNumberedName, migrateDocument } from '@/utils/document';
 import { api, type DocumentListItem } from '@/api/cachedClient';
 import { setBackendId, setProjectContext } from '@/api/autoSave';
 import type { Document } from '@/types/document';
@@ -76,9 +76,9 @@ export function DocumentListPage() {
       navigate(route(saved.id));
     } catch { setBackendId(null); navigate(route(doc.id)); }
   };
-  const dateName = () => new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  const handleNew = () => createAndOpen(createEmptyDocument(dateName()), (id) => `/edit/${id}`);
-  const handleNewPart = () => createAndOpen(createEmptyPart(dateName()), (id) => `/part/${id}`);
+  const uniqueName = (base: string) => generateNumberedName(base, docs.map((d) => d.name));
+  const handleNew = () => createAndOpen(createEmptyDocument(uniqueName('Sketch')), (id) => `/edit/${id}`);
+  const handleNewPart = () => createAndOpen(createEmptyPart(uniqueName('Part')), (id) => `/part/${id}`);
 
   const handleOpen = async (d: DocumentListItem) => {
     try {
@@ -153,6 +153,7 @@ export function DocumentListPage() {
       d={{ id: d.id, name: d.name, kind: d.kind, updated: relativeTime(d.updated_at), thumbnail: d.thumbnail }}
       onOpen={() => handleOpen(d)}
       onDoubleClick={() => { setEditingId(d.id); setEditName(d.name); }}
+      onRename={() => { setEditingId(d.id); setEditName(d.name); }}
       onDelete={() => handleDelete(d.id)}
       onMove={allProjects.length > 1 ? () => setMovingDoc(d) : undefined}
       editing={editingId === d.id ? { value: editName, onChange: setEditName, onCommit: commitRename, onCancel: () => setEditingId(null) } : undefined}

@@ -106,6 +106,16 @@ export function persistModelCode(code: string, label?: string) {
   doSave(backendId, doc, history);
 }
 
+/** Persist a document rename NOW, directly (used by the part editor header). */
+export function persistName(name: string) {
+  useDocumentStore.getState().setDocumentName(name);
+  if (!backendId) return;
+  const state = useDocumentStore.getState();
+  const doc = { ...state.document } as unknown as Record<string, unknown>;
+  const history = { undo: state.undoStack, redo: state.redoStack };
+  doSave(backendId, doc, history);
+}
+
 /** Persist the AI modeling conversation NOW (no debounce), directly. */
 export function persistChat(chat: import('@/types/document').ChatMessage[]) {
   useDocumentStore.getState().setChat(chat);
