@@ -492,7 +492,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
           {usage && (usage.all_time.edits > 0) && (
             <span title={`This model: ${usage.document.tokens_in.toLocaleString()} in / ${usage.document.tokens_out.toLocaleString()} out.  All-time: ${usage.all_time.tokens_in.toLocaleString()} in / ${usage.all_time.tokens_out.toLocaleString()} out.`}
               style={{ fontSize: '12px', color: palette.textSecondary }}>
-              Opus 4.8 · this model ${usage.document.cost_usd.toFixed(3)} ({usage.document.edits}) · all-time ${usage.all_time.cost_usd.toFixed(2)} ({usage.all_time.edits})
+              AI spend · this model ${usage.document.cost_usd.toFixed(3)} ({usage.document.edits}) · all-time ${usage.all_time.cost_usd.toFixed(2)} ({usage.all_time.edits})
             </span>
           )}
           <div style={{ flex: 1 }} />
