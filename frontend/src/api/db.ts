@@ -27,6 +27,15 @@ export interface CachedProject {
   updated_at: string;
 }
 
+/** A cached build result for a build123d script (keyed by a hash of the code +
+ *  cache version). Lets an unchanged part re-open instantly without the engine. */
+export interface CachedBuild {
+  key: string;
+  run: unknown;              // RunResponse (mesh, faces, edges, params, metrics, warning)
+  sens?: unknown;            // sensitivity map (param -> DimInfo), when computed
+  at: number;                // last used, for LRU eviction
+}
+
 export interface SyncQueueEntry {
   autoId?: number;
   table: string;
@@ -41,6 +50,7 @@ class IntentDB extends Dexie {
   parts!: Table<CachedPart, string>;
   projects!: Table<CachedProject, string>;
   syncQueue!: Table<SyncQueueEntry, number>;
+  buildCache!: Table<CachedBuild, string>;
 
   constructor() {
     super('intentcad');
@@ -64,6 +74,9 @@ class IntentDB extends Dexie {
       projects: 'id, updated_at',
       camJobs: null,
       syncQueue: '++autoId, [table+entityId], timestamp',
+    });
+    this.version(4).stores({
+      buildCache: 'key, at',
     });
   }
 }

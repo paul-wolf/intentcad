@@ -7,6 +7,7 @@ import type { ChatMessage } from '@/types/document';
 import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim } from '@/build/webglViewer';
 import { highlightPython, DARK_SYNTAX, LIGHT_SYNTAX } from '@/build/pyHighlight';
 import { downloadTextFile } from '@/export/download';
+import { buildKey, getCachedBuild, putCachedBuild, putCachedSens } from '@/build/buildCache';
 
 interface Props {
   onClose: () => void;
@@ -185,20 +186,40 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
     setStatus('building');
     setMessage('');
     try {
-      const res = await buildApi.run(src);
+      // Deterministic: same code → same mesh. Serve an unchanged part from the
+      // IndexedDB cache with no engine call.
+      const key = buildKey(src);
+      const cached = await getCachedBuild(key);
+      const res = cached?.run ?? await buildApi.run(src);
       setWarn(res.warning ?? '');
       viewerRef.current.update(res.mesh, res.faces);
       resRef.current = res;
       selRef.current = []; setSel([]);
       setParamVals(res.params);
-      // derive which params control which faces (perturbation) in the background
+      if (!cached) putCachedBuild(key, res);
+      // sensitivity (perturbation): use the cached map, else compute in the
+      // background and cache it too
       if (Object.keys(res.params).length > 0) {
-        setSens({});
-        buildApi.sensitivity(src).then((r) => setSens(r.params)).catch(() => {});
+        if (cached?.sens) {
+          setSens(cached.sens);
+        } else {
+          setSens({});
+          buildApi.sensitivity(src).then((r) => { setSens(r.params); putCachedSens(key, r.params); }).catch(() => {});
+        }
       } else setSens({});
       const m = res.metrics;
-      const sz = [0, 1, 2].map((i) => Math.round(m.bbox_max[i]! - m.bbox_min[i]!));
-      setStats(`vol ${Math.round(m.volume).toLocaleString()} mm³ · ${sz[0]}×${sz[1]}×${sz[2]} mm · ${res.mesh.triangle_count.toLocaleString()} triangles`);
+      const sz = [0, 1, 2].map((i) => Math.round((m.bbox_max[i]! - m.bbox_min[i]!) * 10) / 10);
+      const tris = res.mesh.triangle_count;
+      const verts = res.mesh.positions.length / 3;
+      const stlKb = Math.round((84 + tris * 50) / 1024);   // binary STL: 84B header + 50B/triangle
+      setStats(
+        `${sz[0]}×${sz[1]}×${sz[2]} mm · ` +
+        `vol ${Math.round(m.volume).toLocaleString()} mm³ · ` +
+        `area ${Math.round(m.area).toLocaleString()} mm² · ` +
+        `${res.faces.length} faces · ${res.edges.length} edges · ` +
+        `${tris.toLocaleString()} tris (${verts.toLocaleString()} verts) · ` +
+        `~${stlKb.toLocaleString()} KB STL`,
+      );
       setStatus('done');
       // capture a thumbnail from the freshly-framed view (debounced so rapid
       // rebuilds coalesce into one save)
