@@ -1,8 +1,11 @@
 """Tests for the build123d execution engine (the new modeler core)."""
 
+import os
+from unittest import mock
+
 from django.test import SimpleTestCase
 
-from modeling.engine import EngineError, run_script
+from modeling.engine import EngineError, run_script, _sandbox, _min_env
 
 
 class EngineTests(SimpleTestCase):
@@ -55,3 +58,27 @@ class EngineTests(SimpleTestCase):
     def test_runtime_error_is_reported(self):
         with self.assertRaises(EngineError):
             run_script("part = Box(1, 1, 1).faces().nonexistent_method()")
+
+    def test_sandbox_off_uses_plain_subprocess(self):
+        with mock.patch.dict(os.environ, {"MODELING_SANDBOX": "off"}):
+            self.assertEqual(_sandbox(), ([], None))
+
+    def test_sandbox_falls_back_when_bwrap_absent(self):
+        with mock.patch.dict(os.environ, {"MODELING_SANDBOX": "auto"}), \
+             mock.patch("modeling.engine.shutil.which", return_value=None):
+            self.assertEqual(_sandbox(), ([], None))
+
+    def test_sandbox_wraps_when_bwrap_present(self):
+        with mock.patch.dict(os.environ, {"MODELING_SANDBOX": "auto"}), \
+             mock.patch("modeling.engine.shutil.which", return_value="/usr/bin/bwrap"):
+            prefix, env = _sandbox()
+            self.assertEqual(prefix[0], "/usr/bin/bwrap")
+            self.assertIn("--unshare-all", prefix)
+            self.assertIsNotNone(env)
+
+    def test_min_env_scrubs_secrets(self):
+        with mock.patch.dict(os.environ, {"ANTHROPIC_KEY": "sk-secret", "DB_PASSWORD": "pw", "PATH": "/bin"}):
+            env = _min_env()
+            self.assertNotIn("ANTHROPIC_KEY", env)
+            self.assertNotIn("DB_PASSWORD", env)
+            self.assertIn("PATH", env)
