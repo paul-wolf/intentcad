@@ -81,6 +81,14 @@ export function DocumentListPage() {
     catch (err) { console.error('Failed to delete document:', err); }
   };
 
+  const deleteProject = async () => {
+    if (!projectId) return;
+    const n = docs.length;
+    if (!window.confirm(`Delete project "${projectName}"${n ? ` and its ${n} document${n === 1 ? '' : 's'}` : ''}? This cannot be undone.`)) return;
+    try { await projectApi.deleteProject(projectId); navigate('/'); }
+    catch (err) { console.error('Failed to delete project:', err); }
+  };
+
   const commitRename = async () => {
     if (!editingId || !editName.trim()) { setEditingId(null); return; }
     const trimmed = editName.trim();
@@ -154,6 +162,14 @@ export function DocumentListPage() {
               </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+              <button onClick={deleteProject} title="Delete this project"
+                style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '9px 12px', background: 'none', color: t.textMute,
+                         border: `1px solid ${t.border}`, borderRadius: 9, fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}
+                onMouseEnter={(e) => { e.currentTarget.style.color = t.danger; e.currentTarget.style.borderColor = t.danger; }}
+                onMouseLeave={(e) => { e.currentTarget.style.color = t.textMute; e.currentTarget.style.borderColor = t.border; }}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /></svg>
+                Delete
+              </button>
               <button onClick={handleNew}
                 style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '9px 14px', background: t.surface, color: t.text,
                          border: `1px solid ${t.border2}`, borderRadius: 9, fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>

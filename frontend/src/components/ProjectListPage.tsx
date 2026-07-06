@@ -123,9 +123,11 @@ export function ProjectListPage() {
             </button>
           </div>
 
-          {/* Projects table */}
-          <div style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 14, overflow: 'hidden', marginBottom: 44 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: COLS, gap: 14, padding: '12px 20px', borderBottom: `1px solid ${t.border}`,
+          {/* Projects table (capped height, scrolls, so the doc grid stays visible) */}
+          <div style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 14, overflow: 'auto',
+                        maxHeight: '46vh', marginBottom: 44 }}>
+            <div style={{ position: 'sticky', top: 0, zIndex: 1, background: t.surface,
+                          display: 'grid', gridTemplateColumns: COLS, gap: 14, padding: '12px 20px', borderBottom: `1px solid ${t.border}`,
                           fontFamily: MONO, fontSize: '10.5px', letterSpacing: '1px', color: t.textMute }}>
               <div>PROJECT</div><div>DOCUMENTS</div><div>LAST EDITED</div><div>OWNER</div><div />
             </div>
