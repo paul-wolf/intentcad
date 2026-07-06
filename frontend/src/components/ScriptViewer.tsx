@@ -8,7 +8,12 @@ import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim
 import { highlightPython, DARK_SYNTAX, LIGHT_SYNTAX } from '@/build/pyHighlight';
 import { downloadTextFile } from '@/export/download';
 
-interface Props { onClose: () => void }
+interface Props {
+  onClose: () => void;
+  /** When the editor is a standalone page, breadcrumb nav (saves first). */
+  onHome?: () => void;
+  onProject?: () => void;
+}
 
 // stable empty reference so the zustand selector below doesn't return a fresh
 // array every render (which would loop: new snapshot → re-render → new snapshot)
@@ -31,7 +36,7 @@ part += Pos(0, 0, zc) * (Cylinder(P["boss_d"]/2, P["boss_h"])
 part -= Pos(0, 0, zc) * Rot(90, 0, 0) * Cylinder(P["bolt_d"]/2, P["boss_d"]*2)
 `;
 
-export function ScriptViewer({ onClose }: Props) {
+export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   const palette = useThemeStore((s) => s.palette);
   const isDark = useThemeStore((s) => s.theme === 'dark');
   const docName = useDocumentStore((s) => s.document.name);
@@ -252,6 +257,8 @@ export function ScriptViewer({ onClose }: Props) {
 
   // save the current code on close, so nothing typed is lost
   const handleClose = () => { if (code.trim()) saveCode(code, 'hand edit'); onClose(); };
+  // breadcrumb nav: persist the current code, then navigate away
+  const navAway = (fn: () => void) => { if (code.trim()) saveCode(code, 'hand edit'); fn(); };
 
   // version history: restore a prior modelCode (restoring pushes the current one
   // into history too, via setModelCode, so it's reversible)
@@ -422,8 +429,22 @@ export function ScriptViewer({ onClose }: Props) {
         {/* header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px',
                       borderBottom: `1px solid ${palette.border}` }}>
+          {(onHome || onProject) && (
+            <div style={{ display: 'flex', gap: '6px' }}>
+              {onHome && (
+                <button onClick={() => navAway(onHome)} title="Back to projects"
+                  style={{ ...btn, background: 'none', color: palette.textSecondary,
+                           border: `1px solid ${palette.border}` }}>Home</button>
+              )}
+              {onProject && (
+                <button onClick={() => navAway(onProject)} title="Back to this project"
+                  style={{ ...btn, background: 'none', color: palette.textSecondary,
+                           border: `1px solid ${palette.border}` }}>Project</button>
+              )}
+            </div>
+          )}
           <h2 style={{ margin: 0, fontSize: '15px', color: palette.text }}>
-            Model <span style={{ color: palette.textSecondary, fontSize: '12px' }}>(build123d · script)</span>
+            {docName} <span style={{ color: palette.textSecondary, fontSize: '12px' }}>(build123d · script)</span>
           </h2>
           {usage && (usage.all_time.edits > 0) && (
             <span title={`This model: ${usage.document.tokens_in.toLocaleString()} in / ${usage.document.tokens_out.toLocaleString()} out.  All-time: ${usage.all_time.tokens_in.toLocaleString()} in / ${usage.all_time.tokens_out.toLocaleString()} out.`}

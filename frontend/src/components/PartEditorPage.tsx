@@ -44,10 +44,10 @@ export function PartEditorPage() {
 
   useEffect(() => startAutoSave(), []);
 
-  const close = () => {
+  const toProject = () => {
     const pid = getProjectId();
     navigate(pid ? `/project/${pid}` : '/');
   };
 
-  return <ScriptViewer onClose={close} />;
+  return <ScriptViewer onClose={toProject} onHome={() => navigate('/')} onProject={toProject} />;
 }
