@@ -93,12 +93,16 @@ def _anthropic_call(system: str, user: str, tools: list[dict]) -> dict:
         raise AssistantError("ANTHROPIC_KEY is not set")
     client = anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
     try:
-        resp = client.messages.create(
+        # Stream: adaptive thinking + a full script can run long; streaming keeps
+        # data flowing so we don't block on one long read (and get_final_message
+        # reassembles the complete response).
+        with client.messages.stream(
             model=MODEL, max_tokens=8192,
             thinking={"type": "adaptive"},
             system=system, tools=tools,
             messages=[{"role": "user", "content": user}],
-        )
+        ) as stream:
+            resp = stream.get_final_message()
     except anthropic.APIError as exc:
         raise AssistantError(f"Anthropic API error: {exc}") from exc
     usage = {"input": resp.usage.input_tokens, "output": resp.usage.output_tokens}
