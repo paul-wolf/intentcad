@@ -107,7 +107,9 @@ def _anthropic_call(system: str, user: str, tools: list[dict]) -> dict:
         # data flowing so we don't block on one long read (and get_final_message
         # reassembles the complete response).
         with client.messages.stream(
-            model=MODEL, max_tokens=8192,
+            # 32k output: adaptive thinking on a hard task can otherwise use up a
+            # small budget before it emits the script, leaving no tool call.
+            model=MODEL, max_tokens=32000,
             thinking={"type": "adaptive"},
             system=system, tools=tools,
             messages=[{"role": "user", "content": user}],
@@ -116,6 +118,7 @@ def _anthropic_call(system: str, user: str, tools: list[dict]) -> dict:
     except anthropic.APIError as exc:
         raise AssistantError(f"Anthropic API error: {exc}") from exc
     usage = {"input": resp.usage.input_tokens, "output": resp.usage.output_tokens}
+    text = ""
     for block in resp.content:
         if block.type == "tool_use" and block.name == "write_script":
             out = dict(block.input); out["kind"] = "edit"; out["usage"] = usage
@@ -123,6 +126,16 @@ def _anthropic_call(system: str, user: str, tools: list[dict]) -> dict:
         if block.type == "tool_use" and block.name == "ask_clarification":
             out = dict(block.input); out["kind"] = "question"; out["usage"] = usage
             return out
+        if block.type == "text":
+            text += block.text
+    # No tool call — don't hard-fail. Surface what the model actually said (an
+    # explanation or an in-prose question), or a helpful note if it ran out of room.
+    if resp.stop_reason == "max_tokens":
+        msg = ("That was too much to do in one step — I ran out of output room. "
+               "Try breaking it into smaller changes.")
+        return {"kind": "question", "question": text.strip() or msg, "usage": usage}
+    if text.strip():
+        return {"kind": "question", "question": text.strip(), "usage": usage}
     raise AssistantError("the model did not return a script")
 
 

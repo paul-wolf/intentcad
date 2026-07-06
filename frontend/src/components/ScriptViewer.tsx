@@ -18,6 +18,9 @@ interface Props {
 
 // stable empty reference so the zustand selector below doesn't return a fresh
 // array every render (which would loop: new snapshot → re-render → new snapshot)
+const humanBytes = (b: number): string =>
+  b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
+
 const NO_HISTORY: { code: string; at: number; label?: string }[] = [];
 const NO_CHAT: ChatMessage[] = [];
 
@@ -47,6 +50,19 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewerRef = useRef<Viewer | null>(null);
   const thumbTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // lazy sensitivity: compute the param→face map only when first needed
+  const builtCodeRef = useRef<string>('');
+  const sensKeyRef = useRef<string | null>(null);
+  const ensureSens = () => {
+    const src = builtCodeRef.current;
+    if (!src) return;
+    const key = buildKey(src);
+    if (sensKeyRef.current === key) return;   // already computed or in flight
+    sensKeyRef.current = key;
+    buildApi.sensitivity(src)
+      .then((r) => { if (sensKeyRef.current === key) { setSens(r.params); putCachedSens(key, r.params); } })
+      .catch(() => { if (sensKeyRef.current === key) sensKeyRef.current = null; });
+  };
   // syntax-highlight overlay: a highlighted <pre> behind a transparent <textarea>
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const preRef = useRef<HTMLPreElement | null>(null);
@@ -143,6 +159,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
     else s = [...s, f.index].slice(-2);
     selRef.current = s;
     setSel(s);
+    if (s.length) ensureSens();   // selecting geometry → we want the param links
     viewerRef.current?.selectFaces(s);
     const segs: number[] = [];
     if (res && s.length === 2) {
@@ -185,40 +202,35 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
     if (!viewerRef.current) return;
     setStatus('building');
     setMessage('');
+    const t0 = performance.now();
     try {
       // Deterministic: same code → same mesh. Serve an unchanged part from the
       // IndexedDB cache with no engine call.
       const key = buildKey(src);
       const cached = await getCachedBuild(key);
       const res = cached?.run ?? await buildApi.run(src);
+      const took = Math.round(performance.now() - t0);
       setWarn(res.warning ?? '');
       viewerRef.current.update(res.mesh, res.faces);
       resRef.current = res;
       selRef.current = []; setSel([]);
       setParamVals(res.params);
       if (!cached) putCachedBuild(key, res);
-      // sensitivity (perturbation): use the cached map, else compute in the
-      // background and cache it too
-      if (Object.keys(res.params).length > 0) {
-        if (cached?.sens) {
-          setSens(cached.sens);
-        } else {
-          setSens({});
-          buildApi.sensitivity(src).then((r) => { setSens(r.params); putCachedSens(key, r.params); }).catch(() => {});
-        }
-      } else setSens({});
+      // sensitivity (perturbation = N rebuilds) is computed LAZILY — only when
+      // something actually needs the param→face links (hover a param, ⌥, or a
+      // selection). Just prime the state here; ensureSens() does the work.
+      builtCodeRef.current = src;
+      if (cached?.sens) { setSens(cached.sens); sensKeyRef.current = key; }
+      else { setSens({}); sensKeyRef.current = null; }
       const m = res.metrics;
       const sz = [0, 1, 2].map((i) => Math.round((m.bbox_max[i]! - m.bbox_min[i]!) * 10) / 10);
       const tris = res.mesh.triangle_count;
       const verts = res.mesh.positions.length / 3;
-      const stlKb = Math.round((84 + tris * 50) / 1024);   // binary STL: 84B header + 50B/triangle
+      const stlBytes = 84 + tris * 50;   // binary STL: 84B header + 50B/triangle
       setStats(
-        `${sz[0]}×${sz[1]}×${sz[2]} mm · ` +
-        `vol ${Math.round(m.volume).toLocaleString()} mm³ · ` +
-        `area ${Math.round(m.area).toLocaleString()} mm² · ` +
-        `${res.faces.length} faces · ${res.edges.length} edges · ` +
-        `${tris.toLocaleString()} tris (${verts.toLocaleString()} verts) · ` +
-        `~${stlKb.toLocaleString()} KB STL`,
+        `${cached ? 'cached' : `${took} ms`} · ${humanBytes(stlBytes)} · ` +
+        `${res.faces.length} faces · ${tris.toLocaleString()} triangles (${verts.toLocaleString()} verts) · ` +
+        `${sz[0]}×${sz[1]}×${sz[2]} mm · vol ${Math.round(m.volume).toLocaleString()} mm³ · area ${Math.round(m.area).toLocaleString()} mm²`,
       );
       setStatus('done');
       // capture a thumbnail from the freshly-framed view (debounced so rapid
@@ -334,7 +346,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   // drives (like the sketch editor's dimension overlay).
   const [dimsOn, setDimsOn] = useState(false);
   useEffect(() => {
-    const down = (e: KeyboardEvent) => { if (e.key === 'Alt') setDimsOn(true); };
+    const down = (e: KeyboardEvent) => { if (e.key === 'Alt') { setDimsOn(true); ensureSens(); } };
     const up = (e: KeyboardEvent) => { if (e.key === 'Alt') setDimsOn(false); };
     const off = () => setDimsOn(false);
     window.addEventListener('keydown', down);
@@ -561,7 +573,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
                   const active = sel.length > 0 && controls.some((i) => sel.includes(i));
                   return (
                     <label key={name}
-                      onMouseEnter={() => { if (controls.length) viewerRef.current?.selectFaces(controls); }}
+                      onMouseEnter={() => { ensureSens(); if (controls.length) viewerRef.current?.selectFaces(controls); }}
                       onMouseLeave={() => viewerRef.current?.selectFaces(sel)}
                       title={controls.length ? `controls ${controls.length} face(s) — hover to preview` : ''}
                       style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px',
