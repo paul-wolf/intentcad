@@ -66,9 +66,11 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   // syntax-highlight overlay: a highlighted <pre> behind a transparent <textarea>
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const preRef = useRef<HTMLPreElement | null>(null);
+  const gutterRef = useRef<HTMLDivElement | null>(null);
   const syncScroll = () => {
-    const ta = taRef.current, pre = preRef.current;
+    const ta = taRef.current, pre = preRef.current, g = gutterRef.current;
     if (ta && pre) { pre.scrollTop = ta.scrollTop; pre.scrollLeft = ta.scrollLeft; }
+    if (ta && g) g.scrollTop = ta.scrollTop;   // line numbers follow the vertical scroll
   };
   // orientation gizmo: three labeled axes from a shared origin, updated via refs
   // each frame (no React re-render on orbit)
@@ -608,15 +610,19 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
               </div>
             )}
             {(() => {
-              // shared metrics so the highlighted layer sits exactly under the caret
-              const editorStyle: CSSProperties = {
-                margin: 0, padding: '12px 14px', border: 0, boxSizing: 'border-box',
+              // no soft-wrap so line numbers line up 1:1 with logical lines
+              const GUTTER = 46;
+              const monoBase: CSSProperties = {
                 fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '13px',
-                lineHeight: 1.5, tabSize: 4, whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word', overflowWrap: 'break-word',
+                lineHeight: 1.5, tabSize: 4, whiteSpace: 'pre',
+              };
+              const editorStyle: CSSProperties = {
+                ...monoBase, margin: 0, padding: `12px 14px 12px ${GUTTER + 8}px`,
+                border: 0, boxSizing: 'border-box',
               };
               let html = highlightPython(code, isDark ? DARK_SYNTAX : LIGHT_SYNTAX);
               if (code.endsWith('\n')) html += '\n';   // keep the empty last line in sync
+              const lineCount = code.split('\n').length;
               return (
                 <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden',
                               background: palette.inputBg }}>
@@ -630,11 +636,19 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
                     onChange={(e) => setCode(e.target.value)}
                     onScroll={syncScroll}
                     onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); rebuild(); } }}
-                    spellCheck={false} autoCapitalize="off" autoCorrect="off"
+                    spellCheck={false} autoCapitalize="off" autoCorrect="off" wrap="off"
                     style={{ ...editorStyle, position: 'absolute', inset: 0, resize: 'none',
                              background: 'transparent', color: 'transparent',
                              caretColor: palette.text, outline: 'none', overflow: 'auto' }}
                   />
+                  {/* line-number gutter (opaque; scrolls vertically with the editor) */}
+                  <div ref={gutterRef} aria-hidden
+                    style={{ ...monoBase, position: 'absolute', left: 0, top: 0, bottom: 0, width: GUTTER,
+                             overflow: 'hidden', padding: '12px 8px 12px 0', boxSizing: 'border-box',
+                             textAlign: 'right', color: palette.textSecondary, background: palette.inputBg,
+                             borderRight: `1px solid ${palette.border}`, userSelect: 'none', pointerEvents: 'none' }}>
+                    {Array.from({ length: lineCount }, (_, i) => i + 1).join('\n')}
+                  </div>
                 </div>
               );
             })()}
