@@ -5,6 +5,7 @@ from ninja import Router
 
 from .models import LoginLog, Organisation, User
 from .schemas import (
+    ChangePasswordSchema,
     CreateUserSchema,
     CSRFTokenSchema,
     LoginResponseSchema,
@@ -47,6 +48,8 @@ def user_to_schema(user):
         organisation=organisation_to_schema(user.organisation)
         if user.organisation
         else None,
+        date_joined=user.date_joined.isoformat() if user.date_joined else None,
+        last_login=user.last_login.isoformat() if user.last_login else None,
     )
 
 
@@ -182,6 +185,25 @@ def update_current_user(request, data: UpdateMeSchema):
 
     user.save()
     return 200, user_to_schema(user)
+
+
+@router.post(
+    "/me/change-password",
+    response={200: MessageSchema, 400: MessageSchema, 401: MessageSchema},
+)
+def change_password(request, data: ChangePasswordSchema):
+    if not request.user.is_authenticated:
+        return 401, {"message": "Not authenticated"}
+    user = request.user
+    if not user.check_password(data.current_password):
+        return 400, {"message": "Current password is incorrect"}
+    if len(data.new_password) < 8:
+        return 400, {"message": "Password must be at least 8 characters"}
+    user.set_password(data.new_password)
+    user.save()
+    from django.contrib.auth import update_session_auth_hash
+    update_session_auth_hash(request, user)  # keep the current session signed in
+    return 200, {"message": "Password updated"}
 
 
 # ── Password reset (token-based, no email) ──

@@ -52,6 +52,13 @@ class UserSchema(Schema):
     is_staff: bool
     is_superuser: bool
     organisation: OrganisationSchema | None = None
+    date_joined: str | None = None
+    last_login: str | None = None
+
+
+class ChangePasswordSchema(Schema):
+    current_password: str
+    new_password: str
 
 
 class UserDetailSchema(Schema):
