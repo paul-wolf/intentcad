@@ -71,9 +71,10 @@ export function persistBuildFeatures(features: unknown[]) {
   doSave(backendId, doc, history);
 }
 
-/** Persist the build123d model script NOW (no debounce), directly. */
-export function persistModelCode(code: string) {
-  useDocumentStore.getState().setModelCode(code);
+/** Persist the build123d model script NOW (no debounce), directly. `label`
+ *  describes what produced this version (for the version history). */
+export function persistModelCode(code: string, label?: string) {
+  useDocumentStore.getState().setModelCode(code, label);
   if (!backendId) return;
   const state = useDocumentStore.getState();
   const doc = { ...state.document } as unknown as Record<string, unknown>;

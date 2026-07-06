@@ -37,7 +37,7 @@ interface DocumentStore {
   setDocumentName(name: string): void;
   setMetadata(metadata: Partial<DocumentMetadata>): void;
   setBuildFeatures(features: import('@/api/client').BuildFeature[]): void;
-  setModelCode(code: string): void;
+  setModelCode(code: string, label?: string): void;
   setChat(chat: import('@/types/document').ChatMessage[]): void;
 
   // Undo/Redo
@@ -158,16 +158,19 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     set((s) => ({ document: { ...s.document, buildFeatures: features } }));
   },
 
-  setModelCode(code) {
+  setModelCode(code, label) {
     set((s) => {
       const prev = s.document.modelCode;
-      // Keep a capped version history so an overwrite is always recoverable —
-      // record the version being replaced (when it was real and actually changes).
+      const prevLabel = s.document.modelCodeLabel;
+      // Keep a capped, labeled version history so an overwrite is recoverable and
+      // each entry says what produced it. Record the version being REPLACED with
+      // its own label. Coalesce a run of hand edits so typing doesn't spam it.
       const hist = s.document.modelCodeHistory ?? [];
-      const nextHist = prev && prev.trim() && prev !== code
-        ? [...hist, { code: prev, at: Date.now() }].slice(-30)
+      const coalesce = prevLabel === 'hand edit' && label === 'hand edit';
+      const nextHist = prev && prev.trim() && prev !== code && !coalesce
+        ? [...hist, { code: prev, at: Date.now(), label: prevLabel }].slice(-40)
         : hist;
-      return { document: { ...s.document, modelCode: code, modelCodeHistory: nextHist } };
+      return { document: { ...s.document, modelCode: code, modelCodeLabel: label, modelCodeHistory: nextHist } };
     });
   },
 

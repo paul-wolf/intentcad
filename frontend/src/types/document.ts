@@ -223,8 +223,12 @@ export interface Document {
   buildFeatures?: import('@/api/client').BuildFeature[];
   /** The 3D model as a build123d script — the current modeler. */
   modelCode?: string;
-  /** Capped history of prior modelCode versions, so an overwrite is recoverable. */
-  modelCodeHistory?: { code: string; at: number }[];
+  /** Capped history of prior modelCode versions, so an overwrite is recoverable.
+   *  `label` says what produced that version (an AI note, a param change, …). */
+  modelCodeHistory?: { code: string; at: number; label?: string }[];
+  /** Label for the current modelCode (what produced it) — recorded into history
+   *  when the code is next replaced. */
+  modelCodeLabel?: string;
   /** The AI modeling conversation (persisted). Assistant 'edit' turns carry the
    *  resulting script as a checkpoint you can revert to. */
   chat?: ChatMessage[];

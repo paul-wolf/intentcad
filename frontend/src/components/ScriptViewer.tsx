@@ -12,7 +12,7 @@ interface Props { onClose: () => void }
 
 // stable empty reference so the zustand selector below doesn't return a fresh
 // array every render (which would loop: new snapshot → re-render → new snapshot)
-const NO_HISTORY: { code: string; at: number }[] = [];
+const NO_HISTORY: { code: string; at: number; label?: string }[] = [];
 const NO_CHAT: ChatMessage[] = [];
 
 // A starter model so an empty document shows something buildable. The whole CAD
@@ -201,7 +201,7 @@ export function ScriptViewer({ onClose }: Props) {
 
   // Never persist the untouched STARTER seed — that is how saved work got
   // clobbered (seeded before the document had loaded, then written back).
-  const saveCode = (c: string) => { if (c.trim() && c !== STARTER) persistModelCode(c); };
+  const saveCode = (c: string, label?: string) => { if (c.trim() && c !== STARTER) persistModelCode(c, label); };
 
   // mount: create the viewer, then seed the code — but WAIT until the document
   // has actually loaded (getBackendId is set only after setDocument), so we
@@ -245,17 +245,17 @@ export function ScriptViewer({ onClose }: Props) {
   useEffect(() => {
     if (codeBaseline.current === null) { codeBaseline.current = code; return; }
     if (code === codeBaseline.current) return;
-    const t = setTimeout(() => { codeBaseline.current = code; saveCode(code); }, 600);
+    const t = setTimeout(() => { codeBaseline.current = code; saveCode(code, 'hand edit'); }, 600);
     return () => clearTimeout(t);
   }, [code]);
 
   // save the current code on close, so nothing typed is lost
-  const handleClose = () => { if (code.trim()) saveCode(code); onClose(); };
+  const handleClose = () => { if (code.trim()) saveCode(code, 'hand edit'); onClose(); };
 
   // version history: restore a prior modelCode (restoring pushes the current one
   // into history too, via setModelCode, so it's reversible)
   const [showHistory, setShowHistory] = useState(false);
-  const loadVersion = (c: string) => { setShowHistory(false); setCode(c); saveCode(c); build(c); };
+  const loadVersion = (c: string) => { setShowHistory(false); setCode(c); saveCode(c, 'reverted'); build(c); };
   const restore = (v: { code: string; at: number }) => loadVersion(v.code);
   const fmtAgo = (t: number) => {
     const s = Math.max(0, Math.round((Date.now() - t) / 1000));
@@ -333,7 +333,7 @@ export function ScriptViewer({ onClose }: Props) {
     try {
       const r = await buildApi.setParams(code, { [name]: val });
       setCode(r.code);
-      saveCode(r.code);
+      saveCode(r.code, `${name} = ${val}`);
       await build(r.code);
     } catch (err) {
       setMessage(String(err instanceof Error ? err.message : err));
@@ -374,7 +374,7 @@ export function ScriptViewer({ onClose }: Props) {
       } else {
         persistChat([...base, { role: 'assistant', kind: 'edit', text: r.note || 'Done.', code: r.code, at: Date.now() }]);
         setCode(r.code);
-        saveCode(r.code);
+        saveCode(r.code, r.note || instruction);
         await build(r.code);
       }
       fetchUsage();
@@ -456,10 +456,11 @@ export function ScriptViewer({ onClose }: Props) {
                           <span>{fmtAgo(v.at)}</span>
                           <span style={{ color: palette.textSecondary }}>{v.code.length} chars</span>
                         </div>
-                        <div style={{ fontSize: '11px', color: palette.textSecondary, marginTop: '2px',
-                                      fontFamily: 'ui-monospace, Menlo, monospace', whiteSpace: 'nowrap',
-                                      overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {codePreview(v.code) || '(no code)'}
+                        <div style={{ fontSize: '12px', color: palette.text, marginTop: '2px',
+                                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                                      fontFamily: v.label ? 'inherit' : 'ui-monospace, Menlo, monospace',
+                                      opacity: v.label ? 1 : 0.7 }}>
+                          {v.label || codePreview(v.code) || '(no code)'}
                         </div>
                       </button>
                     ))}
