@@ -153,6 +153,9 @@ export interface Viewer {
   selectFaces(indices: number[]): void;
   /** Set the dimension overlay (empty to clear). Reported back via onDims. */
   setDims(dims: DimAnchor[]): void;
+  /** Capture the current view as a transparent PNG data URL of just the solid
+   *  (no grid/overlays) — for a part thumbnail. Returns '' if nothing built. */
+  capture(w?: number, h?: number): string;
   dispose(): void;
 }
 
@@ -171,7 +174,7 @@ export interface ViewerOpts {
 
 export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): Viewer {
   const color = opts.color ?? [0.62, 0.66, 0.72];
-  const gl = canvas.getContext('webgl', { antialias: true, depth: true });
+  const gl = canvas.getContext('webgl', { antialias: true, depth: true, preserveDrawingBuffer: true });
   if (!gl) throw new Error('WebGL not available');
 
   const prog = gl.createProgram()!;
@@ -244,6 +247,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   let selected: number[] = [];
   let dims: DimAnchor[] = [];
   let modelRadius = 40;
+  let thumbMode = false;   // when capturing a thumbnail: draw the solid only (no grid/overlays)
   const SELECT: [number, number, number] = [1.0, 0.62, 0.2];
 
   function uploadMesh(mesh: ViewerMesh) {
@@ -383,11 +387,13 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     };
 
     // ground grid on the Z=0 plane (orientation is shown by the corner gizmo)
-    gl!.lineWidth(1);
-    drawLines(gridBuf, gridCount, [0.45, 0.48, 0.53]);
+    if (!thumbMode) {
+      gl!.lineWidth(1);
+      drawLines(gridBuf, gridCount, [0.45, 0.48, 0.53]);
+    }
 
     // highlight pass: bright, drawn over the solid (depth off so it's visible)
-    if (lineVertexCount) {
+    if (lineVertexCount && !thumbMode) {
       gl!.disable(gl!.DEPTH_TEST);
       gl!.lineWidth(2);
       drawLines(lineBuf, lineVertexCount, HIGHLIGHT);
@@ -396,7 +402,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
 
     // report the view-space direction of each world axis (columns of the
     // rotation) so the UI can draw an orientation gizmo
-    if (opts.onAxes) {
+    if (opts.onAxes && !thumbMode) {
       opts.onAxes([
         { name: 'X', x: rot[0]!, y: rot[1]!, z: rot[2]!, color: '#d95555' },
         { name: 'Y', x: rot[4]!, y: rot[5]!, z: rot[6]!, color: '#5fb36a' },
@@ -405,7 +411,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     }
 
     // project the dimension overlay to screen space (CSS px) for the HTML layer
-    if (opts.onDims) {
+    if (opts.onDims && !thumbMode) {
       const pv = multiply(proj, multiply(view, model));
       const cw = canvas.clientWidth, ch = canvas.clientHeight;
       const arm = modelRadius * 0.12;
@@ -487,6 +493,19 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     },
     selectFaces(indices: number[]) { selected = indices; scheduleRender(); },
     setDims(d: DimAnchor[]) { dims = d; scheduleRender(); },
+    capture(w = 240, h = 180): string {
+      if (!vertexCount) return '';
+      thumbMode = true;
+      try { render(); } finally { thumbMode = false; }
+      const off = document.createElement('canvas');
+      off.width = w; off.height = h;
+      const ctx = off.getContext('2d');
+      if (!ctx) return '';
+      ctx.drawImage(canvas, 0, 0, w, h);   // GL buffer preserved → part on transparent
+      const url = off.toDataURL('image/png');
+      scheduleRender();                    // restore the normal (grid + overlays) view
+      return url;
+    },
     dispose() {
       if (raf) cancelAnimationFrame(raf);
       ro.disconnect();

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
 import { buildApi, type RunResponse, type UsageResponse, type DimInfo } from '@/api/client';
-import { persistModelCode, persistChat, getBackendId } from '@/api/autoSave';
+import { persistModelCode, persistChat, persistThumbnail, getBackendId } from '@/api/autoSave';
 import type { ChatMessage } from '@/types/document';
 import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim } from '@/build/webglViewer';
 import { highlightPython, DARK_SYNTAX, LIGHT_SYNTAX } from '@/build/pyHighlight';
@@ -45,6 +45,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewerRef = useRef<Viewer | null>(null);
+  const thumbTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // syntax-highlight overlay: a highlighted <pre> behind a transparent <textarea>
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const preRef = useRef<HTMLPreElement | null>(null);
@@ -199,6 +200,13 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
       const sz = [0, 1, 2].map((i) => Math.round(m.bbox_max[i]! - m.bbox_min[i]!));
       setStats(`vol ${Math.round(m.volume).toLocaleString()} mm³ · ${sz[0]}×${sz[1]}×${sz[2]} mm · ${res.mesh.triangle_count.toLocaleString()} triangles`);
       setStatus('done');
+      // capture a thumbnail from the freshly-framed view (debounced so rapid
+      // rebuilds coalesce into one save)
+      if (thumbTimer.current) clearTimeout(thumbTimer.current);
+      thumbTimer.current = setTimeout(() => {
+        const url = viewerRef.current?.capture();
+        if (url) persistThumbnail(url);
+      }, 1400);
     } catch (err) {
       setStatus('error');
       setMessage(String(err instanceof Error ? err.message : err));

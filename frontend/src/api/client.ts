@@ -67,6 +67,7 @@ export interface DocumentListItem {
   created_at: string;
   updated_at: string;
   kind?: 'part' | 'sketch';
+  thumbnail?: string | null;
 }
 
 export interface DocumentFull {

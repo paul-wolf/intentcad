@@ -110,6 +110,16 @@ export function persistChat(chat: import('@/types/document').ChatMessage[]) {
   doSave(backendId, doc, history);
 }
 
+/** Persist the part thumbnail (a PNG data URL) NOW, directly. */
+export function persistThumbnail(dataUrl: string) {
+  useDocumentStore.getState().setThumbnail(dataUrl);
+  if (!backendId) return;
+  const state = useDocumentStore.getState();
+  const doc = { ...state.document } as unknown as Record<string, unknown>;
+  const history = { undo: state.undoStack, redo: state.redoStack };
+  doSave(backendId, doc, history);
+}
+
 /** Schedule a debounced save of the current document state. */
 export function requestSave() {
   const state = useDocumentStore.getState();

@@ -19,6 +19,7 @@ export interface DocCardData {
   kind?: 'part' | 'sketch';
   updated: string;
   subtitle?: string;    // e.g. project name (for the "recent" grid)
+  thumbnail?: string | null;   // PNG data URL preview of the built part
 }
 
 export interface DocCardEdit {
@@ -77,9 +78,11 @@ export function DocCard({ d, onOpen, onDoubleClick, onDelete, onMove, editing }:
                        border: `1px solid ${badgeColor}`, borderRadius: 5, padding: '2px 6px' }}>
           {isPart ? 'PART' : 'SKETCH'}
         </span>
-        {isPart
-          ? <PartThumb color={t.part} />
-          : <DocumentThumbnail documentId={d.id} width={120} height={90} background="transparent" stroke={t.thumbLine} />}
+        {d.thumbnail
+          ? <img src={d.thumbnail} alt="" style={{ maxWidth: '86%', maxHeight: '86%', objectFit: 'contain' }} />
+          : isPart
+            ? <PartThumb color={t.part} />
+            : <DocumentThumbnail documentId={d.id} width={120} height={90} background="transparent" stroke={t.thumbLine} />}
       </div>
       <div style={{ padding: '12px 14px 13px' }}>
         {editing ? (

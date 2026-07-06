@@ -231,6 +231,8 @@ export interface Document {
   /** Label for the current modelCode (what produced it) — recorded into history
    *  when the code is next replaced. */
   modelCodeLabel?: string;
+  /** A small PNG data URL snapshot of the built part, for list thumbnails. */
+  thumbnail?: string;
   /** The AI modeling conversation (persisted). Assistant 'edit' turns carry the
    *  resulting script as a checkpoint you can revert to. */
   chat?: ChatMessage[];

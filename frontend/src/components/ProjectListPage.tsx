@@ -195,7 +195,7 @@ export function ProjectListPage() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(224px,1fr))', gap: 16 }}>
               {recentDocs.map((d) => (
                 <DocCard key={d.id}
-                  d={{ id: d.id, name: d.name, kind: d.kind, updated: relativeTime(d.updated_at),
+                  d={{ id: d.id, name: d.name, kind: d.kind, updated: relativeTime(d.updated_at), thumbnail: d.thumbnail,
                        subtitle: projects.find((p) => p.id === d.project_id)?.name }}
                   onOpen={() => handleOpenDoc(d)} />
               ))}

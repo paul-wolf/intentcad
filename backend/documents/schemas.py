@@ -36,6 +36,7 @@ class DocumentListOut(Schema):
     created_at: datetime
     updated_at: datetime
     kind: str = "sketch"   # 'part' | 'sketch' — so the list can group without fetching each doc
+    thumbnail: str | None = None   # PNG data URL preview of a built part, if any
 
     @staticmethod
     def resolve_kind(obj) -> str:
@@ -45,3 +46,9 @@ class DocumentListOut(Schema):
             return t
         mc = data.get("modelCode")
         return "part" if isinstance(mc, str) and mc.strip() else "sketch"
+
+    @staticmethod
+    def resolve_thumbnail(obj) -> str | None:
+        data = obj.data if isinstance(obj.data, dict) else {}
+        thumb = data.get("thumbnail")
+        return thumb if isinstance(thumb, str) and thumb.startswith("data:") else None

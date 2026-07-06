@@ -150,7 +150,7 @@ export function DocumentListPage() {
   });
   const cardOf = (d: DocumentListItem) => (
     <DocCard key={d.id}
-      d={{ id: d.id, name: d.name, kind: d.kind, updated: relativeTime(d.updated_at) }}
+      d={{ id: d.id, name: d.name, kind: d.kind, updated: relativeTime(d.updated_at), thumbnail: d.thumbnail }}
       onOpen={() => handleOpen(d)}
       onDoubleClick={() => { setEditingId(d.id); setEditName(d.name); }}
       onDelete={() => handleDelete(d.id)}

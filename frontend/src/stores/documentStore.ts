@@ -39,6 +39,7 @@ interface DocumentStore {
   setBuildFeatures(features: import('@/api/client').BuildFeature[]): void;
   setModelCode(code: string, label?: string): void;
   setChat(chat: import('@/types/document').ChatMessage[]): void;
+  setThumbnail(thumbnail: string): void;
 
   // Undo/Redo
   beginTransaction(label: string): void;
@@ -180,6 +181,10 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
 
   setChat(chat) {
     set((s) => ({ document: { ...s.document, chat } }));
+  },
+
+  setThumbnail(thumbnail) {
+    set((s) => ({ document: { ...s.document, thumbnail } }));
   },
 
   setMetadata(metadata) {
