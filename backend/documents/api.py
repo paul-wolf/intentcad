@@ -84,6 +84,11 @@ def update_document(request, doc_id: UUID, payload: DocumentUpdateIn):
         doc.data = payload.data
     if payload.history is not None:
         doc.history = payload.history
+    if payload.project_id is not None:   # move to another project (must have access)
+        target = get_object_or_404(Project, id=payload.project_id)
+        if not can_access_project(request.user, target):
+            return JsonResponse({"message": "Access denied"}, status=403)
+        doc.project = target
     doc.save()
     return doc
 

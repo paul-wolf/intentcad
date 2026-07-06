@@ -7,6 +7,7 @@ import { api, type DocumentListItem } from '@/api/cachedClient';
 import { setBackendId, setProjectContext } from '@/api/autoSave';
 import type { Document } from '@/types/document';
 import { projectApi } from '@/api/projectClient';
+import type { Project } from '@/types/project';
 import { TopNav } from '@/ui/TopNav';
 import { DocCard } from '@/ui/DocCard';
 import { useTokens, SANS, MONO } from '@/ui/tokens';
@@ -36,15 +37,18 @@ export function DocumentListPage() {
   const [filter, setFilter] = useState<Filter>('all');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
-  const [notice, setNotice] = useState<string | null>(null);
+  const [allProjects, setAllProjects] = useState<Project[]>([]);
+  const [movingDoc, setMovingDoc] = useState<DocumentListItem | null>(null);
+  const [notice, setNotice] = useState<{ text: string; ok?: boolean } | null>(null);
 
   const fail = (what: string, err: unknown) => {
     const m = err instanceof Error ? err.message : String(err);
     const short = m.length > 160 ? m.slice(0, 160) + '…' : m;
     console.error(what, err);
-    setNotice(`${what}: ${short}`);
+    setNotice({ text: `${what}: ${short}` });
     setTimeout(() => setNotice(null), 7000);
   };
+  const note = (text: string) => { setNotice({ text, ok: true }); setTimeout(() => setNotice(null), 4000); };
 
   const ownerName = [user?.first_name, user?.last_name].filter(Boolean).join(' ') || user?.username || '';
   const ownerInitials = ((user?.first_name?.[0] ?? '') + (user?.last_name?.[0] ?? '') || user?.username?.slice(0, 2) || '?').toUpperCase();
@@ -55,6 +59,7 @@ export function DocumentListPage() {
       const [docList] = await Promise.all([
         api.listDocuments(projectId),
         projectId ? projectApi.getProject(projectId).then((p) => setProjectName(p.name)).catch(() => {}) : Promise.resolve(),
+        projectApi.listProjects().then(setAllProjects).catch(() => {}),
       ]);
       setDocs(docList);
     } catch { /* ignore */ } finally { setLoading(false); }
@@ -88,6 +93,17 @@ export function DocumentListPage() {
   const handleDelete = async (id: string) => {
     try { await api.deleteDocument(id); setDocs((prev) => prev.filter((d) => d.id !== id)); }
     catch (err) { fail("Couldn't delete document", err); }
+  };
+
+  const moveDoc = async (target: Project) => {
+    const doc = movingDoc;
+    if (!doc) return;
+    setMovingDoc(null);
+    try {
+      await api.updateDocument(doc.id, { project_id: target.id });
+      setDocs((prev) => prev.filter((x) => x.id !== doc.id));   // it left this project; stay here
+      note(`Moved "${doc.name}" to ${target.name}`);
+    } catch (err) { fail("Couldn't move document", err); }
   };
 
   const deleteProject = async () => {
@@ -138,6 +154,7 @@ export function DocumentListPage() {
       onOpen={() => handleOpen(d)}
       onDoubleClick={() => { setEditingId(d.id); setEditName(d.name); }}
       onDelete={() => handleDelete(d.id)}
+      onMove={allProjects.length > 1 ? () => setMovingDoc(d) : undefined}
       editing={editingId === d.id ? { value: editName, onChange: setEditName, onCommit: commitRename, onCancel: () => setEditingId(null) } : undefined}
     />
   );
@@ -163,10 +180,39 @@ export function DocumentListPage() {
         <div onClick={() => setNotice(null)} title="Dismiss"
           style={{ position: 'fixed', top: 66, left: '50%', transform: 'translateX(-50%)', zIndex: 50,
                    maxWidth: 620, padding: '11px 16px', background: t.surface, color: t.text,
-                   border: `1px solid ${t.danger}`, borderRadius: 10, boxShadow: t.shadow,
+                   border: `1px solid ${notice.ok ? t.accent : t.danger}`, borderRadius: 10, boxShadow: t.shadow,
                    fontFamily: SANS, fontSize: '13px', cursor: 'pointer', display: 'flex', gap: 10, alignItems: 'center' }}>
-          <span style={{ color: t.danger, fontWeight: 700, fontSize: '15px' }}>!</span>
-          <span>{notice}</span>
+          <span style={{ color: notice.ok ? t.accent : t.danger, fontWeight: 700, fontSize: '15px' }}>{notice.ok ? '✓' : '!'}</span>
+          <span>{notice.text}</span>
+        </div>
+      )}
+
+      {movingDoc && (
+        <div onClick={() => setMovingDoc(null)}
+          style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <div onClick={(e) => e.stopPropagation()}
+            style={{ width: '100%', maxWidth: 420, maxHeight: '70vh', display: 'flex', flexDirection: 'column',
+                     background: t.surface, border: `1px solid ${t.border}`, borderRadius: 14, boxShadow: t.shadow, overflow: 'hidden' }}>
+            <div style={{ padding: '16px 18px', borderBottom: `1px solid ${t.border}` }}>
+              <div style={{ fontSize: '15px', fontWeight: 700, color: t.text }}>Move to project</div>
+              <div style={{ fontFamily: MONO, fontSize: '12px', color: t.textMute, marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{movingDoc.name}</div>
+            </div>
+            <div style={{ overflowY: 'auto' }}>
+              {allProjects.filter((p) => p.id !== projectId).map((p) => (
+                <button key={p.id} onClick={() => moveDoc(p)}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', textAlign: 'left',
+                           padding: '12px 18px', background: 'none', border: 'none', borderBottom: `1px solid ${t.border}`, cursor: 'pointer', color: t.text }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = t.surface2)}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}>
+                  <span style={{ fontSize: '14px', fontWeight: 500 }}>{p.name}</span>
+                  <span style={{ fontFamily: MONO, fontSize: '12px', color: t.textMute }}>{p.document_count} files</span>
+                </button>
+              ))}
+              {allProjects.filter((p) => p.id !== projectId).length === 0 && (
+                <div style={{ padding: '20px 18px', fontSize: '13px', color: t.textMute }}>No other projects to move to.</div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 

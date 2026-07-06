@@ -134,7 +134,7 @@ export const api = {
     }
   },
 
-  async updateDocument(id: string, payload: { name?: string; data?: Record<string, unknown>; history?: unknown }): Promise<DocumentFull> {
+  async updateDocument(id: string, payload: { name?: string; data?: Record<string, unknown>; history?: unknown; project_id?: string }): Promise<DocumentFull> {
     const now = new Date().toISOString();
     const existing = await db.documents.get(id);
     const optimistic = {
@@ -142,7 +142,7 @@ export const api = {
       name: payload.name ?? existing?.name ?? '',
       data: payload.data ?? existing?.data ?? {},
       history: payload.history ?? existing?.history,
-      project_id: existing?.project_id ?? null,
+      project_id: payload.project_id ?? existing?.project_id ?? null,
       updated_at: now,
     };
 

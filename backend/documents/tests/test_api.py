@@ -76,6 +76,23 @@ class DocumentAPITests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["name"], "Updated")
 
+    def test_move_to_another_project(self):
+        other = Project.objects.create(name="Other", organisation=self.org, created_by=self.user)
+        resp = self.client.post(
+            "/api/documents/",
+            data=json.dumps({"name": "Doc", "data": _valid_doc_data(), "project_id": str(self.project.id)}),
+            content_type="application/json",
+        )
+        doc_id = resp.json()["id"]
+
+        resp = self.client.put(
+            f"/api/documents/{doc_id}",
+            data=json.dumps({"project_id": str(other.id)}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["project_id"], str(other.id))
+
     def test_delete(self):
         resp = self.client.post(
             "/api/documents/",

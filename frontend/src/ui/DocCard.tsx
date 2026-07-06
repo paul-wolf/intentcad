@@ -30,11 +30,12 @@ export interface DocCardEdit {
 
 /** A document card: grid-backed thumbnail with a PART/SKETCH badge, name, meta.
  *  Optional double-click rename and a hover delete. */
-export function DocCard({ d, onOpen, onDoubleClick, onDelete, editing }: {
+export function DocCard({ d, onOpen, onDoubleClick, onDelete, onMove, editing }: {
   d: DocCardData;
   onOpen: () => void;
   onDoubleClick?: () => void;
   onDelete?: () => void;
+  onMove?: () => void;
   editing?: DocCardEdit;
 }) {
   const t = useTokens();
@@ -47,18 +48,26 @@ export function DocCard({ d, onOpen, onDoubleClick, onDelete, editing }: {
       style={{ position: 'relative', background: t.surface, border: `1px solid ${t.border}`, borderRadius: 12, overflow: 'hidden',
                cursor: 'pointer', transition: 'transform .12s ease,border-color .12s ease,box-shadow .12s ease' }}
       onMouseEnter={(e) => { const s = e.currentTarget.style; s.transform = 'translateY(-3px)'; s.borderColor = t.border2; s.boxShadow = t.shadow;
-                             const del = e.currentTarget.querySelector('[data-del]') as HTMLElement | null; if (del) del.style.opacity = '1'; }}
+                             e.currentTarget.querySelectorAll('[data-act]').forEach((el) => ((el as HTMLElement).style.opacity = '1')); }}
       onMouseLeave={(e) => { const s = e.currentTarget.style; s.transform = 'none'; s.borderColor = t.border; s.boxShadow = 'none';
-                             const del = e.currentTarget.querySelector('[data-del]') as HTMLElement | null; if (del) del.style.opacity = '0'; }}
+                             e.currentTarget.querySelectorAll('[data-act]').forEach((el) => ((el as HTMLElement).style.opacity = '0')); }}
     >
-      {onDelete && (
-        <button data-del title="Delete" onClick={(e) => { e.stopPropagation(); onDelete(); }}
-          style={{ position: 'absolute', top: 8, right: 8, zIndex: 3, opacity: 0, transition: 'opacity .1s',
-                   display: 'flex', width: 24, height: 24, alignItems: 'center', justifyContent: 'center',
-                   background: t.surface, border: `1px solid ${t.border2}`, borderRadius: 6, color: t.danger, cursor: 'pointer' }}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
-        </button>
-      )}
+      <div style={{ position: 'absolute', top: 8, right: 8, zIndex: 3, display: 'flex', gap: 5 }}>
+        {onMove && (
+          <button data-act title="Move to another project" onClick={(e) => { e.stopPropagation(); onMove(); }}
+            style={{ opacity: 0, transition: 'opacity .1s', display: 'flex', width: 24, height: 24, alignItems: 'center', justifyContent: 'center',
+                     background: t.surface, border: `1px solid ${t.border2}`, borderRadius: 6, color: t.textDim, cursor: 'pointer' }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7.5V19a1.5 1.5 0 0 0 1.5 1.5h15A1.5 1.5 0 0 0 21 19V9a1.5 1.5 0 0 0-1.5-1.5h-7L10 4.8A1.5 1.5 0 0 0 8.8 4H4.5A1.5 1.5 0 0 0 3 5.5z" /><path d="M12 16V11M12 11l-2 2M12 11l2 2" /></svg>
+          </button>
+        )}
+        {onDelete && (
+          <button data-act title="Delete" onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            style={{ opacity: 0, transition: 'opacity .1s', display: 'flex', width: 24, height: 24, alignItems: 'center', justifyContent: 'center',
+                     background: t.surface, border: `1px solid ${t.border2}`, borderRadius: 6, color: t.danger, cursor: 'pointer' }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
+          </button>
+        )}
+      </div>
       <div style={{ position: 'relative', aspectRatio: '4 / 3', display: 'flex', alignItems: 'center', justifyContent: 'center',
                     backgroundColor: t.thumbBg, borderBottom: `1px solid ${t.border}`,
                     backgroundImage: `linear-gradient(${t.grid} 1px,transparent 1px),linear-gradient(90deg,${t.grid} 1px,transparent 1px)`,

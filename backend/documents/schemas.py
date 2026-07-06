@@ -16,6 +16,7 @@ class DocumentUpdateIn(Schema):
     name: str | None = None
     data: dict[str, Any] | None = None
     history: dict[str, Any] | None = None
+    project_id: UUID | None = None   # set to move the document to another project
 
 
 class DocumentOut(Schema):
