@@ -153,6 +153,8 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   const [sel, setSel] = useState<number[]>([]);   // selected face indices (≤ 2)
   const resRef = useRef<RunResponse | null>(null);
   const selRef = useRef<number[]>([]);
+  const buildAbort = useRef<AbortController | null>(null);   // cancel an in-flight build
+  const cancelBuild = () => { buildAbort.current?.abort(); };
 
   // click a face → toggle it in the selection (keep at most 2). With two faces
   // selected, highlight the edge(s) between them (an edge = two faces meeting).
@@ -205,6 +207,9 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
 
   const build = async (src: string, versionLabel?: string) => {
     if (!viewerRef.current) return;
+    buildAbort.current?.abort();                 // supersede any in-flight build
+    const ctrl = new AbortController();
+    buildAbort.current = ctrl;
     setStatus('building');
     setMessage('');
     const t0 = performance.now();
@@ -213,7 +218,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
       // IndexedDB cache with no engine call.
       const key = buildKey(src);
       const cached = await getCachedBuild(key);
-      const res = cached?.run ?? await buildApi.run(src);
+      const res = cached?.run ?? await buildApi.run(src, ctrl.signal);
       const took = Math.round(performance.now() - t0);
       setWarn(res.warning ?? '');
       viewerRef.current.update(res.mesh, res.faces);
@@ -250,8 +255,15 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
         if (url) persistThumbnail(url);
       }, 1400);
     } catch (err) {
+      // Cancelled by the user (or superseded by a newer build) — not an error.
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        if (buildAbort.current === ctrl) { setStatus('idle'); setMessage(''); }
+        return;
+      }
       setStatus('error');
       setMessage(String(err instanceof Error ? err.message : err));
+    } finally {
+      if (buildAbort.current === ctrl) buildAbort.current = null;
     }
   };
 
@@ -281,7 +293,11 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
           return;
         }
       }
-      build(initial);
+      // A brand-new part shows the STARTER seed but does NOT auto-build it —
+      // you almost always replace it, so kicking off a build of the default is
+      // wasted work. Saved parts build on open so you see the model immediately.
+      if (initial === STARTER) { setStatus('idle'); setMessage('Edit the script or ask the AI, then Build.'); }
+      else build(initial);
     };
     const seedWhenLoaded = () => {
       if (done) return;
@@ -542,10 +558,18 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
                      border: `1px solid ${palette.border}` }}>
             Versions
           </button>
-          <button onClick={rebuild} disabled={status === 'building'}
-            style={{ ...btn, background: palette.primaryBtn, color: '#fff', opacity: status === 'building' ? 0.6 : 1 }}>
-            {status === 'building' ? 'Building…' : 'Build'}
-          </button>
+          {status === 'building' ? (
+            <button onClick={cancelBuild} title="Cancel this build"
+              style={{ ...btn, background: 'none', color: palette.danger ?? '#f87171',
+                       border: `1px solid ${palette.danger ?? '#f87171'}` }}>
+              Cancel build
+            </button>
+          ) : (
+            <button onClick={rebuild}
+              style={{ ...btn, background: palette.primaryBtn, color: '#fff' }}>
+              Build
+            </button>
+          )}
           {(['stl', 'step', 'stl-parts'] as const).map((f) => {
             const enabled = status === 'done' && !exporting;
             const label = f === 'stl-parts' ? 'Parts' : f.toUpperCase();

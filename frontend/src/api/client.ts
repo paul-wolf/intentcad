@@ -221,8 +221,8 @@ export const buildApi = {
   chat(payload: ChatRequest): Promise<ChatResponse> {
     return request('/build/chat', { method: 'POST', body: JSON.stringify(payload) });
   },
-  run(code: string): Promise<RunResponse> {
-    return request('/build/run', { method: 'POST', body: JSON.stringify({ code }) });
+  run(code: string, signal?: AbortSignal): Promise<RunResponse> {
+    return request('/build/run', { method: 'POST', body: JSON.stringify({ code }), signal });
   },
   export(code: string, format: 'stl' | 'step' | 'stl-parts'): Promise<{ format: string; data: string }> {
     return request('/build/export', { method: 'POST', body: JSON.stringify({ code, format }) });
