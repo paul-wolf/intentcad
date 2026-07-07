@@ -22,6 +22,24 @@ class EditTests(SimpleTestCase):
         self.assertIn("Cylinder", r["code"])
         self.assertEqual(r["note"], "Made it a cylinder.")
 
+    def test_production_process_reaches_system_prompt(self):
+        seen = {}
+        def llm(system, user, tools):
+            seen["system"] = system
+            return {"code": "part = Box(1,1,1)", "note": "ok"}
+        edit_script("part = Box(2,2,2)", "add a hole for a 4mm rod",
+                    production="FDM 3D print: add 0.4mm clearance to bores.", llm=llm)
+        self.assertIn("MANUFACTURING CONTEXT", seen["system"])
+        self.assertIn("0.4mm clearance to bores", seen["system"])
+
+    def test_no_production_leaves_system_prompt_clean(self):
+        seen = {}
+        def llm(system, user, tools):
+            seen["system"] = system
+            return {"code": "part = Box(1,1,1)", "note": "ok"}
+        edit_script("part = Box(2,2,2)", "add a hole", llm=llm)
+        self.assertNotIn("MANUFACTURING CONTEXT", seen["system"])
+
     def test_passes_selection_context_in_prompt(self):
         seen = {}
         def llm(system, user, tools):

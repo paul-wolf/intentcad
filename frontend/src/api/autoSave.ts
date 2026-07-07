@@ -117,6 +117,16 @@ export function persistName(name: string) {
   doSave(backendId, doc, history);
 }
 
+/** Persist the part's target-production brief NOW, directly. */
+export function persistProductionNotes(notes: string) {
+  useDocumentStore.getState().setProductionNotes(notes);
+  if (!backendId) return;
+  const state = useDocumentStore.getState();
+  const doc = { ...state.document } as unknown as Record<string, unknown>;
+  const history = { undo: state.undoStack, redo: state.redoStack };
+  doSave(backendId, doc, history);
+}
+
 /** Persist the AI modeling conversation NOW (no debounce), directly. */
 export function persistChat(chat: import('@/types/document').ChatMessage[]) {
   useDocumentStore.getState().setChat(chat);

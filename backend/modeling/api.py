@@ -108,7 +108,8 @@ def edit_model(request, payload: EditRequest):
         return err
     history = [{"role": t.role, "text": t.text} for t in payload.history]
     try:
-        r = edit_script(payload.code, payload.instruction, payload.context, history, payload.model or None)
+        r = edit_script(payload.code, payload.instruction, payload.context, history,
+                        payload.model or None, production=payload.production)
     except AssistantError as exc:
         return JsonResponse({"message": str(exc)}, status=422)
     AiEdit.objects.create(

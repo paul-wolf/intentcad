@@ -77,8 +77,18 @@ export function createEmptyDocument(name: string): Document {
   };
 }
 
+/** Default target-process brief for a new part. Fed to the AI as standing
+ *  context so it designs in real clearances. Editable per part in the editor. */
+export const DEFAULT_PRODUCTION_NOTES =
+  `Target process: FDM 3D printing (filament). Design in real clearances — plastic swells and the first layer squishes:
+- Holes/bores print undersized: add ~0.3–0.5 mm to the diameter of any hole meant to accept a rod, pin, bolt or shaft.
+- Moving or press-together fits (hinges, sliders, lids, snap parts): leave ~0.4 mm total clearance between mating faces.
+- No knife edges or paper-thin walls (keep walls ≥ ~1.2 mm, ~3 perimeters).
+- Mind elephant's foot at the base; prefer self-supporting angles (overhangs beyond ~45° need support).
+- Expose every fit/clearance as a named param in P so it can be tuned to the printer without rewriting the script.`;
+
 /** A new 3D part document. It still carries an empty sketch (so it validates and
  *  can reference sketches later); `type: 'part'` marks it for the list + routing. */
 export function createEmptyPart(name: string): Document {
-  return { ...createEmptyDocument(name), type: 'part' };
+  return { ...createEmptyDocument(name), type: 'part', productionNotes: DEFAULT_PRODUCTION_NOTES };
 }

@@ -29,8 +29,8 @@ class AssistantError(RuntimeError):
     """The edit failed (no key, model error, or couldn't produce a building script)."""
 
 
-def _system() -> str:
-    return (
+def _system(production: str = "") -> str:
+    base = (
         "You edit a build123d (Python) script that defines a 3D part. The script "
         "MUST bind `part` to the built solid. build123d is already star-imported "
         "(Box, Cylinder, Sphere, Pos, Rot, Plane, Axis, GeomType, fillet, chamfer, "
@@ -66,6 +66,15 @@ def _system() -> str:
         "ask_clarification with ONE short question instead of guessing — a wrong "
         "guess is worse than a question. Otherwise, make the edit."
     )
+    if production.strip():
+        base += (
+            "\n\nMANUFACTURING CONTEXT — the user's target production process for "
+            "this part. Honour it in EVERY edit: design in the clearances, fits, "
+            "wall thicknesses and feature limits it implies, and expose fit "
+            "clearances as named params in P so they stay tunable. The process is:\n"
+            + production.strip()
+        )
+    return base
 
 
 WRITE_TOOL = {
@@ -152,6 +161,7 @@ def edit_script(
     context: str = "",
     history: list[dict] | None = None,
     model: str | None = None,
+    production: str = "",
     *,
     llm: Callable[[str, str, list[dict]], dict] | None = None,
 ) -> dict:
@@ -186,7 +196,7 @@ def edit_script(
 
     def call(extra: str = "") -> dict:
         nonlocal tok_in, tok_out
-        o = llm(_system(), prompt(extra), [WRITE_TOOL, ASK_TOOL])
+        o = llm(_system(production), prompt(extra), [WRITE_TOOL, ASK_TOOL])
         u = o.get("usage") or {}
         tok_in += u.get("input", 0)
         tok_out += u.get("output", 0)

@@ -289,6 +289,7 @@ class EditRequest(Schema):
     document_id: str = ""          # to tally spend per document
     history: list[ChatTurn] = []   # recent conversation turns
     model: str = ""                # optional LLM override (else the default)
+    production: str = ""           # target production process (e.g. FDM print) — standing context
 
 
 class EditResponse(Schema):

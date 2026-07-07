@@ -40,6 +40,7 @@ interface DocumentStore {
   setModelCode(code: string, label?: string): void;
   setChat(chat: import('@/types/document').ChatMessage[]): void;
   setThumbnail(thumbnail: string): void;
+  setProductionNotes(notes: string): void;
 
   // Undo/Redo
   beginTransaction(label: string): void;
@@ -185,6 +186,10 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
 
   setThumbnail(thumbnail) {
     set((s) => ({ document: { ...s.document, thumbnail } }));
+  },
+
+  setProductionNotes(productionNotes) {
+    set((s) => ({ document: { ...s.document, productionNotes } }));
   },
 
   setMetadata(metadata) {

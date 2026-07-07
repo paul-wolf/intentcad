@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
 import { buildApi, type RunResponse, type UsageResponse, type DimInfo } from '@/api/client';
-import { persistModelCode, persistChat, persistThumbnail, persistName, getBackendId } from '@/api/autoSave';
+import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, getBackendId } from '@/api/autoSave';
+import { DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
 import type { ChatMessage } from '@/types/document';
 import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim } from '@/build/webglViewer';
 import { highlightPython, DARK_SYNTAX, LIGHT_SYNTAX } from '@/build/pyHighlight';
@@ -45,6 +46,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   const isDark = useThemeStore((s) => s.theme === 'dark');
   const docName = useDocumentStore((s) => s.document.name);
   const chat = useDocumentStore((s) => s.document.chat ?? NO_CHAT);
+  const productionNotes = useDocumentStore((s) => s.document.productionNotes ?? DEFAULT_PRODUCTION_NOTES);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const viewerRef = useRef<Viewer | null>(null);
@@ -316,6 +318,10 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   // Restoring re-saves that code (which itself creates a new version), so the
   // current model is never lost.
   const [showVersions, setShowVersions] = useState(false);
+  const [showProduction, setShowProduction] = useState(false);
+  const [prodDraft, setProdDraft] = useState('');
+  const openProduction = () => { setProdDraft(productionNotes); setShowProduction(true); };
+  const saveProduction = () => { setShowProduction(false); persistProductionNotes(prodDraft); };
   const restoreVersion = (c: string) => {
     setShowVersions(false);
     if (!c.trim()) return;
@@ -422,6 +428,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
       const r = await buildApi.edit({
         code, instruction, context: selectionContext(),
         document_id: getBackendId() ?? '', history, model,
+        production: productionNotes,
       });
       if (r.kind === 'question') {
         persistChat([...base, { role: 'assistant', kind: 'question', text: r.question, at: Date.now() }]);
@@ -517,6 +524,11 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
             </span>
           )}
           <div style={{ flex: 1 }} />
+          <button onClick={openProduction} title="Target production process — the AI designs to this (clearances, fits, wall thickness)"
+            style={{ ...btn, background: 'none', color: palette.textSecondary,
+                     border: `1px solid ${palette.border}` }}>
+            Process
+          </button>
           <button onClick={() => setShowVersions(true)} title="Browse and restore saved versions"
             style={{ ...btn, background: 'none', color: palette.textSecondary,
                      border: `1px solid ${palette.border}` }}>
@@ -831,6 +843,45 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
       {showVersions && getBackendId() && (
         <PartVersionsPanel docId={getBackendId()!} currentCode={code}
           onRestore={restoreVersion} onClose={() => setShowVersions(false)} />
+      )}
+      {showProduction && (
+        <div onClick={() => setShowProduction(false)}
+          style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.5)',
+                   display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <div onClick={(e) => e.stopPropagation()}
+            style={{ width: 'min(640px, 94vw)', display: 'flex', flexDirection: 'column', gap: 12,
+                     background: palette.panelBg, border: `1px solid ${palette.border}`, borderRadius: 12,
+                     boxShadow: '0 12px 40px rgba(0,0,0,0.45)', padding: 18 }}>
+            <div>
+              <div style={{ fontSize: '15px', fontWeight: 600, color: palette.text }}>Production process</div>
+              <div style={{ fontSize: '12.5px', color: palette.textSecondary, marginTop: 4 }}>
+                Standing context for the AI — it designs every edit to this (clearances, fits, wall thickness).
+                Describe how this part is made.
+              </div>
+            </div>
+            <textarea value={prodDraft} autoFocus onChange={(e) => setProdDraft(e.target.value)}
+              spellCheck={false} rows={10}
+              style={{ width: '100%', resize: 'vertical', boxSizing: 'border-box', padding: '10px 12px',
+                       background: palette.inputBg, color: palette.text, border: `1px solid ${palette.border}`,
+                       borderRadius: 8, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                       fontSize: '12.5px', lineHeight: 1.5, outline: 'none' }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button onClick={() => setProdDraft(DEFAULT_PRODUCTION_NOTES)}
+                style={{ ...btn, background: 'none', color: palette.textSecondary, border: `1px solid ${palette.border}` }}>
+                Reset to FDM default
+              </button>
+              <div style={{ flex: 1 }} />
+              <button onClick={() => setShowProduction(false)}
+                style={{ ...btn, background: 'none', color: palette.textSecondary, border: `1px solid ${palette.border}` }}>
+                Cancel
+              </button>
+              <button onClick={saveProduction}
+                style={{ ...btn, background: palette.primaryBtn, color: '#fff', border: 'none' }}>
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

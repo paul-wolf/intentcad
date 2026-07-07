@@ -236,6 +236,9 @@ export interface Document {
   /** The AI modeling conversation (persisted). Assistant 'edit' turns carry the
    *  resulting script as a checkpoint you can revert to. */
   chat?: ChatMessage[];
+  /** The target production process for this part (e.g. FDM 3D printing). Fed to
+   *  the AI as standing context so every edit designs in the right clearances. */
+  productionNotes?: string;
 }
 
 export interface ChatMessage {
