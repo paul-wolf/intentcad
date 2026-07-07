@@ -203,7 +203,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
     return { single: false as const, dist: Math.hypot(dx, dy, dz), dx, dy, dz, diaA: dia(a), diaB: dia(b) };
   })();
 
-  const build = async (src: string) => {
+  const build = async (src: string, versionLabel?: string) => {
     if (!viewerRef.current) return;
     setStatus('building');
     setMessage('');
@@ -238,6 +238,10 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
         `${sz[0]}×${sz[1]}×${sz[2]} mm · vol ${Math.round(m.volume).toLocaleString()} mm³ · area ${Math.round(m.area).toLocaleString()} mm²`,
       );
       setStatus('done');
+      // The build succeeded, so this code is a coherent, buildable snapshot —
+      // record it as an immutable version (deduped server-side; a rebuild of
+      // unchanged code adds nothing).
+      snapshotVersion(src, versionLabel);
       // capture a thumbnail from the freshly-framed view (debounced so rapid
       // rebuilds coalesce into one save)
       if (thumbTimer.current) clearTimeout(thumbTimer.current);
@@ -251,9 +255,13 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
     }
   };
 
+  // A version is recorded only on a successful BUILD — a coherent, buildable
+  // snapshot. In-progress hand edits persist as DRAFTS (saved for durability but
+  // not versioned), so half-finished states between builds don't clutter history.
   // Never persist the untouched STARTER seed — that is how saved work got
   // clobbered (seeded before the document had loaded, then written back).
-  const saveCode = (c: string, label?: string) => { if (c.trim() && c !== STARTER) persistModelCode(c, label); };
+  const saveDraft = (c: string) => { if (c.trim() && c !== STARTER) persistModelCode(c, undefined, false); };
+  const snapshotVersion = (c: string, label?: string) => { if (c.trim() && c !== STARTER) persistModelCode(c, label, true); };
 
   // mount: create the viewer, then seed the code — but WAIT until the document
   // has actually loaded (getBackendId is set only after setDocument), so we
@@ -297,14 +305,14 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   useEffect(() => {
     if (codeBaseline.current === null) { codeBaseline.current = code; return; }
     if (code === codeBaseline.current) return;
-    const t = setTimeout(() => { codeBaseline.current = code; saveCode(code, 'hand edit'); }, 600);
+    const t = setTimeout(() => { codeBaseline.current = code; saveDraft(code); }, 600);
     return () => clearTimeout(t);
   }, [code]);
 
   // save the current code on close, so nothing typed is lost
-  const handleClose = () => { if (code.trim()) saveCode(code, 'hand edit'); onClose(); };
+  const handleClose = () => { if (code.trim()) saveDraft(code); onClose(); };
   // breadcrumb nav: persist the current code, then navigate away
-  const navAway = (fn: () => void) => { if (code.trim()) saveCode(code, 'hand edit'); fn(); };
+  const navAway = (fn: () => void) => { if (code.trim()) saveDraft(code); fn(); };
 
   // rename the part (persists immediately; a rename is not a new model version)
   const startRename = () => { setNameDraft(docName); setEditingName(true); };
@@ -326,8 +334,8 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
     setShowVersions(false);
     if (!c.trim()) return;
     setCode(c);
-    saveCode(c, 'restored');
-    build(c);
+    saveDraft(c);
+    build(c, 'restored');
     setFlash('Restored this version');
     setTimeout(() => setFlash(''), 2500);
   };
@@ -393,8 +401,8 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
     try {
       const r = await buildApi.setParams(code, { [name]: val });
       setCode(r.code);
-      saveCode(r.code, `${name} = ${val}`);
-      await build(r.code);
+      saveDraft(r.code);
+      await build(r.code, `${name} = ${val}`);
     } catch (err) {
       setMessage(String(err instanceof Error ? err.message : err));
     }
@@ -435,8 +443,8 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
       } else {
         persistChat([...base, { role: 'assistant', kind: 'edit', text: r.note || 'Done.', code: r.code, at: Date.now() }]);
         setCode(r.code);
-        saveCode(r.code, r.note || instruction);
-        await build(r.code);
+        saveDraft(r.code);
+        await build(r.code, r.note || instruction);
       }
       fetchUsage();
     } catch (err) {
@@ -447,7 +455,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
     }
   };
 
-  const rebuild = () => { saveCode(code); build(code); };
+  const rebuild = () => { saveDraft(code); build(code, 'build'); };
   const [exporting, setExporting] = useState<'stl' | 'step' | 'stl-parts' | null>(null);
   const doExport = async (format: 'stl' | 'step' | 'stl-parts') => {
     if (status !== 'done' || exporting) return;

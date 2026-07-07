@@ -137,7 +137,10 @@ def update_document(request, doc_id: UUID, payload: DocumentUpdateIn):
             return JsonResponse({"message": "Access denied"}, status=403)
         doc.project = target
     doc.save()
-    if payload.data is not None:
+    # Record an immutable version only when asked (a build-verified snapshot).
+    # In-progress hand edits between builds save with snapshot=False so they
+    # persist for durability without cluttering history with unfinished states.
+    if payload.data is not None and payload.snapshot:
         _snapshot(doc, request.user, doc.data, payload.version_label or "")
     return doc
 

@@ -19,6 +19,8 @@ class DocumentUpdateIn(Schema):
     project_id: UUID | None = None       # set to move the document to another project
     base_updated_at: str | None = None   # the updated_at the client last saw (concurrency)
     version_label: str = ""              # optional label for the version snapshot
+    snapshot: bool = True                # whether this save should record an immutable version
+                                         # (False for in-progress drafts between builds)
 
 
 class DocumentOut(Schema):

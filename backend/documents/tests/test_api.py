@@ -110,6 +110,26 @@ class DocumentAPITests(TestCase):
                         data=json.dumps({"data": d2}), content_type="application/json")
         self.assertEqual(DocumentVersion.objects.filter(document_id=doc_id).count(), 2)
 
+    def test_draft_save_does_not_create_a_version(self):
+        from documents.models import DocumentVersion
+        d = dict(_valid_doc_data(), modelCode="part = Box(1,1,1)")
+        resp = self.client.post("/api/documents/",
+                                data=json.dumps({"name": "P", "data": d}), content_type="application/json")
+        doc_id = resp.json()["id"]
+        self.assertEqual(DocumentVersion.objects.filter(document_id=doc_id).count(), 1)  # created
+        # an in-progress draft (snapshot=False) persists but must NOT add a version
+        self.client.put(f"/api/documents/{doc_id}",
+                        data=json.dumps({"data": dict(d, modelCode="part = Box(2,2,2)"), "snapshot": False}),
+                        content_type="application/json")
+        self.assertEqual(DocumentVersion.objects.filter(document_id=doc_id).count(), 1)
+        # the draft's code is still saved on the document
+        self.assertEqual(self.client.get(f"/api/documents/{doc_id}").json()["data"]["modelCode"], "part = Box(2,2,2)")
+        # a build-verified save (snapshot=True, the default) does add one
+        self.client.put(f"/api/documents/{doc_id}",
+                        data=json.dumps({"data": dict(d, modelCode="part = Box(3,3,3)")}),
+                        content_type="application/json")
+        self.assertEqual(DocumentVersion.objects.filter(document_id=doc_id).count(), 2)
+
     def test_stale_save_is_rejected(self):
         d = dict(_valid_doc_data(), modelCode="part = Box(1,1,1)")
         resp = self.client.post("/api/documents/",

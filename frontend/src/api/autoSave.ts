@@ -52,7 +52,7 @@ function hasModelCode(doc: Record<string, unknown>): boolean {
   return typeof c === 'string' && c.trim().length > 0;
 }
 
-function doSave(id: string, doc: Record<string, unknown>, history?: unknown, versionLabel?: string) {
+function doSave(id: string, doc: Record<string, unknown>, history?: unknown, versionLabel?: string, snapshot = false) {
   if (hasModelCode(doc)) {
     sawModelCode = true;
   } else if (sawModelCode) {
@@ -65,6 +65,7 @@ function doSave(id: string, doc: Record<string, unknown>, history?: unknown, ver
     data: doc,
     history,
     version_label: versionLabel,
+    snapshot,
   }).then(() => {
     addLog('info', 'Document saved');
   }).catch((err: unknown) => {
@@ -98,13 +99,16 @@ export function persistBuildFeatures(features: unknown[]) {
 
 /** Persist the build123d model script NOW (no debounce), directly. `label`
  *  describes what produced this version (for the version history). */
-export function persistModelCode(code: string, label?: string) {
+/** Persist the build123d model script NOW, directly.
+ *  `snapshot` records an immutable version (true = a build-verified snapshot;
+ *  false = an in-progress draft between builds — persisted but not versioned). */
+export function persistModelCode(code: string, label?: string, snapshot = true) {
   useDocumentStore.getState().setModelCode(code, label);
   if (!backendId) return;
   const state = useDocumentStore.getState();
   const doc = { ...state.document } as unknown as Record<string, unknown>;
   const history = { undo: state.undoStack, redo: state.redoStack };
-  doSave(backendId, doc, history, label);
+  doSave(backendId, doc, history, label, snapshot);
 }
 
 /** Persist a document rename NOW, directly (used by the part editor header). */
