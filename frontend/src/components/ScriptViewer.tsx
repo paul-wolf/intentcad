@@ -472,18 +472,19 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   };
 
   const rebuild = () => { saveDraft(code); build(code, 'build'); };
-  const [exporting, setExporting] = useState<'stl' | 'step' | 'stl-parts' | 'dxf' | null>(null);
-  const doExport = async (format: 'stl' | 'step' | 'stl-parts' | 'dxf') => {
+  const [exporting, setExporting] = useState<'stl' | 'step' | 'stl-parts' | 'dxf' | 'dxf-views' | null>(null);
+  const doExport = async (format: 'stl' | 'step' | 'stl-parts' | 'dxf' | 'dxf-views') => {
     if (status !== 'done' || exporting) return;
     setExporting(format);
     try {
       const r = await buildApi.export(code, format);
-      if (format === 'stl-parts') {
-        // r.data is a base64 zip of one STL per body
+      if (format === 'stl-parts' || format === 'dxf-views') {
+        // r.data is a base64 zip (STL per body, or top/front/side DXFs)
         const bytes = Uint8Array.from(atob(r.data), (c) => c.charCodeAt(0));
         const url = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }));
+        const suffix = format === 'stl-parts' ? 'parts' : 'views';
         const a = document.createElement('a');
-        a.href = url; a.download = `${docName}-parts.zip`; a.click();
+        a.href = url; a.download = `${docName}-${suffix}.zip`; a.click();
         URL.revokeObjectURL(url);
       } else {
         const mime = format === 'stl' ? 'model/stl'
@@ -572,11 +573,12 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
               Build
             </button>
           )}
-          {(['stl', 'step', 'stl-parts', 'dxf'] as const).map((f) => {
+          {(['stl', 'step', 'stl-parts', 'dxf', 'dxf-views'] as const).map((f) => {
             const enabled = status === 'done' && !exporting;
-            const label = f === 'stl-parts' ? 'Parts' : f.toUpperCase();
+            const label = f === 'stl-parts' ? 'Parts' : f === 'dxf-views' ? '3-View' : f.toUpperCase();
             const title = f === 'stl-parts' ? 'Download one STL per body, zipped (for printing an assembly)'
               : f === 'dxf' ? 'Flat top-down outline as DXF, for 2D CAM / CNC routing'
+              : f === 'dxf-views' ? 'Top, front and side outlines as three DXF files, zipped'
               : undefined;
             return (
               <button key={f} onClick={() => doExport(f)} disabled={!enabled}

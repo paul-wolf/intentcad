@@ -29,6 +29,20 @@ class EngineTests(SimpleTestCase):
         self.assertIn("CIRCLE", dxf)  # the through-hole survives as a circle
         self.assertIn("LINE", dxf)    # the rectangular outline
 
+    def test_dxf_views_zips_top_front_and_side(self):
+        import base64
+        import io
+        import zipfile
+
+        r = run_script("part = Box(40, 24, 3) - Pos(8, 4, 0) * Cylinder(3, 6)",
+                       export=["dxf-views"])
+        self.assertTrue(r["ok"])
+        zf = zipfile.ZipFile(io.BytesIO(base64.b64decode(r["exports"]["dxf-views"])))
+        self.assertEqual(sorted(zf.namelist()), ["front.dxf", "side.dxf", "top.dxf"])
+        # only the top view sees the through-hole (its axis is Z)
+        self.assertIn("CIRCLE", zf.read("top.dxf").decode())
+        self.assertNotIn("CIRCLE", zf.read("front.dxf").decode())
+
     def test_cylindrical_face_reports_its_radius(self):
         r = run_script("part = Box(20, 20, 10) - Cylinder(3, 20)")
         cyls = [f for f in r["faces"] if f["kind"] == "cylinder"]

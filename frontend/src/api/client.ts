@@ -224,7 +224,7 @@ export const buildApi = {
   run(code: string, signal?: AbortSignal): Promise<RunResponse> {
     return request('/build/run', { method: 'POST', body: JSON.stringify({ code }), signal });
   },
-  export(code: string, format: 'stl' | 'step' | 'stl-parts' | 'dxf'): Promise<{ format: string; data: string }> {
+  export(code: string, format: 'stl' | 'step' | 'stl-parts' | 'dxf' | 'dxf-views'): Promise<{ format: string; data: string }> {
     return request('/build/export', { method: 'POST', body: JSON.stringify({ code, format }) });
   },
   edit(payload: { code: string; instruction: string; context?: string; document_id?: string;

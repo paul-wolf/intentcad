@@ -13,28 +13,62 @@ import sys
 import tempfile
 
 
-def _export_dxf(part) -> str:
-    """Flat top-down outline of the part as DXF text, for 2D CAM / CNC routing.
-
-    Looks straight down the Z axis and returns the hidden-line-removed silhouette
-    (build123d's project_to_viewport): for a prismatic sheet part this is exactly
-    the cut profile plus any through-holes, as DXF LINE/ARC/CIRCLE entities at
-    Z=0. The projection is orthographic, so the eye distance is irrelevant. The
-    model is Y-up (same as STEP/STL), which matches DXF, so no Y flip is needed.
-    """
+def _dxf_for_view(part, eye, up, look_at) -> str:
+    """A single orthographic DXF outline of the part, seen from `eye` looking at
+    `look_at` with `up` pointing up. Returns the hidden-line-removed silhouette
+    (build123d's project_to_viewport) as DXF LINE/ARC/CIRCLE entities laid flat on
+    the XY plane. The projection is orthographic, so the eye distance is
+    irrelevant — only the direction matters."""
     from build123d import ExportDXF, Unit
 
-    bb = part.bounding_box()
-    cx = (bb.min.X + bb.max.X) / 2
-    cy = (bb.min.Y + bb.max.Y) / 2
-    eye = (cx, cy, bb.max.Z + 1000.0)  # +Y up -> world XY maps straight to DXF XY
-    visible, _hidden = part.project_to_viewport(eye, (0, 1, 0), (cx, cy, 0))
+    visible, _hidden = part.project_to_viewport(eye, up, look_at)
     exporter = ExportDXF(unit=Unit.MM)
     for edge in visible:
         exporter.add_shape(edge)
     with tempfile.NamedTemporaryFile(suffix=".dxf", mode="r", delete=True) as fh:
         exporter.write(fh.name)
         return open(fh.name).read()
+
+
+def _export_dxf(part) -> str:
+    """Flat top-down outline of the part as DXF text, for 2D CAM / CNC routing.
+
+    Looks straight down the Z axis: for a prismatic sheet part this is exactly the
+    cut profile plus any through-holes. The model is Y-up (same as STEP/STL),
+    which matches DXF, so no Y flip is needed."""
+    bb = part.bounding_box()
+    cx = (bb.min.X + bb.max.X) / 2
+    cy = (bb.min.Y + bb.max.Y) / 2
+    cz = (bb.min.Z + bb.max.Z) / 2
+    return _dxf_for_view(part, (cx, cy, bb.max.Z + 1000.0), (0, 1, 0), (cx, cy, cz))
+
+
+def _export_dxf_views(part) -> str:
+    """Top, front and side outlines as three DXF files, zipped (base64), like
+    stl-parts. Each is an orthographic silhouette on its own plane — top looks
+    down Z (XY), front looks along +Y (XZ), side looks along -X (YZ). Three views
+    don't guarantee full feature coverage (undercuts, angled faces can hide), but
+    for most parts they give the profiles a machinist needs."""
+    import base64
+    import io
+    import zipfile
+
+    bb = part.bounding_box()
+    cx = (bb.min.X + bb.max.X) / 2
+    cy = (bb.min.Y + bb.max.Y) / 2
+    cz = (bb.min.Z + bb.max.Z) / 2
+    d = 1000.0  # orthographic: just needs to clear the part
+    center = (cx, cy, cz)
+    views = {
+        "top": _dxf_for_view(part, (cx, cy, bb.max.Z + d), (0, 1, 0), center),
+        "front": _dxf_for_view(part, (cx, bb.min.Y - d, cz), (0, 0, 1), center),
+        "side": _dxf_for_view(part, (bb.max.X + d, cy, cz), (0, 0, 1), center),
+    }
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, text in views.items():
+            zf.writestr(f"{name}.dxf", text)
+    return base64.b64encode(buf.getvalue()).decode()
 
 
 def _run(code: str, export: list | None = None) -> dict:
@@ -176,6 +210,10 @@ def _run(code: str, export: list | None = None) -> dict:
         if fmt == "dxf":
             # flat top-down outline for 2D CAM (see _export_dxf)
             exports[fmt] = _export_dxf(part)
+            continue
+        if fmt == "dxf-views":
+            # top/front/side outlines, zipped (see _export_dxf_views)
+            exports[fmt] = _export_dxf_views(part)
             continue
         suffix = {"step": ".step", "stl": ".stl"}.get(fmt)
         if not suffix:

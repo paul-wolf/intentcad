@@ -61,7 +61,7 @@ def export_model(request, payload: ExportRequest):
     if err:
         return err
     fmt = payload.format.lower()
-    if fmt not in ("stl", "step", "stl-parts", "dxf"):
+    if fmt not in ("stl", "step", "stl-parts", "dxf", "dxf-views"):
         return JsonResponse({"message": f"unknown format {payload.format!r}"}, status=422)
     try:
         r = run_script(payload.code, export=[fmt])
