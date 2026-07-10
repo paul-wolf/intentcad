@@ -472,8 +472,8 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   };
 
   const rebuild = () => { saveDraft(code); build(code, 'build'); };
-  const [exporting, setExporting] = useState<'stl' | 'step' | 'stl-parts' | null>(null);
-  const doExport = async (format: 'stl' | 'step' | 'stl-parts') => {
+  const [exporting, setExporting] = useState<'stl' | 'step' | 'stl-parts' | 'dxf' | null>(null);
+  const doExport = async (format: 'stl' | 'step' | 'stl-parts' | 'dxf') => {
     if (status !== 'done' || exporting) return;
     setExporting(format);
     try {
@@ -486,7 +486,9 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
         a.href = url; a.download = `${docName}-parts.zip`; a.click();
         URL.revokeObjectURL(url);
       } else {
-        const mime = format === 'stl' ? 'model/stl' : 'application/step';
+        const mime = format === 'stl' ? 'model/stl'
+          : format === 'dxf' ? 'application/dxf'
+          : 'application/step';
         downloadTextFile(r.data, `${docName}.${format}`, mime);
       }
     } catch (err) {
@@ -570,12 +572,15 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
               Build
             </button>
           )}
-          {(['stl', 'step', 'stl-parts'] as const).map((f) => {
+          {(['stl', 'step', 'stl-parts', 'dxf'] as const).map((f) => {
             const enabled = status === 'done' && !exporting;
             const label = f === 'stl-parts' ? 'Parts' : f.toUpperCase();
+            const title = f === 'stl-parts' ? 'Download one STL per body, zipped (for printing an assembly)'
+              : f === 'dxf' ? 'Flat top-down outline as DXF, for 2D CAM / CNC routing'
+              : undefined;
             return (
               <button key={f} onClick={() => doExport(f)} disabled={!enabled}
-                title={f === 'stl-parts' ? 'Download one STL per body, zipped (for printing an assembly)' : undefined}
+                title={title}
                 style={{ ...btn, background: 'none', color: palette.textSecondary,
                          border: `1px solid ${palette.border}`, opacity: enabled ? 1 : 0.5,
                          cursor: enabled ? 'pointer' : 'default' }}>

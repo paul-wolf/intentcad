@@ -13,6 +13,30 @@ import sys
 import tempfile
 
 
+def _export_dxf(part) -> str:
+    """Flat top-down outline of the part as DXF text, for 2D CAM / CNC routing.
+
+    Looks straight down the Z axis and returns the hidden-line-removed silhouette
+    (build123d's project_to_viewport): for a prismatic sheet part this is exactly
+    the cut profile plus any through-holes, as DXF LINE/ARC/CIRCLE entities at
+    Z=0. The projection is orthographic, so the eye distance is irrelevant. The
+    model is Y-up (same as STEP/STL), which matches DXF, so no Y flip is needed.
+    """
+    from build123d import ExportDXF, Unit
+
+    bb = part.bounding_box()
+    cx = (bb.min.X + bb.max.X) / 2
+    cy = (bb.min.Y + bb.max.Y) / 2
+    eye = (cx, cy, bb.max.Z + 1000.0)  # +Y up -> world XY maps straight to DXF XY
+    visible, _hidden = part.project_to_viewport(eye, (0, 1, 0), (cx, cy, 0))
+    exporter = ExportDXF(unit=Unit.MM)
+    for edge in visible:
+        exporter.add_shape(edge)
+    with tempfile.NamedTemporaryFile(suffix=".dxf", mode="r", delete=True) as fh:
+        exporter.write(fh.name)
+        return open(fh.name).read()
+
+
 def _run(code: str, export: list | None = None) -> dict:
     from build123d import export_step, export_stl
 
@@ -148,6 +172,10 @@ def _run(code: str, export: list | None = None) -> dict:
                         export_stl(solid, fh.name, ascii_format=True)
                         zf.writestr(f"part_{i}.stl", open(fh.name).read())
             exports[fmt] = base64.b64encode(buf.getvalue()).decode()
+            continue
+        if fmt == "dxf":
+            # flat top-down outline for 2D CAM (see _export_dxf)
+            exports[fmt] = _export_dxf(part)
             continue
         suffix = {"step": ".step", "stl": ".stl"}.get(fmt)
         if not suffix:

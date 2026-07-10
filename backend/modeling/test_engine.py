@@ -18,6 +18,17 @@ class EngineTests(SimpleTestCase):
         self.assertTrue(r["exports"]["stl"].lstrip().startswith("solid"))
         self.assertLess(r["metrics"]["volume"], 1000)  # box minus a hole
 
+    def test_dxf_export_is_a_flat_outline_with_holes(self):
+        # 40x24 sheet with a 6mm-dia hole: DXF should be the top-down cut profile
+        r = run_script("part = Box(40, 24, 3) - Pos(8, 4, 0) * Cylinder(3, 6)",
+                       export=["dxf"])
+        self.assertTrue(r["ok"])
+        dxf = r["exports"]["dxf"]
+        self.assertIn("SECTION", dxf)
+        self.assertIn("ENTITIES", dxf)
+        self.assertIn("CIRCLE", dxf)  # the through-hole survives as a circle
+        self.assertIn("LINE", dxf)    # the rectangular outline
+
     def test_cylindrical_face_reports_its_radius(self):
         r = run_script("part = Box(20, 20, 10) - Cylinder(3, 20)")
         cyls = [f for f in r["faces"] if f["kind"] == "cylinder"]

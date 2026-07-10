@@ -230,12 +230,12 @@ class RunResponse(Schema):
 
 class ExportRequest(Schema):
     code: str
-    format: str        # 'stl' | 'step'
+    format: str        # 'stl' | 'step' | 'stl-parts' | 'dxf'
 
 
 class ExportResponse(Schema):
     format: str
-    data: str          # the exported file as text (ASCII STL / STEP)
+    data: str          # the exported file as text (ASCII STL / STEP / DXF)
 
 
 class SetParamsRequest(Schema):
