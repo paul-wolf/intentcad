@@ -13,6 +13,13 @@ export function downloadBlob(blob: Blob, filename: string): void {
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
+  // Anchor must be in the document for the click to start a download in
+  // some browsers; the URL stays alive until the download has been picked up.
+  a.style.display = 'none';
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  setTimeout(() => {
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, 10_000);
 }

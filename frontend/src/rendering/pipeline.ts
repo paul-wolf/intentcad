@@ -31,6 +31,8 @@ export interface RenderContext {
   camMode: boolean;
   lineWidthScale?: number;
   fontSizeScale?: number;
+  /** Printable output: no grid, no origin axes, no editing handles. */
+  exportMode?: boolean;
 }
 
 /** Step 1: Clear background */
@@ -166,14 +168,14 @@ function renderGhostedSketches(ctx: RenderContext) {
             const color = CAM_OP_COLORS[opIdx % CAM_OP_COLORS.length]!;
             style = { color, width: opIdx === camFocusedOpIndex ? 2.5 : 1.5 };
           }
-          renderEntity(renderer, viewport, entity, style);
+          renderEntity(renderer, viewport, entity, style, false, ctx.exportMode);
         }
       } else {
         // Non-selected sketches in CAM: very faint disabled look
         renderer.setGlobalAlpha(0.15);
         for (const entity of sketch.entities) {
           if (entity.type === 'dimension') continue;
-          renderEntity(renderer, viewport, entity, styles.ghosted);
+          renderEntity(renderer, viewport, entity, styles.ghosted, false, ctx.exportMode);
         }
         renderer.resetGlobalAlpha();
       }
@@ -183,7 +185,7 @@ function renderGhostedSketches(ctx: RenderContext) {
         const ghostStyle: LineStyle = 'construction' in entity && entity.construction
           ? { ...styles.ghosted, dash: [6, 4] }
           : styles.ghosted;
-        renderEntity(renderer, viewport, entity, ghostStyle);
+        renderEntity(renderer, viewport, entity, ghostStyle, false, ctx.exportMode);
       }
       renderer.resetGlobalAlpha();
     }
@@ -248,7 +250,7 @@ function renderActiveSketch(ctx: RenderContext) {
       renderer.setGlobalAlpha(0.15);
       for (const entity of activeSketch.entities) {
         if (entity.type === 'dimension') continue;
-        renderEntity(renderer, viewport, entity, styles.ghosted);
+        renderEntity(renderer, viewport, entity, styles.ghosted, false, ctx.exportMode);
       }
       renderer.resetGlobalAlpha();
       return;
@@ -285,7 +287,7 @@ function renderActiveSketch(ctx: RenderContext) {
       case 'line': {
         const isConstrained = dofMap.get(entity.id) === 0;
         const style = camStyle ?? pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
-        renderEntity(renderer, viewport, entity, style, !!(entity.fill && entity.closed && !entity.construction));
+        renderEntity(renderer, viewport, entity, style, !!(entity.fill && entity.closed && !entity.construction), ctx.exportMode);
         break;
       }
       case 'circle': {
@@ -299,13 +301,13 @@ function renderActiveSketch(ctx: RenderContext) {
           renderer.resetGlobalAlpha();
         }
         renderer.drawCircle(screenCenter, screenRadius, style);
-        renderer.fillCircle(screenCenter, ENDPOINT_RADIUS, style.color);
+        if (!ctx.exportMode) renderer.fillCircle(screenCenter, ENDPOINT_RADIUS, style.color);
         break;
       }
       case 'rectangle': {
         const isConstrained = dofMap.get(entity.id) === 0;
         const style = camStyle ?? pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
-        renderEntity(renderer, viewport, entity, style, !!(entity.fill && !entity.construction));
+        renderEntity(renderer, viewport, entity, style, !!(entity.fill && !entity.construction), ctx.exportMode);
         break;
       }
       case 'point': {
@@ -322,7 +324,7 @@ function renderActiveSketch(ctx: RenderContext) {
       case 'bezier': {
         const isConstrained = dofMap.get(entity.id) === 0;
         const style = camStyle ?? pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
-        renderEntity(renderer, viewport, entity, style);
+        renderEntity(renderer, viewport, entity, style, false, ctx.exportMode);
         // When selected, show control handle lines and all 4 control points
         if (isSelected) {
           const [cp0, cp1, cp2, cp3] = entity.controlPoints;
@@ -629,6 +631,8 @@ function renderEntity(
   entity: Entity,
   style: LineStyle,
   fillShape = false,
+  /** Suppress endpoint / centre dots — they are editing affordances, not geometry */
+  hideHandles = false,
 ) {
   switch (entity.type) {
     case 'line': {
@@ -653,8 +657,10 @@ function renderEntity(
           renderer.drawLine(a, b, style);
         }
       }
-      for (const pt of entity.points) {
-        renderer.fillCircle(viewport.worldToScreen(pt), ENDPOINT_RADIUS, style.color);
+      if (!hideHandles) {
+        for (const pt of entity.points) {
+          renderer.fillCircle(viewport.worldToScreen(pt), ENDPOINT_RADIUS, style.color);
+        }
       }
       break;
     }
@@ -682,11 +688,13 @@ function renderEntity(
       for (let i = 0; i < 4; i++) {
         renderer.drawLine(corners[i]!, corners[(i + 1) % 4]!, style);
       }
-      const screenCenter = viewport.worldToScreen(c);
-      renderer.fillCircle(screenCenter, ENDPOINT_RADIUS, style.color);
-      // Corner dots
-      for (const corner of corners) {
-        renderer.fillCircle(corner, ENDPOINT_RADIUS, style.color);
+      if (!hideHandles) {
+        const screenCenter = viewport.worldToScreen(c);
+        renderer.fillCircle(screenCenter, ENDPOINT_RADIUS, style.color);
+        // Corner dots
+        for (const corner of corners) {
+          renderer.fillCircle(corner, ENDPOINT_RADIUS, style.color);
+        }
       }
       break;
     }
@@ -702,9 +710,11 @@ function renderEntity(
       const s2 = viewport.worldToScreen(cp2);
       const s3 = viewport.worldToScreen(cp3);
       renderer.drawBezier(s0, s1, s2, s3, style);
-      // Endpoint dots (P0 and P3)
-      renderer.fillCircle(s0, ENDPOINT_RADIUS, style.color);
-      renderer.fillCircle(s3, ENDPOINT_RADIUS, style.color);
+      if (!hideHandles) {
+        // Endpoint dots (P0 and P3)
+        renderer.fillCircle(s0, ENDPOINT_RADIUS, style.color);
+        renderer.fillCircle(s3, ENDPOINT_RADIUS, style.color);
+      }
       break;
     }
     case 'text': {
@@ -849,8 +859,10 @@ function renderCamToolpath(ctx: RenderContext) {
 /** Render pipeline */
 export function renderFrame(ctx: RenderContext): void {
   renderBackground(ctx);
-  renderGrid(ctx);
-  renderOrigin(ctx);
+  if (!ctx.exportMode) {
+    renderGrid(ctx);
+    renderOrigin(ctx);
+  }
   renderGhostedSketches(ctx);
   renderActiveSketch(ctx);
 

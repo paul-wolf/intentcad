@@ -39,6 +39,18 @@ function resolveTwoSegments(): { entityId: string; segmentIndex: number }[] | nu
   return null;
 }
 
+/** Run an async export, download the result, and surface any failure in the log. */
+function runExport(label: string, produce: () => Promise<Blob>, filename: string): void {
+  produce()
+    .then((blob) => {
+      downloadBlob(blob, filename);
+      addLog('info', `Exported ${filename}`);
+    })
+    .catch((err) => {
+      addLog('error', `${label} export failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
+}
+
 function ToolIcon({ children }: { children: ReactNode }) {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -301,23 +313,23 @@ export function Toolbar() {
           +DXF
         </button>
         <button
-          onClick={() => { downloadBlob(exportDocumentToPdf(doc, palette), `${doc.name}.pdf`); }}
+          onClick={() => { runExport('PDF', () => exportDocumentToPdf(doc), `${doc.name}.pdf`); }}
           style={{ ...btn(palette), color: palette.textSecondary }}
-          title="Export visible sketches as PDF"
+          title="Export as a PDF drawing sheet"
         >
           PDF
         </button>
         <button
-          onClick={() => { downloadBlob(exportDocumentToImage(doc, palette, 'png'), `${doc.name}.png`); }}
+          onClick={() => { runExport('PNG', () => exportDocumentToImage(doc, 'png'), `${doc.name}.png`); }}
           style={{ ...btn(palette), color: palette.textSecondary }}
-          title="Export visible sketches as PNG"
+          title="Export as a PNG drawing sheet"
         >
           PNG
         </button>
         <button
-          onClick={() => { downloadBlob(exportDocumentToImage(doc, palette, 'jpeg'), `${doc.name}.jpg`); }}
+          onClick={() => { runExport('JPEG', () => exportDocumentToImage(doc, 'jpeg'), `${doc.name}.jpg`); }}
           style={{ ...btn(palette), color: palette.textSecondary }}
-          title="Export visible sketches as JPEG"
+          title="Export as a JPEG drawing sheet"
         >
           JPG
         </button>
