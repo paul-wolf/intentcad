@@ -30,3 +30,5 @@ __pycache__/
 
 screenshot-*
 tmp/
+# Build artifacts
+frontend/tsconfig.tsbuildinfo
