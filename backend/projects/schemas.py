@@ -29,7 +29,6 @@ class ProjectListOut(Schema):
     description: str
     updated_at: datetime
     document_count: int = 0
-    part_count: int = 0
 
 
 class ShareIn(Schema):

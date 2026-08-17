@@ -26,7 +26,6 @@ USER_FK_COLUMNS = {'created_by_id', 'organisation_id', 'user_id'}
 TABLES = [
     'projects',
     'documents_document',
-    'parts_part',
     'cam_camprofile',
     'cam_camjob',
     'login_logs',

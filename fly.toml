@@ -24,7 +24,11 @@ primary_region = 'fra'
   app = "/app/start.sh"
 
 [[vm]]
-  memory = '512mb'
-  cpu_kind = 'shared'
-  cpus = 1
+  # Dedicated (performance) CPUs: CAD/tessellation is single-threaded and
+  # CPU-bound, and shared CPUs get throttled under it. 4 dedicated cores let
+  # ~4 builds run in parallel; 8GB covers a warm OCP engine per web worker
+  # (~0.5GB each) plus transient build memory. Tune down later if over-provisioned.
+  memory = '8192mb'
+  cpu_kind = 'performance'
+  cpus = 4
   processes = ["app"]

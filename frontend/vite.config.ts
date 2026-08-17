@@ -9,11 +9,7 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
-  assetsInclude: ['**/*.wasm'],
   worker: {
     format: 'es',
-  },
-  optimizeDeps: {
-    exclude: ['opencascade.js'],
   },
 });

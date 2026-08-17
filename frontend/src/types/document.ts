@@ -200,7 +200,7 @@ export interface Sketch {
   name: string;
   visible: boolean;
   suppressed?: boolean;
-  plane?: import('@/types/part').Plane;
+  plane?: import('@/types/geometry').Plane;
   entities: Entity[];
   constraints: Constraint[];
 }
@@ -215,8 +215,36 @@ export interface DocumentMetadata {
 export interface Document {
   id: string;
   name: string;
+  /** Whether this document is primarily a 3D part or a 2D sketch. */
+  type?: 'sketch' | 'part';
   sketches: Sketch[];
   activeSketchId: string;
   parameters?: Record<string, number>;
   metadata?: DocumentMetadata;
+  /** The 3D build feature tree (legacy op-list modeler). */
+  buildFeatures?: import('@/api/client').BuildFeature[];
+  /** The 3D model as a build123d script — the current modeler. */
+  modelCode?: string;
+  /** Capped history of prior modelCode versions, so an overwrite is recoverable.
+   *  `label` says what produced that version (an AI note, a param change, …). */
+  modelCodeHistory?: { code: string; at: number; label?: string }[];
+  /** Label for the current modelCode (what produced it) — recorded into history
+   *  when the code is next replaced. */
+  modelCodeLabel?: string;
+  /** A small PNG data URL snapshot of the built part, for list thumbnails. */
+  thumbnail?: string;
+  /** The AI modeling conversation (persisted). Assistant 'edit' turns carry the
+   *  resulting script as a checkpoint you can revert to. */
+  chat?: ChatMessage[];
+  /** The target production process for this part (e.g. FDM 3D printing). Fed to
+   *  the AI as standing context so every edit designs in the right clearances. */
+  productionNotes?: string;
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  kind?: 'edit' | 'question';   // assistant turns
+  text: string;                 // instruction, note, or question
+  code?: string;                // (assistant edit) the resulting script — a checkpoint
+  at: number;
 }

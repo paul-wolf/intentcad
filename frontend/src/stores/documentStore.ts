@@ -36,6 +36,11 @@ interface DocumentStore {
   setDocument(doc: Document): void;
   setDocumentName(name: string): void;
   setMetadata(metadata: Partial<DocumentMetadata>): void;
+  setBuildFeatures(features: import('@/api/client').BuildFeature[]): void;
+  setModelCode(code: string, label?: string): void;
+  setChat(chat: import('@/types/document').ChatMessage[]): void;
+  setThumbnail(thumbnail: string): void;
+  setProductionNotes(notes: string): void;
 
   // Undo/Redo
   beginTransaction(label: string): void;
@@ -45,7 +50,7 @@ interface DocumentStore {
   restoreHistory(persisted: { undo: HistoryEntry[]; redo: HistoryEntry[] }): void;
 
   // Sketch actions
-  addSketch(name: string, plane?: import('@/types/part').Plane): string;
+  addSketch(name: string, plane?: import('@/types/geometry').Plane): string;
   renameSketch(sketchId: string, name: string): void;
   toggleSketchVisibility(sketchId: string): void;
   toggleSketchSuppressed(sketchId: string): void;
@@ -147,6 +152,44 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
 
   setDocumentName(name) {
     set((s) => ({ document: { ...s.document, name } }));
+  },
+
+  // The 3D feature tree has its own undo (buildStore); this just mirrors it into
+  // the document so auto-save persists it. No transaction.
+  setBuildFeatures(features) {
+    set((s) => ({ document: { ...s.document, buildFeatures: features } }));
+  },
+
+  setModelCode(code, label) {
+    set((s) => {
+      const prev = s.document.modelCode;
+      // Unchanged code is a no-op: never overwrite the label (the debounced
+      // 'hand edit' save fires after every edit and would otherwise clobber the
+      // AI note / param label) and never create a duplicate history entry.
+      if (prev === code) return s;
+      const prevLabel = s.document.modelCodeLabel;
+      // Keep a capped, labeled version history so an overwrite is recoverable and
+      // each entry says what produced it. Record the version being REPLACED with
+      // its own label. Coalesce a run of hand edits so typing doesn't spam it.
+      const hist = s.document.modelCodeHistory ?? [];
+      const coalesce = prevLabel === 'hand edit' && label === 'hand edit';
+      const nextHist = prev && prev.trim() && !coalesce
+        ? [...hist, { code: prev, at: Date.now(), label: prevLabel }].slice(-40)
+        : hist;
+      return { document: { ...s.document, modelCode: code, modelCodeLabel: label, modelCodeHistory: nextHist } };
+    });
+  },
+
+  setChat(chat) {
+    set((s) => ({ document: { ...s.document, chat } }));
+  },
+
+  setThumbnail(thumbnail) {
+    set((s) => ({ document: { ...s.document, thumbnail } }));
+  },
+
+  setProductionNotes(productionNotes) {
+    set((s) => ({ document: { ...s.document, productionNotes } }));
   },
 
   setMetadata(metadata) {

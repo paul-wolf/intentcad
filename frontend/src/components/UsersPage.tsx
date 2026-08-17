@@ -1,19 +1,22 @@
-import { useState, useEffect, type FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect, type FormEvent, type CSSProperties } from 'react';
 import { authApi } from '@/api/authClient';
 import { useAuthStore } from '@/stores/authStore';
-import { useThemeStore } from '@/theme';
 import type { UserDetail, OrganisationDetail } from '@/types/auth';
+import { TopNav } from '@/ui/TopNav';
+import { useTokens, SANS, MONO } from '@/ui/tokens';
+
+type RoleFilter = 'all' | 'admin' | 'staff' | 'user';
 
 export function UsersPage() {
-  const navigate = useNavigate();
-  const palette = useThemeStore((s) => s.palette);
+  const t = useTokens();
   const currentUser = useAuthStore((s) => s.user);
   const [users, setUsers] = useState<UserDetail[]>([]);
   const [orgs, setOrgs] = useState<OrganisationDetail[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [roleFilter, setRoleFilter] = useState<RoleFilter>('all');
 
   // Edit state
   const [editingUser, setEditingUser] = useState<UserDetail | null>(null);
@@ -36,9 +39,7 @@ export function UsersPage() {
 
   const isSuperuserUser = currentUser?.is_superuser ?? false;
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  useEffect(() => { loadData(); }, []);
 
   const loadData = async () => {
     try {
@@ -56,37 +57,26 @@ export function UsersPage() {
   };
 
   const resetForm = () => {
-    setUsername('');
-    setEmail('');
-    setFirstName('');
-    setLastName('');
-    setOrgId('');
-    setIsStaff(false);
-    setIsSuperuser(false);
-    setShowForm(false);
+    setUsername(''); setEmail(''); setFirstName(''); setLastName('');
+    setOrgId(''); setIsStaff(false); setIsSuperuser(false); setShowForm(false);
   };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     try {
       await authApi.createUser({
-        username,
-        email,
-        first_name: firstName,
-        last_name: lastName,
-        organisation_id: orgId || undefined,
-        is_staff: isStaff,
-        is_superuser: isSuperuser,
+        username, email, first_name: firstName, last_name: lastName,
+        organisation_id: orgId || undefined, is_staff: isStaff, is_superuser: isSuperuser,
       });
       resetForm();
       loadData();
     } catch (err) {
-      console.error('Failed to create user:', err);
       alert(err instanceof Error ? err.message : 'Failed to create user');
     }
   };
 
   const startEdit = (user: UserDetail) => {
+    setShowForm(false);
     setEditingUser(user);
     setEditEmail(user.email);
     setEditFirstName(user.first_name);
@@ -97,60 +87,30 @@ export function UsersPage() {
     setEditIsActive(user.is_active);
   };
 
-  const cancelEdit = () => {
-    setEditingUser(null);
-  };
-
   const handleEditSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!editingUser) return;
     try {
       const data: Record<string, unknown> = {
-        email: editEmail,
-        first_name: editFirstName,
-        last_name: editLastName,
-        is_active: editIsActive,
-        is_staff: editIsStaff,
+        email: editEmail, first_name: editFirstName, last_name: editLastName,
+        is_active: editIsActive, is_staff: editIsStaff,
       };
-      if (isSuperuserUser) {
-        data.is_superuser = editIsSuperuser;
-        data.organisation_id = editOrgId || '';
-      }
+      if (isSuperuserUser) { data.is_superuser = editIsSuperuser; data.organisation_id = editOrgId || ''; }
       await authApi.updateUser(editingUser.id, data);
       setEditingUser(null);
       loadData();
     } catch (err) {
-      console.error('Failed to update user:', err);
       alert(err instanceof Error ? err.message : 'Failed to update user');
     }
   };
 
-  const handleToggleActive = async (user: UserDetail) => {
-    try {
-      await authApi.updateUser(user.id, { is_active: !user.is_active });
-      loadData();
-    } catch (err) {
-      console.error('Failed to update user:', err);
-    }
-  };
-
   const handleUnlock = async (userId: string) => {
-    try {
-      await authApi.unlockUser(userId);
-      loadData();
-    } catch (err) {
-      console.error('Failed to unlock user:', err);
-    }
+    try { await authApi.unlockUser(userId); loadData(); } catch (err) { console.error(err); }
   };
 
   const handleDelete = async (userId: string) => {
     if (!confirm('Are you sure you want to delete this user?')) return;
-    try {
-      await authApi.deleteUser(userId);
-      loadData();
-    } catch (err) {
-      console.error('Failed to delete user:', err);
-    }
+    try { await authApi.deleteUser(userId); loadData(); } catch (err) { console.error(err); }
   };
 
   const handleResetLink = async (userId: string) => {
@@ -159,237 +119,198 @@ export function UsersPage() {
       await navigator.clipboard.writeText(result.reset_url);
       setCopiedLink(userId);
       setTimeout(() => setCopiedLink(null), 3000);
-    } catch (err) {
-      console.error('Failed to generate reset link:', err);
-      alert('Failed to generate reset link');
-    }
+    } catch { alert('Failed to generate reset link'); }
   };
 
-  const inputStyle = {
-    padding: '8px 10px',
-    background: palette.panelBg,
-    border: `1px solid ${palette.textSecondary}`,
-    borderRadius: '4px',
-    color: palette.text,
-    fontSize: '13px',
-    outline: 'none',
-    width: '100%',
-    boxSizing: 'border-box' as const,
-  };
+  const roleOf = (u: UserDetail): RoleFilter => (u.is_superuser ? 'admin' : u.is_staff ? 'staff' : 'user');
+  const initialsOf = (u: UserDetail) =>
+    ((u.first_name?.[0] ?? '') + (u.last_name?.[0] ?? '') || u.username.slice(0, 2)).toUpperCase();
+  const nameOf = (u: UserDetail) => [u.first_name, u.last_name].filter(Boolean).join(' ') || u.username;
+  const lastLoginOf = (u: UserDetail) => (u.last_login ? new Date(u.last_login).toLocaleDateString() : 'never');
 
-  const btnStyle = {
-    background: 'none',
-    border: 'none',
-    fontSize: '12px',
-    cursor: 'pointer',
-    padding: '2px 6px',
+  const lower = search.toLowerCase();
+  const visible = users.filter((u) =>
+    (roleFilter === 'all' || roleOf(u) === roleFilter) &&
+    (!lower || u.username.toLowerCase().includes(lower) || u.email.toLowerCase().includes(lower) || nameOf(u).toLowerCase().includes(lower)));
+
+  // ── styles ──
+  const COLS = 'minmax(230px,2.3fr) minmax(150px,1.4fr) 100px 112px 104px 116px';
+  const formInput: CSSProperties = {
+    padding: '10px 12px', background: t.appBg, border: `1px solid ${t.border2}`, borderRadius: 8,
+    color: t.text, fontFamily: SANS, fontSize: '13.5px', outline: 'none', width: '100%', boxSizing: 'border-box',
   };
+  const primaryBtn: CSSProperties = { padding: '9px 18px', background: t.accent, color: '#fff', border: 'none', borderRadius: 8, fontSize: '13px', fontWeight: 600, cursor: 'pointer' };
+  const ghostBtn: CSSProperties = { padding: '9px 18px', background: 'transparent', color: t.textDim, border: `1px solid ${t.border2}`, borderRadius: 8, fontSize: '13px', cursor: 'pointer' };
+  const seg = (active: boolean): CSSProperties => ({
+    padding: '7px 14px', borderRadius: 8, fontSize: '13px', fontWeight: 600, cursor: 'pointer',
+    background: active ? t.accentSoft : t.surface, color: active ? t.accent : t.textDim, border: `1px solid ${active ? t.accent : t.border}`,
+  });
+  const pill = (color: string, bg: string): CSSProperties => ({
+    fontFamily: MONO, fontSize: '10px', fontWeight: 600, letterSpacing: '0.5px', color, background: bg,
+    border: `1px solid ${color}`, borderRadius: 5, padding: '2px 7px',
+  });
+  const roleBadge = (u: UserDetail) => u.is_superuser
+    ? pill(t.accent, t.accentSoft) : u.is_staff ? pill(t.violet, t.violetSoft) : pill(t.textDim, t.surface3);
+  const iconBtn: CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, background: 'none', border: 'none', borderRadius: 6, color: t.textMute, cursor: 'pointer' };
+  const check: CSSProperties = { display: 'flex', alignItems: 'center', gap: 7, fontSize: '13px', color: t.textDim, cursor: 'pointer' };
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        padding: '24px',
-        maxWidth: '1000px',
-        margin: '0 auto',
-        gap: '16px',
-      }}
-    >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h1 style={{ fontSize: '22px', fontWeight: 700, color: palette.text, margin: 0 }}>
-          User Management
-        </h1>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button
-            onClick={() => setShowForm(true)}
-            style={{
-              padding: '8px 16px',
-              background: palette.primaryBtn,
-              color: '#fff',
-              border: 'none',
-              borderRadius: '4px',
-              fontSize: '13px',
-              cursor: 'pointer',
-            }}
-          >
-            + New User
-          </button>
-          <button
-            onClick={() => navigate('/')}
-            style={{
-              padding: '8px 16px',
-              background: palette.panelBg,
-              color: palette.text,
-              border: `1px solid ${palette.textSecondary}`,
-              borderRadius: '4px',
-              fontSize: '13px',
-              cursor: 'pointer',
-            }}
-          >
-            Back
-          </button>
-        </div>
-      </div>
-
-      {showForm && (
-        <div
-          style={{
-            background: palette.panelBg,
-            borderRadius: '6px',
-            padding: '16px',
-          }}
-        >
-          <p style={{ fontSize: '13px', color: palette.textSecondary, margin: '0 0 12px' }}>
-            After creating, use "Reset Link" to generate a password setup link.
-          </p>
-          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-              <input type="text" placeholder="Username *" value={username} onChange={(e) => setUsername(e.target.value)} required style={inputStyle} />
-              <input type="email" placeholder="Email *" value={email} onChange={(e) => setEmail(e.target.value)} required style={inputStyle} />
-              <input type="text" placeholder="First Name" value={firstName} onChange={(e) => setFirstName(e.target.value)} style={inputStyle} />
-              <input type="text" placeholder="Last Name" value={lastName} onChange={(e) => setLastName(e.target.value)} style={inputStyle} />
-              {isSuperuserUser && (
-                <select value={orgId} onChange={(e) => setOrgId(e.target.value)} style={inputStyle}>
-                  <option value="">No organisation</option>
-                  {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                </select>
-              )}
-              <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                <label style={{ display: 'flex', gap: '4px', alignItems: 'center', fontSize: '13px', color: palette.text }}>
-                  <input type="checkbox" checked={isStaff} onChange={(e) => setIsStaff(e.target.checked)} /> Staff
-                </label>
-                {isSuperuserUser && (
-                  <label style={{ display: 'flex', gap: '4px', alignItems: 'center', fontSize: '13px', color: palette.text }}>
-                    <input type="checkbox" checked={isSuperuser} onChange={(e) => setIsSuperuser(e.target.checked)} /> Admin
-                  </label>
-                )}
-              </div>
+    <div style={{ height: '100%', overflow: 'auto', background: t.appBg, color: t.text, fontFamily: SANS }}>
+      <TopNav />
+      <div style={{ maxWidth: 1180, margin: '0 auto', padding: '36px 28px 72px' }}>
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 20, marginBottom: 26 }}>
+          <div>
+            <div style={{ fontFamily: MONO, fontSize: '11px', letterSpacing: '2px', color: t.accent, marginBottom: 8 }}>ADMINISTRATION</div>
+            <h1 style={{ margin: 0, fontSize: '26px', fontWeight: 700, letterSpacing: '-0.5px', color: t.text }}>User management</h1>
+            <div style={{ fontFamily: MONO, fontSize: '12.5px', color: t.textDim, marginTop: 7 }}>
+              {users.length} users{isSuperuserUser ? ` · ${orgs.length} organisations` : ''}
             </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button type="submit" style={{ padding: '8px 16px', background: palette.primaryBtn, color: '#fff', border: 'none', borderRadius: '4px', fontSize: '13px', cursor: 'pointer' }}>
-                Create
-              </button>
-              <button type="button" onClick={resetForm} style={{ padding: '8px 16px', background: 'transparent', color: palette.textSecondary, border: `1px solid ${palette.textSecondary}`, borderRadius: '4px', fontSize: '13px', cursor: 'pointer' }}>
-                Cancel
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {editingUser && (
-        <div
-          style={{
-            background: palette.panelBg,
-            borderRadius: '6px',
-            padding: '16px',
-          }}
-        >
-          <p style={{ fontSize: '14px', fontWeight: 600, color: palette.text, margin: '0 0 12px' }}>
-            Edit: {editingUser.username}
-          </p>
-          <form onSubmit={handleEditSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-              <input type="email" placeholder="Email" value={editEmail} onChange={(e) => setEditEmail(e.target.value)} required style={inputStyle} />
-              <input type="text" placeholder="First Name" value={editFirstName} onChange={(e) => setEditFirstName(e.target.value)} style={inputStyle} />
-              <input type="text" placeholder="Last Name" value={editLastName} onChange={(e) => setEditLastName(e.target.value)} style={inputStyle} />
-              {isSuperuserUser && (
-                <select value={editOrgId} onChange={(e) => setEditOrgId(e.target.value)} style={inputStyle}>
-                  <option value="">No organisation</option>
-                  {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                </select>
-              )}
-              <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                <label style={{ display: 'flex', gap: '4px', alignItems: 'center', fontSize: '13px', color: palette.text }}>
-                  <input type="checkbox" checked={editIsActive} onChange={(e) => setEditIsActive(e.target.checked)} /> Active
-                </label>
-                <label style={{ display: 'flex', gap: '4px', alignItems: 'center', fontSize: '13px', color: palette.text }}>
-                  <input type="checkbox" checked={editIsStaff} onChange={(e) => setEditIsStaff(e.target.checked)} /> Staff
-                </label>
-                {isSuperuserUser && (
-                  <label style={{ display: 'flex', gap: '4px', alignItems: 'center', fontSize: '13px', color: palette.text }}>
-                    <input type="checkbox" checked={editIsSuperuser} onChange={(e) => setEditIsSuperuser(e.target.checked)} /> Admin
-                  </label>
-                )}
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button type="submit" style={{ padding: '8px 16px', background: palette.primaryBtn, color: '#fff', border: 'none', borderRadius: '4px', fontSize: '13px', cursor: 'pointer' }}>
-                Save
-              </button>
-              <button type="button" onClick={cancelEdit} style={{ padding: '8px 16px', background: 'transparent', color: palette.textSecondary, border: `1px solid ${palette.textSecondary}`, borderRadius: '4px', fontSize: '13px', cursor: 'pointer' }}>
-                Cancel
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      <div style={{ background: palette.panelBg, borderRadius: '6px', overflow: 'auto' }}>
-        {loading ? (
-          <div style={{ padding: '24px', textAlign: 'center', color: palette.textSecondary, fontSize: '14px' }}>
-            Loading...
           </div>
-        ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-            <thead>
-              <tr style={{ borderBottom: `1px solid ${palette.textSecondary}` }}>
-                {['Username', 'Email', 'Name', 'Org', 'Status', 'Role', 'Last Login', 'Actions'].map((h) => (
-                  <th key={h} style={{ padding: '10px 12px', textAlign: 'left', color: palette.textSecondary, fontWeight: 500 }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((user) => (
-                <tr key={user.id} style={{ borderBottom: `1px solid ${palette.panelBg}`, opacity: user.is_active ? 1 : 0.5 }}>
-                  <td style={{ padding: '8px 12px', color: palette.text, fontWeight: 500 }}>{user.username}</td>
-                  <td style={{ padding: '8px 12px', color: palette.text }}>{user.email}</td>
-                  <td style={{ padding: '8px 12px', color: palette.text }}>{user.first_name} {user.last_name}</td>
-                  <td style={{ padding: '8px 12px', color: palette.textSecondary }}>{user.organisation?.name ?? '—'}</td>
-                  <td style={{ padding: '8px 12px' }}>
-                    {user.locked_until
-                      ? <span style={{ color: palette.danger, fontSize: '11px' }}>Locked</span>
-                      : user.is_active
-                        ? <span style={{ color: '#4caf50', fontSize: '11px' }}>Active</span>
-                        : <span style={{ color: palette.textSecondary, fontSize: '11px' }}>Inactive</span>}
-                  </td>
-                  <td style={{ padding: '8px 12px', color: palette.text }}>
-                    {user.is_superuser ? 'Admin' : user.is_staff ? 'Staff' : 'User'}
-                  </td>
-                  <td style={{ padding: '8px 12px', color: palette.textSecondary }}>
-                    {user.last_login ? new Date(user.last_login).toLocaleDateString() : 'Never'}
-                  </td>
-                  <td style={{ padding: '8px 12px' }}>
-                    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-                      <button onClick={() => startEdit(user)} style={{ ...btnStyle, color: palette.primaryBtn }}>
-                        Edit
-                      </button>
-                      {currentUser && user.id !== currentUser.id && (
-                        <button onClick={() => handleToggleActive(user)} style={{ ...btnStyle, color: '#2196f3' }}>
-                          {user.is_active ? 'Disable' : 'Enable'}
-                        </button>
-                      )}
-                      {user.locked_until && (
-                        <button onClick={() => handleUnlock(user.id)} style={{ ...btnStyle, color: '#4caf50' }}>
-                          Unlock
-                        </button>
-                      )}
-                      <button onClick={() => handleResetLink(user.id)} style={{ ...btnStyle, color: '#9c27b0' }}>
-                        {copiedLink === user.id ? 'Copied!' : 'Reset Link'}
-                      </button>
-                      {currentUser && user.id !== currentUser.id && (
-                        <button onClick={() => handleDelete(user.id)} style={{ ...btnStyle, color: palette.danger }}>
-                          Delete
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <button onClick={() => { setEditingUser(null); setShowForm((v) => !v); }}
+            style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '10px 16px', background: t.accent, color: '#fff',
+                     border: 'none', borderRadius: 9, fontSize: '13.5px', fontWeight: 600, cursor: 'pointer', boxShadow: `0 6px 16px -8px ${t.accent}` }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+            New user
+          </button>
+        </div>
+
+        {/* Create form */}
+        {showForm && (
+          <form onSubmit={handleSubmit} style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 14, padding: '20px 20px 22px', marginBottom: 22 }}>
+            <div style={{ fontSize: '14px', fontWeight: 600, color: t.text, marginBottom: 4 }}>Create user</div>
+            <div style={{ fontSize: '12.5px', color: t.textMute, marginBottom: 16 }}>After creating, use the key action to generate a password setup link.</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 14 }}>
+              <input placeholder="Username *" value={username} onChange={(e) => setUsername(e.target.value)} required style={formInput} />
+              <input placeholder="Email *" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required style={formInput} />
+              {isSuperuserUser && (
+                <select value={orgId} onChange={(e) => setOrgId(e.target.value)} style={formInput}>
+                  <option value="">No organisation</option>
+                  {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                </select>
+              )}
+              <input placeholder="First name" value={firstName} onChange={(e) => setFirstName(e.target.value)} style={formInput} />
+              <input placeholder="Last name" value={lastName} onChange={(e) => setLastName(e.target.value)} style={formInput} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 18, paddingLeft: 2 }}>
+                <label style={check}><input type="checkbox" checked={isStaff} onChange={(e) => setIsStaff(e.target.checked)} style={{ accentColor: t.accent }} /> Staff</label>
+                {isSuperuserUser && <label style={check}><input type="checkbox" checked={isSuperuser} onChange={(e) => setIsSuperuser(e.target.checked)} style={{ accentColor: t.accent }} /> Admin</label>}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 9 }}>
+              <button type="submit" style={primaryBtn}>Create</button>
+              <button type="button" onClick={resetForm} style={ghostBtn}>Cancel</button>
+            </div>
+          </form>
         )}
+
+        {/* Edit form */}
+        {editingUser && (
+          <form onSubmit={handleEditSubmit} style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 14, padding: '20px 20px 22px', marginBottom: 22 }}>
+            <div style={{ fontSize: '14px', fontWeight: 600, color: t.text, marginBottom: 16 }}>Edit {editingUser.username}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 14 }}>
+              <input placeholder="Email" type="email" value={editEmail} onChange={(e) => setEditEmail(e.target.value)} required style={formInput} />
+              <input placeholder="First name" value={editFirstName} onChange={(e) => setEditFirstName(e.target.value)} style={formInput} />
+              <input placeholder="Last name" value={editLastName} onChange={(e) => setEditLastName(e.target.value)} style={formInput} />
+              {isSuperuserUser && (
+                <select value={editOrgId} onChange={(e) => setEditOrgId(e.target.value)} style={formInput}>
+                  <option value="">No organisation</option>
+                  {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                </select>
+              )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 18, paddingLeft: 2 }}>
+                <label style={check}><input type="checkbox" checked={editIsActive} onChange={(e) => setEditIsActive(e.target.checked)} style={{ accentColor: t.accent }} /> Active</label>
+                <label style={check}><input type="checkbox" checked={editIsStaff} onChange={(e) => setEditIsStaff(e.target.checked)} style={{ accentColor: t.accent }} /> Staff</label>
+                {isSuperuserUser && <label style={check}><input type="checkbox" checked={editIsSuperuser} onChange={(e) => setEditIsSuperuser(e.target.checked)} style={{ accentColor: t.accent }} /> Admin</label>}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 9 }}>
+              <button type="submit" style={primaryBtn}>Save</button>
+              <button type="button" onClick={() => setEditingUser(null)} style={ghostBtn}>Cancel</button>
+            </div>
+          </form>
+        )}
+
+        {/* Toolbar */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 18 }}>
+          <div style={{ position: 'relative', flex: 1, maxWidth: 340 }}>
+            <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: t.textMute, display: 'flex' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4-4" /></svg>
+            </span>
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search users..."
+              style={{ width: '100%', padding: '9px 12px 9px 36px', background: t.surface, border: `1px solid ${t.border}`, borderRadius: 9, color: t.text, fontFamily: SANS, fontSize: '13px', outline: 'none' }} />
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {(['all', 'admin', 'staff', 'user'] as const).map((r) => (
+              <button key={r} onClick={() => setRoleFilter(r)} style={seg(roleFilter === r)}>
+                {r === 'all' ? 'All' : r === 'admin' ? 'Admins' : r === 'staff' ? 'Staff' : 'Users'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Table */}
+        <div style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 14, overflow: 'hidden' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: COLS, gap: 14, padding: '12px 20px', borderBottom: `1px solid ${t.border}`, fontFamily: MONO, fontSize: '10.5px', letterSpacing: '1px', color: t.textMute }}>
+            <div>USER</div><div>ORGANISATION</div><div>ROLE</div><div>STATUS</div><div>LAST LOGIN</div><div style={{ textAlign: 'right' }}>ACTIONS</div>
+          </div>
+          {loading ? (
+            <div style={{ padding: 44, textAlign: 'center', fontFamily: MONO, fontSize: '13px', color: t.textMute }}>Loading…</div>
+          ) : visible.length === 0 ? (
+            <div style={{ padding: 44, textAlign: 'center', fontFamily: MONO, fontSize: '13px', color: t.textMute }}>No users match “{search}”</div>
+          ) : visible.map((u) => {
+            const locked = !!u.locked_until;
+            const self = currentUser?.id === u.id;
+            return (
+              <div key={u.id} style={{ display: 'grid', gridTemplateColumns: COLS, gap: 14, alignItems: 'center', padding: '13px 20px', borderBottom: `1px solid ${t.border}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, flexShrink: 0, borderRadius: '50%', background: t.surface3, color: t.textDim, fontFamily: MONO, fontSize: '11px', fontWeight: 600 }}>{initialsOf(u)}</div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: '14px', fontWeight: 600, color: t.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {nameOf(u)} <span style={{ fontWeight: 400, color: t.textMute, fontFamily: MONO, fontSize: '11.5px' }}>@{u.username}</span>
+                    </div>
+                    <div style={{ fontFamily: MONO, fontSize: '11px', color: t.textMute, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.email}</div>
+                  </div>
+                </div>
+                <div style={{ fontSize: '13px', color: t.textDim, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.organisation?.name ?? '—'}</div>
+                <div><span style={roleBadge(u)}>{u.is_superuser ? 'ADMIN' : u.is_staff ? 'STAFF' : 'USER'}</span></div>
+                <div>
+                  {locked ? <span style={pill(t.danger, t.partSoft)}>LOCKED</span>
+                    : u.is_active ? <span style={pill(t.ok, t.okSoft)}>ACTIVE</span>
+                      : <span style={pill(t.textMute, t.surface3)}>INACTIVE</span>}
+                </div>
+                <div style={{ fontFamily: MONO, fontSize: '11.5px', color: t.textMute }}>{lastLoginOf(u)}</div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 2 }}>
+                  <button title="Edit" style={iconBtn} onClick={() => startEdit(u)}
+                    onMouseEnter={(e) => { e.currentTarget.style.color = t.accent; e.currentTarget.style.background = t.accentSoft; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.color = t.textMute; e.currentTarget.style.background = 'none'; }}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
+                  </button>
+                  {locked && (
+                    <button title="Unlock" style={iconBtn} onClick={() => handleUnlock(u.id)}
+                      onMouseEnter={(e) => { e.currentTarget.style.color = t.ok; e.currentTarget.style.background = t.okSoft; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.color = t.textMute; e.currentTarget.style.background = 'none'; }}>
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="11" width="16" height="9" rx="2" /><path d="M8 11V7a4 4 0 0 1 7.5-1.9" /></svg>
+                    </button>
+                  )}
+                  <button title={copiedLink === u.id ? 'Copied!' : 'Password reset link'} style={iconBtn} onClick={() => handleResetLink(u.id)}
+                    onMouseEnter={(e) => { e.currentTarget.style.color = t.violet; e.currentTarget.style.background = t.violetSoft; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.color = t.textMute; e.currentTarget.style.background = 'none'; }}>
+                    {copiedLink === u.id
+                      ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={t.ok} strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+                      : <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="7.5" cy="15.5" r="3.5" /><path d="M10 13 20 3m-3 0 3 3m-6 0 3 3" /></svg>}
+                  </button>
+                  {!self && (
+                    <button title="Delete" style={iconBtn} onClick={() => handleDelete(u.id)}
+                      onMouseEnter={(e) => { e.currentTarget.style.color = t.danger; e.currentTarget.style.background = t.partSoft; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.color = t.textMute; e.currentTarget.style.background = 'none'; }}>
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M6 6l1 14h10l1-14" /></svg>
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

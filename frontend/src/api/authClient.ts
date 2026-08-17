@@ -73,6 +73,13 @@ export const authApi = {
     });
   },
 
+  changePassword(data: { current_password: string; new_password: string }): Promise<{ message: string }> {
+    return authRequest('/me/change-password', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
   // ── User management ──
 
   listUsers(): Promise<UserDetail[]> {

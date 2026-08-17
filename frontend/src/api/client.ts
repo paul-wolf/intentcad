@@ -66,6 +66,8 @@ export interface DocumentListItem {
   project_id: string | null;
   created_at: string;
   updated_at: string;
+  kind?: 'part' | 'sketch';
+  thumbnail?: string | null;
 }
 
 export interface DocumentFull {
@@ -95,7 +97,7 @@ export const api = {
     });
   },
 
-  updateDocument(id: string, payload: { name?: string; data?: Record<string, unknown>; history?: unknown }): Promise<DocumentFull> {
+  updateDocument(id: string, payload: { name?: string; data?: Record<string, unknown>; history?: unknown; project_id?: string; base_updated_at?: string; version_label?: string; snapshot?: boolean }): Promise<DocumentFull> {
     return request(`/documents/${id}`, {
       method: 'PUT',
       body: JSON.stringify(payload),
@@ -105,51 +107,219 @@ export const api = {
   deleteDocument(id: string): Promise<void> {
     return request(`/documents/${id}`, { method: 'DELETE' });
   },
+
+  listVersions(docId: string): Promise<VersionListItem[]> {
+    return request(`/documents/${docId}/versions`);
+  },
+
+  getVersion(docId: string, versionId: string): Promise<VersionFull> {
+    return request(`/documents/${docId}/versions/${versionId}`);
+  },
 };
 
-export interface PartListItem {
+/** Metadata for one immutable saved version (mirrors documents/schemas.VersionListOut). */
+export interface VersionListItem {
   id: string;
-  name: string;
-  project_id: string | null;
+  label: string;
   created_at: string;
-  updated_at: string;
+  chars: number;
+  preview: string;
 }
 
-export interface PartFull {
+/** A full version snapshot, including its document data (VersionOut). */
+export interface VersionFull {
   id: string;
-  name: string;
+  label: string;
+  created_at: string;
   data: Record<string, unknown>;
-  history: unknown;
-  project_id: string | null;
-  created_at: string;
-  updated_at: string;
 }
 
-export const partApi = {
-  listParts(projectId?: string): Promise<PartListItem[]> {
-    const params = projectId ? `?project=${projectId}` : '';
-    return request(`/parts/${params}`);
-  },
+// ── 3D build (server-side CadQuery, experimental) ──
+// Mirrors backend/modeling/schemas.py. The request is self-contained: sketches
+// are sent inline rather than referenced by id.
 
-  getPart(id: string): Promise<PartFull> {
-    return request(`/parts/${id}`);
-  },
+export interface BuildEntity {
+  type: 'line' | 'circle' | 'rectangle';
+  construction?: boolean;
+  points?: { x: number; y: number }[];
+  closed?: boolean;
+  bulge?: number[];
+  center?: { x: number; y: number };
+  radius?: number;
+  width?: number;
+  height?: number;
+  anchor?: 'center' | 'corner';
+}
 
-  createPart(name: string, data: Record<string, unknown>, projectId?: string): Promise<PartFull> {
-    return request('/parts/', {
-      method: 'POST',
-      body: JSON.stringify({ name, data, project_id: projectId }),
-    });
-  },
+export interface BuildSketch {
+  id: string;
+  entities: BuildEntity[];
+}
 
-  updatePart(id: string, payload: { name?: string; data?: Record<string, unknown>; history?: unknown }): Promise<PartFull> {
-    return request(`/parts/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(payload),
-    });
-  },
+export interface BuildAxis {
+  start: { x: number; y: number };
+  end: { x: number; y: number };
+}
 
-  deletePart(id: string): Promise<void> {
-    return request(`/parts/${id}`, { method: 'DELETE' });
+export interface BuildFeature {
+  id: string;
+  type: 'extrude' | 'revolve' | 'fillet' | 'chamfer' | 'counterbore' | 'trim';
+  sketchId: string;
+  operation?: 'add' | 'remove';
+  // extrude
+  distance?: number;
+  direction?: 'forward' | 'reverse' | 'both';
+  // revolve
+  axis?: BuildAxis;
+  angle?: number;
+  // fillet / chamfer (modify the running result)
+  edges?: string;
+  radius?: number;
+  // counterbore (recesses the top face at the sketch's circles)
+  cboreDia?: number;
+  cboreDepth?: number;
+  // trim (cut past a plane)
+  trimAxis?: 'X' | 'Y' | 'Z';
+  at?: number;
+  keep?: 'min' | 'max';
+  trimFace?: string;  // face tag ('back'|'front'|…) — trim flush with that face
+  // placement
+  plane?: 'XY' | 'XZ' | 'YZ';
+  tilt?: number;
+  tiltAxis?: 'X' | 'Y' | 'Z';
+  offset?: [number, number, number];
+}
+
+export interface BuildRequest {
+  sketches: BuildSketch[];
+  features: BuildFeature[];
+  tolerance?: number;
+}
+
+export interface BuildResponse {
+  mesh: { positions: number[]; normals: number[]; triangle_count: number };
+  step: string;
+  metrics: {
+    volume: number;
+    area: number;
+    bbox_min: [number, number, number];
+    bbox_max: [number, number, number];
+    center: [number, number, number];
+  };
+  faces: { index: number; kind: string; area: number; center: [number, number, number]; normal: [number, number, number]; tags: string[] }[];
+  edges: { index: number; kind: string; length: number; center: [number, number, number]; start: [number, number, number]; end: [number, number, number]; faces: string[][]; faceIndices: number[]; polyline: [number, number, number][] }[];
+  warnings: string[];
+}
+
+export const buildApi = {
+  build(payload: BuildRequest): Promise<BuildResponse> {
+    return request('/build/', { method: 'POST', body: JSON.stringify(payload) });
+  },
+  resolve(payload: ResolveRequest): Promise<ResolveResponse> {
+    return request('/build/resolve', { method: 'POST', body: JSON.stringify(payload) });
+  },
+  chat(payload: ChatRequest): Promise<ChatResponse> {
+    return request('/build/chat', { method: 'POST', body: JSON.stringify(payload) });
+  },
+  run(code: string, signal?: AbortSignal): Promise<RunResponse> {
+    return request('/build/run', { method: 'POST', body: JSON.stringify({ code }), signal });
+  },
+  export(code: string, format: 'stl' | 'step' | 'stl-parts' | 'dxf' | 'dxf-views'): Promise<{ format: string; data: string }> {
+    return request('/build/export', { method: 'POST', body: JSON.stringify({ code, format }) });
+  },
+  edit(payload: { code: string; instruction: string; context?: string; document_id?: string;
+                  history?: { role: string; text: string }[]; model?: string; production?: string }): Promise<EditResponse> {
+    return request('/build/edit', { method: 'POST', body: JSON.stringify(payload) });
+  },
+  usage(documentId: string): Promise<UsageResponse> {
+    return request(`/build/usage?document=${encodeURIComponent(documentId)}`);
+  },
+  setParams(code: string, params: Record<string, number>): Promise<{ code: string }> {
+    return request('/build/set_params', { method: 'POST', body: JSON.stringify({ code, params }) });
+  },
+  sensitivity(code: string): Promise<{ params: Record<string, DimInfo> }> {
+    return request('/build/sensitivity', { method: 'POST', body: JSON.stringify({ code }) });
   },
 };
+
+/** What a parameter controls, derived by perturbation (see backend sensitivity). */
+export interface DimInfo {
+  faces: number[];
+  value: number;
+  anchor: [number, number, number] | null;
+  dir: [number, number, number] | null;
+  kind: 'length' | 'callout';
+}
+
+export interface EditResponse {
+  kind: 'edit' | 'question';
+  code: string; note?: string; question: string;
+  tokens_in: number; tokens_out: number; cost_usd: number;
+}
+
+export interface UsageTotals { edits: number; tokens_in: number; tokens_out: number; cost_usd: number }
+export interface UsageResponse { document: UsageTotals; all_time: UsageTotals }
+
+// ── build123d engine (the model is a script) ──
+export interface RunFace {
+  index: number; start: number; count: number;
+  kind: string; area: number; center: [number, number, number]; normal: [number, number, number];
+  radius?: number | null;   // radius of a cylindrical face (hole/boss), else null
+  size?: [number, number, number];   // bounding-box extents of the face
+}
+
+export interface RunEdge {
+  index: number; kind: string; faceIndices: number[]; polyline: [number, number, number][];
+}
+
+export interface RunResponse {
+  mesh: { positions: number[]; normals: number[]; triangle_count: number };
+  faces: RunFace[];
+  edges: RunEdge[];
+  params: Record<string, number>;
+  metrics: { volume: number; area: number; bbox_min: [number, number, number]; bbox_max: [number, number, number] };
+  warning?: string;
+}
+
+// ── chat agent (instruction → feature-tree operations) ──
+// Mirrors backend/modeling/agent.py.
+
+export interface ChatSketchMeta {
+  id: string;
+  name: string;
+  entityCount: number;
+}
+
+export interface ChatRequest {
+  instruction: string;
+  sketches: ChatSketchMeta[];
+  features: BuildFeature[];
+  faces: BuildResponse['faces'];
+  edges: BuildResponse['edges'];
+}
+
+export interface ChatResponse {
+  status: 'ok' | 'clarify';
+  reply?: string;
+  operations?: BuildFeature[];
+  question?: string;
+}
+
+// ── reference resolver (natural language → selector) ──
+// Mirrors backend/modeling/resolver.py. Given the inventory of an already-built
+// result and a phrase, returns the formal selector it names.
+
+export interface ResolveRequest {
+  reference: string;
+  faces: BuildResponse['faces'];
+  edges: BuildResponse['edges'];
+}
+
+export interface ResolveResponse {
+  status: 'resolved' | 'clarify';
+  target?: 'face' | 'edge';
+  selector?: string;
+  indices?: number[];
+  rationale?: string;
+  question?: string;
+}

@@ -1,5 +1,5 @@
 import { db } from './db';
-import { api, partApi } from './client';
+import { api } from './client';
 import { projectApi } from './projectClient';
 import { addLog } from '@/stores/logStore';
 
@@ -63,9 +63,6 @@ async function processQueue() {
             if (entry.table === 'documents') {
               const doc = await db.documents.get(entry.entityId);
               if (doc?.name) entityLabel = `"${doc.name}"`;
-            } else if (entry.table === 'parts') {
-              const part = await db.parts.get(entry.entityId);
-              if (part?.name) entityLabel = `"${part.name}"`;
             }
           } catch { /* ignore */ }
           addLog('error', `Sync failed for ${entityLabel}: ${msg}. Check the document for unsupported content.`);
@@ -107,11 +104,6 @@ async function dispatchSync(entry: { table: string; entityId: string; method: st
       if (method === 'update') await api.updateDocument(entityId, payload);
       else if (method === 'create') await api.createDocument(payload.name as string, payload.data as Record<string, unknown>, payload.project_id as string | undefined);
       else if (method === 'delete') await api.deleteDocument(entityId);
-      break;
-    case 'parts':
-      if (method === 'update') await partApi.updatePart(entityId, payload);
-      else if (method === 'create') await partApi.createPart(payload.name as string, payload.data as Record<string, unknown>, payload.project_id as string | undefined);
-      else if (method === 'delete') await partApi.deletePart(entityId);
       break;
     case 'projects':
       if (method === 'update') await projectApi.updateProject(entityId, payload as { name?: string; description?: string });

@@ -22,6 +22,8 @@ export interface User {
   is_staff: boolean;
   is_superuser: boolean;
   organisation: Organisation | null;
+  date_joined?: string | null;
+  last_login?: string | null;
 }
 
 export interface UserDetail extends User {

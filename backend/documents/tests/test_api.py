@@ -76,6 +76,73 @@ class DocumentAPITests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["name"], "Updated")
 
+    def test_move_to_another_project(self):
+        other = Project.objects.create(name="Other", organisation=self.org, created_by=self.user)
+        resp = self.client.post(
+            "/api/documents/",
+            data=json.dumps({"name": "Doc", "data": _valid_doc_data(), "project_id": str(self.project.id)}),
+            content_type="application/json",
+        )
+        doc_id = resp.json()["id"]
+
+        resp = self.client.put(
+            f"/api/documents/{doc_id}",
+            data=json.dumps({"project_id": str(other.id)}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["project_id"], str(other.id))
+
+    def test_saving_new_code_creates_immutable_versions(self):
+        from documents.models import DocumentVersion
+        d = dict(_valid_doc_data(), modelCode="part = Box(1,1,1)")
+        resp = self.client.post("/api/documents/",
+                                data=json.dumps({"name": "P", "data": d}), content_type="application/json")
+        doc_id = resp.json()["id"]
+        self.assertEqual(DocumentVersion.objects.filter(document_id=doc_id).count(), 1)  # created
+        # a save with new code → a new version
+        d2 = dict(d, modelCode="part = Box(2,2,2)")
+        self.client.put(f"/api/documents/{doc_id}",
+                        data=json.dumps({"data": d2}), content_type="application/json")
+        self.assertEqual(DocumentVersion.objects.filter(document_id=doc_id).count(), 2)
+        # a save with the SAME code → no duplicate version
+        self.client.put(f"/api/documents/{doc_id}",
+                        data=json.dumps({"data": d2}), content_type="application/json")
+        self.assertEqual(DocumentVersion.objects.filter(document_id=doc_id).count(), 2)
+
+    def test_draft_save_does_not_create_a_version(self):
+        from documents.models import DocumentVersion
+        d = dict(_valid_doc_data(), modelCode="part = Box(1,1,1)")
+        resp = self.client.post("/api/documents/",
+                                data=json.dumps({"name": "P", "data": d}), content_type="application/json")
+        doc_id = resp.json()["id"]
+        self.assertEqual(DocumentVersion.objects.filter(document_id=doc_id).count(), 1)  # created
+        # an in-progress draft (snapshot=False) persists but must NOT add a version
+        self.client.put(f"/api/documents/{doc_id}",
+                        data=json.dumps({"data": dict(d, modelCode="part = Box(2,2,2)"), "snapshot": False}),
+                        content_type="application/json")
+        self.assertEqual(DocumentVersion.objects.filter(document_id=doc_id).count(), 1)
+        # the draft's code is still saved on the document
+        self.assertEqual(self.client.get(f"/api/documents/{doc_id}").json()["data"]["modelCode"], "part = Box(2,2,2)")
+        # a build-verified save (snapshot=True, the default) does add one
+        self.client.put(f"/api/documents/{doc_id}",
+                        data=json.dumps({"data": dict(d, modelCode="part = Box(3,3,3)")}),
+                        content_type="application/json")
+        self.assertEqual(DocumentVersion.objects.filter(document_id=doc_id).count(), 2)
+
+    def test_stale_save_is_rejected(self):
+        d = dict(_valid_doc_data(), modelCode="part = Box(1,1,1)")
+        resp = self.client.post("/api/documents/",
+                                data=json.dumps({"name": "P", "data": d}), content_type="application/json")
+        doc_id = resp.json()["id"]
+        # a client whose base is far in the past must not overwrite
+        stale = self.client.put(
+            f"/api/documents/{doc_id}",
+            data=json.dumps({"data": dict(d, modelCode="part = Box(9,9,9)"),
+                             "base_updated_at": "2020-01-01T00:00:00+00:00"}),
+            content_type="application/json")
+        self.assertEqual(stale.status_code, 409)
+
     def test_delete(self):
         resp = self.client.post(
             "/api/documents/",

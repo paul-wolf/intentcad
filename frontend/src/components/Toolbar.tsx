@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { ScriptViewer } from './ScriptViewer';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useUIStateStore } from '@/stores/uiStateStore';
@@ -11,10 +13,10 @@ import { exportDocumentToImage } from '@/export/image';
 import { downloadTextFile, downloadBlob } from '@/export/download';
 import { getEntityPoint, getEntityPoints } from '@/utils/entityPoints';
 import { getSegmentCount } from '@/utils/lineSegments';
-import { requestSave, getBackendId, flushSaveAsync, getProjectId, getProjectName, setBackendId, setProjectContext } from '@/api/autoSave';
-import { createEmptyDocument, generateDateName } from '@/utils/document';
+import { requestSave, getProjectId, getProjectName, setBackendId, setProjectContext } from '@/api/autoSave';
+import { createEmptyDocument, generateNumberedName } from '@/utils/document';
 import { addLog } from '@/stores/logStore';
-import { api, partApi } from '@/api/cachedClient';
+import { api } from '@/api/cachedClient';
 import type { ToolType } from '@/types/editor';
 import type { ThemePalette } from '@/theme';
 import type { ReactNode } from 'react';
@@ -117,6 +119,7 @@ const rowStyle: React.CSSProperties = {
 
 export function Toolbar() {
   const navigate = useNavigate();
+  const [showBuild, setShowBuild] = useState(false);
   const activeTool = useEditorStore((s) => s.activeTool);
   const setActiveTool = useEditorStore((s) => s.setActiveTool);
   const drawerOpen = useUIStateStore((s) => s.drawerOpen);
@@ -135,7 +138,8 @@ export function Toolbar() {
   const handleNewSketch = async () => {
     const projId = getProjectId();
     const projName = getProjectName();
-    const newDoc = createEmptyDocument(generateDateName([]));
+    const existing = await api.listDocuments(projId ?? undefined).then((l) => l.map((d) => d.name)).catch(() => []);
+    const newDoc = createEmptyDocument(generateNumberedName('Sketch', existing));
     try {
       const saved = await api.createDocument(newDoc.name, newDoc as unknown as Record<string, unknown>, projId ?? undefined);
       setBackendId(saved.id);
@@ -239,32 +243,13 @@ export function Toolbar() {
         </button>
         <Sep color={palette.border} />
         <button
-          onClick={async () => {
-            const backendId = getBackendId();
-            if (!backendId) return;
-            try {
-              // Ensure latest sketch data is saved before creating the part
-              requestSave();
-              await flushSaveAsync();
-              // Fetch document to get its project_id for inheritance
-              const docData = await api.getDocument(backendId);
-              const saved = await partApi.createPart(doc.name + ' Part', {
-                id: crypto.randomUUID(),
-                name: doc.name + ' Part',
-                documentId: backendId,
-                features: [],
-              }, docData.project_id ?? undefined);
-              navigate(`/part/${saved.id}`);
-            } catch (err) {
-              console.error('Failed to create part:', err);
-            }
-          }}
-          style={{ ...btn(palette), background: palette.primaryBtn, color: '#fff', borderColor: palette.primaryBtn }}
-          title="Create a new 3D Part from this sketch"
+          onClick={() => setShowBuild(true)}
+          style={{ ...btn(palette), color: palette.textSecondary }}
+          title="Build a 3D solid from the active sketch (server, experimental)"
         >
-          New Part
+          3D
         </button>
-        <Sep color={palette.border} />
+        {showBuild && <ScriptViewer onClose={() => setShowBuild(false)} />}
         <button
           onClick={() => { downloadTextFile(exportDocumentToDxf(doc), `${doc.name}.dxf`, 'application/dxf'); }}
           style={{ ...btn(palette), color: palette.textSecondary }}

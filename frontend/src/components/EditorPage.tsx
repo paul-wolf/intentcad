@@ -1,5 +1,5 @@
 import { useMemo, useEffect, useState, useRef, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { Toolbar } from './Toolbar';
 import { StatusBar } from './StatusBar';
 import { RightPanel } from './RightPanel';
@@ -15,6 +15,7 @@ import { CanvasContainer } from '@/canvas/CanvasContainer';
 import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useCamStore, setCamDocumentId } from '@/stores/camStore';
+import { useBuildStore } from '@/stores/buildStore';
 import { useThemeStore } from '@/theme';
 import { createLineTool } from '@/tools/lineTool';
 import { createSelectTool } from '@/tools/selectTool';
@@ -189,22 +190,13 @@ function CamRightPanel() {
   );
 }
 
-interface SketchOnFaceIntent {
-  returnToPartId: string;
-  sketchId: string;
-  plane: unknown;
-  sketchDocumentId: string;
-}
-
 export function EditorPage() {
   const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
   const activeTool = useEditorStore((s) => s.activeTool);
   const setActiveTool = useEditorStore((s) => s.setActiveTool);
   const camPanelOpen = useCamStore((s) => s.camPanelOpen);
   const focusedOperationIndex = useCamStore((s) => s.focusedOperationIndex);
   const [showCuttingPanel, setShowCuttingPanel] = useState(true);
-  const [sketchOnFaceIntent, setSketchOnFaceIntent] = useState<SketchOnFaceIntent | null>(null);
   const [showHelp, setShowHelp] = useState(false);
 
   // Load document from backend if navigated directly and backendId not set
@@ -257,24 +249,6 @@ export function EditorPage() {
     return unsub;
   }, []);
 
-  // Check for sketch-on-face intent on mount
-  useEffect(() => {
-    const raw = sessionStorage.getItem('sketchOnFace_intent');
-    if (!raw) return;
-    try {
-      const intent = JSON.parse(raw) as SketchOnFaceIntent;
-      setSketchOnFaceIntent(intent);
-      // Auto-select the sketch that was just created
-      const doc = useDocumentStore.getState().document;
-      const sketch = doc.sketches.find((s) => s.id === intent.sketchId);
-      if (sketch) {
-        useDocumentStore.getState().setActiveSketch(intent.sketchId);
-      }
-    } catch {
-      // ignore
-    }
-  }, [id]);
-
   // In CAM mode, force select tool
   const effectiveTool = camPanelOpen ? 'select' : activeTool;
 
@@ -308,6 +282,8 @@ export function EditorPage() {
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+      // The 3D Build panel owns the keyboard while open (don't undo the sketch, etc.)
+      if (useBuildStore.getState().panelOpen) return;
 
       const ctrl = e.ctrlKey || e.metaKey;
 
@@ -401,46 +377,9 @@ export function EditorPage() {
     };
   }, [setActiveTool]);
 
-  const handleSketchOnFaceDone = () => {
-    if (!sketchOnFaceIntent) return;
-    // Keep the intent in sessionStorage so the part editor picks it up
-    // (it's still there — we didn't remove it)
-    navigate(`/part/${sketchOnFaceIntent.returnToPartId}`);
-  };
-
   return (
     <div style={styles.container}>
       <Toolbar />
-      {sketchOnFaceIntent && (
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: '12px',
-          padding: '6px 12px',
-          background: '#1a5fb4',
-          color: '#fff',
-          fontSize: '13px',
-          fontWeight: 500,
-        }}>
-          <span>Sketching on face</span>
-          <button
-            onClick={handleSketchOnFaceDone}
-            style={{
-              padding: '3px 14px',
-              background: '#fff',
-              color: '#1a5fb4',
-              border: 'none',
-              borderRadius: '4px',
-              fontSize: '12px',
-              fontWeight: 600,
-              cursor: 'pointer',
-            }}
-          >
-            Done
-          </button>
-        </div>
-      )}
       <div style={styles.middle}>
         {!camPanelOpen && <HistoryPanel />}
         {camPanelOpen && <CamOperationsPanel onShowCutting={() => setShowCuttingPanel(true)} />}

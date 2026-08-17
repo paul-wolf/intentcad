@@ -7,3 +7,7 @@ python-dotenv>=1.0,<2.0
 whitenoise>=6.7,<7.0
 gunicorn>=23.0,<24.0
 django-extensions>=3.2,<4.0
+anthropic>=0.40
+# 0.11+ depends on cadquery-ocp-novtk (no VTK), which is what we run. Do NOT add
+# `cadquery` here — it pulls the heavy VTK OCP build and conflicts with novtk.
+build123d>=0.11,<0.12
