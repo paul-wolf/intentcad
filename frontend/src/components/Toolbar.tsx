@@ -8,6 +8,7 @@ import { useCamStore } from '@/stores/camStore';
 import { useThemeStore } from '@/theme';
 import { exportDocumentToDxf } from '@/export/dxf';
 import { importDxf } from '@/export/dxfImport';
+import { entityBounds } from '@/utils/bounds';
 import { exportDocumentToPdf } from '@/export/pdf';
 import { exportDocumentToImage } from '@/export/image';
 import { downloadTextFile, downloadBlob } from '@/export/download';
@@ -271,23 +272,26 @@ export function Toolbar() {
                   addLog('warn', 'No supported entities found in DXF file');
                   return;
                 }
-                const store = useDocumentStore.getState();
-                if (!store.getActiveSketch()) {
+                if (!useDocumentStore.getState().getActiveSketch()) {
                   addLog('warn', 'No active sketch — create or select a sketch first');
                   return;
                 }
-                store.beginTransaction('Import DXF');
-                for (const entity of result.entities) {
-                  useDocumentStore.getState().addEntity(entity);
+                const bounds = entityBounds(result.entities);
+                if (!bounds) {
+                  addLog('warn', 'DXF contained no measurable geometry');
+                  return;
                 }
-                useDocumentStore.getState().centerToOrigin();
-                requestSave();
-                setTimeout(() => useEditorStore.getState().setViewportCommand('fit-entities'), 0);
-                let msg = `Imported ${result.entities.length} entities from DXF`;
-                if (result.skipped > 0) {
-                  msg += ` (${result.skipped} skipped: ${result.skippedTypes.join(', ')})`;
-                }
-                addLog('info', msg);
+                // Placement is the user's call — see DxfImportDialog.
+                useEditorStore.getState().setPendingDxfImport({
+                  fileName: file.name,
+                  entities: result.entities,
+                  skipped: result.skipped,
+                  skippedTypes: result.skippedTypes,
+                  bounds: {
+                    minX: bounds.min.x, minY: bounds.min.y,
+                    maxX: bounds.max.x, maxY: bounds.max.y,
+                  },
+                });
               });
             };
             input.click();
@@ -603,11 +607,16 @@ export function Toolbar() {
 
         <button
           onClick={() => {
-            useDocumentStore.getState().centerToOrigin();
+            // With a selection, centre just that; otherwise the whole sketch.
+            const selected = useEditorStore.getState().selectedEntityIds;
+            useDocumentStore.getState().alignToOrigin(
+              'center',
+              selected.size > 0 ? [...selected] : null,
+            );
             requestSave();
           }}
           style={btn(palette)}
-          title="Center sketch at origin"
+          title="Center selection at origin (whole sketch if nothing selected)"
         >
           <ToolIcon><circle cx="8" cy="8" r="1.5" fill="currentColor" stroke="none" /><line x1="8" y1="2" x2="8" y2="14" strokeDasharray="2 1.5" /><line x1="2" y1="8" x2="14" y2="8" strokeDasharray="2 1.5" /><rect x="3" y="3" width="10" height="10" rx="1" strokeDasharray="2 1.5" /></ToolIcon>
         </button>

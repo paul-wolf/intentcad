@@ -9,6 +9,7 @@ import { getDimensionTextScreenPos, getDiameterTextScreenPos, computeAngleDimens
 import { MirrorDialog } from '@/components/MirrorDialog';
 import { CircularCopyDialog } from '@/components/CircularCopyDialog';
 import { GridCopyDialog } from '@/components/GridCopyDialog';
+import { DxfImportDialog } from '@/components/DxfImportDialog';
 import type { DimensionGeom } from '@/rendering/dimensionRenderer';
 import type { Tool } from '@/tools/types';
 import type { ViewportImpl } from '@/rendering/viewport';
@@ -544,6 +545,7 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
       <MirrorDialog />
       <CircularCopyDialog />
       <GridCopyDialog />
+      <DxfImportDialog />
     </div>
   );
 }

@@ -96,6 +96,11 @@ export interface TextEntity {
 
 export type Entity = LineEntity | CircleEntity | RectangleEntity | PointEntity | DimensionEntity | BezierEntity | TextEntity;
 
+/** How incoming geometry is placed relative to the sketch origin.
+ *  'center' puts its bounding-box centre on (0,0), 'min' puts its lower-left
+ *  corner there, 'none' keeps the source file's own coordinates. */
+export type OriginAlignMode = 'center' | 'min' | 'none';
+
 /** Check if a line entity is a closed profile suitable for extrusion.
  *  Handles both explicit `closed: true` and implicit closure (first == last point). */
 export function isClosedProfile(e: LineEntity): boolean {

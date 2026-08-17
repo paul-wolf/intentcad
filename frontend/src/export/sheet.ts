@@ -5,6 +5,7 @@ import { Canvas2DRenderer } from '@/rendering/canvas2d';
 import { ViewportImpl } from '@/rendering/viewport';
 import { renderFrame, type RenderContext } from '@/rendering/pipeline';
 import { DIMENSION_FONT_SIZE, STROKES } from '@/config';
+import { BoundsBuilder, type Bounds } from '@/utils/bounds';
 
 /**
  * Sheet export: renders the document as a printable drawing sheet
@@ -60,10 +61,7 @@ export const PRINT_PALETTE: ThemePalette = {
   origin: '#000000',
 };
 
-export interface Bounds {
-  min: Point;
-  max: Point;
-}
+export type { Bounds };
 
 /**
  * World-space bounding box of the entities that will be drawn.
@@ -72,64 +70,21 @@ export interface Bounds {
  * Use {@link measureDrawingBounds} for the extents of the finished drawing.
  */
 export function computeWorldBounds(doc: Document): Bounds {
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-
-  function expandPoint(p: Point) {
-    if (p.x < minX) minX = p.x;
-    if (p.y < minY) minY = p.y;
-    if (p.x > maxX) maxX = p.x;
-    if (p.y > maxY) maxY = p.y;
-  }
+  const builder = new BoundsBuilder();
 
   for (const sketch of doc.sketches) {
     if (sketch.suppressed) continue;
     if (!sketch.visible && sketch.id !== doc.activeSketchId) continue;
-    for (const entity of sketch.entities) {
-      switch (entity.type) {
-        case 'line':
-          for (const pt of entity.points) expandPoint(pt);
-          break;
-        case 'circle':
-          expandPoint({ x: entity.center.x - entity.radius, y: entity.center.y - entity.radius });
-          expandPoint({ x: entity.center.x + entity.radius, y: entity.center.y + entity.radius });
-          break;
-        case 'rectangle': {
-          const hw = entity.width / 2;
-          const hh = entity.height / 2;
-          expandPoint({ x: entity.center.x - hw, y: entity.center.y - hh });
-          expandPoint({ x: entity.center.x + hw, y: entity.center.y + hh });
-          break;
-        }
-        case 'point':
-          expandPoint(entity.position);
-          break;
-        case 'text':
-          expandPoint(entity.position);
-          expandPoint({ x: entity.position.x, y: entity.position.y - entity.height });
-          break;
-        case 'bezier':
-          // Convex hull of control points contains the curve
-          for (const cp of entity.controlPoints) expandPoint(cp);
-          break;
-        case 'dimension':
-          // Resolved when the drawing is probed — see measureDrawingBounds
-          break;
-      }
-    }
+    // Dimension annotations are skipped here — see measureDrawingBounds
+    for (const entity of sketch.entities) builder.expandEntity(entity);
   }
 
   // Fallback for empty documents
-  if (minX > maxX) {
-    minX = -50;
-    minY = -50;
-    maxX = 50;
-    maxY = 50;
+  if (builder.isEmpty) {
+    return { min: { x: -50, y: -50 }, max: { x: 50, y: 50 } };
   }
 
-  return { min: { x: minX, y: minY }, max: { x: maxX, y: maxY } };
+  return builder.toBounds();
 }
 
 /** Largest dimension offset in the document, in mm (0 when there are none). */

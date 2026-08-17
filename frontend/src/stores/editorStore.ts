@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Point } from '@/types/document';
+import type { Entity, Point } from '@/types/document';
 import type { ToolType, ToolState } from '@/types/editor';
 import type { SegmentHit } from '@/hittest/hitTest';
 import { addLog } from '@/stores/logStore';
@@ -7,6 +7,16 @@ import { addLog } from '@/stores/logStore';
 export interface SelectedPoint {
   entityId: string;
   pointIndex: number;
+}
+
+/** A parsed DXF waiting on the user's placement choice before it is committed. */
+export interface PendingDxfImport {
+  fileName: string;
+  entities: Entity[];
+  skipped: number;
+  skippedTypes: string[];
+  /** Bounding box of the incoming geometry, in source-file coordinates. */
+  bounds: { minX: number; minY: number; maxX: number; maxY: number };
 }
 
 interface EditorStore {
@@ -24,6 +34,7 @@ interface EditorStore {
   circularCopyPickingCenter: boolean;
   circularCopyCenter: Point | null;
   gridCopyEntityIds: string[] | null;
+  pendingDxfImport: PendingDxfImport | null;
   viewportScale: number;
   viewportCommand: 'center-origin' | 'fit-entities' | null;
 
@@ -45,6 +56,7 @@ interface EditorStore {
   setCircularCopyPickingCenter(picking: boolean): void;
   setCircularCopyCenter(center: Point | null): void;
   setGridCopyEntityIds(ids: string[] | null): void;
+  setPendingDxfImport(pending: PendingDxfImport | null): void;
   setViewportScale(scale: number): void;
   setViewportCommand(cmd: 'center-origin' | 'fit-entities' | null): void;
 }
@@ -89,6 +101,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
   circularCopyPickingCenter: false,
   circularCopyCenter: null,
   gridCopyEntityIds: null,
+  pendingDxfImport: null,
   viewportScale: 1,
   viewportCommand: null,
 
@@ -183,6 +196,10 @@ export const useEditorStore = create<EditorStore>((set) => ({
 
   setGridCopyEntityIds(ids) {
     set({ gridCopyEntityIds: ids });
+  },
+
+  setPendingDxfImport(pending) {
+    set({ pendingDxfImport: pending });
   },
 
   setViewportScale(scale) {

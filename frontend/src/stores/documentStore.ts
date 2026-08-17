@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Document, DocumentMetadata, Entity, Point, Sketch, Constraint, HorizontalConstraint, VerticalConstraint } from '@/types/document';
+import type { Document, DocumentMetadata, Entity, OriginAlignMode, Point, Sketch, Constraint, HorizontalConstraint, VerticalConstraint } from '@/types/document';
 import { createEmptyDocument, createEmptySketch } from '@/utils/document';
 import { createMirroredEntity, createRotatedEntity, createTranslatedEntity, propagateDerived } from '@/utils/propagate';
 import { rotatePoint, lineLineIntersection } from '@/utils/geometry';
@@ -10,6 +10,7 @@ import { computeDerivedDimensionIds } from '@/utils/dof';
 import { addLog } from '@/stores/logStore';
 import type { SelectedPoint } from '@/stores/editorStore';
 import { getSegmentCount, getSegmentPointIndices, getEntitySegmentEndpoints } from '@/utils/lineSegments';
+import { BoundsBuilder } from '@/utils/bounds';
 import { evaluateExpression } from '@/utils/expression';
 
 const UNDO_STACK_LIMIT = 100;
@@ -81,6 +82,13 @@ interface DocumentStore {
 
   // Center sketch at origin
   centerToOrigin(): void;
+  /** Align geometry to the origin. `entityIds` limits the move to a subset
+   *  (e.g. just-imported entities); omit it to align the whole active sketch. */
+  alignToOrigin(
+    mode: OriginAlignMode,
+    entityIds?: string[] | null,
+    skipTransaction?: boolean,
+  ): void;
 
   // Constraints
   addConstraint(constraint: Constraint): void;
@@ -856,45 +864,38 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   },
 
   centerToOrigin() {
+    get().alignToOrigin('center');
+  },
+
+  alignToOrigin(mode, entityIds, skipTransaction) {
+    if (mode === 'none') return;
     const { document } = get();
     const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
     if (!sketch) return;
 
-    // Collect all geometry points to compute bounding box
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    // Only the requested entities are measured and moved. Aligning against the
+    // whole sketch would drag pre-existing geometry along with an import.
+    const subset = entityIds ? new Set(entityIds) : null;
+
+    const builder = new BoundsBuilder();
     const geomIds: string[] = [];
     for (const e of sketch.entities) {
       if (e.type === 'dimension') continue;
+      if (subset && !subset.has(e.id)) continue;
       geomIds.push(e.id);
-      const pts: Point[] = [];
-      if (e.type === 'line') pts.push(...e.points);
-      else if (e.type === 'circle') {
-        pts.push({ x: e.center.x - e.radius, y: e.center.y - e.radius });
-        pts.push({ x: e.center.x + e.radius, y: e.center.y + e.radius });
-      }
-      else if (e.type === 'rectangle') {
-        const hw = e.width / 2, hh = e.height / 2;
-        pts.push({ x: e.center.x - hw, y: e.center.y - hh });
-        pts.push({ x: e.center.x + hw, y: e.center.y + hh });
-      }
-      else if (e.type === 'point') pts.push(e.position);
-      else if (e.type === 'bezier') pts.push(...e.controlPoints);
-      else if (e.type === 'text') pts.push(e.position);
-      for (const p of pts) {
-        if (p.x < minX) minX = p.x;
-        if (p.y < minY) minY = p.y;
-        if (p.x > maxX) maxX = p.x;
-        if (p.y > maxY) maxY = p.y;
-      }
+      builder.expandEntity(e);
     }
-    if (!isFinite(minX) || geomIds.length === 0) return;
+    if (builder.isEmpty || geomIds.length === 0) return;
+    const { min, max } = builder.toBounds();
 
-    const cx = (minX + maxX) / 2;
-    const cy = (minY + maxY) / 2;
-    if (Math.abs(cx) < 0.01 && Math.abs(cy) < 0.01) return; // already centered
+    const dx = mode === 'min' ? -min.x : -(min.x + max.x) / 2;
+    const dy = mode === 'min' ? -min.y : -(min.y + max.y) / 2;
+    if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01) return; // already aligned
 
-    get().beginTransaction('Center to origin');
-    get().moveEntities(geomIds, { x: -cx, y: -cy });
+    if (!skipTransaction) {
+      get().beginTransaction(mode === 'min' ? 'Align to origin' : 'Center to origin');
+    }
+    get().moveEntities(geomIds, { x: dx, y: dy });
   },
 
   addConstraint(constraint) {
