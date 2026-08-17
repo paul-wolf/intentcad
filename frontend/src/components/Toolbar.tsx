@@ -621,6 +621,19 @@ export function Toolbar() {
           <ToolIcon><circle cx="8" cy="8" r="1.5" fill="currentColor" stroke="none" /><line x1="8" y1="2" x2="8" y2="14" strokeDasharray="2 1.5" /><line x1="2" y1="8" x2="14" y2="8" strokeDasharray="2 1.5" /><rect x="3" y="3" width="10" height="10" rx="1" strokeDasharray="2 1.5" /></ToolIcon>
         </button>
 
+        <button
+          onClick={() => {
+            const selected = useEditorStore.getState().selectedEntityIds;
+            if (selected.size === 0) return;
+            useDocumentStore.getState().toggleReference([...selected]);
+            requestSave();
+          }}
+          style={btn(palette)}
+          title="Set/clear datum: keep the entity, but exclude it from centring"
+        >
+          <ToolIcon><circle cx="8" cy="8" r="3" /><line x1="8" y1="1" x2="8" y2="4" /><line x1="8" y1="12" x2="8" y2="15" /><line x1="1" y1="8" x2="4" y2="8" /><line x1="12" y1="8" x2="15" y2="8" /></ToolIcon>
+        </button>
+
         <div style={{ flex: 1 }} />
 
         {/* Viewport */}

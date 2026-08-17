@@ -71,6 +71,10 @@ interface DocumentStore {
   // Construction toggle
   toggleConstruction(entityIds: string[]): void;
 
+  /** Mark entities as reference/datum features: kept, drawn, exported and
+   *  built as normal, but ignored when measuring a sketch for alignment. */
+  toggleReference(entityIds: string[]): void;
+
   // Mirror
   mirrorEntities(entityIds: string[], lineA: Point, lineB: Point): string[];
 
@@ -771,6 +775,29 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     });
   },
 
+  toggleReference(entityIds) {
+    const idSet = new Set(entityIds);
+    const { document } = get();
+    get().beginTransaction('Toggle reference');
+    set({
+      document: {
+        ...document,
+        sketches: document.sketches.map((sk) =>
+          sk.id === document.activeSketchId
+            ? {
+                ...sk,
+                entities: sk.entities.map((e) => {
+                  if (!idSet.has(e.id)) return e;
+                  if (e.type === 'dimension') return e;
+                  return { ...e, reference: !e.reference };
+                }),
+              }
+            : sk,
+        ),
+      },
+    });
+  },
+
   mirrorEntities(entityIds, lineA, lineB) {
     const { document } = get();
     const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
@@ -877,15 +904,29 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     // whole sketch would drag pre-existing geometry along with an import.
     const subset = entityIds ? new Set(entityIds) : null;
 
+    // Reference/datum markers move with the part but must not measure it —
+    // a touch-off marker outside the outline would otherwise offset everything.
     const builder = new BoundsBuilder();
     const geomIds: string[] = [];
+    let sawReference = false;
     for (const e of sketch.entities) {
       if (e.type === 'dimension') continue;
       if (subset && !subset.has(e.id)) continue;
       geomIds.push(e.id);
-      builder.expandEntity(e);
+      if ('reference' in e && e.reference) sawReference = true;
+      builder.expandEntity(e, true);
     }
-    if (builder.isEmpty || geomIds.length === 0) return;
+    if (geomIds.length === 0) return;
+    if (builder.isEmpty) {
+      // Nothing but markers — measure them rather than doing nothing.
+      if (!sawReference) return;
+      for (const e of sketch.entities) {
+        if (e.type === 'dimension') continue;
+        if (subset && !subset.has(e.id)) continue;
+        builder.expandEntity(e);
+      }
+      if (builder.isEmpty) return;
+    }
     const { min, max } = builder.toBounds();
 
     const dx = mode === 'min' ? -min.x : -(min.x + max.x) / 2;

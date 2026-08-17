@@ -7,6 +7,7 @@ export interface ThemeStyles {
   lineSelected: LineStyle;
   construction: LineStyle;
   constructionSelected: LineStyle;
+  reference: LineStyle;
   ghosted: LineStyle;
   preview: LineStyle;
   gridMinor: LineStyle;
@@ -35,6 +36,9 @@ export function getStyles(palette: ThemePalette, lineWidthScale = 1, fontSizeSca
     lineSelected: { color: palette.lineSelected, width: STROKES.lineSelected * s },
     construction: { color: palette.line, width: STROKES.line * s, dash: [6, 4] },
     constructionSelected: { color: palette.lineSelected, width: STROKES.lineSelected * s, dash: [6, 4] },
+    // Datum/reference geometry: real, but drawn as a centreline so it reads as
+    // "a marker, not part of the outline".
+    reference: { color: palette.warning, width: STROKES.line * s, dash: [10, 3, 2, 3] },
     ghosted: { color: palette.ghosted, width: STROKES.ghosted * s },
     preview: { color: palette.preview, width: STROKES.preview * s },
     gridMinor: { color: palette.gridMinor, width: STROKES.grid * s },

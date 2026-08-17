@@ -33,6 +33,7 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
   const beginTransaction = useDocumentStore((s) => s.beginTransaction);
   const updateEntity = useDocumentStore((s) => s.updateEntity);
   const toggleConstruction = useDocumentStore((s) => s.toggleConstruction);
+  const toggleReference = useDocumentStore((s) => s.toggleReference);
   const isFixed = useDocumentStore((s) => {
     const doc = s.document;
     const sketch = doc.sketches.find((sk) => sk.id === doc.activeSketchId);
@@ -423,6 +424,25 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
             }}
           />
           <span style={{ fontSize: '12px', color: palette.text }}>Construction</span>
+        </div>
+      )}
+
+      {entity.type !== 'dimension' && (
+        <div style={{ marginTop: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <input
+            type="checkbox"
+            checked={!!entity.reference}
+            onChange={() => {
+              toggleReference([entity.id]);
+              requestSave();
+            }}
+          />
+          <span
+            style={{ fontSize: '12px', color: palette.text }}
+            title="Datum/reference feature: kept and exported as normal geometry, but ignored when centring the sketch on the origin"
+          >
+            Reference (datum)
+          </span>
         </div>
       )}
 

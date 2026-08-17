@@ -27,6 +27,8 @@ function sketchBounds(sketch: Sketch) {
   };
   for (const e of sketch.entities) {
     if ('construction' in e && e.construction) continue;
+    // Datum markers sit outside the part; they must not move a revolve axis.
+    if ('reference' in e && e.reference) continue;
     if (e.type === 'line') { for (const p of e.points) acc(p.x, p.y); }
     else if (e.type === 'circle') { acc(e.center.x - e.radius, e.center.y - e.radius); acc(e.center.x + e.radius, e.center.y + e.radius); }
     else if (e.type === 'rectangle') {

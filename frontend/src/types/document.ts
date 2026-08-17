@@ -16,6 +16,10 @@ export interface LineEntity {
   bulge?: number[];
   polygonCenter?: Point;
   construction?: boolean;
+  /** Reference/datum feature (e.g. a CNC touch-off marker). Real geometry —
+   *  exported and built like anything else — but excluded from the bounding
+   *  box used to align a sketch, so a marker outside the outline cannot skew it. */
+  reference?: boolean;
   fill?: boolean;
   sourceId?: string;
   sourceTransform?: SourceTransform;
@@ -27,6 +31,10 @@ export interface CircleEntity {
   center: Point;
   radius: number;
   construction?: boolean;
+  /** Reference/datum feature (e.g. a CNC touch-off marker). Real geometry —
+   *  exported and built like anything else — but excluded from the bounding
+   *  box used to align a sketch, so a marker outside the outline cannot skew it. */
+  reference?: boolean;
   fill?: boolean;
   sourceId?: string;
   sourceTransform?: SourceTransform;
@@ -40,6 +48,10 @@ export interface RectangleEntity {
   height: number;
   anchor?: 'center' | 'corner';
   construction?: boolean;
+  /** Reference/datum feature (e.g. a CNC touch-off marker). Real geometry —
+   *  exported and built like anything else — but excluded from the bounding
+   *  box used to align a sketch, so a marker outside the outline cannot skew it. */
+  reference?: boolean;
   fill?: boolean;
   sourceId?: string;
   sourceTransform?: SourceTransform;
@@ -50,6 +62,10 @@ export interface PointEntity {
   type: 'point';
   position: Point;
   construction?: boolean;
+  /** Reference/datum feature (e.g. a CNC touch-off marker). Real geometry —
+   *  exported and built like anything else — but excluded from the bounding
+   *  box used to align a sketch, so a marker outside the outline cannot skew it. */
+  reference?: boolean;
   sourceId?: string;
   sourceTransform?: SourceTransform;
 }
@@ -78,6 +94,10 @@ export interface BezierEntity {
   type: 'bezier';
   controlPoints: [Point, Point, Point, Point];
   construction?: boolean;
+  /** Reference/datum feature (e.g. a CNC touch-off marker). Real geometry —
+   *  exported and built like anything else — but excluded from the bounding
+   *  box used to align a sketch, so a marker outside the outline cannot skew it. */
+  reference?: boolean;
   sourceId?: string;
   sourceTransform?: SourceTransform;
 }
@@ -90,6 +110,10 @@ export interface TextEntity {
   height: number; // text height in world units
   rotation?: number; // degrees, counter-clockwise
   construction?: boolean;
+  /** Reference/datum feature (e.g. a CNC touch-off marker). Real geometry —
+   *  exported and built like anything else — but excluded from the bounding
+   *  box used to align a sketch, so a marker outside the outline cannot skew it. */
+  reference?: boolean;
   sourceId?: string;
   sourceTransform?: SourceTransform;
 }

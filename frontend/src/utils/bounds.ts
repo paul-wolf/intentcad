@@ -20,8 +20,12 @@ export class BoundsBuilder {
   }
 
   /** Geometry only — dimension annotations are ignored, as they extend well
-   *  beyond the geometry and are positioned relative to it. */
-  expandEntity(entity: Entity) {
+   *  beyond the geometry and are positioned relative to it.
+   *
+   *  `skipReference` also drops datum/touch-off markers, which are real
+   *  geometry but sit outside the part and would otherwise skew the box. */
+  expandEntity(entity: Entity, skipReference = false) {
+    if (skipReference && 'reference' in entity && entity.reference) return;
     switch (entity.type) {
       case 'line':
         for (const pt of entity.points) this.expandPoint(pt);
@@ -63,9 +67,14 @@ export class BoundsBuilder {
 }
 
 /** Bounding box of a set of entities, or null when none carry geometry. */
-export function entityBounds(entities: Iterable<Entity>): Bounds | null {
+export function entityBounds(entities: Iterable<Entity>, skipReference = false): Bounds | null {
   const b = new BoundsBuilder();
-  for (const e of entities) b.expandEntity(e);
+  for (const e of entities) b.expandEntity(e, skipReference);
+  if (b.isEmpty && skipReference) {
+    // Everything given was reference geometry — fall back to measuring it,
+    // so aligning a marker-only selection still does something sensible.
+    return entityBounds(entities, false);
+  }
   return b.isEmpty ? null : b.toBounds();
 }
 

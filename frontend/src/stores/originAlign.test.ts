@@ -93,6 +93,66 @@ describe('alignToOrigin', () => {
     expect((pre.min.y + pre.max.y) / 2).toBeCloseTo(500, 6);
   });
 
+  // A CNC touch-off marker sits outside the outline. It has to survive the
+  // import (it is what the operator zeroes on) but must not skew the box the
+  // part is centred by — otherwise the plate lands off-centre by half the
+  // marker's overhang.
+  describe('reference/datum markers', () => {
+    const MARKER = 'imported_datum';
+
+    beforeEach(() => {
+      // r1.5 circle tangent to the plate's left edge, as in the real DXF:
+      // it hangs 3.0 past the outline and so widens the box by 3.
+      useDocumentStore.getState().addEntity({
+        id: MARKER,
+        type: 'circle',
+        center: { x: 12000 - 1.5, y: -5000 + 200 },
+        radius: 1.5,
+        reference: true,
+      } as Entity);
+      importedIds = ['imported_outline', 'imported_hole', MARKER];
+    });
+
+    it('excludes the marker from the bounding box it centres by', () => {
+      useDocumentStore.getState().alignToOrigin('center', importedIds);
+
+      const plate = boundsOf(['imported_outline']);
+      expect((plate.min.x + plate.max.x) / 2).toBeCloseTo(0, 6);
+      expect((plate.min.y + plate.max.y) / 2).toBeCloseTo(0, 6);
+    });
+
+    it('still moves the marker with the part, preserving its offset', () => {
+      const before = boundsOf([MARKER]);
+      const plateBefore = boundsOf(['imported_outline']);
+
+      useDocumentStore.getState().alignToOrigin('center', importedIds);
+
+      const after = boundsOf([MARKER]);
+      const plateAfter = boundsOf(['imported_outline']);
+      // marker keeps its exact relationship to the outline
+      expect(after.min.x - plateAfter.min.x).toBeCloseTo(before.min.x - plateBefore.min.x, 6);
+      expect(after.min.y - plateAfter.min.y).toBeCloseTo(before.min.y - plateBefore.min.y, 6);
+      // and it did actually move
+      expect(after.min.x).not.toBeCloseTo(before.min.x, 3);
+    });
+
+    it('an unflagged marker does skew the box (the bug being guarded against)', () => {
+      useDocumentStore.getState().toggleReference([MARKER]);
+      useDocumentStore.getState().alignToOrigin('center', importedIds);
+
+      const plate = boundsOf(['imported_outline']);
+      // marker hangs 3 units past the left edge -> plate pushed right by 1.5
+      expect((plate.min.x + plate.max.x) / 2).toBeCloseTo(1.5, 6);
+    });
+
+    it('measures markers when the selection is nothing but markers', () => {
+      useDocumentStore.getState().alignToOrigin('center', [MARKER]);
+      const b = boundsOf([MARKER]);
+      expect((b.min.x + b.max.x) / 2).toBeCloseTo(0, 6);
+      expect((b.min.y + b.max.y) / 2).toBeCloseTo(0, 6);
+    });
+  });
+
   it('aligns the whole sketch when no subset is given', () => {
     useDocumentStore.getState().addEntity({
       id: 'other',

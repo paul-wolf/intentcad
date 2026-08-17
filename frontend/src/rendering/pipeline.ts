@@ -199,6 +199,7 @@ function pickStyle(
   isConstruction: boolean,
   isConstrained: boolean,
   isRelated: boolean = false,
+  isReference: boolean = false,
 ): LineStyle {
   // Selected (blue) wins
   if (isSelected) {
@@ -212,6 +213,8 @@ function pickStyle(
     const base = isConstrained ? styles.lineRelatedConstrained : styles.lineRelated;
     return isConstruction ? { ...base, dash: [6, 4] } : base;
   }
+  // Reference/datum geometry reads as a marker regardless of constraint state
+  if (isReference) return styles.reference;
   // Constrained (green)
   if (isConstrained && isConstruction) return styles.constructionConstrained;
   if (isConstrained) return styles.lineConstrained;
@@ -271,6 +274,7 @@ function renderActiveSketch(ctx: RenderContext) {
     const isSelected = selectedEntityIds.has(entity.id) &&
       !ctx.selectedSegments.some(s => s.entityId === entity.id);
     const isRelated = !isSelected && relatedIds.has(entity.id);
+    const isReference = 'reference' in entity && !!entity.reference;
 
     // In CAM mode, override style for entities assigned to operations
     let camStyle: LineStyle | undefined;
@@ -286,13 +290,13 @@ function renderActiveSketch(ctx: RenderContext) {
     switch (entity.type) {
       case 'line': {
         const isConstrained = dofMap.get(entity.id) === 0;
-        const style = camStyle ?? pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
+        const style = camStyle ?? pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated, isReference);
         renderEntity(renderer, viewport, entity, style, !!(entity.fill && entity.closed && !entity.construction), ctx.exportMode);
         break;
       }
       case 'circle': {
         const isConstrained = dofMap.get(entity.id) === 0;
-        const style = camStyle ?? pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
+        const style = camStyle ?? pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated, isReference);
         const screenCenter = viewport.worldToScreen(entity.center);
         const screenRadius = entity.radius * viewport.scale;
         if (entity.fill && !entity.construction) {
@@ -306,14 +310,14 @@ function renderActiveSketch(ctx: RenderContext) {
       }
       case 'rectangle': {
         const isConstrained = dofMap.get(entity.id) === 0;
-        const style = camStyle ?? pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
+        const style = camStyle ?? pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated, isReference);
         renderEntity(renderer, viewport, entity, style, !!(entity.fill && !entity.construction), ctx.exportMode);
         break;
       }
       case 'point': {
         if (ctx.camMode) break; // Skip standalone points in CAM mode
         const isConstrained = dofMap.get(entity.id) === 0;
-        const style = pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
+        const style = pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated, isReference);
         const sp = viewport.worldToScreen(entity.position);
         renderer.fillCircle(sp, ENDPOINT_RADIUS + 1, style.color);
         if (isSelected) {
@@ -323,7 +327,7 @@ function renderActiveSketch(ctx: RenderContext) {
       }
       case 'bezier': {
         const isConstrained = dofMap.get(entity.id) === 0;
-        const style = camStyle ?? pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated);
+        const style = camStyle ?? pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated, isReference);
         renderEntity(renderer, viewport, entity, style, false, ctx.exportMode);
         // When selected, show control handle lines and all 4 control points
         if (isSelected) {
@@ -345,7 +349,7 @@ function renderActiveSketch(ctx: RenderContext) {
         break;
       }
       case 'text': {
-        const style = pickStyle(styles, isSelected, !!entity.construction, false, isRelated);
+        const style = pickStyle(styles, isSelected, !!entity.construction, false, isRelated, isReference);
         const screenPos = viewport.worldToScreen(entity.position);
         const screenHeight = entity.height * viewport.scale;
         const fontSize = Math.max(8, Math.min(screenHeight, 200));
