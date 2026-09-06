@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
-import { buildApi, type RunResponse, type UsageResponse, type DimInfo } from '@/api/client';
+import { buildApi, errorText, ApiError, type RunResponse, type UsageResponse, type DimInfo, type ModelInfo, type SizeFix } from '@/api/client';
 import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, getBackendId } from '@/api/autoSave';
 import { DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
 import type { ChatMessage } from '@/types/document';
@@ -149,6 +149,9 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   const [status, setStatus] = useState<'idle' | 'building' | 'done' | 'error'>('idle');
   const [message, setMessage] = useState('');
   const [warn, setWarn] = useState('');
+  // the engine's one-click remedy for a fillet/chamfer that doesn't fit (a
+  // param to set), from the last build error or warning
+  const [fix, setFix] = useState<SizeFix | null>(null);
   const [stats, setStats] = useState('');
   const [sel, setSel] = useState<number[]>([]);   // selected face indices (≤ 2)
   const resRef = useRef<RunResponse | null>(null);
@@ -205,8 +208,14 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
     return { single: false as const, dist: Math.hypot(dx, dy, dz), dx, dy, dz, diaA: dia(a), diaB: dia(b) };
   })();
 
-  const build = async (src: string, versionLabel?: string) => {
-    if (!viewerRef.current) return;
+  // What a build came to — so a caller (a parameter edit) can act on it.
+  type BuildOutcome =
+    | { kind: 'ok' }
+    | { kind: 'aborted' }
+    | { kind: 'warning' | 'error'; message: string; fix: SizeFix | null };
+
+  const build = async (src: string, versionLabel?: string): Promise<BuildOutcome> => {
+    if (!viewerRef.current) return { kind: 'aborted' };
     buildAbort.current?.abort();                 // supersede any in-flight build
     const ctrl = new AbortController();
     buildAbort.current = ctrl;
@@ -221,6 +230,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
       const res = cached?.run ?? await buildApi.run(src, ctrl.signal);
       const took = Math.round(performance.now() - t0);
       setWarn(res.warning ?? '');
+      setFix(res.fix?.param ? res.fix : null);
       viewerRef.current.update(res.mesh, res.faces);
       resRef.current = res;
       selRef.current = []; setSel([]);
@@ -254,14 +264,19 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
         const url = viewerRef.current?.capture();
         if (url) persistThumbnail(url);
       }, 1400);
+      if (res.warning) return { kind: 'warning', message: res.warning, fix: res.fix?.param ? res.fix : null };
+      return { kind: 'ok' };
     } catch (err) {
       // Cancelled by the user (or superseded by a newer build) — not an error.
       if (err instanceof DOMException && err.name === 'AbortError') {
         if (buildAbort.current === ctrl) { setStatus('idle'); setMessage(''); }
-        return;
+        return { kind: 'aborted' };
       }
+      const fix = err instanceof ApiError && err.fix?.param ? err.fix : null;
       setStatus('error');
-      setMessage(String(err instanceof Error ? err.message : err));
+      setMessage(errorText(err));
+      setFix(fix);
+      return { kind: 'error', message: errorText(err), fix };
     } finally {
       if (buildAbort.current === ctrl) buildAbort.current = null;
     }
@@ -289,7 +304,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
           viewerRef.current = createViewer(canvasRef.current, { onFacePick: onPick, onAxes, onDims });
         } catch (err) {
           setStatus('error');
-          setMessage(String(err instanceof Error ? err.message : err));
+          setMessage(errorText(err));
           return;
         }
       }
@@ -358,8 +373,21 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
 
   const [ask, setAsk] = useState('');
   const [asking, setAsking] = useState(false);
-  const [model, setModel] = useState<string>(() => localStorage.getItem('intentcad-edit-model') || 'claude-opus-4-8');
+  // Model picker. The list comes from the server (which asks the Models API),
+  // so it never goes stale; '' means "server default" until the list arrives.
+  // A remembered pick that the API no longer offers (a retired model) is
+  // dropped in favour of the default.
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [model, setModel] = useState<string>(() => { try { return localStorage.getItem('intentcad-edit-model') || ''; } catch { return ''; } });
   const pickModel = (m: string) => { setModel(m); try { localStorage.setItem('intentcad-edit-model', m); } catch { /* ignore */ } };
+  useEffect(() => {
+    buildApi.models().then((r) => {
+      setModels(r.models);
+      setModel((cur) => (cur && r.models.some((m) => m.id === cur) ? cur : r.default));
+    }).catch(() => { /* keep the free-text id; the server falls back to its default */ });
+  }, []);
+  const modelTitle = (m: ModelInfo) =>
+    `${m.label} — ${m.note}. $${m.input_per_m}/M in · $${m.output_per_m}/M out (released ${m.released})`;
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -411,16 +439,37 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
     );
   }, [dimsOn, sens]);
 
+  // A parameter edit that didn't build: what was tried, what was kept, and why.
+  const [paramReject, setParamReject] = useState<{
+    name: string; tried: number; kept: number | undefined; message: string; fix: SizeFix | null;
+  } | null>(null);
+  const applying = useRef<string | null>(null);   // "name=val" in flight (Enter + blur both fire)
+
   // change a parameter's value: rewrite just that value in the script (comments
-  // and formatting preserved), then rebuild + save.
+  // and formatting preserved), then rebuild + save. A value that doesn't build
+  // cleanly is REJECTED: the last good script and value come back (the model
+  // stays rendered, the draft stays buildable) and the reason is shown — with
+  // the engine's one-click fix when it measured a value that fits.
   const applyParam = async (name: string, val: number) => {
+    const key = `${name}=${val}`;
+    if (applying.current === key) return;
+    applying.current = key;
+    const prevCode = code;
+    const prevVal = resRef.current?.params[name];
+    setParamReject(null);
     try {
       const r = await buildApi.setParams(code, { [name]: val });
       setCode(r.code);
-      saveDraft(r.code);
-      await build(r.code, `${name} = ${val}`);
+      const out = await build(r.code, `${name} = ${val}`);
+      if (out.kind === 'ok') { saveDraft(r.code); return; }
+      if (out.kind === 'aborted') return;
+      setCode(prevCode);
+      setParamReject({ name, tried: val, kept: prevVal, message: out.message, fix: out.fix });
+      await build(prevCode);          // the last good build — served from cache
     } catch (err) {
-      setMessage(String(err instanceof Error ? err.message : err));
+      setMessage(errorText(err));
+    } finally {
+      if (applying.current === key) applying.current = null;
     }
   };
 
@@ -439,8 +488,12 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
     return `${edge}the ${desc(sel[0]!)} and the ${desc(sel[1]!)}`;
   };
 
-  const sendChat = async () => {
-    const instruction = ask.trim();
+  // The instruction the "Fix with AI" button sends: the build error itself
+  // travels as `build_error` context, so this only needs to state the goal.
+  const FIX_INSTRUCTION = 'Fix the build error, keeping the design intent.';
+
+  const sendChat = async (text?: string) => {
+    const instruction = (text ?? ask).trim();
     if (!instruction || asking) return;
     setAsking(true);
     const userMsg: ChatMessage = { role: 'user', text: instruction, at: Date.now() };
@@ -453,6 +506,9 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
         code, instruction, context: selectionContext(),
         document_id: getBackendId() ?? '', history, model,
         production: productionNotes,
+        // if the current script doesn't build, the assistant repairs it as part
+        // of this edit (see assistant.py) — no need to paste the error
+        build_error: status === 'error' ? message : '',
       });
       if (r.kind === 'question') {
         persistChat([...base, { role: 'assistant', kind: 'question', text: r.question, at: Date.now() }]);
@@ -464,14 +520,14 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
       }
       fetchUsage();
     } catch (err) {
-      const msg = `⚠ ${err instanceof Error ? err.message : err}`;
+      const msg = `⚠ ${errorText(err)}`;
       persistChat([...base, { role: 'assistant', kind: 'question', text: msg, at: Date.now() }]);
     } finally {
       setAsking(false);
     }
   };
 
-  const rebuild = () => { saveDraft(code); build(code, 'build'); };
+  const rebuild = () => { setParamReject(null); saveDraft(code); build(code, 'build'); };
   const [exporting, setExporting] = useState<'stl' | 'step' | 'stl-parts' | 'dxf' | 'dxf-views' | null>(null);
   const doExport = async (format: 'stl' | 'step' | 'stl-parts' | 'dxf' | 'dxf-views') => {
     if (status !== 'done' || exporting) return;
@@ -493,7 +549,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
         downloadTextFile(r.data, `${docName}.${format}`, mime);
       }
     } catch (err) {
-      setMessage(String(err instanceof Error ? err.message : err));
+      setMessage(errorText(err));
     } finally {
       setExporting(null);
     }
@@ -502,6 +558,16 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   const btn: CSSProperties = {
     padding: '5px 14px', border: 'none', borderRadius: '4px', fontSize: '13px', cursor: 'pointer',
   };
+
+  // "Set r = 1.42 and rebuild": the engine measured the largest size that fits
+  // and it's a param — apply it, no AI round-trip.
+  const fixButton = (f: SizeFix) => (
+    <button onClick={() => void applyParam(f.param!, f.value!)}
+      title={`The largest ${f.kind} that fits is about ${f.max?.toPrecision(3)}; sets ${f.param} just under that and rebuilds`}
+      style={{ ...btn, background: palette.primaryBtn, color: '#fff' }}>
+      Set {f.param} = {f.value} and rebuild
+    </button>
+  );
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: palette.panelBg, zIndex: 1000,
@@ -628,6 +694,21 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
                     </label>
                   );
                 })}
+                {paramReject && (() => {
+                  const pr = paramReject;
+                  const lines = pr.message.split('\n').map((l) => l.trim()).filter(Boolean);
+                  const why = lines[lines.length - 1] ?? pr.message;   // the plain-language line
+                  return (
+                    <div title={pr.message}
+                      style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
+                               fontSize: '11px', color: palette.danger }}>
+                      <span>
+                        {pr.name} = {pr.tried} doesn't build{pr.kept !== undefined ? ` — kept ${pr.kept}` : ''}. {why}
+                      </span>
+                      {pr.fix?.param && fixButton(pr.fix)}
+                    </div>
+                  );
+                })()}
               </div>
             )}
             {(() => {
@@ -769,9 +850,23 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
             {status === 'error' && (
               <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '45%',
                             overflow: 'auto', padding: '12px 14px', background: 'rgba(0,0,0,0.35)',
-                            color: palette.danger, fontSize: '12px', whiteSpace: 'pre-wrap',
-                            fontFamily: 'ui-monospace, Menlo, monospace' }}>
-                {message || 'Build failed'}
+                            display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ color: palette.danger, fontSize: '12px', whiteSpace: 'pre-wrap',
+                              fontFamily: 'ui-monospace, Menlo, monospace' }}>
+                  {message || 'Build failed'}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                  {fix && fixButton(fix)}
+                  <button onClick={() => void sendChat(FIX_INSTRUCTION)} disabled={asking}
+                    title="Send the script and this error to the AI; it repairs the failing line and rebuilds"
+                    style={{ ...btn, background: palette.primaryBtn, color: '#fff',
+                             opacity: asking ? 0.5 : 1, cursor: asking ? 'default' : 'pointer' }}>
+                    {asking ? 'Fixing…' : 'Fix with AI'}
+                  </button>
+                  <span style={{ fontSize: '11px', color: palette.textSecondary }}>
+                    or edit the script / a parameter and Build again
+                  </span>
+                </div>
               </div>
             )}
           </div>
@@ -817,21 +912,26 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
           <input
             value={ask}
             onChange={(e) => setAsk(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') sendChat(); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') void sendChat(); }}
             placeholder={sel.length ? 'e.g. chamfer this edge 2mm  (targets your selection)' : 'Describe a change — e.g. add four M4 corner bolt holes'}
             disabled={asking}
             style={{ flex: 1, padding: '6px 10px', background: palette.inputBg,
                      border: `1px solid ${palette.inputBorder}`, borderRadius: '4px',
                      color: palette.text, fontSize: '13px', outline: 'none' }}
           />
-          <select value={model} onChange={(e) => pickModel(e.target.value)} disabled={asking}
-            title="Model for AI edits — Fable 5 is stronger (and pricier); use it for hard tasks"
+          <select value={model} onChange={(e) => pickModel(e.target.value)} disabled={asking || models.length === 0}
+            title={models.find((m) => m.id === model) ? modelTitle(models.find((m) => m.id === model)!)
+                   : 'Model for AI edits — stronger tiers cost more; use them for hard tasks'}
             style={{ padding: '6px 8px', background: palette.inputBg, color: palette.textSecondary,
                      border: `1px solid ${palette.inputBorder}`, borderRadius: '4px', fontSize: '12px', cursor: 'pointer' }}>
-            <option value="claude-opus-4-8">Opus 4.8</option>
-            <option value="claude-fable-5">Fable 5 ✦</option>
+            {models.length === 0 && <option value={model}>{model || 'default model'}</option>}
+            {models.map((m) => (
+              <option key={m.id} value={m.id} title={modelTitle(m)}>
+                {m.label}{m.tier === 'fable' || m.tier === 'mythos' ? ' ✦' : ''}
+              </option>
+            ))}
           </select>
-          <button onClick={sendChat} disabled={asking || !ask.trim()}
+          <button onClick={() => void sendChat()} disabled={asking || !ask.trim()}
             style={{ padding: '6px 14px', background: palette.primaryBtn, color: '#fff', border: 'none',
                      borderRadius: '4px', fontSize: '13px', cursor: ask.trim() && !asking ? 'pointer' : 'default',
                      opacity: ask.trim() && !asking ? 1 : 0.5 }}>
@@ -854,8 +954,9 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
           {!flash && status === 'building' && 'Building…'}
           {status === 'error' && <span style={{ color: palette.danger }}>Build failed — see the editor side.</span>}
           {status === 'done' && warn && (
-            <span style={{ color: palette.warning ?? '#c78a1a' }}>
-              ⚠ an operation failed (model shown up to it): {warn}
+            <span style={{ color: palette.warning ?? '#c78a1a', display: 'inline-flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <span>⚠ an operation failed (model shown up to it): {warn}</span>
+              {fix && fixButton(fix)}
             </span>
           )}
           {status === 'done' && !warn && (() => {

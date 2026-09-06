@@ -64,6 +64,53 @@ class EngineTests(SimpleTestCase):
         self.assertIsNotNone(r.get("warning"))
         self.assertIn("chamfer", r["warning"].lower())
 
+    def test_failing_fillet_names_the_line_and_the_radius_that_fits(self):
+        code = "P = {'r': 6}\npart = Box(10, 10, 4)\npart = fillet(part.edges().filter_by(Axis.Z), radius=P['r'])"
+        r = run_script(code)
+        w = r["warning"]
+        self.assertIn("line 3: part = fillet(", w)        # the script line (not the import shim's)
+        self.assertIn("radius 6 is too large", w)        # the plain-language cause
+        self.assertIn("largest radius that works is about 5", w)  # measured, not guessed
+        # ...and a structured fix naming the param that holds the bad size
+        fix = r["fix"]
+        self.assertEqual(fix["param"], "r")
+        self.assertAlmostEqual(fix["max"], 5.0, places=1)
+        self.assertLess(fix["value"], 5.0)
+        # the suggested value actually builds, clean
+        r2 = run_script(code.replace("'r': 6", f"'r': {fix['value']}"))
+        self.assertIsNone(r2.get("warning"))
+
+    def test_failing_polyline_fillet_reports_the_radius_for_every_corner(self):
+        # a 10x3 outline: corners are filleted one at a time, and the first
+        # corner alone would allow r=3 — but the 3-long side is shared by two
+        # corners, so the radius that fits ALL of them is 1.5
+        code = ("P = {'r': 6.0}\n"
+                "bpath = Plane.XZ * FilletPolyline((0,0),(10,0),(10,3),(0,3), radius=P['r'], close=True)\n"
+                "part = extrude(make_face(bpath), 2)")
+        with self.assertRaises(EngineError) as cm:   # fails before `part` exists
+            run_script(code)
+        self.assertIn("polyline", str(cm.exception))
+        self.assertIn("tightest corner", str(cm.exception))
+        fix = cm.exception.fix
+        self.assertAlmostEqual(fix["max"], 1.5, places=3)
+        self.assertEqual(fix["param"], "r")
+        r2 = run_script(code.replace("'r': 6.0", f"'r': {fix['value']}"))
+        self.assertIsNone(r2.get("warning"))
+
+    def test_fix_without_a_matching_param_names_no_param(self):
+        # fails before `part` exists → a hard error, but the fix still rides along
+        with self.assertRaises(EngineError) as cm:
+            run_script("with BuildSketch() as sk:\n    Rectangle(10, 3)\n    fillet(sk.vertices(), radius=6)\n"
+                       "part = extrude(sk.sketch, 2)")
+        fix = cm.exception.fix
+        self.assertNotIn("param", fix)
+        self.assertAlmostEqual(fix["max"], 1.5, places=1)
+
+    def test_syntax_error_names_the_script_line(self):
+        with self.assertRaises(EngineError) as cm:
+            run_script("x = 1\npart = Box(1,1,1")
+        self.assertIn("line 2: part = Box(1,1,1", str(cm.exception))
+
     def test_error_before_any_part_still_fails(self):
         with self.assertRaises(EngineError):
             run_script("x = chamfer(nope, length=1)")  # no `part` ever bound

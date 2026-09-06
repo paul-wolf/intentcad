@@ -226,6 +226,7 @@ class RunResponse(Schema):
     params: dict[str, float] = {}   # editable scalar params from the script
     metrics: RunMetrics
     warning: str | None = None      # an op failed; the model is rendered up to it
+    fix: dict | None = None         # for a fillet/chamfer that doesn't fit: the size that does
 
 
 class ExportRequest(Schema):
@@ -290,6 +291,25 @@ class EditRequest(Schema):
     history: list[ChatTurn] = []   # recent conversation turns
     model: str = ""                # optional LLM override (else the default)
     production: str = ""           # target production process (e.g. FDM print) — standing context
+    build_error: str = ""          # the error the current script fails with, if it doesn't build
+
+
+class ModelInfo(Schema):
+    id: str
+    label: str            # short name for a menu, e.g. "Opus 5"
+    tier: str             # fable | opus | sonnet | haiku
+    note: str             # one line on when to pick it
+    released: str         # YYYY-MM-DD
+    input_per_m: float    # USD per 1M input tokens
+    output_per_m: float   # USD per 1M output tokens
+
+
+class ModelsResponse(Schema):
+    """The models the AI edit can use right now (from the Models API), newest
+    first within each tier, and which one is the default."""
+    models: list[ModelInfo]
+    default: str
+    source: str           # "live" or "static" (API unreachable — snapshot)
 
 
 class EditResponse(Schema):

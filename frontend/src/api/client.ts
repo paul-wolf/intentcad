@@ -55,9 +55,51 @@ async function request<T>(
   if (resp.status === 204) return undefined as T;
   if (!resp.ok) {
     const body = await resp.text();
-    throw new Error(`API ${resp.status}: ${body}`);
+    throw new ApiError(resp.status, body);
   }
   return resp.json() as Promise<T>;
+}
+
+/** The engine's structured remedy for a fillet/chamfer that doesn't fit: the
+ *  size that failed, the largest that works, and — when that size is a script
+ *  param — which param to set to what. */
+export interface SizeFix {
+  kind: 'fillet' | 'chamfer';
+  size: number;
+  max: number | null;
+  suggest: number | null;
+  param?: string;
+  value?: number;
+}
+
+/** A non-2xx response. `detail` is the server's human message (the `message`
+ *  field of a JSON error body, else the raw body); `message` keeps the
+ *  `API <status>: …` form that callers string-match on. */
+export class ApiError extends Error {
+  status: number;
+  detail: string;
+  fix?: SizeFix;
+  constructor(status: number, body: string) {
+    let detail = body;
+    let fix: SizeFix | undefined;
+    try {
+      const j = JSON.parse(body);
+      if (j && typeof j.message === 'string') detail = j.message;
+      if (j && j.fix && typeof j.fix === 'object') fix = j.fix as SizeFix;
+    } catch { /* not JSON — keep the raw body */ }
+    super(`API ${status}: ${detail}`);
+    this.name = 'ApiError';
+    this.status = status;
+    this.detail = detail;
+    this.fix = fix;
+  }
+}
+
+/** The text to show a user for a caught error: the server's message for API
+ *  errors (no status-code prefix), else the error's own message. */
+export function errorText(err: unknown): string {
+  if (err instanceof ApiError) return err.detail;
+  return err instanceof Error ? err.message : String(err);
 }
 
 export interface DocumentListItem {
@@ -228,8 +270,14 @@ export const buildApi = {
     return request('/build/export', { method: 'POST', body: JSON.stringify({ code, format }) });
   },
   edit(payload: { code: string; instruction: string; context?: string; document_id?: string;
-                  history?: { role: string; text: string }[]; model?: string; production?: string }): Promise<EditResponse> {
+                  history?: { role: string; text: string }[]; model?: string; production?: string;
+                  build_error?: string }): Promise<EditResponse> {
     return request('/build/edit', { method: 'POST', body: JSON.stringify(payload) });
+  },
+  /** The Claude models the AI edit can use right now (discovered server-side
+   *  from the Models API, so a new release appears without a frontend change). */
+  models(): Promise<ModelsResponse> {
+    return request('/build/models');
   },
   usage(documentId: string): Promise<UsageResponse> {
     return request(`/build/usage?document=${encodeURIComponent(documentId)}`);
@@ -258,6 +306,22 @@ export interface EditResponse {
 }
 
 export interface UsageTotals { edits: number; tokens_in: number; tokens_out: number; cost_usd: number }
+export interface ModelInfo {
+  id: string;
+  label: string;          // short menu name, e.g. "Opus 5"
+  tier: 'fable' | 'opus' | 'sonnet' | 'haiku' | string;
+  note: string;           // one line on when to pick it
+  released: string;       // YYYY-MM-DD
+  input_per_m: number;    // USD per 1M input tokens
+  output_per_m: number;   // USD per 1M output tokens
+}
+
+export interface ModelsResponse {
+  models: ModelInfo[];    // strongest tier first, newest first within a tier
+  default: string;
+  source: 'live' | 'static';
+}
+
 export interface UsageResponse { document: UsageTotals; all_time: UsageTotals }
 
 // ── build123d engine (the model is a script) ──
@@ -279,6 +343,7 @@ export interface RunResponse {
   params: Record<string, number>;
   metrics: { volume: number; area: number; bbox_min: [number, number, number]; bbox_max: [number, number, number] };
   warning?: string;
+  fix?: SizeFix;
 }
 
 // ── chat agent (instruction → feature-tree operations) ──

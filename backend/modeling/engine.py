@@ -30,7 +30,15 @@ _BACKEND = Path(__file__).resolve().parent.parent
 
 
 class EngineError(RuntimeError):
-    """The script failed to build (surfaced to the client with the message)."""
+    """The script failed to build (surfaced to the client with the message).
+
+    `fix`, when present, is the runner's structured remedy for a fillet/chamfer
+    that doesn't fit: {kind, size, max, suggest} plus {param, value} when the
+    failing size is a script param — so callers can apply it without an edit."""
+
+    def __init__(self, message: str, fix: dict | None = None):
+        super().__init__(message)
+        self.fix = fix
 
 
 def _min_env() -> dict[str, str]:
@@ -177,5 +185,5 @@ def run_script(code: str, *, export: list[str] | None = None, timeout: float = 6
     except json.JSONDecodeError as exc:
         raise EngineError("engine returned malformed output") from exc
     if not result.get("ok"):
-        raise EngineError(result.get("error", "build failed"))
+        raise EngineError(result.get("error", "build failed"), fix=result.get("fix"))
     return result

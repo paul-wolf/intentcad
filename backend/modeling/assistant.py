@@ -13,16 +13,20 @@ import os
 from typing import Callable
 
 from .engine import EngineError, run_script
+from .paramedit import ParamError, set_params
+from .llm_models import is_known, list_models, price_for
 
-MODEL = "claude-opus-4-8"   # default: fast + capable
+# Per-attempt cap on an Anthropic call, and how many times the SDK retries it.
+# The SDK's own default is more patient than gunicorn's --timeout, so without
+# these a slow call gets the *worker* killed mid-stream instead of returning an
+# error the UI can show. Worst case per call is TIMEOUT * (1 + RETRIES), and an
+# edit makes up to two calls — keep that under the gunicorn timeout budget.
+LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT", "240"))
+LLM_RETRIES = int(os.environ.get("LLM_RETRIES", "1"))
 
-# selectable models and their USD-per-token pricing (input, output).
-# Fable 5 is Anthropic's most capable model — for the occasional hard edit;
-# roughly 2x the cost and slower, so it's opt-in per request.
-_PRICING = {
-    "claude-opus-4-8": (5.0 / 1_000_000, 25.0 / 1_000_000),
-    "claude-fable-5": (10.0 / 1_000_000, 50.0 / 1_000_000),
-}
+# Selectable models and their pricing live in llm_models.py — discovered from
+# the Models API so a new release shows up without a code change. The default
+# is the newest Opus (capable + fast); stronger tiers are opt-in per request.
 
 
 class AssistantError(RuntimeError):
@@ -49,6 +53,13 @@ def _system(production: str = "") -> str:
         "fillet(edges, radius=r) or chamfer(edges, length=d).\n\n"
         "If a SELECTION is given, it names the exact geometry the user means — "
         "write a selector that resolves to it (use the given positions/kinds).\n\n"
+        "If a BUILD ERROR is given, the CURRENT SCRIPT does not build: the error "
+        "names the failing line and, where known, the cause. Fix the cause while "
+        "preserving the design intent — e.g. a fillet/chamfer that is too large "
+        "for its geometry should be reduced to the largest value that fits (or "
+        "applied to fewer edges), not deleted. Keep the size as a named param. "
+        "If the user's instruction is about something else, do both: fix the "
+        "build AND make the requested change.\n\n"
         "ASSEMBLIES / MECHANISMS: to keep several bodies as distinct parts (an "
         "assembly), position each and combine them with Compound([a, b, …]) — NOT "
         "a boolean +, which fuses them into one solid. `part` may be a Compound. "
@@ -107,7 +118,7 @@ ASK_TOOL = {
 }
 
 
-def _anthropic_call(system: str, user: str, tools: list[dict], model: str = MODEL) -> dict:
+def _anthropic_call(system: str, user: str, tools: list[dict], model: str) -> dict:
     try:
         import anthropic
     except ImportError as exc:  # pragma: no cover
@@ -115,7 +126,8 @@ def _anthropic_call(system: str, user: str, tools: list[dict], model: str = MODE
     key = os.environ.get("ANTHROPIC_KEY") or os.environ.get("ANTHROPIC_API_KEY")
     if not (key or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
         raise AssistantError("ANTHROPIC_KEY is not set")
-    client = anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
+    opts = {"timeout": LLM_TIMEOUT, "max_retries": LLM_RETRIES}
+    client = anthropic.Anthropic(api_key=key, **opts) if key else anthropic.Anthropic(**opts)
     try:
         # Stream: adaptive thinking + a full script can run long; streaming keeps
         # data flowing so we don't block on one long read (and get_final_message
@@ -129,6 +141,10 @@ def _anthropic_call(system: str, user: str, tools: list[dict], model: str = MODE
             messages=[{"role": "user", "content": user}],
         ) as stream:
             resp = stream.get_final_message()
+    except anthropic.APITimeoutError as exc:
+        raise AssistantError(
+            "the model took too long to respond — try a smaller, more specific edit"
+        ) from exc
     except anthropic.APIError as exc:
         raise AssistantError(f"Anthropic API error: {exc}") from exc
     usage = {"input": resp.usage.input_tokens, "output": resp.usage.output_tokens}
@@ -162,24 +178,29 @@ def edit_script(
     history: list[dict] | None = None,
     model: str | None = None,
     production: str = "",
+    build_error: str = "",
     *,
     llm: Callable[[str, str, list[dict]], dict] | None = None,
 ) -> dict:
     """Turn `instruction` into either an edit of `code` or a clarifying question.
 
     `history` is recent conversation turns ([{role, text}, …]) so references
-    across turns resolve. `model` picks which LLM (defaults to MODEL; only known
-    models are honoured). Returns {kind: "edit", code, note, tokens…} for an edit
+    across turns resolve. `model` picks which LLM (defaults to the newest Opus;
+    only models the Models API currently offers are honoured). `build_error` is
+    the error the current `code` fails with, if any — the model is asked to
+    repair it as part of the edit. Returns {kind: "edit", code, note, tokens…} for an edit
     (validated to build, one corrective retry) or {kind: "question", question,
     tokens…} when the model asks for clarification."""
     instruction = (instruction or "").strip()
     if not instruction:
         raise AssistantError("empty instruction")
-    model = model if model in _PRICING else MODEL
+    model = model if model and is_known(model) else list_models()["default"]
     llm = llm or (lambda s, u, t: _anthropic_call(s, u, t, model=model))
 
     def prompt(extra: str = "") -> str:
         sel = f"SELECTION: {context}\n\n" if context.strip() else ""
+        berr = (f"BUILD ERROR (the current script fails with this):\n{build_error.strip()}\n\n"
+                if build_error.strip() else "")
         convo = ""
         if history:
             turns = []
@@ -189,7 +210,7 @@ def edit_script(
             convo = "RECENT CONVERSATION:\n" + "\n".join(turns) + "\n\n"
         return (
             f"CURRENT SCRIPT:\n```python\n{code}\n```\n\n"
-            f"{convo}{sel}INSTRUCTION: {instruction}\n{extra}"
+            f"{convo}{berr}{sel}INSTRUCTION: {instruction}\n{extra}"
         )
 
     tok_in = tok_out = 0
@@ -203,7 +224,7 @@ def edit_script(
         return o
 
     def cost() -> dict:
-        pin, pout = _PRICING[model]
+        pin, pout = price_for(model)
         return {
             "tokens_in": tok_in, "tokens_out": tok_out,
             "cost_usd": round(tok_in * pin + tok_out * pout, 4),
@@ -212,7 +233,21 @@ def edit_script(
     def validate(script: str) -> None:
         r = run_script(script)  # raises EngineError if nothing builds
         if r.get("warning"):    # an operation failed partway — treat as a build error
-            raise EngineError(r["warning"])
+            raise EngineError(r["warning"], fix=r.get("fix"))
+
+    def apply_fix(script: str, exc: EngineError) -> str | None:
+        """The engine measured the size that fits and it lives in a param: set it
+        and re-validate. Deterministic and ~instant — spares a second model call
+        (the slow part) for the commonest failure."""
+        fix = exc.fix or {}
+        if not fix.get("param") or fix.get("value") is None:
+            return None
+        try:
+            fixed = set_params(script, {fix["param"]: fix["value"]})
+            validate(fixed)
+        except (ParamError, EngineError):
+            return None
+        return fixed
 
     out = call()
     if out.get("kind") == "question":
@@ -222,15 +257,29 @@ def edit_script(
     try:
         validate(new_code)
     except EngineError as exc:
+        fixed = apply_fix(new_code, exc)
+        if fixed is not None:
+            fix = exc.fix or {}
+            note = (out.get("note", "") +
+                    f" ({fix['param']} reduced to {fix['value']:g}, the largest "
+                    f"{fix.get('kind', 'size')} that fits this geometry)").strip()
+            return {"kind": "edit", "code": fixed, "note": note, **cost()}
         out = call(
-            f"\nYour previous script failed to build with this error:\n{exc}\n"
-            "Return a corrected complete script.")
+            f"\nYour previous script failed to build. The failing line and error "
+            f"(with the likely cause, where known):\n{exc}\n"
+            "Fix that cause — don't just remove the feature. If the error states "
+            "the largest size that fits (fillet radius, chamfer length), use that "
+            "value or less; otherwise compute a size that fits from the neighbouring "
+            "dimensions. Return a corrected complete script.")
         if out.get("kind") == "question":
             return {"kind": "question", "question": out.get("question", ""), **cost()}
         new_code = out.get("code", "")
         try:
             validate(new_code)
         except EngineError as exc2:
-            raise AssistantError(f"couldn't produce a script that builds: {exc2}") from exc2
+            fixed = apply_fix(new_code, exc2)
+            if fixed is None:
+                raise AssistantError(f"couldn't produce a script that builds: {exc2}") from exc2
+            new_code = fixed
 
     return {"kind": "edit", "code": new_code, "note": out.get("note", ""), **cost()}

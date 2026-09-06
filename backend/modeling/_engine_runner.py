@@ -9,6 +9,7 @@ We do no CAD here — build123d does. We only take the artifacts out.
 """
 
 import json
+import re
 import sys
 import tempfile
 
@@ -70,23 +71,295 @@ def _export_dxf_views(part) -> str:
             zf.writestr(f"{name}.dxf", text)
     return base64.b64encode(buf.getvalue()).decode()
 
+# Script errors, made actionable. The raw exception is OpenCASCADE/build123d
+# wording ("Fillet algorithm failed for Vertex(...)") with no hint of which line
+# or what to do about it — this adds the failing script line and, for the
+# failures that recur in practice, a plain-language cause and remedy. The same
+# text goes to the user AND back to the model on a corrective retry.
+#
+# Fillets and chamfers get more than a hint: `_instrument()` wraps the build123d
+# operations so a failure also reports the LARGEST size that does fit (measured,
+# not guessed), and a structured `fix` the caller can apply — see `_last_fix`.
+_HINTS = [
+    (r"fillet", "The fillet radius is too large for that geometry: the fillet must fit "
+                "within the edges/faces it joins, and neighbouring fillets must not "
+                "overlap. Reduce the radius, or fillet fewer corners/edges."),
+    (r"chamfer", "The chamfer length is too large for that geometry: it must fit within "
+                 "the edges/faces it joins. Reduce the length, or chamfer fewer edges."),
+    (r"BRep_API: command not done|BRepAlgoAPI|boolean", "A boolean operation produced "
+                 "nothing usable — usually the shapes don't actually overlap, or they "
+                 "touch only along a face or edge. Check positions and sizes."),
+    (r"list index out of range|IndexError|StopIteration", "A selector matched no "
+                 "geometry (or fewer items than expected). Check the face/edge selector "
+                 "against the current shape."),
+]
+
+
+class SizeError(ValueError):
+    """A fillet/chamfer size that doesn't fit, enriched with the size that does.
+
+    `fix` is {"kind", "size", "max", "suggest"}: the size that failed, the largest
+    that works (None if it couldn't be measured) and a rounded-down value to use.
+    `_run` adds "param"/"value" when `size` matches a script param exactly."""
+
+    def __init__(self, message: str, fix: dict):
+        super().__init__(message)
+        self.fix = fix
+
+
+def _suggest(mx: float | None) -> float | None:
+    """A usable size just under the measured maximum (5% margin, 2 decimals)."""
+    if mx is None:
+        return None
+    import math
+    v = math.floor(mx * 0.95 * 100) / 100
+    return v if v >= 0.05 else 0.0
+
+
+def _largest_ok(attempt, size: float, iters: int = 9) -> float | None:
+    """Bisect for the largest size in (0, size) for which `attempt(size)` succeeds.
+    `attempt` must be side-effect free (build123d topology methods are: they
+    return new shapes). Resolution after 9 halvings is size/512."""
+    lo, hi = 0.0, float(size)
+    for _ in range(iters):
+        mid = (lo + hi) / 2
+        try:
+            attempt(mid)
+            lo = mid
+        except Exception:
+            hi = mid
+    return lo if lo > 0 else None
+
+
+def _size_error(exc: BaseException, kind: str, what: str, size: float,
+                mx: float | None, extra: str = "") -> SizeError:
+    noun = "length" if kind == "chamfer" else "radius"
+    sug = _suggest(mx)
+    if mx is None:
+        remedy = (f"The largest {noun} that fits couldn't be measured; try roughly "
+                  f"half, or {kind} fewer of them.")
+    elif sug == 0.0:
+        remedy = (f"No {kind} fits there (largest {noun} that works ≈ {mx:.3g}): "
+                  f"remove it from {what}, or change the geometry.")
+    else:
+        remedy = (f"The largest {noun} that works is about {mx:.3g}: use {noun} "
+                  f"{sug:g} (or less), or {kind} fewer of them.")
+    msg = (f"{exc}\n{kind.capitalize()} {noun} {size:g} is too large for {what}"
+           f"{extra}. {remedy}")
+    return SizeError(msg, {"kind": kind, "size": float(size), "max": mx, "suggest": sug})
+
+
+def _polyline_max_radius(points, close: bool):
+    """Largest single radius FilletPolyline can apply at every corner of `points`.
+
+    A fillet of radius r at a corner with interior angle θ consumes r/tan(θ/2)
+    of each adjoining segment, so each segment of length L bounds r by
+    L / (cot(θa/2) + cot(θb/2)) over the corners it joins. Returns
+    (r_max, tightest_corner_point) or (None, None) if nothing constrains it."""
+    import math
+    from build123d import Vector
+    pts = [Vector(p) for p in points]
+    n = len(pts)
+    if n < 3:
+        return None, None
+    corners = range(n) if close else range(1, n - 1)
+    cot: dict = {}
+    for i in corners:
+        a = pts[(i - 1) % n] - pts[i]
+        b = pts[(i + 1) % n] - pts[i]
+        if a.length < 1e-9 or b.length < 1e-9:
+            continue
+        cosang = max(-1.0, min(1.0, a.dot(b) / (a.length * b.length)))
+        theta = math.acos(cosang)
+        if theta < 1e-6 or abs(theta - math.pi) < 1e-6:   # spike or straight-through
+            continue
+        cot[i] = 1.0 / math.tan(theta / 2)
+    best, where = None, None
+    for i in range(n if close else n - 1):
+        j = (i + 1) % n
+        seg_len = (pts[j] - pts[i]).length
+        c = cot.get(i, 0.0) + cot.get(j, 0.0)
+        if c <= 0 or seg_len < 1e-9:
+            continue
+        r = seg_len / c
+        if best is None or r < best:
+            best = r
+            where = pts[i] if cot.get(i, 0.0) >= cot.get(j, 0.0) else pts[j]
+    return best, where
+
+
+_instrumented = False
+
+
+def _instrument() -> None:
+    """Wrap build123d's fillet/chamfer entry points so a size that doesn't fit
+    raises SizeError carrying the size that does. Class-level, once per worker:
+    covers `fillet(...)`, `part.fillet(...)`, sketch/wire `fillet_2d` and
+    `FilletPolyline`. Only the failure path changes."""
+    global _instrumented
+    if _instrumented:
+        return
+    _instrumented = True
+    from build123d import Face, FilletPolyline, Wire, Vector
+    from build123d.build_common import flatten_sequence
+    from build123d.topology.three_d import Mixin3D
+
+    def is_size_failure(exc: BaseException) -> bool:
+        return not isinstance(exc, SizeError) and bool(
+            re.search(r"fillet|chamfer|BRep_API|not done", str(exc), re.IGNORECASE))
+
+    orig_fillet3d = Mixin3D.fillet
+
+    def fillet3d(self, radius, edge_list):
+        edges = list(edge_list)
+        try:
+            return orig_fillet3d(self, radius, edges)
+        except Exception as exc:
+            if not is_size_failure(exc):
+                raise
+            mx = None
+            try:
+                mx = float(self.max_fillet(edges, tolerance=0.02, max_iterations=14))
+            except Exception:
+                mx = _largest_ok(lambda r: orig_fillet3d(self, r, edges), radius)
+            raise _size_error(exc, "fillet", f"the {len(edges)} selected edge(s)",
+                              radius, mx, " (short or converging edges limit it)") from exc
+
+    Mixin3D.fillet = fillet3d
+
+    orig_chamfer3d = Mixin3D.chamfer
+
+    def chamfer3d(self, length, length2, edge_list, face=None):
+        edges = list(edge_list)
+        try:
+            return orig_chamfer3d(self, length, length2, edges, face)
+        except Exception as exc:
+            if not is_size_failure(exc):
+                raise
+            mx = _largest_ok(
+                lambda d: orig_chamfer3d(self, d, None if length2 is None else d, edges, face),
+                length)
+            raise _size_error(exc, "chamfer", f"the {len(edges)} selected edge(s)",
+                              length, mx) from exc
+
+    Mixin3D.chamfer = chamfer3d
+
+    def wrap_2d(cls):
+        orig = cls.fillet_2d
+
+        def fillet_2d(self, radius, vertices):
+            verts = list(vertices)
+            try:
+                return orig(self, radius, verts)
+            except Exception as exc:
+                if not is_size_failure(exc):
+                    raise
+                mx = _largest_ok(lambda r: orig(self, r, verts), radius)
+                raise _size_error(exc, "fillet", f"the {len(verts)} selected corner(s)",
+                                  radius, mx, " (adjoining edges are too short "
+                                  "or the corners too close together)") from exc
+
+        cls.fillet_2d = fillet_2d
+
+    wrap_2d(Face)
+    wrap_2d(Wire)
+
+    orig_poly_init = FilletPolyline.__init__
+
+    def poly_init(self, *pts, radius, close=False, **kw):
+        try:
+            return orig_poly_init(self, *pts, radius=radius, close=close, **kw)
+        except Exception as exc:
+            # corners are filleted one at a time, so an inner SizeError only knows
+            # ONE corner's limit — recompute for the whole polyline
+            if isinstance(exc, SizeError):
+                exc = exc.__cause__ or exc
+            elif not is_size_failure(exc):
+                raise
+            if not isinstance(radius, (int, float)):
+                raise
+            points = list(flatten_sequence(*pts))
+            closed = close
+            if len(points) >= 2 and (Vector(points[0]) - Vector(points[-1])).length < 1e-5:
+                closed, points = True, points[:-1]
+            mx, at = _polyline_max_radius(points, closed)
+            extra = ""
+            if at is not None:
+                extra = f" (tightest corner at ({at.X:g}, {at.Y:g}))"
+            raise _size_error(exc, "fillet", "this polyline's corners", radius, mx,
+                              extra) from exc
+
+    FilletPolyline.__init__ = poly_init
+
+
+def _describe_error(exc: BaseException, code: str) -> str:
+    """'<line N: source>\nType: message\nhint' — where N is the script line."""
+    import traceback
+    head = f"{type(exc).__name__}: {exc}"
+    lines = code.split("\n")
+    where = ""
+    if isinstance(exc, SyntaxError) and exc.filename == "<script>" and exc.lineno:
+        n = exc.lineno - 1                       # minus the prepended import line
+        if 1 <= n <= len(lines):
+            where = f"line {n}: {lines[n - 1].strip()}\n"
+    else:
+        for fr in traceback.extract_tb(exc.__traceback__):
+            if fr.filename == "<script>":
+                n = fr.lineno - 1
+                if 1 <= n <= len(lines):
+                    where = f"line {n}: {lines[n - 1].strip()}\n"
+    hint = ""
+    if not isinstance(exc, SizeError):          # SizeError already says what fits
+        for pat, text in _HINTS:
+            if re.search(pat, head, re.IGNORECASE):
+                hint = "\n" + text
+                break
+    return f"{where}{head}{hint}"
+
+
+def _fix_for(exc: BaseException, ns: dict) -> dict | None:
+    """The structured remedy for a SizeError: its measured sizes, plus the name of
+    the script param holding the failing size when exactly one does — that makes
+    the fix a one-click "set <param> = <suggest>" instead of a script edit."""
+    fix = getattr(exc, "fix", None)
+    if not isinstance(fix, dict):
+        return None
+    fix = dict(fix)
+    raw = ns.get("P")
+    if not isinstance(raw, dict):
+        raw = ns.get("params")
+    if isinstance(raw, dict) and fix.get("suggest") is not None:
+        hits = [k for k, v in raw.items()
+                if isinstance(k, str) and isinstance(v, (int, float))
+                and not isinstance(v, bool) and abs(float(v) - fix["size"]) < 1e-9]
+        if len(hits) == 1:
+            fix["param"] = hits[0]
+            fix["value"] = fix["suggest"]
+    return fix
+
 
 def _run(code: str, export: list | None = None) -> dict:
     from build123d import export_step, export_stl
 
+    _instrument()
     ns: dict = {"__name__": "__cad__"}
     # Run the script. If an operation fails partway (e.g. a chamfer too big),
     # `part` still holds the model built up to that line — render THAT plus the
     # error as a warning, instead of blanking the whole model.
     warning = None
+    fix = None
     try:
-        exec(f"from build123d import *\n{code}", ns)  # noqa: S102 - sandboxed subprocess
+        exec(compile(f"from build123d import *\n{code}", "<script>", "exec"), ns)  # noqa: S102 - sandboxed subprocess
     except Exception as exc:
-        warning = f"{type(exc).__name__}: {exc}"
+        warning = _describe_error(exc, code)
+        fix = _fix_for(exc, ns)
 
     part = ns.get("part") or ns.get("result")
     if part is None or not hasattr(part, "faces"):
-        return {"ok": False, "error": warning or "script did not define `part`"}
+        out = {"ok": False, "error": warning or "script did not define `part`"}
+        if fix:
+            out["fix"] = fix
+        return out
 
     # expose the params dict (scalar entries) so the UI can offer number fields
     raw = ns.get("P")
@@ -242,6 +515,8 @@ def _run(code: str, export: list | None = None) -> dict:
     }
     if warning:
         result["warning"] = warning   # an op failed; we rendered up to it
+    if fix:
+        result["fix"] = fix           # ...and here's the size that would have fit
     return result
 
 

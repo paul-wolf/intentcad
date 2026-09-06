@@ -7,6 +7,7 @@ from projects.access import require_auth
 from .assistant import AssistantError, edit_script
 from .models import AiEdit
 from .engine import EngineError, run_script
+from .llm_models import list_models
 from .paramedit import ParamError, set_params
 from .schemas import (
     EditRequest,
@@ -14,6 +15,7 @@ from .schemas import (
     ExportRequest,
     ExportResponse,
     MeshOut,
+    ModelsResponse,
     RunEdge,
     RunFace,
     RunMetrics,
@@ -43,7 +45,10 @@ def run_model(request, payload: RunRequest):
     try:
         r = run_script(payload.code)
     except EngineError as exc:
-        return JsonResponse({"message": str(exc)}, status=422)
+        body = {"message": str(exc)}
+        if exc.fix:
+            body["fix"] = exc.fix
+        return JsonResponse(body, status=422)
     return RunResponse(
         mesh=MeshOut(**r["mesh"]),
         faces=[RunFace(**f) for f in r.get("faces", [])],
@@ -51,6 +56,7 @@ def run_model(request, payload: RunRequest):
         params=r.get("params", {}),
         metrics=RunMetrics(**r["metrics"]),
         warning=r.get("warning"),
+        fix=r.get("fix"),
     )
 
 
@@ -109,7 +115,8 @@ def edit_model(request, payload: EditRequest):
     history = [{"role": t.role, "text": t.text} for t in payload.history]
     try:
         r = edit_script(payload.code, payload.instruction, payload.context, history,
-                        payload.model or None, production=payload.production)
+                        payload.model or None, production=payload.production,
+                        build_error=payload.build_error)
     except AssistantError as exc:
         return JsonResponse({"message": str(exc)}, status=422)
     AiEdit.objects.create(
@@ -124,6 +131,16 @@ def edit_model(request, payload: EditRequest):
         tokens_in=r.get("tokens_in", 0), tokens_out=r.get("tokens_out", 0),
         cost_usd=r.get("cost_usd", 0.0),
     )
+
+
+@router.get("/models", response=ModelsResponse)
+def models(request):
+    """Which Claude models the AI edit can use — discovered from the Models API
+    (cached an hour) so the picker never goes stale."""
+    err = require_auth(request)
+    if err:
+        return err
+    return ModelsResponse(**list_models())
 
 
 @router.get("/usage", response=UsageResponse)
