@@ -1,5 +1,6 @@
 import type { Entity, Point } from '@/types/document';
 import { getSegmentCount, getSegmentPointIndices, getSegmentBulge } from '@/utils/lineSegments';
+import { rectanglePath } from '@/utils/rectPath';
 
 /**
  * An ordered CNC path segment with optional bulge for arcs.
@@ -15,7 +16,7 @@ export interface CncSegment {
 /**
  * Convert sketch entities (filtered to a set of IDs) into ordered CNC path segments.
  * Handles LineEntity (with arc segments via bulge), CircleEntity (2 semicircles),
- * and RectangleEntity (4 straight segments).
+ * and RectangleEntity (4 straight segments, or 8 with arcs when filleted).
  */
 export function entityToSegments(entities: Entity[], entityIds: string[]): CncSegment[] {
   const idSet = new Set(entityIds);
@@ -48,20 +49,15 @@ export function entityToSegments(entities: Entity[], entityIds: string[]): CncSe
         break;
       }
       case 'rectangle': {
-        const hw = entity.width / 2;
-        const hh = entity.height / 2;
-        const c = entity.center;
-        const corners: Point[] = [
-          { x: c.x - hw, y: c.y + hh }, // TL (y-down)
-          { x: c.x + hw, y: c.y + hh }, // TR
-          { x: c.x + hw, y: c.y - hh }, // BR
-          { x: c.x - hw, y: c.y - hh }, // BL
-        ];
-        for (let i = 0; i < 4; i++) {
+        // 4 straight segments when square; 8 with an arc at each corner when
+        // filleted (the corner radius machines as a real arc, not a tool-radius
+        // artefact — see cam/validate.ts).
+        const { points, bulge } = rectanglePath(entity);
+        for (let i = 0; i < points.length; i++) {
           segments.push({
-            from: corners[i]!,
-            to: corners[(i + 1) % 4]!,
-            bulge: 0,
+            from: points[i]!,
+            to: points[(i + 1) % points.length]!,
+            bulge: bulge[i] ?? 0,
           });
         }
         break;

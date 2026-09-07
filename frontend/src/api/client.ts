@@ -190,6 +190,7 @@ export interface BuildEntity {
   radius?: number;
   width?: number;
   height?: number;
+  cornerRadius?: number;
   anchor?: 'center' | 'corner';
 }
 

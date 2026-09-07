@@ -81,6 +81,7 @@ function toBuildEntity(e: Entity): BuildEntity | null {
         center: { x: e.center.x, y: e.center.y },
         width: e.width,
         height: e.height,
+        cornerRadius: e.cornerRadius,
         anchor: e.anchor,
       };
     default:

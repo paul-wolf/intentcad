@@ -15,6 +15,7 @@ import { resolveDimensionEndpoints } from '@/utils/dimensionGeom';
 import { getConstraintPartners, getEntityRepresentativePoint, CONSTRAINT_SYMBOLS } from '@/utils/constraints';
 import { getSegmentCount, getSegmentPointIndices, getSegmentBulge, getEntitySegmentEndpoints } from '@/utils/lineSegments';
 import { arcFromBulge, arcMidpoint } from '@/utils/arcGeometry';
+import { rectanglePath, rectangleOutline, rectangleCorners } from '@/utils/rectPath';
 import { renderToolpathOverlay, renderSimulatorOverlay } from '@/components/ToolpathOverlay';
 import { useCamStore } from '@/stores/camStore';
 
@@ -675,29 +676,33 @@ function renderEntity(
       break;
     }
     case 'rectangle': {
-      const hw = entity.width / 2;
-      const hh = entity.height / 2;
       const c = entity.center;
-      const corners = [
-        viewport.worldToScreen({ x: c.x - hw, y: c.y + hh }),
-        viewport.worldToScreen({ x: c.x + hw, y: c.y + hh }),
-        viewport.worldToScreen({ x: c.x + hw, y: c.y - hh }),
-        viewport.worldToScreen({ x: c.x - hw, y: c.y - hh }),
-      ];
+      const { points, bulge } = rectanglePath(entity);
+      const screenPts = points.map((p) => viewport.worldToScreen(p));
       if (fillShape) {
         renderer.setGlobalAlpha(0.25);
-        renderer.fillPolygon(corners, style.color);
+        renderer.fillPolygon(rectangleOutline(entity).map((p) => viewport.worldToScreen(p)), style.color);
         renderer.resetGlobalAlpha();
       }
-      for (let i = 0; i < 4; i++) {
-        renderer.drawLine(corners[i]!, corners[(i + 1) % 4]!, style);
+      for (let i = 0; i < screenPts.length; i++) {
+        const a = screenPts[i]!;
+        const b = screenPts[(i + 1) % screenPts.length]!;
+        const seg = bulge[i] ?? 0;
+        if (seg === 0) {
+          renderer.drawLine(a, b, style);
+        } else {
+          const arc = arcFromBulge(points[i]!, points[(i + 1) % points.length]!, seg);
+          renderer.drawArc(viewport.worldToScreen(arc.center), arc.radius * viewport.scale,
+            arc.startAngle, arc.endAngle, arc.counterClockwise, style);
+        }
       }
       if (!hideHandles) {
         const screenCenter = viewport.worldToScreen(c);
         renderer.fillCircle(screenCenter, ENDPOINT_RADIUS, style.color);
-        // Corner dots
-        for (const corner of corners) {
-          renderer.fillCircle(corner, ENDPOINT_RADIUS, style.color);
+        // Corner dots stay on the theoretical (sharp) corners even when filleted —
+        // they are the drag handles, and entityPoints indices 1-4 resolve there.
+        for (const corner of rectangleCorners(entity)) {
+          renderer.fillCircle(viewport.worldToScreen(corner), ENDPOINT_RADIUS, style.color);
         }
       }
       break;

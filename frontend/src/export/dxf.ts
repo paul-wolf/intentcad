@@ -1,5 +1,6 @@
 import type { Document } from '@/types/document';
 import { getSegmentCount, getSegmentPointIndices, getSegmentBulge } from '@/utils/lineSegments';
+import { rectanglePath } from '@/utils/rectPath';
 
 /** Our editor uses Y-down (screen convention), DXF uses Y-up (math convention). */
 function dxfY(y: number): number { return -y; }
@@ -152,34 +153,28 @@ export function exportDocumentToDxf(doc: Document): string {
         w('40');
         w(String(entity.radius));
       } else if (entity.type === 'rectangle') {
-        const hw = entity.width / 2;
-        const hh = entity.height / 2;
-        const cx = entity.center.x;
-        const cy = entity.center.y;
+        // 4 vertices when square, 8 with a bulge on each corner when filleted.
+        const { points, bulge } = rectanglePath(entity);
         w('0');
         w('LWPOLYLINE');
         w('8');
         w(sketch.name);
         w('90');
-        w('4');
+        w(String(points.length));
         w('70');
         w('1');
-        w('10');
-        w(String(cx - hw));
-        w('20');
-        w(String(dxfY(cy - hh)));
-        w('10');
-        w(String(cx + hw));
-        w('20');
-        w(String(dxfY(cy - hh)));
-        w('10');
-        w(String(cx + hw));
-        w('20');
-        w(String(dxfY(cy + hh)));
-        w('10');
-        w(String(cx - hw));
-        w('20');
-        w(String(dxfY(cy + hh)));
+        for (let i = 0; i < points.length; i++) {
+          const pt = points[i]!;
+          w('10');
+          w(String(pt.x));
+          w('20');
+          w(String(dxfY(pt.y)));
+          const b = bulge[i] ?? 0;
+          if (b !== 0) {
+            w('42');
+            w(String(-b)); // negate: Y-down CW → Y-up CCW
+          }
+        }
       } else if (entity.type === 'point') {
         w('0');
         w('POINT');

@@ -43,6 +43,13 @@ def validate_entity(obj: object) -> list[str]:
             errors.append("Entity.width must be a number")
         if "height" not in obj or not isinstance(obj["height"], (int, float)):
             errors.append("Entity.height must be a number")
+        corner_radius = obj.get("cornerRadius")
+        if corner_radius is not None and (
+            isinstance(corner_radius, bool)
+            or not isinstance(corner_radius, (int, float))
+            or corner_radius < 0
+        ):
+            errors.append("Entity.cornerRadius must be a non-negative number")
     elif obj.get("type") == "point":
         position = obj.get("position")
         if not isinstance(position, dict):

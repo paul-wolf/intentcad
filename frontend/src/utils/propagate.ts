@@ -1,5 +1,32 @@
-import type { Entity, SourceTransform, Point } from '@/types/document';
+import type { Entity, LineEntity, RectangleEntity, SourceTransform, Point } from '@/types/document';
 import { reflectPoint, rotatePoint } from '@/utils/geometry';
+import { rectanglePath } from '@/utils/rectPath';
+
+/**
+ * A rectangle that a transform can no longer keep axis-aligned degrades to a
+ * closed polyline. Fillets survive as bulge arcs; a reflection reverses the
+ * outline's handedness, so its bulges flip sign while a rotation's do not.
+ */
+function rectangleAsPolyline(
+  source: RectangleEntity,
+  id: string,
+  transform: SourceTransform,
+  map: (p: Point) => Point,
+  reflected: boolean,
+): LineEntity {
+  const { points, bulge } = rectanglePath(source);
+  const filleted = bulge.some((b) => b !== 0);
+  return {
+    id,
+    type: 'line',
+    points: points.map(map),
+    closed: true,
+    bulge: filleted ? bulge.map((b) => (reflected ? -b : b)) : undefined,
+    construction: source.construction,
+    sourceId: source.id,
+    sourceTransform: transform,
+  };
+}
 
 export function createMirroredEntity(
   source: Entity,
@@ -67,25 +94,8 @@ export function createMirroredEntity(
       };
     }
 
-    // Non-axis-aligned: convert to a 5-point closed polyline
-    const hw = source.width / 2;
-    const hh = source.height / 2;
-    const c = source.center;
-    const corners: Point[] = [
-      { x: c.x - hw, y: c.y - hh },
-      { x: c.x + hw, y: c.y - hh },
-      { x: c.x + hw, y: c.y + hh },
-      { x: c.x - hw, y: c.y + hh },
-      { x: c.x - hw, y: c.y - hh }, // close
-    ];
-    return {
-      id,
-      type: 'line',
-      points: corners.map((p) => reflectPoint(p, lineA, lineB)),
-      construction: source.construction,
-      sourceId: source.id,
-      sourceTransform: transform,
-    };
+    // Non-axis-aligned: degrade to a closed polyline
+    return rectangleAsPolyline(source, id, transform, (p) => reflectPoint(p, lineA, lineB), true);
   }
 
   return null;
@@ -166,25 +176,8 @@ export function createRotatedEntity(
       };
     }
 
-    // Non-axis-aligned: convert to 5-point closed polyline
-    const hw = source.width / 2;
-    const hh = source.height / 2;
-    const c = source.center;
-    const corners: Point[] = [
-      { x: c.x - hw, y: c.y - hh },
-      { x: c.x + hw, y: c.y - hh },
-      { x: c.x + hw, y: c.y + hh },
-      { x: c.x - hw, y: c.y + hh },
-      { x: c.x - hw, y: c.y - hh }, // close
-    ];
-    return {
-      id,
-      type: 'line',
-      points: corners.map((p) => rotatePoint(p, center, angle)),
-      construction: source.construction,
-      sourceId: source.id,
-      sourceTransform: transform,
-    };
+    // Non-axis-aligned: degrade to a closed polyline
+    return rectangleAsPolyline(source, id, transform, (p) => rotatePoint(p, center, angle), false);
   }
 
   return null;

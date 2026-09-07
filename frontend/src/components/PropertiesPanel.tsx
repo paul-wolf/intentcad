@@ -9,6 +9,7 @@ import { resolveDimensionEndpoints } from '@/utils/dimensionGeom';
 import { computeAngleDimensionGeom } from '@/rendering/dimensionRenderer';
 import { computeDerivedDimensionIds } from '@/utils/dof';
 import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
+import { clampCornerRadius } from '@/utils/rectPath';
 
 interface PropertiesPanelProps {
   entity: Entity;
@@ -282,6 +283,17 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
           <FieldGroup label="Size">
             <NumberInput label="W" value={entity.width} disabled={isDerived} onChange={(width) => update({ ...entity, width })} />
             <NumberInput label="H" value={entity.height} disabled={isDerived} onChange={(height) => update({ ...entity, height })} />
+          </FieldGroup>
+          <FieldGroup label="Fillet">
+            <NumberInput
+              label="R"
+              value={entity.cornerRadius ?? 0}
+              disabled={isDerived}
+              onChange={(r) => {
+                const cornerRadius = clampCornerRadius(r, entity.width, entity.height);
+                update({ ...entity, cornerRadius: cornerRadius > 0 ? cornerRadius : undefined });
+              }}
+            />
           </FieldGroup>
         </>
       )}

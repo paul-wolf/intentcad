@@ -30,6 +30,7 @@ class SketchEntityIn(Schema):
     # rectangle
     width: float | None = None
     height: float | None = None
+    cornerRadius: float | None = None  # fillet on all four corners
     anchor: str | None = None  # 'center' | 'corner'
 
 

@@ -1,12 +1,48 @@
-import type { Point, Entity, LineEntity } from '@/types/document';
+import type { Point, Entity, LineEntity, RectangleEntity } from '@/types/document';
 import type { Viewport } from '@/types/renderer';
 import { distance, pointToSegmentDist } from '@/utils/geometry';
 import { computeAngleDimensionGeom } from '@/rendering/dimensionRenderer';
 import { HIT_TOL } from '@/config';
 import { getSegmentCount, getSegmentPointIndices, getSegmentBulge, getEntitySegmentEndpoints } from '@/utils/lineSegments';
 import { arcFromBulge, pointToArcDist, arcMidpoint } from '@/utils/arcGeometry';
+import { rectanglePath } from '@/utils/rectPath';
 import { pointToBezierDist } from '@/utils/bezierGeometry';
 import { resolveDimensionEndpoints } from '@/utils/dimensionGeom';
+
+/**
+ * Screen-space distance from `screenPos` to each of a rectangle's four edges,
+ * following its real outline — including corner arcs when it is filleted.
+ *
+ * Returns exactly four distances whatever the fillet: each corner arc is
+ * attributed to the edge running into it, so the indices stay 0-3, the
+ * numbering dimensions and constraints resolve through
+ * `getEntitySegmentEndpoints`. Without this, a generously filleted rectangle
+ * is measured against sharp corners that its outline never reaches, and
+ * clicking directly on a large arc misses the entity entirely.
+ */
+function rectEdgeDistances(entity: RectangleEntity, screenPos: Point, viewport: Viewport): number[] {
+  const { points, bulge } = rectanglePath(entity);
+  const filleted = points.length === 8;
+  const dists = [Infinity, Infinity, Infinity, Infinity];
+  for (let i = 0; i < points.length; i++) {
+    const p1 = points[i]!;
+    const p2 = points[(i + 1) % points.length]!;
+    const sa = viewport.worldToScreen(p1);
+    const sb = viewport.worldToScreen(p2);
+    const b = bulge[i] ?? 0;
+    let d: number;
+    if (b === 0) {
+      d = pointToSegmentDist(screenPos, sa, sb);
+    } else {
+      const arc = arcFromBulge(p1, p2, b);
+      d = pointToArcDist(screenPos, viewport.worldToScreen(arc.center), arc.radius * viewport.scale,
+        arc.startAngle, arc.endAngle, arc.counterClockwise, sa, sb);
+    }
+    const edge = filleted ? i >> 1 : i;
+    if (d < dists[edge]!) dists[edge] = d;
+  }
+  return dists;
+}
 
 export interface PointHit {
   entityId: string;
@@ -175,19 +211,7 @@ export function hitTestEntities(
         best = entity;
       }
     } else if (entity.type === 'rectangle') {
-      const hw = entity.width / 2;
-      const hh = entity.height / 2;
-      const c = entity.center;
-      const corners: Point[] = [
-        { x: c.x - hw, y: c.y + hh },
-        { x: c.x + hw, y: c.y + hh },
-        { x: c.x + hw, y: c.y - hh },
-        { x: c.x - hw, y: c.y - hh },
-      ];
-      for (let i = 0; i < 4; i++) {
-        const sa = viewport.worldToScreen(corners[i]!);
-        const sb = viewport.worldToScreen(corners[(i + 1) % 4]!);
-        const d = pointToSegmentDist(screenPos, sa, sb);
+      for (const d of rectEdgeDistances(entity, screenPos, viewport)) {
         if (d < bestDist) {
           bestDist = d;
           best = entity;
@@ -436,22 +460,11 @@ export function hitTestSegment(
         best = { entityId: entity.id, segmentIndex: -1 };
       }
     } else if (entity.type === 'rectangle') {
-      const hw = entity.width / 2;
-      const hh = entity.height / 2;
-      const c = entity.center;
       // 0=TL→TR, 1=TR→BR, 2=BR→BL, 3=BL→TL
-      const corners: Point[] = [
-        { x: c.x - hw, y: c.y + hh }, // TL
-        { x: c.x + hw, y: c.y + hh }, // TR
-        { x: c.x + hw, y: c.y - hh }, // BR
-        { x: c.x - hw, y: c.y - hh }, // BL
-      ];
+      const dists = rectEdgeDistances(entity, screenPos, viewport);
       for (let i = 0; i < 4; i++) {
-        const a = viewport.worldToScreen(corners[i]!);
-        const b = viewport.worldToScreen(corners[(i + 1) % 4]!);
-        const d = pointToSegmentDist(screenPos, a, b);
-        if (d < bestDist) {
-          bestDist = d;
+        if (dists[i]! < bestDist) {
+          bestDist = dists[i]!;
           best = { entityId: entity.id, segmentIndex: i };
         }
       }
@@ -586,21 +599,10 @@ export function hitTestAllCandidates(
         }
       }
     } else if (entity.type === 'rectangle') {
-      const hw = entity.width / 2;
-      const hh = entity.height / 2;
-      const c = entity.center;
-      const corners: Point[] = [
-        { x: c.x - hw, y: c.y + hh },
-        { x: c.x + hw, y: c.y + hh },
-        { x: c.x + hw, y: c.y - hh },
-        { x: c.x - hw, y: c.y - hh },
-      ];
+      const dists = rectEdgeDistances(entity, screenPos, viewport);
       for (let i = 0; i < 4; i++) {
-        const a = viewport.worldToScreen(corners[i]!);
-        const b = viewport.worldToScreen(corners[(i + 1) % 4]!);
-        const d = pointToSegmentDist(screenPos, a, b);
-        if (d < bestSegDist) {
-          bestSegDist = d;
+        if (dists[i]! < bestSegDist) {
+          bestSegDist = dists[i]!;
           bestSegHit = { entityId: entity.id, segmentIndex: i };
         }
       }
@@ -634,21 +636,7 @@ export function hitTestAllCandidates(
       const screenRadius = entity.radius * viewport.scale;
       bodyDist = Math.abs(distance(screenPos, screenCenter) - screenRadius);
     } else if (entity.type === 'rectangle') {
-      const hw = entity.width / 2;
-      const hh = entity.height / 2;
-      const c = entity.center;
-      const corners: Point[] = [
-        { x: c.x - hw, y: c.y + hh },
-        { x: c.x + hw, y: c.y + hh },
-        { x: c.x + hw, y: c.y - hh },
-        { x: c.x - hw, y: c.y - hh },
-      ];
-      for (let i = 0; i < 4; i++) {
-        const a = viewport.worldToScreen(corners[i]!);
-        const b = viewport.worldToScreen(corners[(i + 1) % 4]!);
-        const d = pointToSegmentDist(screenPos, a, b);
-        if (d < bodyDist) bodyDist = d;
-      }
+      bodyDist = Math.min(...rectEdgeDistances(entity, screenPos, viewport));
     } else if (entity.type === 'point') {
       const sp = viewport.worldToScreen(entity.position);
       bodyDist = distance(screenPos, sp);

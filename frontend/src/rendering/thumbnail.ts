@@ -1,6 +1,7 @@
 import type { Sketch, Entity, Point } from '@/types/document';
 import { getSegmentCount, getSegmentPointIndices, getSegmentBulge } from '@/utils/lineSegments';
 import { arcFromBulge } from '@/utils/arcGeometry';
+import { rectangleOutline } from '@/utils/rectPath';
 
 interface ThumbnailOptions {
   width: number;
@@ -144,18 +145,13 @@ export function renderSketchThumbnail(
         break;
       }
       case 'rectangle': {
-        const hw = entity.width / 2, hh = entity.height / 2;
-        const c = entity.center;
-        const corners = [
-          w2s({ x: c.x - hw, y: c.y - hh }),
-          w2s({ x: c.x + hw, y: c.y - hh }),
-          w2s({ x: c.x + hw, y: c.y + hh }),
-          w2s({ x: c.x - hw, y: c.y + hh }),
-        ];
+        // Flattened outline: a thumbnail is a few dozen pixels wide, so sampled
+        // arcs are indistinguishable from true ones and need no arc plumbing.
+        const pts = rectangleOutline(entity).map(w2s);
         ctx.beginPath();
-        ctx.moveTo(corners[0]![0], corners[0]![1]);
-        for (let i = 1; i < 4; i++) {
-          ctx.lineTo(corners[i]![0], corners[i]![1]);
+        ctx.moveTo(pts[0]![0], pts[0]![1]);
+        for (let i = 1; i < pts.length; i++) {
+          ctx.lineTo(pts[i]![0], pts[i]![1]);
         }
         ctx.closePath();
         ctx.stroke();

@@ -46,6 +46,9 @@ export interface RectangleEntity {
   center: Point;
   width: number;
   height: number;
+  /** Fillet radius applied to all four corners. 0/undefined = square corners.
+   *  Clamped to min(width, height) / 2 when drawn; see utils/rectPath.ts. */
+  cornerRadius?: number;
   anchor?: 'center' | 'corner';
   construction?: boolean;
   /** Reference/datum feature (e.g. a CNC touch-off marker). Real geometry —
