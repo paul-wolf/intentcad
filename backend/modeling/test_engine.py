@@ -97,6 +97,13 @@ class EngineTests(SimpleTestCase):
         r2 = run_script(code.replace("'r': 6.0", f"'r': {fix['value']}"))
         self.assertIsNone(r2.get("warning"))
 
+    def test_hard_failure_still_reports_the_params(self):
+        # the script never binds `part`, but its params are known — the UI keeps
+        # its parameter editor so the user has a way to change the bad value
+        with self.assertRaises(EngineError) as cm:
+            run_script("P = {'r': 6.0, 'w': 10}\nbad = fillet(Box(10, 10, 4).edges(), radius=P['r'])")
+        self.assertEqual(cm.exception.params, {"r": 6.0, "w": 10})
+
     def test_fix_without_a_matching_param_names_no_param(self):
         # fails before `part` exists → a hard error, but the fix still rides along
         with self.assertRaises(EngineError) as cm:

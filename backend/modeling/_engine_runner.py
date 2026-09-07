@@ -354,14 +354,10 @@ def _run(code: str, export: list | None = None) -> dict:
         warning = _describe_error(exc, code)
         fix = _fix_for(exc, ns)
 
-    part = ns.get("part") or ns.get("result")
-    if part is None or not hasattr(part, "faces"):
-        out = {"ok": False, "error": warning or "script did not define `part`"}
-        if fix:
-            out["fix"] = fix
-        return out
-
-    # expose the params dict (scalar entries) so the UI can offer number fields
+    # expose the params dict (scalar entries) so the UI can offer number fields.
+    # Collected BEFORE the no-part bail-out: a script that fails hard still has
+    # its params (they're defined at the top), and the UI needs them to offer a
+    # way out — a script that never builds must not lose its parameter editor.
     raw = ns.get("P")
     if not isinstance(raw, dict):
         raw = ns.get("params")
@@ -370,6 +366,13 @@ def _run(code: str, export: list | None = None) -> dict:
         for k, v in raw.items():
             if isinstance(k, str) and isinstance(v, (int, float, bool)) and not isinstance(v, bool):
                 params[k] = v
+
+    part = ns.get("part") or ns.get("result")
+    if part is None or not hasattr(part, "faces"):
+        out = {"ok": False, "error": warning or "script did not define `part`", "params": params}
+        if fix:
+            out["fix"] = fix
+        return out
 
     # Mesh built FACE BY FACE (each face's triangles are contiguous) so the
     # viewer can pick/highlight a face. `faces` records each face's vertex range

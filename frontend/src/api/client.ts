@@ -79,19 +79,24 @@ export class ApiError extends Error {
   status: number;
   detail: string;
   fix?: SizeFix;
+  /** For a failed build: the script's editable params as far as it got. */
+  params?: Record<string, number>;
   constructor(status: number, body: string) {
     let detail = body;
     let fix: SizeFix | undefined;
+    let params: Record<string, number> | undefined;
     try {
       const j = JSON.parse(body);
       if (j && typeof j.message === 'string') detail = j.message;
       if (j && j.fix && typeof j.fix === 'object') fix = j.fix as SizeFix;
+      if (j && j.params && typeof j.params === 'object') params = j.params as Record<string, number>;
     } catch { /* not JSON — keep the raw body */ }
     super(`API ${status}: ${detail}`);
     this.name = 'ApiError';
     this.status = status;
     this.detail = detail;
     this.fix = fix;
+    this.params = params;
   }
 }
 

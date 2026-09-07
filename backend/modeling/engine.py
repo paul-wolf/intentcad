@@ -34,11 +34,14 @@ class EngineError(RuntimeError):
 
     `fix`, when present, is the runner's structured remedy for a fillet/chamfer
     that doesn't fit: {kind, size, max, suggest} plus {param, value} when the
-    failing size is a script param — so callers can apply it without an edit."""
+    failing size is a script param — so callers can apply it without an edit.
+    `params` are the script's editable params as far as it got — so the UI can
+    keep offering them even though nothing built."""
 
-    def __init__(self, message: str, fix: dict | None = None):
+    def __init__(self, message: str, fix: dict | None = None, params: dict | None = None):
         super().__init__(message)
         self.fix = fix
+        self.params = params or {}
 
 
 def _min_env() -> dict[str, str]:
@@ -185,5 +188,6 @@ def run_script(code: str, *, export: list[str] | None = None, timeout: float = 6
     except json.JSONDecodeError as exc:
         raise EngineError("engine returned malformed output") from exc
     if not result.get("ok"):
-        raise EngineError(result.get("error", "build failed"), fix=result.get("fix"))
+        raise EngineError(result.get("error", "build failed"), fix=result.get("fix"),
+                          params=result.get("params"))
     return result

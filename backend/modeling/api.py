@@ -45,7 +45,7 @@ def run_model(request, payload: RunRequest):
     try:
         r = run_script(payload.code)
     except EngineError as exc:
-        body = {"message": str(exc)}
+        body = {"message": str(exc), "params": exc.params}
         if exc.fix:
             body["fix"] = exc.fix
         return JsonResponse(body, status=422)

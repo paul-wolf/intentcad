@@ -235,6 +235,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
       resRef.current = res;
       selRef.current = []; setSel([]);
       setParamVals(res.params);
+      paramBase.current = res.params;
       if (!cached) putCachedBuild(key, res);
       // sensitivity (perturbation = N rebuilds) is computed LAZILY — only when
       // something actually needs the param→face links (hover a param, ⌥, or a
@@ -276,6 +277,12 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
       setStatus('error');
       setMessage(errorText(err));
       setFix(fix);
+      // nothing built, but the script's params are known — keep the parameter
+      // editor up so there's a way to change the offending value
+      if (err instanceof ApiError && err.params && Object.keys(err.params).length) {
+        setParamVals(err.params);
+        paramBase.current = err.params;
+      }
       return { kind: 'error', message: errorText(err), fix };
     } finally {
       if (buildAbort.current === ctrl) buildAbort.current = null;
@@ -396,6 +403,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   }, [chat, asking]);
   const fetchUsage = () => buildApi.usage(getBackendId() ?? '').then(setUsage).catch(() => {});
   const [paramVals, setParamVals] = useState<Record<string, number>>({});
+  const paramBase = useRef<Record<string, number>>({});   // values as of the last build (good or failed)
   const [sens, setSens] = useState<Record<string, DimInfo>>({});   // param -> what it controls
 
   // hold Opt/Alt to reveal every parameter as a dimension on the geometry it
@@ -455,11 +463,15 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
     if (applying.current === key) return;
     applying.current = key;
     const prevCode = code;
-    const prevVal = resRef.current?.params[name];
+    const prevVal = paramBase.current[name];
+    // Only guard when there IS a good state to keep. If the script is already
+    // broken, a param change is the way out — let it through, saved or not.
+    const guarded = status === 'done' && !warn;
     setParamReject(null);
     try {
       const r = await buildApi.setParams(code, { [name]: val });
       setCode(r.code);
+      if (!guarded) { saveDraft(r.code); await build(r.code, `${name} = ${val}`); return; }
       const out = await build(r.code, `${name} = ${val}`);
       if (out.kind === 'ok') { saveDraft(r.code); return; }
       if (out.kind === 'aborted') return;
@@ -686,7 +698,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
                         type="number" value={val} step="any"
                         onChange={(e) => setParamVals((p) => ({ ...p, [name]: Number(e.target.value) }))}
                         onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyParam(name, paramVals[name]!); } }}
-                        onBlur={() => { if (paramVals[name] !== resRef.current?.params[name]) applyParam(name, paramVals[name]!); }}
+                        onBlur={() => { if (paramVals[name] !== paramBase.current[name]) applyParam(name, paramVals[name]!); }}
                         style={{ width: '64px', padding: '3px 6px', background: palette.inputBg,
                                  border: `1px solid ${active ? palette.primaryBtn : palette.inputBorder}`,
                                  borderRadius: '4px', color: palette.text, fontSize: '12px' }}
