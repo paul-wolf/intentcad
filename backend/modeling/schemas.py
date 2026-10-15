@@ -256,6 +256,8 @@ class SensitivityRequest(Schema):
 class DimInfo(Schema):
     faces: list[int] = []               # face indices the param controls
     value: float = 0.0                  # its current value
+    shifts: dict[int, list[float]] = {} # face index -> [dx,dy,dz] center motion per unit
+    radial: dict[int, float] = {}       # cylinder face index -> radius change per unit
     anchor: list[float] | None = None   # a world point on the controlled geometry
     dir: list[float] | None = None      # unit direction it moves as the param grows
     kind: str = "callout"               # "length" (has dir) or "callout"

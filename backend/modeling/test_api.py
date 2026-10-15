@@ -46,6 +46,19 @@ class RunApiTests(TestCase):
             self.assertEqual(resp.status_code, 200)
             self.assertTrue(resp.json()["data"].lstrip().startswith(head))
 
+    def test_sensitivity_returns_per_face_shifts(self):
+        self.client.force_login(self.user)
+        code = 'P = dict(thick=6)\npart = Box(20, 20, P["thick"])'
+        resp = self.client.post("/api/build/sensitivity", data=json.dumps({"code": code}),
+                                content_type="application/json")
+        self.assertEqual(resp.status_code, 200)
+        info = resp.json()["params"]["thick"]
+        self.assertTrue(info["shifts"])
+        # JSON object keys: face indices arrive as strings, each a 3-vector
+        for face, shift in info["shifts"].items():
+            self.assertIn(int(face), info["faces"])
+            self.assertEqual(len(shift), 3)
+
     def test_bad_script_returns_422(self):
         self.client.force_login(self.user)
         resp = self._post("part = Box(1, 1, 1")  # syntax error

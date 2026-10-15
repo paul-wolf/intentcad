@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
 import { buildApi, errorText, ApiError, type RunResponse, type UsageResponse, type DimInfo, type ModelInfo, type SizeFix } from '@/api/client';
 import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, getBackendId } from '@/api/autoSave';
 import { DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
 import type { ChatMessage } from '@/types/document';
-import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim } from '@/build/webglViewer';
+import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim, type PlacedHandle } from '@/build/webglViewer';
+import { handleOptions, add, scale, dot, len, sub, type HandleOption, type Vec3 } from '@/build/dragHandle';
 import { highlightPython, DARK_SYNTAX, LIGHT_SYNTAX } from '@/build/pyHighlight';
 import { downloadTextFile } from '@/export/download';
 import { buildKey, getCachedBuild, putCachedBuild, putCachedSens } from '@/build/buildCache';
@@ -24,6 +25,10 @@ const humanBytes = (b: number): string =>
   b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
 
 const NO_CHAT: ChatMessage[] = [];
+
+// a sensitivity map cached before per-face `shifts` existed can't drive drag
+// handles — treat it as missing so it's recomputed
+const sensCurrent = (s: Record<string, DimInfo>) => Object.values(s).every((d) => d.shifts && d.radial);
 
 // A starter model so an empty document shows something buildable. The whole CAD
 // vocabulary is build123d's — this is just a seed to edit / for the AI to replace.
@@ -142,6 +147,41 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
     }
   };
 
+  // drag handle (one face selected): an arrow along the shift of the param
+  // that moves the face, positioned every frame via refs like the dims
+  type HandleEls = { line: SVGLineElement | null; knob: SVGCircleElement | null;
+                     label: SVGTextElement | null; sub: SVGTextElement | null };
+  const hEls = useRef<HandleEls>({ line: null, knob: null, label: null, sub: null });
+  const handleRef = useRef<HandleOption | null>(null);
+  const handleHintRef = useRef('');   // "Tab ⇄ 1/2" when several params move the face
+  const onHandle = (p: PlacedHandle | null) => {
+    const { line, knob, label, sub: subEl } = hEls.current;
+    const h = handleRef.current;
+    const show = !!(p && h && p.visible);
+    for (const el of [line, knob, label, subEl]) el?.setAttribute('opacity', show ? '1' : '0');
+    if (!show || !p || !h) return;
+    line?.setAttribute('x1', `${p.x}`); line?.setAttribute('y1', `${p.y}`);
+    line?.setAttribute('x2', `${p.ax}`); line?.setAttribute('y2', `${p.ay}`);
+    knob?.setAttribute('cx', `${p.x}`); knob?.setAttribute('cy', `${p.y}`);
+    const right = p.ax >= p.x;              // label past the arrow tip
+    const lx = `${p.ax + (right ? 9 : -9)}`, anchor = right ? 'start' : 'end';
+    if (label) {
+      label.setAttribute('x', lx); label.setAttribute('y', `${p.ay + 4}`);
+      label.setAttribute('text-anchor', anchor);
+      label.textContent = p.dragging && p.value !== h.value
+        ? `${h.name} ${dimFmt(h.value)} → ${dimFmt(p.value)}`
+        : `${h.name} ${dimFmt(p.value)}`;
+    }
+    if (subEl) {
+      subEl.setAttribute('x', lx); subEl.setAttribute('y', `${p.ay + 18}`);
+      subEl.setAttribute('text-anchor', anchor);
+      const snapped = p.snapFace !== null;
+      subEl.setAttribute('fill', snapped ? '#2dd4bf' : '#cfd6df');
+      subEl.textContent = snapped ? `snap → face #${p.snapFace}`
+        : p.dragging ? 'Shift: 0.1 steps · Esc cancels' : handleHintRef.current;
+    }
+  };
+
   const [code, setCode] = useState('');
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
@@ -162,11 +202,14 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   // click a face → toggle it in the selection (keep at most 2). With two faces
   // selected, highlight the edge(s) between them (an edge = two faces meeting).
   const onPick = (f: FaceRange | null) => {
-    const res = resRef.current;
     let s = selRef.current;
     if (!f) s = [];
     else if (s.includes(f.index)) s = s.filter((i) => i !== f.index);
     else s = [...s, f.index].slice(-2);
+    applySelection(s);
+  };
+  const applySelection = (s: number[]) => {
+    const res = resRef.current;
     selRef.current = s;
     setSel(s);
     if (s.length) ensureSens();   // selecting geometry → we want the param links
@@ -233,7 +276,6 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
       setFix(res.fix?.param ? res.fix : null);
       viewerRef.current.update(res.mesh, res.faces);
       resRef.current = res;
-      selRef.current = []; setSel([]);
       setParamVals(res.params);
       paramBase.current = res.params;
       if (!cached) putCachedBuild(key, res);
@@ -241,8 +283,22 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
       // something actually needs the param→face links (hover a param, ⌥, or a
       // selection). Just prime the state here; ensureSens() does the work.
       builtCodeRef.current = src;
-      if (cached?.sens) { setSens(cached.sens); sensKeyRef.current = key; }
+      if (cached?.sens && sensCurrent(cached.sens)) { setSens(cached.sens); sensKeyRef.current = key; }
       else { setSens({}); sensKeyRef.current = null; }
+      // a handle drop rebuilt this: keep the dragged face selected — found
+      // where the drag put it — so it can be dragged again. Otherwise clear.
+      const want = reselectRef.current;
+      let keep: number[] = [];
+      if (want && Math.abs((res.params[want.param] ?? NaN) - want.value) < 1e-9) {
+        reselectRef.current = null;
+        let best = want.tol;
+        for (const f of res.faces) {
+          if (dot(f.normal, want.normal) < 0.99) continue;
+          const d = len(sub(f.center, want.center));
+          if (d < best) { best = d; keep = [f.index]; }
+        }
+      }
+      applySelection(keep);
       const m = res.metrics;
       const sz = [0, 1, 2].map((i) => Math.round((m.bbox_max[i]! - m.bbox_min[i]!) * 10) / 10);
       const tris = res.mesh.triangle_count;
@@ -308,7 +364,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
       setCode(initial);
       if (canvasRef.current && !viewerRef.current) {
         try {
-          viewerRef.current = createViewer(canvasRef.current, { onFacePick: onPick, onAxes, onDims });
+          viewerRef.current = createViewer(canvasRef.current, { onFacePick: onPick, onAxes, onDims, onHandle, onHandleDrop });
         } catch (err) {
           setStatus('error');
           setMessage(errorText(err));
@@ -483,6 +539,61 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
     } finally {
       if (applying.current === key) applying.current = null;
     }
+  };
+  // the viewer keeps its mount-time callbacks, so a drop reaches the current
+  // applyParam (which closes over the current code) through a ref
+  const applyParamRef = useRef(applyParam);
+  applyParamRef.current = applyParam;
+
+  // Direct manipulation: with exactly one face selected, a drag handle for a
+  // param that moves it (sensitivity `shifts`) — the one moving it most along
+  // its normal first; Tab cycles when several do. Releasing goes through
+  // applyParam (set_params → rebuild → version), never the AI.
+  const selFace = sel.length === 1 ? resRef.current?.faces.find((f) => f.index === sel[0]) ?? null : null;
+  const handleOpts = useMemo(() => (selFace ? handleOptions(selFace, sens) : []), [selFace, sens]);
+  const handleKey = `${sel.join()}|${handleOpts.map((h) => h.name).join()}`;
+  const [handlePick, setHandlePick] = useState({ key: '', i: 0 });
+  const nHandles = handleOpts.length;
+  const hi = nHandles ? ((((handlePick.key === handleKey ? handlePick.i : 0) % nHandles) + nHandles) % nHandles) : 0;
+  const handle = nHandles ? handleOpts[hi]! : null;
+  handleRef.current = handle;
+  handleHintRef.current = nHandles > 1 ? `Tab ⇄ ${hi + 1}/${nHandles}` : '';
+  const handleKeyRef = useRef(handleKey);
+  handleKeyRef.current = handleKey;
+  const nHandlesRef = useRef(0);
+  nHandlesRef.current = nHandles;
+  useEffect(() => {
+    viewerRef.current?.setHandle(handle && selFace
+      ? { face: selFace.index, shift: handle.shift, dr: handle.dr, value: handle.value, moves: handle.moves }
+      : null);
+  }, [handle, selFace]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || nHandlesRef.current < 2) return;
+      // only when nothing has focus (the canvas isn't focusable), so Tab still
+      // moves between the editor's fields
+      if (e.target instanceof HTMLElement && e.target !== document.body) return;
+      e.preventDefault();
+      const key = handleKeyRef.current;
+      setHandlePick((p) => ({ key, i: (p.key === key ? p.i : 0) + (e.shiftKey ? -1 : 1) }));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // after a drop, build() reselects the face found where the drag put it
+  const reselectRef = useRef<{ param: string; value: number; center: Vec3; normal: Vec3; tol: number } | null>(null);
+  const onHandleDrop = (value: number) => {
+    const h = handleRef.current;
+    const f = resRef.current?.faces.find((x) => x.index === selRef.current[0]);
+    if (!h || !f || selRef.current.length !== 1) { viewerRef.current?.clearDragPreview(); return; }
+    const move = scale(h.shift, value - h.value);
+    reselectRef.current = { param: h.name, value, center: add(f.center, move), normal: f.normal,
+                            tol: Math.max(1, len(move) * 0.25) };
+    void applyParamRef.current(h.name, value).finally(() => {
+      reselectRef.current = null;
+      viewerRef.current?.clearDragPreview();   // if nothing rebuilt (e.g. set_params failed)
+    });
   };
 
   // describe the current selection so the assistant can target it in build123d
@@ -852,6 +963,25 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
                 </g>
               ))}
             </svg>
+            {/* drag handle on the selected face (positioned per frame by onHandle) */}
+            <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%',
+                          pointerEvents: 'none', overflow: 'hidden' }}>
+              <defs>
+                <marker id="handleArrow" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12"
+                        refX="4" refY="6" orient="auto">
+                  <path d="M0,1 L11,6 L0,11 Z" fill="#4aa8ff" />
+                </marker>
+              </defs>
+              <line ref={(el) => { hEls.current.line = el; }} opacity={0}
+                    stroke="#4aa8ff" strokeWidth={2.5} strokeLinecap="round" markerEnd="url(#handleArrow)" />
+              <circle ref={(el) => { hEls.current.knob = el; }} opacity={0} r={4.5}
+                      fill="#4aa8ff" stroke="#fff" strokeWidth={1.5} />
+              <text ref={(el) => { hEls.current.label = el; }} opacity={0}
+                    fontSize={12} fontWeight={600} fill="#a8d4ff"
+                    style={{ paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.7)', strokeWidth: 3.5 }} />
+              <text ref={(el) => { hEls.current.sub = el; }} opacity={0} fontSize={10.5}
+                    style={{ paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.7)', strokeWidth: 3 }} />
+            </svg>
             {Object.keys(paramVals).length > 0 && status === 'done' && (
               <div style={{ position: 'absolute', right: 10, bottom: 10, fontSize: '11px',
                             color: dimsOn ? '#e0b24a' : palette.textSecondary, pointerEvents: 'none',
@@ -981,6 +1111,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
               const f = faces[0]!;
               return <span style={{ color: palette.text }}>
                 Face #{f.index} · <b>{f.kind}</b> · normal {v(f.normal)} · center {v(f.center)} · area {Math.round(f.area)} mm²
+                {handle && <span style={{ color: palette.textSecondary }}> · drag the arrow to change <b>{handle.name}</b>{nHandles > 1 ? ' (Tab for others)' : ''}</span>}
               </span>;
             }
             const shared = res.edges.filter((e) => e.faceIndices.length === 2 && e.faceIndices.includes(sel[0]!) && e.faceIndices.includes(sel[1]!));

@@ -32,3 +32,6 @@ screenshot-*
 tmp/
 # Build artifacts
 frontend/tsconfig.tsbuildinfo
+
+# Local data (backups, exports)
+data/

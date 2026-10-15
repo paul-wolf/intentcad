@@ -7,6 +7,8 @@
  * independent shading, render-on-demand.
  */
 
+import { add, scale, faceMotion, dragAmount, snapToStep, snapToPlane, type Vec3 } from './dragHandle';
+
 export interface ViewerMesh {
   positions: number[];
   normals: number[];
@@ -86,6 +88,7 @@ const FRAG = `
 precision mediump float;
 varying vec3 vNormal;
 uniform vec3 uColor;
+uniform float uAlpha;
 void main() {
   vec3 n = normalize(vNormal);
   vec3 l1 = normalize(vec3(0.4, 0.7, 0.8));
@@ -93,7 +96,7 @@ void main() {
   float d1 = max(dot(n, l1), 0.0);
   float d2 = max(dot(n, l2), 0.0);
   vec3 col = uColor * (0.28 + 0.62 * d1 + 0.22 * d2);
-  gl_FragColor = vec4(col, 1.0);
+  gl_FragColor = vec4(col, uAlpha);
 }`;
 
 function compile(gl: WebGLRenderingContext, type: number, src: string): WebGLShader {
@@ -145,6 +148,26 @@ export interface PlacedDim {
   visible: boolean;
 }
 
+/** A drag handle on one face: dragging moves the face along `shift` (its world
+ * motion per unit of the param — see backend sensitivity `shifts`). */
+export interface DragHandle {
+  face: number;
+  shift: Vec3;
+  dr: number;         // radius change per unit, for a cylinder face (else 0)
+  value: number;      // the param's current value
+  moves: number[];    // faces the param changes — not snap targets
+}
+
+/** The handle projected into the current view, for the HTML overlay. */
+export interface PlacedHandle {
+  x: number; y: number;      // screen px of the face anchor (follows a drag)
+  ax: number; ay: number;    // screen px of the arrow tip
+  visible: boolean;
+  dragging: boolean;
+  value: number;             // the param value at the current drag position
+  snapFace: number | null;   // the face whose plane the drag snapped to
+}
+
 export interface Viewer {
   update(mesh: ViewerMesh, faces?: FaceRange[]): void;
   /** Highlight edges: flat GL_LINES vertices [x,y,z, x,y,z, ...] (pairs). */
@@ -153,6 +176,11 @@ export interface Viewer {
   selectFaces(indices: number[]): void;
   /** Set the dimension overlay (empty to clear). Reported back via onDims. */
   setDims(dims: DimAnchor[]): void;
+  /** Show a drag handle on a face (null to remove). Cancels any drag. */
+  setHandle(h: DragHandle | null): void;
+  /** Drop the preview left by a released drag (normally the rebuild that the
+   *  drop triggers replaces it — this is for when there isn't one). */
+  clearDragPreview(): void;
   /** Capture the current view as a transparent PNG data URL of just the solid
    *  (no grid/overlays) — for a part thumbnail. Returns '' if nothing built. */
   capture(w?: number, h?: number): string;
@@ -170,6 +198,11 @@ export interface ViewerOpts {
   onAxes?: (dirs: AxisDir[]) => void;
   /** Called each frame with the projected dimension overlay (see setDims). */
   onDims?: (dims: PlacedDim[]) => void;
+  /** Called each frame with the projected drag handle (see setHandle). */
+  onHandle?: (h: PlacedHandle | null) => void;
+  /** A handle drag was released at a new param value. The preview stays up
+   *  until the next update() / setHandle() / clearDragPreview(). */
+  onHandleDrop?: (value: number) => void;
 }
 
 export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): Viewer {
@@ -193,9 +226,11 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   const uModel = gl.getUniformLocation(prog, 'uModel');
   const uNormal = gl.getUniformLocation(prog, 'uNormal');
   const uColor = gl.getUniformLocation(prog, 'uColor');
+  const uAlpha = gl.getUniformLocation(prog, 'uAlpha');
 
   const posBuf = gl.createBuffer()!;
   const normBuf = gl.createBuffer()!;
+  const previewBuf = gl.createBuffer()!;   // the dragged face's offset triangles
 
   // second program: bright lines for highlighting edges (drawn over the mesh)
   const lineProg = gl.createProgram()!;
@@ -244,12 +279,27 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   // face selection
   let meshPositions: number[] = [];
   let faces: FaceRange[] = [];
+  let faceByIndex = new Map<number, FaceRange>();
   let selected: number[] = [];
   let dims: DimAnchor[] = [];
   let modelRadius = 40;
   let thumbMode = false;   // when capturing a thumbnail: draw the solid only (no grid/overlays)
   const SELECT: [number, number, number] = [1.0, 0.62, 0.2];
+  const SNAP: [number, number, number] = [0.18, 0.83, 0.75];
 
+  // drag handle: dragging it previews the face moved by shift*t (no rebuild);
+  // on release the new value goes to onHandleDrop and the preview stays up
+  // (`pending`) until the rebuild replaces the mesh
+  let handle: DragHandle | null = null;
+  let drag: {
+    x0: number; y0: number;     // pointer-down, client px
+    t: number;                  // param change at the current position
+    value: number;              // handle.value + t
+    snap: number | null;        // face whose plane it snapped to
+    motion: Float32Array;       // per-vertex world motion per unit (faceMotion)
+    pending: boolean;           // released, waiting for the rebuild
+  } | null = null;
+  const handleArm = () => modelRadius * 0.22;   // drawn arrow length (world)
   function uploadMesh(mesh: ViewerMesh) {
     gl!.bindBuffer(gl!.ARRAY_BUFFER, posBuf);
     gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array(mesh.positions), gl!.STATIC_DRAW);
@@ -325,6 +375,34 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     return bestFace;
   }
 
+  // world → CSS px in the canvas, for the HTML overlays and handle hit-testing
+  function cssProjector() {
+    const { proj, view, model } = mvp(canvas.width, canvas.height);
+    const pv = multiply(proj, multiply(view, model));
+    const cw = canvas.clientWidth, ch = canvas.clientHeight;
+    return (p: Vec3): [number, number, boolean] => {
+      const [x, y, z] = p;
+      const clw = pv[3]! * x + pv[7]! * y + pv[11]! * z + pv[15]!;
+      if (clw <= 0) return [0, 0, false];
+      const cx = pv[0]! * x + pv[4]! * y + pv[8]! * z + pv[12]!;
+      const cy = pv[1]! * x + pv[5]! * y + pv[9]! * z + pv[13]!;
+      return [(cx / clw * 0.5 + 0.5) * cw, (1 - (cy / clw * 0.5 + 0.5)) * ch, true];
+    };
+  }
+
+  // the handle in screen space: anchor (moved by the drag) → arrow tip
+  function placeHandle(toCss: (p: Vec3) => [number, number, boolean]): PlacedHandle | null {
+    const f = handle && faceByIndex.get(handle.face);
+    if (!handle || !f) return null;
+    const p = add(f.center, scale(handle.shift, drag ? drag.t : 0));
+    const [x, y, v1] = toCss(p);
+    const [ax, ay, v2] = toCss(add(p, scale(handle.shift, handleArm() / Math.hypot(...handle.shift))));
+    return {
+      x, y, ax, ay, visible: v1 && v2, dragging: !!drag,
+      value: drag ? drag.value : handle.value, snapFace: drag ? drag.snap : null,
+    };
+  }
+
   let raf = 0;
   function scheduleRender() {
     if (raf) return;
@@ -351,6 +429,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     gl!.uniformMatrix4fv(uModel, false, model);
     gl!.uniformMatrix3fv(uNormal, false, mat3Of(rot));
     gl!.uniform3fv(uColor, color);
+    gl!.uniform1f(uAlpha, 1);
 
     gl!.bindBuffer(gl!.ARRAY_BUFFER, posBuf);
     gl!.enableVertexAttribArray(aPos);
@@ -359,17 +438,55 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     gl!.enableVertexAttribArray(aNormal);
     gl!.vertexAttribPointer(aNormal, 3, gl!.FLOAT, false, 0, 0);
 
-    if (vertexCount) gl!.drawArrays(gl!.TRIANGLES, 0, vertexCount);
+    // while a handle drag is previewed, its face is drawn moved (below), so
+    // leave it out of the solid
+    const df = drag && handle && !thumbMode ? faceByIndex.get(handle.face) ?? null : null;
+    if (vertexCount) {
+      if (df) {
+        gl!.drawArrays(gl!.TRIANGLES, 0, df.start);
+        gl!.drawArrays(gl!.TRIANGLES, df.start + df.count, vertexCount - df.start - df.count);
+      } else {
+        gl!.drawArrays(gl!.TRIANGLES, 0, vertexCount);
+      }
+    }
 
     // selected faces: re-draw their triangles in a tint (depthFunc LEQUAL lets
     // the identical geometry pass)
     if (selected.length) {
       gl!.uniform3fv(uColor, SELECT);
-      const byIndex = new Map(faces.map((f) => [f.index, f]));
       for (const idx of selected) {
-        const f = byIndex.get(idx);
-        if (f) gl!.drawArrays(gl!.TRIANGLES, f.start, f.count);
+        const f = faceByIndex.get(idx);
+        if (f && f !== df) gl!.drawArrays(gl!.TRIANGLES, f.start, f.count);
       }
+    }
+
+    if (df && drag) {
+      // the face whose plane the drag snapped to
+      const sf = drag.snap !== null ? faceByIndex.get(drag.snap) : undefined;
+      if (sf) {
+        gl!.uniform3fv(uColor, SNAP);
+        gl!.drawArrays(gl!.TRIANGLES, sf.start, sf.count);
+      }
+      // the dragged face at its new place: its own triangles + motion*t, with
+      // its own normals. Opaque where visible, then a faint x-ray pass so it
+      // still shows when moved into the solid.
+      const pos = new Float32Array(df.count * 3);
+      for (let i = 0; i < pos.length; i++) pos[i] = meshPositions[df.start * 3 + i]! + drag.motion[i]! * drag.t;
+      gl!.bindBuffer(gl!.ARRAY_BUFFER, previewBuf);
+      gl!.bufferData(gl!.ARRAY_BUFFER, pos, gl!.DYNAMIC_DRAW);
+      gl!.vertexAttribPointer(aPos, 3, gl!.FLOAT, false, 0, 0);
+      gl!.bindBuffer(gl!.ARRAY_BUFFER, normBuf);
+      gl!.vertexAttribPointer(aNormal, 3, gl!.FLOAT, false, 0, df.start * 12);
+      gl!.uniform3fv(uColor, SELECT);
+      gl!.drawArrays(gl!.TRIANGLES, 0, df.count);
+      gl!.disable(gl!.DEPTH_TEST);
+      gl!.enable(gl!.BLEND);
+      gl!.blendFuncSeparate(gl!.SRC_ALPHA, gl!.ONE_MINUS_SRC_ALPHA, gl!.ZERO, gl!.ONE);  // keep canvas alpha
+      gl!.uniform1f(uAlpha, 0.35);
+      gl!.drawArrays(gl!.TRIANGLES, 0, df.count);
+      gl!.uniform1f(uAlpha, 1);
+      gl!.disable(gl!.BLEND);
+      gl!.enable(gl!.DEPTH_TEST);
     }
 
     // coordinate frame + highlight all use the line program / same matrices
@@ -412,39 +529,96 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
 
     // project the dimension overlay to screen space (CSS px) for the HTML layer
     if (opts.onDims && !thumbMode) {
-      const pv = multiply(proj, multiply(view, model));
-      const cw = canvas.clientWidth, ch = canvas.clientHeight;
+      const toCss = cssProjector();
       const arm = modelRadius * 0.12;
-      const proj2 = (x: number, y: number, z: number): [number, number, boolean] => {
-        const clw = pv[3]! * x + pv[7]! * y + pv[11]! * z + pv[15]!;
-        if (clw <= 0) return [0, 0, false];
-        const cx = pv[0]! * x + pv[4]! * y + pv[8]! * z + pv[12]!;
-        const cy = pv[1]! * x + pv[5]! * y + pv[9]! * z + pv[13]!;
-        return [(cx / clw * 0.5 + 0.5) * cw, (1 - (cy / clw * 0.5 + 0.5)) * ch, true];
-      };
       opts.onDims(dims.map((d) => {
-        const [x, y, vis] = proj2(d.point[0], d.point[1], d.point[2]);
+        const [x, y, vis] = toCss(d.point);
         let ax = x, ay = y;
-        if (d.dir) {
-          const [tx, ty] = proj2(d.point[0] + d.dir[0] * arm, d.point[1] + d.dir[1] * arm, d.point[2] + d.dir[2] * arm);
-          ax = tx; ay = ty;
-        }
+        if (d.dir) [ax, ay] = toCss(add(d.point, scale(d.dir, arm)));
         return { key: d.key, label: d.label, x, y, ax, ay, visible: vis };
       }));
     }
+    if (opts.onHandle && !thumbMode) opts.onHandle(placeHandle(cssProjector()));
   }
 
   // ── interaction ──
-  let dragging = false;
+  // a gesture is an orbit (or a click → pick) or a handle drag, fixed at
+  // pointer-down; a handle drag never orbits
+  let mode: 'none' | 'orbit' | 'handle' = 'none';
   let lastX = 0, lastY = 0;
   let downX = 0, downY = 0, moved = 0;
+  const baseCursor = canvas.style.cursor;
+
+  function overHandle(e: PointerEvent): boolean {
+    const h = placeHandle(cssProjector());
+    if (!h || !h.visible) return false;
+    const rect = canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left, py = e.clientY - rect.top;
+    // distance to the arrow segment (anchor → tip), with a little slop
+    const dx = h.ax - h.x, dy = h.ay - h.y, l2 = dx * dx + dy * dy;
+    const u = l2 > 0 ? Math.max(0, Math.min(1, ((px - h.x) * dx + (py - h.y) * dy) / l2)) : 0;
+    return Math.hypot(px - (h.x + u * dx), py - (h.y + u * dy)) <= 9;
+  }
+
+  // new param value for the pointer position: the mouse delta projected onto
+  // the shift's screen direction, snapped to a 0.5 grid (Shift: 0.1) — or onto
+  // another face's plane when one is within a few px
+  function dragTo(e: PointerEvent) {
+    const f = handle && faceByIndex.get(handle.face);
+    if (!drag || !handle || !f) return;
+    const toCss = cssProjector();
+    const [x0, y0] = toCss(f.center);
+    const [x1, y1] = toCss(add(f.center, handle.shift));
+    const sx = x1 - x0, sy = y1 - y0;
+    const mx = e.clientX - drag.x0, my = e.clientY - drag.y0;
+    const t = dragAmount([mx, my], [sx, sy]);
+    if (t === null) return;
+    let value = handle.value, snap: number | null = null;
+    if (Math.hypot(mx, my) >= 3) {   // dead zone: a press alone doesn't jump to the grid
+      value = snapToStep(handle.value + t, e.shiftKey ? 0.1 : 0.5);
+      const hit = snapToPlane(f, handle.shift, t, Math.hypot(sx, sy), faces, handle.moves);
+      if (hit) { value = snapToStep(handle.value + hit.t, 0.001); snap = hit.face; }
+    }
+    drag.value = value;
+    drag.t = value - handle.value;
+    drag.snap = snap;
+    scheduleRender();
+  }
+
+  function endHandleDrag(cancel: boolean) {
+    window.removeEventListener('keydown', onKey);
+    canvas.style.cursor = baseCursor;
+    if (!drag || !handle) return;
+    if (cancel || drag.value === handle.value) drag = null;
+    else { drag.pending = true; opts.onHandleDrop?.(drag.value); }
+    scheduleRender();
+  }
+  function onKey(e: KeyboardEvent) {
+    if (e.key === 'Escape' && drag && !drag.pending) { e.preventDefault(); endHandleDrag(true); }
+  }
+
   function onDown(e: PointerEvent) {
-    dragging = true; lastX = e.clientX; lastY = e.clientY;
+    lastX = e.clientX; lastY = e.clientY;
     downX = e.clientX; downY = e.clientY; moved = 0;
     canvas.setPointerCapture(e.pointerId);
+    const f = handle && faceByIndex.get(handle.face);
+    if (e.button === 0 && handle && f && !drag?.pending && overHandle(e)) {
+      mode = 'handle';
+      drag = { x0: e.clientX, y0: e.clientY, t: 0, value: handle.value, snap: null,
+               motion: faceMotion(f, meshPositions, handle.shift, handle.dr), pending: false };
+      canvas.style.cursor = 'grabbing';
+      window.addEventListener('keydown', onKey);
+      scheduleRender();
+      return;
+    }
+    mode = 'orbit';
   }
   function onMove(e: PointerEvent) {
-    if (!dragging) return;
+    if (mode === 'handle') { if (drag && !drag.pending) dragTo(e); return; }
+    if (mode === 'none') {   // hover: show the handle is grabbable
+      canvas.style.cursor = handle && !drag?.pending && overHandle(e) ? 'pointer' : baseCursor;
+      return;
+    }
     moved += Math.abs(e.clientX - lastX) + Math.abs(e.clientY - lastY);
     // Full vertical orbit: rolling past the poles lets you see the bottom. When
     // upside-down (cos < 0) horizontal drag would feel reversed, so invert it.
@@ -457,9 +631,14 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     scheduleRender();
   }
   function onUp(e: PointerEvent) {
-    dragging = false;
+    const was = mode;
+    mode = 'none';
     try { canvas.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
-    if (moved < 4 && opts.onFacePick) {  // a click, not a drag → pick a face
+    if (was === 'handle') {
+      if (drag && !drag.pending) endHandleDrag(false);
+      return;
+    }
+    if (was === 'orbit' && moved < 4 && opts.onFacePick) {  // a click, not a drag → pick a face
       const rect = canvas.getBoundingClientRect();
       opts.onFacePick(pick(downX - rect.left, downY - rect.top));  // caller sets selection
     }
@@ -482,7 +661,10 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       uploadMesh(mesh);
       meshPositions = mesh.positions;
       faces = facesArg ?? [];
+      faceByIndex = new Map(faces.map((f) => [f.index, f]));
       selected = [];
+      handle = null;
+      if (drag) endHandleDrag(true);
       scheduleRender();
     },
     highlightEdges(segments: number[]) {
@@ -493,6 +675,14 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     },
     selectFaces(indices: number[]) { selected = indices; scheduleRender(); },
     setDims(d: DimAnchor[]) { dims = d; scheduleRender(); },
+    setHandle(h: DragHandle | null) {
+      if (drag) endHandleDrag(true);
+      handle = h;
+      scheduleRender();
+    },
+    clearDragPreview() {
+      if (drag?.pending) { drag = null; scheduleRender(); }
+    },
     capture(w = 240, h = 180): string {
       if (!vertexCount) return '';
       thumbMode = true;
@@ -513,7 +703,9 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       canvas.removeEventListener('pointermove', onMove);
       canvas.removeEventListener('pointerup', onUp);
       canvas.removeEventListener('wheel', onWheel);
+      window.removeEventListener('keydown', onKey);
       gl.deleteBuffer(posBuf);
+      gl.deleteBuffer(previewBuf);
       gl.deleteBuffer(normBuf);
       gl.deleteBuffer(lineBuf);
       gl.deleteBuffer(gridBuf);

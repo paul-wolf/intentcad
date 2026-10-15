@@ -300,6 +300,10 @@ export const buildApi = {
 export interface DimInfo {
   faces: number[];
   value: number;
+  /** face index -> how far that face's center moves per unit of the param */
+  shifts: Record<number, [number, number, number]>;
+  /** cylinder face index -> radius change per unit of the param */
+  radial: Record<number, number>;
   anchor: [number, number, number] | null;
   dir: [number, number, number] | null;
   kind: 'length' | 'callout';

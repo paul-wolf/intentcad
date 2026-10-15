@@ -37,12 +37,37 @@ def _aligned(a: list[float], b: list[float]) -> bool:
     return sum(a[i] * b[i] for i in range(3)) > 0.9
 
 
+def _match(f: dict, candidates: list[dict]) -> tuple[dict, float] | None:
+    """The face in `candidates` that `f` became: same orientation and similar
+    area, nearest center. Returns (face, center distance), or None when there
+    is no counterpart or it didn't actually move."""
+    match, md = None, None
+    for pf in candidates:
+        if not _aligned(f["normal"], pf["normal"]):
+            continue
+        if abs(f["area"] - pf["area"]) > max(f["area"] * 0.3, 1.0):
+            continue
+        d = _dist(f["center"], pf["center"])
+        if md is None or d < md:
+            md, match = d, pf
+    if match is None or md is None or md < 1e-3:
+        return None
+    return match, md
+
+
 def sensitivity(code: str) -> dict[str, dict]:
     """Return {param_name: dimension-info} for the script's params.
 
-    Each entry is {faces, value, anchor, dir, kind}:
+    Each entry is {faces, value, shifts, radial, anchor, dir, kind}:
       faces  — inventory indices of the faces the param controls
       value  — the param's current value
+      shifts — {face index: [dx, dy, dz]}: how far each moved face's center
+               travels per unit of the param (for drag handles). A cylinder's
+               center is a point on its wall, so a diameter param shows up as
+               a radial shift there.
+      radial — {face index: dr}: for cylinders whose radius changes, the
+               radius change per unit (so a drag preview can tell a hole
+               growing from one sliding along its own normal)
       anchor — a world point on the controlled geometry (or None)
       dir    — unit direction the geometry moves as the param grows (or None)
       kind   — "length" when a translation was recovered, else "callout"
@@ -54,7 +79,8 @@ def sensitivity(code: str) -> dict[str, dict]:
         return {}
 
     def affected(name: str, val: float) -> tuple[str, dict]:
-        empty = {"faces": [], "value": val, "anchor": None, "dir": None, "kind": "callout"}
+        empty = {"faces": [], "value": val, "shifts": {}, "radial": {},
+                 "anchor": None, "dir": None, "kind": "callout"}
         delta = max(abs(val) * 0.15, 1.0)
         try:
             perturbed = set_params(code, {name: val + delta})
@@ -66,32 +92,33 @@ def sensitivity(code: str) -> dict[str, dict]:
         moved = [f for f in base_faces if _sig(f) not in pert_sigs]
         idxs = [f["index"] for f in moved]
 
-        # recover a representative translation: the moved face that shifts the
-        # farthest, matched to its counterpart (same orientation + area) in the
-        # perturbed build. That shift vector is the param's dimension direction.
+        # match every moved face to its counterpart in the perturbed build: its
+        # center displacement per unit of the param is how a drag on that face
+        # maps to the param (`shifts`). The face that shifts the farthest gives
+        # the param's representative dimension direction (`dir`).
+        shifts: dict[int, list[float]] = {}
+        radial: dict[int, float] = {}
         best = None  # (shift, center, unit_dir)
         for f in moved:
-            match, md = None, None
-            for pf in pert_faces:
-                if not _aligned(f["normal"], pf["normal"]):
-                    continue
-                if abs(f["area"] - pf["area"]) > max(f["area"] * 0.3, 1.0):
-                    continue
-                d = _dist(f["center"], pf["center"])
-                if md is None or d < md:
-                    md, match = d, pf
-            if match is None or md is None or md < 1e-3:
+            m = _match(f, pert_faces)
+            if m is None:
                 continue
-            u = _unit([match["center"][i] - f["center"][i] for i in range(3)])
+            pf, md = m
+            disp = [pf["center"][i] - f["center"][i] for i in range(3)]
+            shifts[f["index"]] = [d / delta for d in disp]
+            r0, r1 = f.get("radius"), pf.get("radius")
+            if r0 and r1 and abs(r1 - r0) > 1e-6:
+                radial[f["index"]] = (r1 - r0) / delta
+            u = _unit(disp)
             if u and (best is None or md > best[0]):
                 best = (md, list(f["center"]), u)
 
         if best:
-            return name, {"faces": idxs, "value": val,
-                          "anchor": best[1], "dir": best[2], "kind": "length"}
+            return name, {"faces": idxs, "value": val, "shifts": shifts,
+                          "radial": radial, "anchor": best[1], "dir": best[2], "kind": "length"}
         anchor = list(moved[0]["center"]) if moved else None
-        return name, {"faces": idxs, "value": val,
-                      "anchor": anchor, "dir": None, "kind": "callout"}
+        return name, {"faces": idxs, "value": val, "shifts": shifts,
+                      "radial": radial, "anchor": anchor, "dir": None, "kind": "callout"}
 
     with ThreadPoolExecutor(max_workers=min(8, len(params))) as pool:
         results = pool.map(lambda kv: affected(*kv), list(params.items()))
