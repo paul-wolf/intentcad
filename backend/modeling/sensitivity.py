@@ -37,17 +37,33 @@ def _aligned(a: list[float], b: list[float]) -> bool:
     return sum(a[i] * b[i] for i in range(3)) > 0.9
 
 
+def _resized_cylinder(f: dict, pf: dict) -> float | None:
+    """For two cylinders on parallel axes with different radii — a fillet or
+    a hole growing — the radius change; else None. Their area changes with the
+    radius, so it says nothing about whether they're the same face."""
+    a, b = f.get("axis"), pf.get("axis")
+    r0, r1 = f.get("radius"), pf.get("radius")
+    if f["kind"] != "cylinder" or pf["kind"] != "cylinder" or not (a and b and r0 and r1):
+        return None
+    if abs(sum(a[i] * b[i] for i in range(3))) < 0.999 or abs(r1 - r0) < 1e-6:
+        return None
+    return abs(r1 - r0)
+
+
 def _match(f: dict, candidates: list[dict]) -> tuple[dict, float] | None:
     """The face in `candidates` that `f` became: same orientation and similar
-    area, nearest center. Returns (face, center distance), or None when there
-    is no counterpart or it didn't actually move."""
+    area (or, for a resized cylinder, a center that moved no more than a few
+    times the radius change), nearest center. Returns (face, center distance),
+    or None when there is no counterpart or it didn't actually move."""
     match, md = None, None
     for pf in candidates:
         if not _aligned(f["normal"], pf["normal"]):
             continue
-        if abs(f["area"] - pf["area"]) > max(f["area"] * 0.3, 1.0):
-            continue
         d = _dist(f["center"], pf["center"])
+        if abs(f["area"] - pf["area"]) > max(f["area"] * 0.3, 1.0):
+            dr = _resized_cylinder(f, pf)
+            if dr is None or d > 4 * dr + 1e-3:
+                continue
         if md is None or d < md:
             md, match = d, pf
     if match is None or md is None or md < 1e-3:

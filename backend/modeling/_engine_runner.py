@@ -391,6 +391,17 @@ def _run(code: str, export: list | None = None,
                 "missing_assets": exc.hashes}
     # ASSETS["<sha256>"] -> local path of an uploaded file (see engine.run_script)
     ns: dict = {"__name__": "__cad__", "ASSETS": paths}
+    # auto_round(part, ...) — rounds every eligible edge; each call's report is
+    # collected here and returned as result["auto_round"]
+    from modeling.auto_round import auto_round
+
+    rounds: list[dict] = []
+
+    def auto_round_reported(part, *args, **kwargs):
+        kwargs.pop("report", None)
+        return auto_round(part, *args, report=rounds.append, **kwargs)
+
+    ns["auto_round"] = auto_round_reported
     # Run the script. If an operation fails partway (e.g. a chamfer too big),
     # `part` still holds the model built up to that line — render THAT plus the
     # error as a warning, instead of blanking the whole model.
@@ -573,11 +584,24 @@ def _run(code: str, export: list | None = None,
             "bbox_max": [bb.max.X, bb.max.Y, bb.max.Z],
         },
     }
+    if rounds:
+        result["auto_round"] = _merge_rounds(rounds)
     if warning:
         result["warning"] = warning   # an op failed; we rendered up to it
     if fix:
         result["fix"] = fix           # ...and here's the size that would have fit
     return result
+
+
+def _merge_rounds(rounds: list[dict]) -> dict:
+    """One report for a script's auto_round calls (normally just one)."""
+    out = {"rounded": 0, "skipped": [], "capped": 0, "merged": 0, "protected": 0, "elapsed": 0.0}
+    for r in rounds:
+        for k in ("rounded", "capped", "merged", "protected"):
+            out[k] += r.get(k, 0)
+        out["skipped"] += r.get("skipped", [])
+        out["elapsed"] = round(out["elapsed"] + r.get("elapsed", 0.0), 3)
+    return out
 
 
 def main() -> None:

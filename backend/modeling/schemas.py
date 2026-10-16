@@ -223,6 +223,24 @@ class RunEdge(Schema):
     polyline: list[list[float]] = []
 
 
+class AutoRoundSkip(Schema):
+    reason: str                     # 'failed' | 'protected' | 'timeout' | 'thin'
+    kind: str                       # 'convex' | 'concave'
+    polyline: list[list[float]] = []
+
+
+class AutoRoundReport(Schema):
+    """What auto_round did: edges rounded, the eligible ones it couldn't round,
+    how many got less than the requested radius, how many a neighbouring
+    fillet's chain took in, protected faces, seconds."""
+    rounded: int = 0
+    skipped: list[AutoRoundSkip] = []
+    capped: int = 0
+    merged: int = 0                 # of `rounded`: taken in by a neighbour's tangent chain
+    protected: int = 0
+    elapsed: float = 0.0
+
+
 class RunResponse(Schema):
     mesh: MeshOut
     faces: list[RunFace] = []
@@ -231,6 +249,7 @@ class RunResponse(Schema):
     metrics: RunMetrics
     warning: str | None = None      # an op failed; the model is rendered up to it
     fix: dict | None = None         # for a fillet/chamfer that doesn't fit: the size that does
+    auto_round: AutoRoundReport | None = None   # the script called auto_round
 
 
 class ExportRequest(Schema):

@@ -65,6 +65,20 @@ class EditTests(SimpleTestCase):
         edit_script("part = Box(2,2,2)", "add a hole", llm=llm)
         self.assertNotIn("MANUFACTURING CONTEXT", seen["system"])
 
+    def test_system_prompt_explains_auto_round(self):
+        seen = {}
+        def llm(system, user, tools):
+            seen["system"] = system
+            return {"code": "part = Box(1,1,1)", "note": "ok"}
+        edit_script("part = Box(2,2,2)", "soften this part", llm=llm)
+        s = seen["system"]
+        self.assertIn("auto_round(part", s)
+        self.assertIn("LAST", s)              # the final step of the script
+        self.assertIn("radii in P", s)
+        for word in ("mounting", "mating", "clamping", "bearing", "sealing"):
+            self.assertIn(word, s)            # functional faces go in keep
+        self.assertIn("not hand-picked fillet()", s)
+
     def test_passes_selection_context_in_prompt(self):
         seen = {}
         def llm(system, user, tools):

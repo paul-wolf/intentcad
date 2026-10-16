@@ -72,6 +72,19 @@ class SensitivityTests(SimpleTestCase):
         self.assertAlmostEqual(info["shifts"][wall["index"]][0], 1.0, places=2)
         self.assertEqual(info["radial"], {})
 
+    def test_round_radius_grows_auto_round_fillets_radially(self):
+        # a fillet that grows sits further back along the corner and its area
+        # changes, but it is still the same face — the drag handle needs it
+        code = ('P = dict(round_r=1.0)\n'
+                'part = Box(20, 20, 10, align=(Align.CENTER, Align.CENTER, Align.MIN))\n'
+                'part = auto_round(part, convex=P["round_r"])')
+        faces = run_script(code)["faces"]
+        fillets = [f["index"] for f in faces if f["kind"] == "cylinder"]
+        self.assertEqual(len(fillets), 4)   # the top edges (the verticals end on the bed)
+        radial = sensitivity(code)["round_r"]["radial"]
+        for i in fillets:
+            self.assertAlmostEqual(radial[i], 1.0, places=2)
+
     def test_shifts_only_name_faces_the_param_controls(self):
         code = 'P = dict(w=20, thick=5)\npart = Box(P["w"], P["w"], P["thick"])'
         for info in sensitivity(code).values():

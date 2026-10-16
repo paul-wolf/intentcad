@@ -201,6 +201,9 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   const [sel, setSel] = useState<number[]>([]);   // selected face indices (≤ 2)
   const resRef = useRef<RunResponse | null>(null);
   const selRef = useRef<number[]>([]);
+  // highlight the edges auto_round couldn't round (the footer's toggle)
+  const [showSkipped, setShowSkipped] = useState(false);
+  const showSkippedRef = useRef(false);
   const buildAbort = useRef<AbortController | null>(null);   // cancel an in-flight build
   const cancelBuild = () => { buildAbort.current?.abort(); };
 
@@ -231,7 +234,17 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
       const b = res.faces.find((x) => x.index === s[1]);
       if (a && b) segs.push(...a.center, ...b.center);
     }
+    if (res?.auto_round && showSkippedRef.current) {
+      for (const e of res.auto_round.skipped) {
+        for (let i = 0; i < e.polyline.length - 1; i++) segs.push(...e.polyline[i]!, ...e.polyline[i + 1]!);
+      }
+    }
     viewerRef.current?.highlightEdges(segs);
+  };
+  const toggleSkipped = () => {
+    showSkippedRef.current = !showSkippedRef.current;
+    setShowSkipped(showSkippedRef.current);
+    applySelection(selRef.current);
   };
 
   // readout for the current selection: a hole's diameter (1 face) or the
@@ -649,6 +662,8 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   // The instruction the "Fix with AI" button sends: the build error itself
   // travels as `build_error` context, so this only needs to state the goal.
   const FIX_INSTRUCTION = 'Fix the build error, keeping the design intent.';
+  // The "Protect" action on a face selection: the selection travels as context.
+  const PROTECT_INSTRUCTION = "Add the selected face(s) to auto_round's keep list with a robust selector, change nothing else.";
 
   const sendChat = async (text?: string) => {
     const instruction = (text ?? ask).trim();
@@ -1144,12 +1159,36 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
               {fix && fixButton(fix)}
             </span>
           )}
+          {status === 'done' && resRef.current?.auto_round && (() => {
+            const r = resRef.current.auto_round;
+            return <span style={{ marginRight: '10px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              <span title={`auto_round: ${r.protected} protected face${r.protected === 1 ? '' : 's'}, ${r.elapsed.toFixed(1)} s`}>
+                rounded {r.rounded} edge{r.rounded === 1 ? '' : 's'} · {r.skipped.length} skipped · {r.capped} capped
+              </span>
+              {r.skipped.length > 0 && (
+                <button onClick={toggleSkipped} aria-pressed={showSkipped}
+                  title={r.skipped.map((e) => e.reason).filter((x, i, a) => a.indexOf(x) === i).join(', ')}
+                  style={{ ...btn, padding: '1px 7px', fontSize: '11px',
+                           ...(showSkipped ? { background: palette.primaryBtn, color: '#fff' } : {}) }}>
+                  {showSkipped ? 'hide skipped' : 'show skipped'}
+                </button>
+              )}
+              <span>·</span>
+            </span>;
+          })()}
           {status === 'done' && !warn && (() => {
             const res = resRef.current;
             const v = (a: [number, number, number]) => `(${a.map((n) => Math.round(n * 10) / 10).join(', ')})`;
             if (!res || sel.length === 0)
               return `${stats} · drag to orbit · scroll to zoom · click a face (click two for the edge between them)`;
             const faces = sel.map((i) => res.faces.find((f) => f.index === i)!).filter(Boolean);
+            const protect = res.auto_round && (
+              <button onClick={() => void sendChat(PROTECT_INSTRUCTION)} disabled={asking}
+                title="Ask the AI to add the selected face(s) to auto_round's keep list, so they stay flat and sharp-edged"
+                style={{ ...btn, padding: '1px 7px', fontSize: '11px', marginLeft: '8px' }}>
+                Protect
+              </button>
+            );
             if (sel.length === 1) {
               const f = faces[0]!;
               return <span style={{ color: palette.text }}>
@@ -1165,6 +1204,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
                           ? ' · no parameter moves this face'
                           : ' · finding the parameters that move it…'}
                 </span>
+                {protect}
               </span>;
             }
             const shared = res.edges.filter((e) => e.faceIndices.length === 2 && e.faceIndices.includes(sel[0]!) && e.faceIndices.includes(sel[1]!));
@@ -1172,6 +1212,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
               {faces.map((f) => `#${f.index} ${f.kind}`).join(' ∩ ')} → {shared.length
                 ? <b>{shared.length} joining edge{shared.length > 1 ? 's' : ''} ({shared[0]!.kind})</b>
                 : 'no shared edge (faces don’t meet)'}
+              {protect}
             </span>;
           })()}
         </div>

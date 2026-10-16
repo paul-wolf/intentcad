@@ -73,6 +73,7 @@ def run_model(request, payload: RunRequest):
         metrics=RunMetrics(**r["metrics"]),
         warning=r.get("warning"),
         fix=r.get("fix"),
+        auto_round=r.get("auto_round"),
     )
 
 

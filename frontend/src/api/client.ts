@@ -386,6 +386,21 @@ export interface RunResponse {
   metrics: { volume: number; area: number; bbox_min: [number, number, number]; bbox_max: [number, number, number] };
   warning?: string;
   fix?: SizeFix;
+  /** Present when the script called auto_round: what it rounded and what it couldn't. */
+  auto_round?: AutoRoundReport | null;
+}
+
+/** Mirrors backend modeling.schemas.AutoRoundReport. */
+export interface AutoRoundReport {
+  rounded: number;
+  /** Eligible edges left sharp: reason 'failed' | 'protected' | 'timeout' | 'thin'. */
+  skipped: { reason: string; kind: string; polyline: [number, number, number][] }[];
+  /** Rounded below the requested radius (thin wall, or a half-radius retry). */
+  capped: number;
+  /** Of `rounded`: edges a neighbouring fillet's tangent chain took in. */
+  merged: number;
+  protected: number;
+  elapsed: number;
 }
 
 // ── chat agent (instruction → feature-tree operations) ──
