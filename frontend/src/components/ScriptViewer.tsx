@@ -66,9 +66,13 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
     const key = buildKey(src);
     if (sensKeyRef.current === key) return;   // already computed or in flight
     sensKeyRef.current = key;
+    setSensState('loading');
     buildApi.sensitivity(src, getBackendId() ?? '')
-      .then((r) => { if (sensKeyRef.current === key) { setSens(r.params); putCachedSens(key, r.params); } })
-      .catch(() => { if (sensKeyRef.current === key) sensKeyRef.current = null; });
+      .then((r) => {
+        if (sensKeyRef.current !== key) return;
+        setSens(r.params); setSensState('ready'); putCachedSens(key, r.params);
+      })
+      .catch(() => { if (sensKeyRef.current === key) { sensKeyRef.current = null; setSensState('error'); } });
   };
   // syntax-highlight overlay: a highlighted <pre> behind a transparent <textarea>
   const taRef = useRef<HTMLTextAreaElement | null>(null);
@@ -284,8 +288,8 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
       // something actually needs the param→face links (hover a param, ⌥, or a
       // selection). Just prime the state here; ensureSens() does the work.
       builtCodeRef.current = src;
-      if (cached?.sens && sensCurrent(cached.sens)) { setSens(cached.sens); sensKeyRef.current = key; }
-      else { setSens({}); sensKeyRef.current = null; }
+      if (cached?.sens && sensCurrent(cached.sens)) { setSens(cached.sens); setSensState('ready'); sensKeyRef.current = key; }
+      else { setSens({}); setSensState('idle'); sensKeyRef.current = null; }
       // a handle drop rebuilt this: keep the dragged face selected — found
       // where the drag put it — so it can be dragged again. Otherwise clear.
       const want = reselectRef.current;
@@ -489,6 +493,9 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   const [paramVals, setParamVals] = useState<Record<string, number>>({});
   const paramBase = useRef<Record<string, number>>({});   // values as of the last build (good or failed)
   const [sens, setSens] = useState<Record<string, DimInfo>>({});   // param -> what it controls
+  // where `sens` stands for the current build, so the status bar can tell
+  // "still working out the handles" from "nothing moves this face"
+  const [sensState, setSensState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
 
   // hold Opt/Alt to reveal every parameter as a dimension on the geometry it
   // drives (like the sketch editor's dimension overlay).
@@ -1147,7 +1154,17 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
               const f = faces[0]!;
               return <span style={{ color: palette.text }}>
                 Face #{f.index} · <b>{f.kind}</b> · normal {v(f.normal)} · center {v(f.center)} · area {Math.round(f.area)} mm²
-                {handle && <span style={{ color: palette.textSecondary }}> · drag the arrow to change <b>{handle.name}</b>{nHandles > 1 ? ' (Tab for others)' : ''}</span>}
+                <span style={{ color: palette.textSecondary }}>
+                  {handle
+                    ? <> · drag the arrow to change <b>{handle.name}</b>{nHandles > 1 ? ' (Tab for others)' : ''}</>
+                    : Object.keys(paramVals).length === 0
+                      ? ' · no parameters to drag (add some to P, or ask the AI)'
+                      : sensState === 'error'
+                        ? ' · couldn’t work out which parameters move it (reselect the face to retry)'
+                        : sensState === 'ready'
+                          ? ' · no parameter moves this face'
+                          : ' · finding the parameters that move it…'}
+                </span>
               </span>;
             }
             const shared = res.edges.filter((e) => e.faceIndices.length === 2 && e.faceIndices.includes(sel[0]!) && e.faceIndices.includes(sel[1]!));
