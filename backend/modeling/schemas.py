@@ -241,6 +241,29 @@ class AutoRoundReport(Schema):
     elapsed: float = 0.0
 
 
+class OrganicWarning(Schema):
+    kind: str                       # 'thin' | 'overhang' | 'blend'
+    message: str
+    at: list[float] = []            # where, when it's a place
+
+
+class OrganicDrop(Schema):
+    reason: str                     # 'small' | 'failed' | 'protected'
+    at: list[float] = []
+
+
+class OrganicReport(Schema):
+    """What the organic helpers did: frame members joined and the ones left
+    out, truss/window cuts made and dropped, the mass truss_windows removed,
+    printability warnings."""
+    members: int = 0
+    failed_members: list[str] = []
+    windows: int = 0
+    dropped: list[OrganicDrop] = []
+    removed_pct: float | None = None
+    warnings: list[OrganicWarning] = []
+
+
 class RunResponse(Schema):
     mesh: MeshOut
     faces: list[RunFace] = []
@@ -250,6 +273,7 @@ class RunResponse(Schema):
     warning: str | None = None      # an op failed; the model is rendered up to it
     fix: dict | None = None         # for a fillet/chamfer that doesn't fit: the size that does
     auto_round: AutoRoundReport | None = None   # the script called auto_round
+    organic: OrganicReport | None = None        # ... spoke/frame/window/truss_windows
 
 
 class ExportRequest(Schema):

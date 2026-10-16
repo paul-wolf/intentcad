@@ -388,6 +388,8 @@ export interface RunResponse {
   fix?: SizeFix;
   /** Present when the script called auto_round: what it rounded and what it couldn't. */
   auto_round?: AutoRoundReport | null;
+  /** Present when the script called spoke/frame/window/truss_windows. */
+  organic?: OrganicReport | null;
 }
 
 /** Mirrors backend modeling.schemas.AutoRoundReport. */
@@ -401,6 +403,20 @@ export interface AutoRoundReport {
   merged: number;
   protected: number;
   elapsed: number;
+}
+
+/** Mirrors backend modeling.schemas.OrganicReport. */
+export interface OrganicReport {
+  /** frame() members joined, and the ones left out ("a–b: reason"). */
+  members: number;
+  failed_members: string[];
+  /** window()/truss_windows() cuts made, and truss windows dropped: 'small' | 'failed' | 'protected'. */
+  windows: number;
+  dropped: { reason: string; at: number[] }[];
+  /** Volume truss_windows took away, % (null when it wasn't called). */
+  removed_pct: number | null;
+  /** Printability ('thin' | 'overhang') and joints left less blended ('blend'). */
+  warnings: { kind: string; message: string; at: number[] }[];
 }
 
 // ── chat agent (instruction → feature-tree operations) ──

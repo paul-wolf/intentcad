@@ -4,7 +4,7 @@ here; auto_round runs in-process (and through the engine for the report)."""
 
 from unittest import mock
 
-from build123d import Align, Axis, Box, Compound, Cylinder, GeomType, Pos
+from build123d import Align, Axis, Box, Compound, Cylinder, GeomType, Pos, SlotCenterToCenter, extrude
 from django.test import SimpleTestCase
 from OCP.BRepAdaptor import BRepAdaptor_Surface
 
@@ -119,6 +119,21 @@ class AutoRoundTests(SimpleTestCase):
         out, rep = _round(plate, convex=1.0, concave=1.0, protect_holes=False)
         self.assertTrue(out.is_valid)
         self.assertEqual(_count(out, GeomType.TORUS), 2)  # both top rims rounded (bottom: the bed)
+
+    def test_rounded_inside_corners_are_not_holes_but_slot_ends_are(self):
+        # a pocket's corner fillets (90°) round like any edge; a slot's ends
+        # (180°) are hole walls and stay sharp
+        pocket = Box(60, 40, 8, align=MIN) - Pos(0, 0, 3) * Box(30, 20, 10, align=MIN)
+        pocket = pocket.fillet(3, [e for e in pocket.edges().filter_by(Axis.Z) if abs(e.center().X) < 20])
+        out, rep = _round(pocket, convex=1.0, concave=1.0)
+        self.assertTrue(out.is_valid)
+        self.assertEqual(rep["protected"], 1)   # just the bed
+        slot = Box(60, 30, 5, align=MIN) - Pos(0, 0, -5) * extrude(SlotCenterToCenter(20, 5), 20)
+        ends = [f for f in slot.faces() if f.geom_type == GeomType.CYLINDER]
+        self.assertEqual(len(ends), 2)
+        out, rep = _round(slot, convex=1.0, concave=1.0)
+        self.assertTrue(out.is_valid)
+        self.assertEqual(rep["protected"], 3)   # both slot ends + the bed
 
     def test_a_boss_is_not_a_hole(self):
         part = Box(60, 30, 5, align=MIN) + Pos(0, 0, 5) * Cylinder(5, 8, align=MIN)   # Ø10 boss

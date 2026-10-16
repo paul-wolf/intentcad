@@ -45,6 +45,7 @@ requested radius, `merged` the rounded edges a neighbouring fillet's chain took 
 from __future__ import annotations
 
 import faulthandler
+import math
 import os
 import tempfile
 import time
@@ -176,13 +177,20 @@ def _face_sig(f) -> tuple:
 
 def _is_hole_wall(f, max_r: float) -> bool:
     """A cylindrical face of radius <= max_r with the material outside it (its
-    outward normal points at the axis). A boss has the material inside."""
+    outward normal points at the axis), wrapping at least half way round — a
+    hole or a slot end. A boss has the material inside; a rounded inside
+    corner (a pocket's or a window's) wraps less than half way."""
     s = BRepAdaptor_Surface(f.wrapped)
     if s.GetType() != GeomAbs_Cylinder:
         return False
     cyl = s.Cylinder()
     if cyl.Radius() > max_r + 1e-9:
         return False
+    try:
+        if s.LastUParameter() - s.FirstUParameter() < math.pi - 1e-6:
+            return False
+    except Exception:
+        pass
     ax = cyl.Axis()
     a, d = ax.Location(), ax.Direction()
     p = f.center()   # area centroid; for a partial wall use a point ON the face

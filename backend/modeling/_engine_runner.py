@@ -402,6 +402,21 @@ def _run(code: str, export: list | None = None,
         return auto_round(part, *args, report=rounds.append, **kwargs)
 
     ns["auto_round"] = auto_round_reported
+    # spoke / frame / window / truss_windows (modeling/organic.py) — their
+    # reports (members, windows, printability warnings) go to result["organic"];
+    # min_wall comes from the script's P
+    from modeling import organic
+
+    organic_events: list[dict] = []
+
+    def min_wall() -> float:
+        p = ns.get("P")
+        try:
+            return float(p.get("min_wall", 2.0)) if isinstance(p, dict) else 2.0
+        except (TypeError, ValueError):
+            return 2.0
+
+    ns.update(organic.bind(organic_events.append, min_wall))
     # Run the script. If an operation fails partway (e.g. a chamfer too big),
     # `part` still holds the model built up to that line — render THAT plus the
     # error as a warning, instead of blanking the whole model.
@@ -586,6 +601,8 @@ def _run(code: str, export: list | None = None,
     }
     if rounds:
         result["auto_round"] = _merge_rounds(rounds)
+    if organic_events:
+        result["organic"] = organic.merge(organic_events)
     if warning:
         result["warning"] = warning   # an op failed; we rendered up to it
     if fix:

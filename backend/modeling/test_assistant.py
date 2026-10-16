@@ -79,6 +79,22 @@ class EditTests(SimpleTestCase):
             self.assertIn(word, s)            # functional faces go in keep
         self.assertIn("not hand-picked fillet()", s)
 
+    def test_system_prompt_explains_organic_shapes(self):
+        seen = {}
+        def llm(system, user, tools):
+            seen["system"] = system
+            return {"code": "part = Box(1,1,1)", "note": "ok"}
+        edit_script("part = Box(2,2,2)", "make it organic", llm=llm)
+        s = seen["system"]
+        for api in ("spoke(a, b", "frame(nodes=", "window(part, face", "truss_windows(part, face"):
+            self.assertIn(api, s)
+        self.assertIn("organic, sculpted, lighter or aerodynamic", s)
+        self.assertIn("protected nodes", s)
+        self.assertIn("auto_round() LAST", s)
+        self.assertIn("flat_bottom_z = the bed plane", s)
+        self.assertIn("min_wall", s)
+        self.assertIn("remove 30-40% of the mass", s)
+
     def test_passes_selection_context_in_prompt(self):
         seen = {}
         def llm(system, user, tools):

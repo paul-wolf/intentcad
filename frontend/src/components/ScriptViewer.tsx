@@ -12,6 +12,7 @@ import { downloadTextFile } from '@/export/download';
 import { buildKey, getCachedBuild, putCachedBuild, putCachedSens } from '@/build/buildCache';
 import { importScript, importLabel, STEP_ACCEPT } from '@/build/importStep';
 import { PartVersionsPanel } from './PartVersionsPanel';
+import { PartHelpModal } from './PartHelpModal';
 
 interface Props {
   onClose: () => void;
@@ -628,6 +629,16 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+  // "?" opens the help, as in the sketch editor — not while typing in a field
+  const [showHelp, setShowHelp] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '?' || (e.target instanceof HTMLElement && e.target !== document.body)) return;
+      setShowHelp((v) => !v);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // after a drop, build() reselects the face found where the drag put it
   const reselectRef = useRef<{ param: string; value: number; center: Vec3; normal: Vec3; tol: number } | null>(null);
@@ -664,6 +675,19 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   const FIX_INSTRUCTION = 'Fix the build error, keeping the design intent.';
   // The "Protect" action on a face selection: the selection travels as context.
   const PROTECT_INSTRUCTION = "Add the selected face(s) to auto_round's keep list with a robust selector, change nothing else.";
+  // The "Lighten" button: the organic-shapes design pattern from the system
+  // prompt, so it can be reached without knowing what to ask for.
+  const LIGHTEN_INSTRUCTION = 'Make this part lighter and more organic: aim to remove 30-40% of its mass. '
+    + 'Keep every hole, boss and mating face exact. '
+    + 'Lighten its flat plates with truss_windows() anchored at the mounts, sized to hit that target '
+    + '(only the selected face, if one is selected), '
+    + 'or, if it is an open bracket, rebuild it as a frame() of tapered, gently bowed members between the mount points. '
+    + 'Then auto_round() last.';
+  // The "Round" button: auto_round on its own.
+  const ROUND_INSTRUCTION = 'Round every edge of this part with auto_round() as the last line, with the convex and '
+    + 'concave radii as P["round_r"] and P["blend_r"] sized to suit the part. Keep holes and mating faces exact '
+    + '(and the selected face, if one is selected). If the script already calls auto_round, leave it in place and '
+    + 'only fix what stops it rounding.';
 
   const sendChat = async (text?: string) => {
     const instruction = (text ?? ask).trim();
@@ -808,6 +832,16 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
                      border: `1px solid ${palette.border}` }}>
             Versions
           </button>
+          {([['Lighten', LIGHTEN_INSTRUCTION, 'AI: cut 30–40% of the mass with windows or spokes, then round (? for more)'],
+             ['Round', ROUND_INSTRUCTION, 'AI: round every edge, keeping holes and mating faces exact (? for more)']] as const)
+            .map(([label, instruction, title]) => (
+              <button key={label} onClick={() => void sendChat(instruction)}
+                disabled={asking || status === 'building' || !code.trim()} title={title}
+                style={{ ...btn, background: 'none', color: palette.textSecondary,
+                         border: `1px solid ${palette.border}`, opacity: asking || status === 'building' ? 0.5 : 1 }}>
+                {label}
+              </button>
+            ))}
           {status === 'building' ? (
             <button onClick={cancelBuild} title="Cancel this build"
               style={{ ...btn, background: 'none', color: palette.danger ?? '#f87171',
@@ -837,6 +871,9 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
               </button>
             );
           })}
+          <button onClick={() => setShowHelp(true)} title="What everything here does (?)" aria-label="Help"
+            style={{ ...btn, padding: '5px 10px', background: 'none', color: palette.textSecondary,
+                     border: `1px solid ${palette.border}`, borderRadius: '50%' }}>?</button>
           <button onClick={handleClose} style={{ background: 'none', border: 'none',
                    color: palette.textSecondary, fontSize: '18px', cursor: 'pointer', padding: '0 4px' }}>&times;</button>
         </div>
@@ -1176,6 +1213,29 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
               <span>·</span>
             </span>;
           })()}
+          {status === 'done' && resRef.current?.organic && (() => {
+            const o = resRef.current.organic;
+            const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
+            const bits: string[] = [];
+            if (o.members || o.failed_members.length)
+              bits.push(plural(o.members, 'member') + (o.failed_members.length ? ` (${o.failed_members.length} failed)` : ''));
+            if (o.windows || o.dropped.length)
+              bits.push(plural(o.windows, 'window') + (o.dropped.length ? ` (${o.dropped.length} dropped)` : ''));
+            if (o.removed_pct != null) bits.push(`−${o.removed_pct.toFixed(0)}% mass`);
+            const why = [...o.failed_members,
+                         ...o.dropped.map((d) => `window dropped: ${d.reason}`)
+                           .filter((x, i, a) => a.indexOf(x) === i)];
+            return <span style={{ marginRight: '10px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              {bits.length > 0 && <span title={why.join('\n') || undefined}>{bits.join(' · ')}</span>}
+              {o.warnings.length > 0 && (
+                <span title={o.warnings.map((w) => w.message).join('\n')}
+                  style={{ color: palette.warning ?? '#c78a1a' }}>
+                  ⚠ {plural(o.warnings.length, 'warning')}
+                </span>
+              )}
+              <span>·</span>
+            </span>;
+          })()}
           {status === 'done' && !warn && (() => {
             const res = resRef.current;
             const v = (a: [number, number, number]) => `(${a.map((n) => Math.round(n * 10) / 10).join(', ')})`;
@@ -1217,6 +1277,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
           })()}
         </div>
       </div>
+      {showHelp && <PartHelpModal onClose={() => setShowHelp(false)} />}
       {showVersions && getBackendId() && (
         <PartVersionsPanel docId={getBackendId()!} currentCode={code}
           onRestore={restoreVersion} onClose={() => setShowVersions(false)} />
