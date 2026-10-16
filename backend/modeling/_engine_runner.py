@@ -8,7 +8,10 @@ Part/Solid/Compound), then tessellates + exports STEP and prints the result.
 We do no CAD here — build123d does. We only take the artifacts out.
 """
 
+import base64
+import hashlib
 import json
+import os
 import re
 import sys
 import tempfile
@@ -338,11 +341,56 @@ def _fix_for(exc: BaseException, ns: dict) -> dict | None:
     return fix
 
 
-def _run(code: str, export: list | None = None) -> dict:
+class MissingAssets(RuntimeError):
+    """A referenced asset isn't on disk (e.g. the tmp dir was cleaned) — the
+    caller should re-send its bytes."""
+
+    def __init__(self, hashes: list[str]):
+        super().__init__(", ".join(hashes))
+        self.hashes = hashes
+
+
+def _stage_assets(assets: dict | None, refs: list | None) -> dict[str, str]:
+    """Write uploaded files (`assets`: {sha256: base64}) to <tmp>/assets/<sha>.step
+    and return ASSETS ({sha256: path}) for every hash the script references.
+
+    The tmp dir is the sandbox's private writable /tmp (bwrap) — the rest of the
+    filesystem is read-only. The worker is long-lived, so a file already there
+    is not rewritten, and the engine stops re-sending hashes it knows we hold."""
+    root = os.path.join(tempfile.gettempdir(), "assets")
+    os.makedirs(root, exist_ok=True)
+    for sha, b64 in (assets or {}).items():
+        if not re.fullmatch(r"[0-9a-f]{64}", sha):
+            raise ValueError(f"bad asset hash {sha!r}")
+        path = os.path.join(root, f"{sha}.step")
+        if os.path.exists(path):
+            continue
+        data = base64.b64decode(b64)
+        if hashlib.sha256(data).hexdigest() != sha:
+            raise ValueError(f"asset {sha} does not match its hash")
+        tmp = f"{path}.{os.getpid()}.part"
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+        os.replace(tmp, path)
+    paths = {sha: os.path.join(root, f"{sha}.step") for sha in (refs or [])}
+    missing = sorted(sha for sha, path in paths.items() if not os.path.exists(path))
+    if missing:
+        raise MissingAssets(missing)
+    return paths
+
+
+def _run(code: str, export: list | None = None,
+         assets: dict | None = None, asset_refs: list | None = None) -> dict:
     from build123d import export_step, export_stl
 
     _instrument()
-    ns: dict = {"__name__": "__cad__"}
+    try:
+        paths = _stage_assets(assets, asset_refs)
+    except MissingAssets as exc:
+        return {"ok": False, "error": f"uploaded file not loaded: {exc}",
+                "missing_assets": exc.hashes}
+    # ASSETS["<sha256>"] -> local path of an uploaded file (see engine.run_script)
+    ns: dict = {"__name__": "__cad__", "ASSETS": paths}
     # Run the script. If an operation fails partway (e.g. a chamfer too big),
     # `part` still holds the model built up to that line — render THAT plus the
     # error as a warning, instead of blanking the whole model.
@@ -385,14 +433,22 @@ def _run(code: str, export: list | None = None) -> dict:
     from OCP.BRepAdaptor import BRepAdaptor_Surface
     from OCP.GeomAbs import GeomAbs_Cylinder
 
-    def cyl_radius(f):
+    def cyl_info(f, c) -> dict:
+        """A cylindrical face's radius, axis direction and the point on its axis
+        level with the face's center (where a hole/boss sits) — else {}."""
         try:
             surf = BRepAdaptor_Surface(f.wrapped)
             if surf.GetType() == GeomAbs_Cylinder:
-                return float(surf.Cylinder().Radius())
+                cyl = surf.Cylinder()
+                ax = cyl.Axis()
+                p, d = ax.Location(), ax.Direction()
+                t = (c.X - p.X()) * d.X() + (c.Y - p.Y()) * d.Y() + (c.Z - p.Z()) * d.Z()
+                return {"radius": float(cyl.Radius()),
+                        "axis": [d.X(), d.Y(), d.Z()],
+                        "axis_point": [p.X() + t * d.X(), p.Y() + t * d.Y(), p.Z() + t * d.Z()]}
         except Exception:
             pass
-        return None
+        return {}
 
     vstart = 0
     for fi, face in enumerate(face_list):
@@ -425,8 +481,9 @@ def _run(code: str, export: list | None = None) -> dict:
             "area": float(face.area),
             "center": [c.X, c.Y, c.Z],
             "normal": [n.X, n.Y, n.Z] if n is not None else [0.0, 0.0, 1.0],
-            "radius": cyl_radius(face),
+            "radius": None,
             "size": size,
+            **cyl_info(face, c),
         })
         vstart += count
 
@@ -526,7 +583,8 @@ def _run(code: str, export: list | None = None) -> dict:
 def main() -> None:
     try:
         payload = json.loads(sys.stdin.read() or "{}")
-        result = _run(payload.get("code", ""), payload.get("export"))
+        result = _run(payload.get("code", ""), payload.get("export"),
+                      payload.get("assets"), payload.get("asset_refs"))
     except Exception as exc:  # any script/engine error → structured, not a crash
         import traceback
         result = {"ok": False, "error": f"{type(exc).__name__}: {exc}",

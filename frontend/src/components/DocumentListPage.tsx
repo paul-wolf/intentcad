@@ -1,9 +1,11 @@
-import { useState, useEffect, useCallback, type CSSProperties } from 'react';
+import { useState, useEffect, useCallback, useRef, type CSSProperties } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 import { useDocumentStore } from '@/stores/documentStore';
 import { createEmptyDocument, createEmptyPart, generateNumberedName, migrateDocument } from '@/utils/document';
 import { api, type DocumentListItem } from '@/api/cachedClient';
+import { api as rawApi, errorText } from '@/api/client';
+import { importScript, importLabel, partNameFor, STEP_ACCEPT } from '@/build/importStep';
 import { setBackendId, setProjectContext } from '@/api/autoSave';
 import type { Document } from '@/types/document';
 import { projectApi } from '@/api/projectClient';
@@ -79,6 +81,35 @@ export function DocumentListPage() {
   const uniqueName = (base: string) => generateNumberedName(base, docs.map((d) => d.name));
   const handleNew = () => createAndOpen(createEmptyDocument(uniqueName('Sketch')), (id) => `/edit/${id}`);
   const handleNewPart = () => createAndOpen(createEmptyPart(uniqueName('Part')), (id) => `/part/${id}`);
+
+  // New part from STEP: create the part, upload the file (trial-built server-side),
+  // save the import script as its first version, then open it. A failed upload
+  // removes the part it just created.
+  const stepInput = useRef<HTMLInputElement | null>(null);
+  const [importing, setImporting] = useState(false);
+  const handleNewPartFromStep = async (file: File) => {
+    const base = partNameFor(file.name);
+    const doc = createEmptyPart(docs.some((d) => d.name === base) ? uniqueName(base) : base);
+    setImporting(true);
+    let createdId: string | null = null;
+    try {
+      const saved = await api.createDocument(doc.name, doc as unknown as Record<string, unknown>, projectId);
+      createdId = saved.id;
+      const asset = await rawApi.uploadAsset(saved.id, file);
+      const label = importLabel(asset.filename);
+      const withCode: Document = { ...doc, modelCode: importScript(asset), modelCodeLabel: label };
+      await api.updateDocument(saved.id, { data: withCode as unknown as Record<string, unknown>, version_label: label });
+      setDocument(withCode);
+      setBackendId(saved.id);
+      setProjectContext(projectId ?? null, projectName);
+      navigate(`/part/${saved.id}`);
+    } catch (err) {
+      if (createdId) api.deleteDocument(createdId).catch(() => {});
+      fail(`Couldn't import ${file.name}`, new Error(errorText(err)));
+    } finally {
+      setImporting(false);
+    }
+  };
 
   const handleOpen = async (d: DocumentListItem) => {
     try {
@@ -266,6 +297,16 @@ export function DocumentListPage() {
                          border: `1px solid ${t.border2}`, borderRadius: 9, fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
                 New sketch
+              </button>
+              <input ref={stepInput} type="file" accept={STEP_ACCEPT} style={{ display: 'none' }}
+                onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void handleNewPartFromStep(f); }} />
+              <button onClick={() => stepInput.current?.click()} disabled={importing}
+                title="Create a part from a STEP file (.step/.stp)"
+                style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '9px 14px', background: t.surface, color: t.text,
+                         border: `1px solid ${t.border2}`, borderRadius: 9, fontSize: '13px', fontWeight: 600,
+                         cursor: importing ? 'default' : 'pointer', opacity: importing ? 0.6 : 1 }}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M12 15V4M7 9l5-5 5 5M5 20h14" /></svg>
+                {importing ? 'Importing…' : 'New part from STEP'}
               </button>
               <button onClick={handleNewPart}
                 style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '9px 14px', background: t.accent, color: '#fff',

@@ -110,6 +110,23 @@ class DocumentAPITests(TestCase):
                         data=json.dumps({"data": d2}), content_type="application/json")
         self.assertEqual(DocumentVersion.objects.filter(document_id=doc_id).count(), 2)
 
+    def test_long_version_label_is_clipped_to_the_column(self):
+        # Postgres rejects a label over varchar(200) (sqlite doesn't check), so
+        # a long AI summary used to 500 the save
+        from documents.models import DocumentVersion
+        d = dict(_valid_doc_data(), modelCode="part = Box(1,1,1)")
+        doc_id = self.client.post("/api/documents/", data=json.dumps({"name": "P", "data": d}),
+                                  content_type="application/json").json()["id"]
+        resp = self.client.put(f"/api/documents/{doc_id}",
+                               data=json.dumps({"data": dict(d, modelCode="part = Box(2,2,2)"),
+                                                "version_label": "Added a hole. " * 30}),
+                               content_type="application/json")
+        self.assertEqual(resp.status_code, 200)
+        label = DocumentVersion.objects.filter(document_id=doc_id).first().label
+        self.assertEqual(len(label), 200)
+        self.assertTrue(label.startswith("Added a hole. Added"))
+        self.assertTrue(label.endswith("…"))
+
     def test_draft_save_does_not_create_a_version(self):
         from documents.models import DocumentVersion
         d = dict(_valid_doc_data(), modelCode="part = Box(1,1,1)")

@@ -32,7 +32,8 @@ async function request<T>(
 ): Promise<T> {
   const method = (opts.method || 'GET').toUpperCase();
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
+    // a FormData body (file upload) sets its own multipart boundary
+    ...(opts.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
     ...opts.headers as Record<string, string>,
   };
 
@@ -155,6 +156,18 @@ export const api = {
     return request(`/documents/${id}`, { method: 'DELETE' });
   },
 
+  /** Upload a STEP file for the part's script to import as ASSETS["<sha256>"].
+   *  The server trial-builds it first and refuses what the engine can't read. */
+  uploadAsset(docId: string, file: File): Promise<AssetInfo> {
+    const body = new FormData();
+    body.append('file', file);
+    return request(`/documents/${docId}/assets`, { method: 'POST', body });
+  },
+
+  listAssets(docId: string): Promise<AssetListItem[]> {
+    return request(`/documents/${docId}/assets`);
+  },
+
   listVersions(docId: string): Promise<VersionListItem[]> {
     return request(`/documents/${docId}/versions`);
   },
@@ -163,6 +176,24 @@ export const api = {
     return request(`/documents/${docId}/versions/${versionId}`);
   },
 };
+
+/** An uploaded STEP file as the import script places it (mirrors documents/schemas.AssetOut). */
+export interface AssetInfo {
+  sha256: string;
+  filename: string;
+  size: number;
+  bbox: { min: [number, number, number]; max: [number, number, number] };
+  face_count: number;
+}
+
+/** Metadata for one uploaded file (mirrors documents/schemas.AssetListOut). */
+export interface AssetListItem {
+  sha256: string;
+  filename: string;
+  content_type: string;
+  size: number;
+  created_at: string;
+}
 
 /** Metadata for one immutable saved version (mirrors documents/schemas.VersionListOut). */
 export interface VersionListItem {
@@ -269,11 +300,12 @@ export const buildApi = {
   chat(payload: ChatRequest): Promise<ChatResponse> {
     return request('/build/chat', { method: 'POST', body: JSON.stringify(payload) });
   },
-  run(code: string, signal?: AbortSignal): Promise<RunResponse> {
-    return request('/build/run', { method: 'POST', body: JSON.stringify({ code }), signal });
+  // `documentId`: the part whose uploaded files the script imports (ASSETS[...])
+  run(code: string, signal?: AbortSignal, documentId = ''): Promise<RunResponse> {
+    return request('/build/run', { method: 'POST', body: JSON.stringify({ code, document_id: documentId }), signal });
   },
-  export(code: string, format: 'stl' | 'step' | 'stl-parts' | 'dxf' | 'dxf-views'): Promise<{ format: string; data: string }> {
-    return request('/build/export', { method: 'POST', body: JSON.stringify({ code, format }) });
+  export(code: string, format: 'stl' | 'step' | 'stl-parts' | 'dxf' | 'dxf-views', documentId = ''): Promise<{ format: string; data: string }> {
+    return request('/build/export', { method: 'POST', body: JSON.stringify({ code, format, document_id: documentId }) });
   },
   edit(payload: { code: string; instruction: string; context?: string; document_id?: string;
                   history?: { role: string; text: string }[]; model?: string; production?: string;
@@ -291,8 +323,8 @@ export const buildApi = {
   setParams(code: string, params: Record<string, number>): Promise<{ code: string }> {
     return request('/build/set_params', { method: 'POST', body: JSON.stringify({ code, params }) });
   },
-  sensitivity(code: string): Promise<{ params: Record<string, DimInfo> }> {
-    return request('/build/sensitivity', { method: 'POST', body: JSON.stringify({ code }) });
+  sensitivity(code: string, documentId = ''): Promise<{ params: Record<string, DimInfo> }> {
+    return request('/build/sensitivity', { method: 'POST', body: JSON.stringify({ code, document_id: documentId }) });
   },
 };
 

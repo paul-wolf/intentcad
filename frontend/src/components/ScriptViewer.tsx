@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
-import { buildApi, errorText, ApiError, type RunResponse, type UsageResponse, type DimInfo, type ModelInfo, type SizeFix } from '@/api/client';
+import { api, buildApi, errorText, ApiError, type RunResponse, type UsageResponse, type DimInfo, type ModelInfo, type SizeFix } from '@/api/client';
 import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, getBackendId } from '@/api/autoSave';
 import { DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
 import type { ChatMessage } from '@/types/document';
@@ -10,6 +10,7 @@ import { handleOptions, add, scale, dot, len, sub, type HandleOption, type Vec3 
 import { highlightPython, DARK_SYNTAX, LIGHT_SYNTAX } from '@/build/pyHighlight';
 import { downloadTextFile } from '@/export/download';
 import { buildKey, getCachedBuild, putCachedBuild, putCachedSens } from '@/build/buildCache';
+import { importScript, importLabel, STEP_ACCEPT } from '@/build/importStep';
 import { PartVersionsPanel } from './PartVersionsPanel';
 
 interface Props {
@@ -65,7 +66,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
     const key = buildKey(src);
     if (sensKeyRef.current === key) return;   // already computed or in flight
     sensKeyRef.current = key;
-    buildApi.sensitivity(src)
+    buildApi.sensitivity(src, getBackendId() ?? '')
       .then((r) => { if (sensKeyRef.current === key) { setSens(r.params); putCachedSens(key, r.params); } })
       .catch(() => { if (sensKeyRef.current === key) sensKeyRef.current = null; });
   };
@@ -270,7 +271,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
       // IndexedDB cache with no engine call.
       const key = buildKey(src);
       const cached = await getCachedBuild(key);
-      const res = cached?.run ?? await buildApi.run(src, ctrl.signal);
+      const res = cached?.run ?? await buildApi.run(src, ctrl.signal, getBackendId() ?? '');
       const took = Math.round(performance.now() - t0);
       setWarn(res.warning ?? '');
       setFix(res.fix?.param ? res.fix : null);
@@ -424,6 +425,33 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   const [prodDraft, setProdDraft] = useState('');
   const openProduction = () => { setProdDraft(productionNotes); setShowProduction(true); };
   const saveProduction = () => { setShowProduction(false); persistProductionNotes(prodDraft); };
+  // Import STEP: upload the file (the server trial-builds it), then replace the
+  // script with one that imports it by hash, build, and version it. The script
+  // being replaced is kept: a built one is already a version, and the server
+  // files an overwritten draft under modelCodeHistory.
+  const stepInput = useRef<HTMLInputElement | null>(null);
+  const [importing, setImporting] = useState(false);
+  const importStep = async (file: File) => {
+    const docId = getBackendId();
+    if (!docId) { setStatus('error'); setMessage('Save this part before importing a file.'); return; }
+    if (code.trim() && code !== STARTER &&
+        !window.confirm(`Replace the current script with an import of ${file.name}? It stays in Versions.`)) return;
+    setImporting(true);
+    setMessage(`Importing ${file.name}…`);
+    try {
+      const asset = await api.uploadAsset(docId, file);
+      const c = importScript(asset);
+      setCode(c);
+      saveDraft(c);
+      await build(c, importLabel(asset.filename));
+    } catch (err) {
+      setStatus('error');
+      setMessage(errorText(err));
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const restoreVersion = (c: string) => {
     setShowVersions(false);
     if (!c.trim()) return;
@@ -656,7 +684,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
     if (status !== 'done' || exporting) return;
     setExporting(format);
     try {
-      const r = await buildApi.export(code, format);
+      const r = await buildApi.export(code, format, getBackendId() ?? '');
       if (format === 'stl-parts' || format === 'dxf-views') {
         // r.data is a base64 zip (STL per body, or top/front/side DXFs)
         const bytes = Uint8Array.from(atob(r.data), (c) => c.charCodeAt(0));
@@ -744,6 +772,14 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
             style={{ ...btn, background: 'none', color: palette.textSecondary,
                      border: `1px solid ${palette.border}` }}>
             Process
+          </button>
+          <input ref={stepInput} type="file" accept={STEP_ACCEPT} style={{ display: 'none' }}
+            onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void importStep(f); }} />
+          <button onClick={() => stepInput.current?.click()} disabled={importing || status === 'building'}
+            title="Start this part from a STEP file (.step/.stp): replaces the script with one that imports it"
+            style={{ ...btn, background: 'none', color: palette.textSecondary,
+                     border: `1px solid ${palette.border}`, opacity: importing ? 0.5 : 1 }}>
+            {importing ? 'Importing…' : 'Import STEP'}
           </button>
           <button onClick={() => setShowVersions(true)} title="Browse and restore saved versions"
             style={{ ...btn, background: 'none', color: palette.textSecondary,

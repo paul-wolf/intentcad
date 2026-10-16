@@ -5,10 +5,13 @@ building it (build123d), so these cover the prompt/validate/retry logic without
 network — but do exercise the engine.
 """
 
+from unittest import mock
+
 from django.test import SimpleTestCase
 
 from modeling import llm_models
-from modeling.assistant import AssistantError, edit_script
+from modeling.assistant import AssistantError, edit_script, geometry_summary
+from modeling.engine import run_script
 
 
 def _fake(*outs):
@@ -136,3 +139,100 @@ class EditTests(SimpleTestCase):
                              {"role": "assistant", "text": "Added a boss."}], llm=llm)
         self.assertIn("RECENT CONVERSATION", seen["user"])
         self.assertIn("add a boss", seen["user"])
+
+
+def _plane(i, center, normal, area=100.0):
+    return {"index": i, "kind": "plane", "area": area, "center": center, "normal": normal, "radius": None}
+
+
+class GeometrySummaryTests(SimpleTestCase):
+    def test_groups_planes_by_normal_with_their_positions(self):
+        faces = [
+            _plane(0, [0, 0, 10], [0, 0, 1], 800), _plane(1, [5, 0, 4], [0, 0, 1], 50),
+            _plane(2, [0, 0, 0], [0, 0, -1], 800), _plane(3, [20, 0, 5], [1, 0, 0], 200),
+            _plane(4, [0, 7.07, 7.07], [0, 0.7071, 0.7071], 30),
+        ]
+        s = geometry_summary(faces, {"bbox_min": [-20, -15, 0], "bbox_max": [20, 15, 10]})
+        self.assertIn("bbox: min (-20, -15, 0) max (20, 15, 10)  size (40, 30, 10)", s)
+        self.assertIn("5 faces: 5 planes", s.replace("5 plane", "5 planes"))
+        self.assertIn("normal +Z: 2 faces, area 850", s)
+        self.assertIn("z=10: 1 face, area 800 [#0]", s)
+        self.assertIn("z=4: 1 face, area 50 [#1]", s)
+        self.assertIn("normal -Z", s)
+        self.assertIn("z=0: 1 face", s)             # a -Z face reports its z, not -z
+        self.assertIn("x=20: 1 face", s)
+        self.assertIn("d=10: 1 face", s)            # slanted: offset along the normal
+        # largest normal group first
+        self.assertLess(s.index("normal +Z"), s.index("normal +X"))
+
+    def test_describes_holes_and_bosses(self):
+        r = run_script("part = Box(40, 30, 10) - Pos(8, 4, 0) * Cylinder(3, 20) "
+                       "+ Pos(-10, 0, 7) * Cylinder(4, 4)")
+        s = geometry_summary(r["faces"], r["metrics"])
+        self.assertIn("r=3 (dia 6) axis (0, 0, 1) center (8, 4, 0) hole, ~10 long", s)
+        self.assertIn("r=4 (dia 8) axis (0, 0, 1) center (-10, 0, 7) boss/round, ~4 long", s)
+
+    def test_is_capped(self):
+        faces = [_plane(i, [0, 0, float(i)], [0, 0, 1]) for i in range(200)]
+        s = geometry_summary(faces, max_lines=60)
+        self.assertLessEqual(len(s.splitlines()), 60)
+        self.assertIn("more lines omitted", s)
+
+
+class ImportedGeometryEditTests(SimpleTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        import hashlib
+        cls.step = run_script("part = Box(30, 20, 10)", export=["step"])["exports"]["step"].encode()
+        cls.sha = hashlib.sha256(cls.step).hexdigest()
+        cls.code = f'P = dict()\npart = import_step(ASSETS["{cls.sha}"])'
+
+    def setUp(self):
+        llm_models._cache.update(at=9e12, value={
+            "models": llm_models.select([
+                {"id": "claude-opus-5", "display_name": "Claude Opus 5", "created_at": "2026-07-24"},
+            ]), "default": "claude-opus-5", "source": "live"})
+        p = mock.patch("modeling.engine.load_assets", return_value={self.sha: self.step})
+        p.start()
+        self.addCleanup(p.stop)
+        q = mock.patch("modeling.assistant.load_assets", return_value={self.sha: self.step})
+        q.start()
+        self.addCleanup(q.stop)
+
+    def tearDown(self):
+        llm_models._cache.update(at=0.0, value=None)
+
+    def test_the_prompt_gets_a_geometry_summary_and_the_rules(self):
+        seen = {}
+        new = self.code.replace("dict()", "dict(d=4)") + ' - Cylinder(P["d"] / 2, 30)'
+
+        def llm(system, user, tools):
+            seen.update(system=system, user=user)
+            return {"code": new, "note": "hole"}
+        r = edit_script(self.code, "add a hole", document_id="doc", llm=llm)
+        self.assertEqual(r["code"], new)
+        self.assertIn("GEOMETRY SUMMARY", seen["user"])
+        self.assertIn("6 faces: 6 planes", seen["user"].replace("6 plane", "6 planes"))
+        self.assertIn("z=5: 1 face, area 600", seen["user"])
+        self.assertIn("Never invent, change or remove an ASSETS[...]", seen["system"])
+
+    def test_no_summary_without_assets(self):
+        seen = {}
+
+        def llm(system, user, tools):
+            seen["user"] = user
+            return {"code": "part = Box(2,2,2)", "note": "ok"}
+        edit_script("part = Box(1,1,1)", "bigger", llm=llm)
+        self.assertNotIn("GEOMETRY SUMMARY", seen["user"])
+
+    def test_an_edit_that_drops_the_import_is_retried(self):
+        seen = []
+
+        def llm(system, user, tools):
+            seen.append(user)
+            return ({"code": "part = Box(30, 20, 10)", "note": "rebuilt"} if len(seen) == 1
+                    else {"code": self.code + " - Cylinder(2, 30)", "note": "hole"})
+        r = edit_script(self.code, "add a hole", document_id="doc", llm=llm)
+        self.assertIn(self.sha, r["code"])
+        self.assertIn("no longer imports", seen[1])

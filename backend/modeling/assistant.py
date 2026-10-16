@@ -10,9 +10,10 @@ is testable with a fake llm.
 from __future__ import annotations
 
 import os
+from collections import defaultdict
 from typing import Callable
 
-from .engine import EngineError, run_script
+from .engine import EngineError, asset_refs, load_assets, run_script
 from .paramedit import ParamError, set_params
 from .llm_models import is_known, list_models, price_for
 
@@ -31,6 +32,84 @@ LLM_RETRIES = int(os.environ.get("LLM_RETRIES", "1"))
 
 class AssistantError(RuntimeError):
     """The edit failed (no key, model error, or couldn't produce a building script)."""
+
+
+def _fmt(v: float) -> str:
+    v = round(v, 2)
+    return f"{v:g}" if v != 0 else "0"   # no "-0"
+
+
+def _vec(v) -> str:
+    return "(" + ", ".join(_fmt(c) for c in v) + ")"
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+_AXES = {(1.0, 0.0, 0.0): "+X", (-1.0, 0.0, 0.0): "-X", (0.0, 1.0, 0.0): "+Y",
+         (0.0, -1.0, 0.0): "-Y", (0.0, 0.0, 1.0): "+Z", (0.0, 0.0, -1.0): "-Z"}
+
+
+def geometry_summary(faces: list[dict], metrics: dict | None = None, max_lines: int = 60) -> str:
+    """A compact text description of a build's face inventory (the runner's
+    `faces`): bbox and face count, planar faces grouped by normal with their
+    offsets along it, and cylinders with radius/axis/center. For the model to
+    write selectors against geometry it can't read from the script (an imported
+    STEP). Capped at about `max_lines`; the biggest features come first."""
+    lines = []
+    if metrics and metrics.get("bbox_min") and metrics.get("bbox_max"):
+        lo, hi = metrics["bbox_min"], metrics["bbox_max"]
+        lines.append(f"bbox: min {_vec(lo)} max {_vec(hi)}  "
+                     f"size {_vec([hi[i] - lo[i] for i in range(3)])}")
+    kinds: dict[str, int] = defaultdict(int)
+    for f in faces:
+        kinds[f.get("kind", "?")] += 1
+    lines.append(f"{len(faces)} faces: " + ", ".join(f"{n} {k}" for k, n in sorted(kinds.items(), key=lambda kv: -kv[1])))
+
+    # planes: by normal, then by offset along it (d = center . normal)
+    planes: dict[tuple, dict[float, list[dict]]] = defaultdict(lambda: defaultdict(list))
+    for f in faces:
+        if f.get("kind") != "plane":
+            continue
+        n = tuple(round(c, 3) + 0.0 for c in f["normal"])
+        d = round(sum(f["center"][i] * f["normal"][i] for i in range(3)), 2)
+        planes[n][d].append(f)
+    body = []
+    if planes:
+        body.append("PLANAR faces by outward normal; each at a position along it "
+                    "(x/y/z = that coordinate, d = signed offset along a slanted normal):")
+        groups = sorted(planes.items(), key=lambda kv: -sum(f["area"] for fs in kv[1].values() for f in fs))
+        for n, by_d in groups:
+            fs = [f for v in by_d.values() for f in v]
+            name = _AXES.get(n)
+            body.append(f"  normal {name or _vec(n)}: {_plural(len(fs), 'face')}, "
+                        f"area {_fmt(sum(f['area'] for f in fs))}")
+            sign = -1 if name and name[0] == "-" else 1
+            for d, at in sorted(by_d.items(), key=lambda kv: -sign * kv[0]):   # highest first
+                # along an axis, report the coordinate itself (what filter_by_position takes)
+                where = f"{name[1].lower()}={_fmt(sign * d)}" if name else f"d={_fmt(d)}"
+                idx = ",".join(str(f["index"]) for f in at[:6]) + ("…" if len(at) > 6 else "")
+                body.append(f"    {where}: {_plural(len(at), 'face')}, "
+                            f"area {_fmt(sum(f['area'] for f in at))} [#{idx}]")
+    cyls = [f for f in faces if f.get("kind") == "cylinder" and f.get("radius")]
+    if cyls:
+        body.append("CYLINDRICAL faces (holes/bosses/rounds):")
+        for f in sorted(cyls, key=lambda f: (-f["radius"], -f["area"])):
+            axis = f.get("axis")
+            center = f.get("axis_point") or f["center"]
+            # a hole's surface normal points at its axis; a boss's points away
+            to_axis = [center[i] - f["center"][i] for i in range(3)]
+            hole = sum(to_axis[i] * f["normal"][i] for i in range(3)) > 0
+            size = f.get("size") or [0.0, 0.0, 0.0]
+            length = sum(size[i] * abs(axis[i]) for i in range(3)) if axis else max(size)
+            body.append(f"  r={_fmt(f['radius'])} (dia {_fmt(2 * f['radius'])}) "
+                        f"axis {_vec(axis) if axis else '?'} center {_vec(center)} "
+                        f"{'hole' if hole else 'boss/round'}, ~{_fmt(length)} long [#{f['index']}]")
+    room = max_lines - len(lines)
+    if len(body) > room:
+        body = body[:room - 1] + [f"  … {len(body) - room + 1} more lines omitted"]
+    return "\n".join(lines + body)
 
 
 def _system(production: str = "") -> str:
@@ -70,6 +149,13 @@ def _system(production: str = "") -> str:
         "formal joint system (RigidJoint, RevoluteJoint, LinearJoint, "
         "CylindricalJoint, BallJoint) with .connect_to(); use it if the user asks, "
         "but the param-driven transform is usually simpler and stays tweakable.\n\n"
+        "IMPORTED GEOMETRY: a line like part = import_step(ASSETS[\"<sha256>\"]) "
+        "loads a file the user uploaded. Never invent, change or remove an "
+        "ASSETS[...] reference — keep each exactly as written. The imported body "
+        "has no params; put the dimensions of any feature you add to it in P as "
+        "usual. To target imported geometry, write selectors from the GEOMETRY "
+        "SUMMARY (face normals, plane offsets, cylinder axes/radii) — e.g. "
+        "part.faces().filter_by(Axis.Z).sort_by(Axis.Z)[-1] for the top face.\n\n"
         "RECENT CONVERSATION (if shown) is prior turns with the user; use it to "
         "resolve references like 'that hole' or 'make it bigger'. When the "
         "instruction is genuinely ambiguous or you lack information you need "
@@ -179,6 +265,7 @@ def edit_script(
     model: str | None = None,
     production: str = "",
     build_error: str = "",
+    document_id: str | None = None,
     *,
     llm: Callable[[str, str, list[dict]], dict] | None = None,
 ) -> dict:
@@ -188,7 +275,9 @@ def edit_script(
     across turns resolve. `model` picks which LLM (defaults to the newest Opus;
     only models the Models API currently offers are honoured). `build_error` is
     the error the current `code` fails with, if any — the model is asked to
-    repair it as part of the edit. Returns {kind: "edit", code, note, tokens…} for an edit
+    repair it as part of the edit. `document_id` resolves the uploaded files
+    the script imports (ASSETS[...]); for such a script the prompt also gets a
+    GEOMETRY SUMMARY of the current build. Returns {kind: "edit", code, note, tokens…} for an edit
     (validated to build, one corrective retry) or {kind: "question", question,
     tokens…} when the model asks for clarification."""
     instruction = (instruction or "").strip()
@@ -196,6 +285,16 @@ def edit_script(
         raise AssistantError("empty instruction")
     model = model if model and is_known(model) else list_models()["default"]
     llm = llm or (lambda s, u, t: _anthropic_call(s, u, t, model=model))
+
+    # an imported file's geometry isn't readable from the script: describe it
+    assets = load_assets(code, document_id) if asset_refs(code) else {}
+    summary = ""
+    if assets:
+        try:
+            cur = run_script(code, assets=assets)
+            summary = geometry_summary(cur.get("faces", []), cur.get("metrics"))
+        except EngineError:
+            pass    # the current script doesn't build: no inventory to describe
 
     def prompt(extra: str = "") -> str:
         sel = f"SELECTION: {context}\n\n" if context.strip() else ""
@@ -208,9 +307,11 @@ def edit_script(
                 who = "USER" if h.get("role") == "user" else "ASSISTANT"
                 turns.append(f"{who}: {h.get('text', '')}")
             convo = "RECENT CONVERSATION:\n" + "\n".join(turns) + "\n\n"
+        geom = (f"GEOMETRY SUMMARY (of the current build):\n{summary}\n\n"
+                if summary else "")
         return (
             f"CURRENT SCRIPT:\n```python\n{code}\n```\n\n"
-            f"{convo}{berr}{sel}INSTRUCTION: {instruction}\n{extra}"
+            f"{geom}{convo}{berr}{sel}INSTRUCTION: {instruction}\n{extra}"
         )
 
     tok_in = tok_out = 0
@@ -231,7 +332,12 @@ def edit_script(
         }
 
     def validate(script: str) -> None:
-        r = run_script(script)  # raises EngineError if nothing builds
+        # an uploaded file must survive the edit (an invented one fails to resolve)
+        dropped = sorted(asset_refs(code) - asset_refs(script))
+        if dropped:
+            raise EngineError(f'the script no longer imports ASSETS["{dropped[0]}"]; '
+                              "keep every ASSETS[...] line exactly as it was")
+        r = run_script(script, document_id=document_id)  # raises EngineError if nothing builds
         if r.get("warning"):    # an operation failed partway — treat as a build error
             raise EngineError(r["warning"], fix=r.get("fix"))
 

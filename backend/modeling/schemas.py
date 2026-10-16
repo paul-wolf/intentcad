@@ -188,6 +188,7 @@ class ChatResponse(Schema):
 class RunRequest(Schema):
     """Execute a build123d script (the model is the script)."""
     code: str
+    document_id: str = ""   # whose uploaded files ASSETS["<sha256>"] resolves to
 
 
 class RunMetrics(Schema):
@@ -209,6 +210,8 @@ class RunFace(Schema):
     normal: list[float]
     radius: float | None = None   # radius of a cylindrical face (a hole/boss), else null
     size: list[float] = []        # bounding-box extents [dx, dy, dz] of the face
+    axis: list[float] | None = None        # a cylinder's axis direction, else null
+    axis_point: list[float] | None = None  # the point on that axis level with the face
 
 
 class RunEdge(Schema):
@@ -233,6 +236,7 @@ class RunResponse(Schema):
 class ExportRequest(Schema):
     code: str
     format: str        # 'stl' | 'step' | 'stl-parts' | 'dxf'
+    document_id: str = ""
 
 
 class ExportResponse(Schema):
@@ -251,6 +255,7 @@ class SetParamsResponse(Schema):
 
 class SensitivityRequest(Schema):
     code: str
+    document_id: str = ""
 
 
 class DimInfo(Schema):
@@ -290,7 +295,7 @@ class EditRequest(Schema):
     code: str
     instruction: str
     context: str = ""              # a description of the selected face(s)/edge
-    document_id: str = ""          # to tally spend per document
+    document_id: str = ""          # to tally spend per document + resolve its uploaded files
     history: list[ChatTurn] = []   # recent conversation turns
     model: str = ""                # optional LLM override (else the default)
     production: str = ""           # target production process (e.g. FDM print) — standing context

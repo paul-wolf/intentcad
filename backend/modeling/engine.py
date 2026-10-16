@@ -16,8 +16,10 @@ worker (gVisor / Fargate). Force the plain path with MODELING_SANDBOX=off.
 from __future__ import annotations
 
 import atexit
+import base64
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -91,6 +93,7 @@ class _Worker:
 
     def __init__(self, proc: subprocess.Popen):
         self.proc = proc
+        self.assets: set[str] = set()      # asset hashes this worker has on disk
         self._err: list[str] = []
         t = threading.Thread(target=self._drain, daemon=True)
         t.start()
@@ -155,38 +158,92 @@ def _read_line(proc: subprocess.Popen, timeout: float) -> str | None:
     return out.get("line", "")
 
 
-def run_script(code: str, *, export: list[str] | None = None, timeout: float = 60.0) -> dict:
+# An uploaded file is referenced by content hash: ASSETS["<sha256>"] is its
+# local path inside the worker. The hash in the script text is what keeps a
+# build a pure function of the script (the frontend's build cache keys on it).
+ASSET_REF = re.compile(r"""ASSETS\[\s*["']([0-9a-f]{64})["']\s*\]""")
+
+
+def asset_refs(code: str) -> set[str]:
+    """The asset hashes `code` references."""
+    return set(ASSET_REF.findall(code))
+
+
+def load_assets(code: str, document_id: str | None) -> dict[str, bytes]:
+    """The bytes of every asset `code` references, from that document only.
+    Raises EngineError naming a hash the document doesn't have."""
+    refs = asset_refs(code)
+    if not refs:
+        return {}
+    if not document_id:
+        raise EngineError("this script uses an uploaded file (ASSETS[...]) but no document was given")
+    from documents.models import DocumentAsset  # the engine is otherwise Django-free
+
+    rows = dict(DocumentAsset.objects.filter(document_id=document_id, sha256__in=refs)
+                .values_list("sha256", "data"))
+    missing = sorted(refs - rows.keys())
+    if missing:
+        raise EngineError(f"uploaded file ASSETS[\"{missing[0]}\"] is not part of this document")
+    return {sha: bytes(data) for sha, data in rows.items()}
+
+
+def run_script(code: str, *, export: list[str] | None = None, timeout: float = 60.0,
+               document_id: str | None = None, assets: dict[str, bytes] | None = None) -> dict:
     """Execute `code` (a build123d script that binds `part`) and return
     {mesh, faces, edges, params, metrics, exports}. `export` requests STEP/STL
     text. Raises EngineError with the script's error message on failure.
 
+    Uploaded files the script references (ASSETS["<sha256>"]) are loaded from
+    `document_id`'s assets, or taken from `assets` ({sha256: bytes}) when the
+    caller already has them (sensitivity rebuilds one script many times).
+
     Runs on the warm worker; serialized by a lock. On timeout or crash the worker
     is discarded so the next call gets a fresh one."""
-    payload = json.dumps({"code": code, "export": export or []})
-    with _worker_lock:
-        global _worker
-        if _worker is None or _worker.proc.poll() is not None:
-            _worker = _start_worker()
-        w = _worker
-        try:
-            w.proc.stdin.write(payload + "\n")
-            w.proc.stdin.flush()
-        except (BrokenPipeError, OSError) as exc:
-            _worker = None
-            raise EngineError("engine worker crashed") from exc
-        line = _read_line(w.proc, timeout)
-        if line is None:                        # overran the timeout — kill it
-            _worker = None
-            w.proc.kill()
-            raise EngineError(f"build timed out after {timeout:.0f}s")
-        if line == "":                          # EOF — the worker died mid-build
-            _worker = None
-            raise EngineError(w.stderr_tail() or "engine worker crashed")
+    refs = asset_refs(code)
+    if assets is None:
+        assets = load_assets(code, document_id)
+    missing = sorted(refs - assets.keys())
+    if missing:
+        raise EngineError(f"uploaded file ASSETS[\"{missing[0]}\"] is not part of this document")
 
-    try:
-        result = json.loads(line)
-    except json.JSONDecodeError as exc:
-        raise EngineError("engine returned malformed output") from exc
+    for attempt in range(2):
+        with _worker_lock:
+            global _worker
+            if _worker is None or _worker.proc.poll() is not None:
+                _worker = _start_worker()
+            w = _worker
+            # send only the files this worker doesn't hold yet (a new worker holds none)
+            payload = json.dumps({
+                "code": code, "export": export or [],
+                "assets": {sha: base64.b64encode(assets[sha]).decode()
+                           for sha in sorted(refs) if sha not in w.assets},
+                "asset_refs": sorted(refs),
+            })
+            try:
+                w.proc.stdin.write(payload + "\n")
+                w.proc.stdin.flush()
+            except (BrokenPipeError, OSError) as exc:
+                _worker = None
+                raise EngineError("engine worker crashed") from exc
+            line = _read_line(w.proc, timeout)
+            if line is None:                        # overran the timeout — kill it
+                _worker = None
+                w.proc.kill()
+                raise EngineError(f"build timed out after {timeout:.0f}s")
+            if line == "":                          # EOF — the worker died mid-build
+                _worker = None
+                raise EngineError(w.stderr_tail() or "engine worker crashed")
+
+        try:
+            result = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise EngineError("engine returned malformed output") from exc
+        if result.get("missing_assets") and attempt == 0:
+            # its copy is gone (tmp cleaned): forget it and send the bytes again
+            w.assets.difference_update(result["missing_assets"])
+            continue
+        w.assets.update(refs)                       # staged before the script ran
+        break
     if not result.get("ok"):
         raise EngineError(result.get("error", "build failed"), fix=result.get("fix"),
                           params=result.get("params"))

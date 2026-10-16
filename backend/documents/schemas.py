@@ -87,3 +87,26 @@ class DocumentListOut(Schema):
         data = obj.data if isinstance(obj.data, dict) else {}
         thumb = data.get("thumbnail")
         return thumb if isinstance(thumb, str) and thumb.startswith("data:") else None
+
+
+class AssetBBox(Schema):
+    min: list[float]   # [x, y, z]
+    max: list[float]
+
+
+class AssetOut(Schema):
+    """An uploaded STEP file, as placed by the import script (see api.IMPORT_SCRIPT)."""
+    sha256: str
+    filename: str
+    size: int
+    bbox: AssetBBox
+    face_count: int
+
+
+class AssetListOut(Schema):
+    """Metadata for one uploaded file (no bytes)."""
+    sha256: str
+    filename: str
+    content_type: str
+    size: int
+    created_at: datetime

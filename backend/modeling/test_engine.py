@@ -1,5 +1,6 @@
 """Tests for the build123d execution engine (the new modeler core)."""
 
+import json
 import os
 from unittest import mock
 
@@ -161,3 +162,96 @@ class EngineTests(SimpleTestCase):
             self.assertNotIn("ANTHROPIC_KEY", env)
             self.assertNotIn("DB_PASSWORD", env)
             self.assertIn("PATH", env)
+
+
+def _box_step() -> bytes:
+    r = run_script("part = Box(30, 20, 10)", export=["step"])
+    return r["exports"]["step"].encode()
+
+
+class AssetEngineTests(SimpleTestCase):
+    """Scripts import uploaded files by hash: ASSETS["<sha256>"] is a local path."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        import hashlib
+        cls.step = _box_step()
+        cls.sha = hashlib.sha256(cls.step).hexdigest()
+        cls.code = f'part = import_step(ASSETS["{cls.sha}"])'
+
+    def test_run_script_imports_the_asset(self):
+        r = run_script(self.code, assets={self.sha: self.step})
+        self.assertEqual(len(r["faces"]), 6)
+        self.assertAlmostEqual(r["metrics"]["volume"], 6000, places=3)
+
+    def test_a_compound_of_several_solids_imports_and_exports_per_solid(self):
+        import base64
+        import hashlib
+        import io
+        import zipfile
+        two = run_script("part = Compound([Box(10, 10, 10), Pos(30, 0, 0) * Cylinder(5, 10)])",
+                         export=["step"])["exports"]["step"].encode()
+        sha = hashlib.sha256(two).hexdigest()
+        r = run_script(f'part = import_step(ASSETS["{sha}"])', export=["stl-parts"], assets={sha: two})
+        zf = zipfile.ZipFile(io.BytesIO(base64.b64decode(r["exports"]["stl-parts"])))
+        self.assertEqual(len(zf.namelist()), 2)
+
+    def test_a_missing_hash_is_an_error_naming_it(self):
+        with self.assertRaisesRegex(EngineError, self.sha):
+            run_script(self.code, assets={})
+
+    def test_without_a_document_it_is_an_error(self):
+        with self.assertRaisesRegex(EngineError, "no document"):
+            run_script(self.code)
+
+    def test_the_worker_is_sent_each_file_once(self):
+        from modeling import engine
+
+        run_script(self.code, assets={self.sha: self.step})
+        sent = []
+        w = engine._worker
+        real = w.proc.stdin
+
+        class Spy:
+            def write(self, s):
+                sent.append(json.loads(s))
+                return real.write(s)
+
+            def flush(self):
+                real.flush()
+
+        w.proc.stdin = Spy()
+        try:
+            run_script(self.code, assets={self.sha: self.step})
+        finally:
+            w.proc.stdin = real
+        self.assertEqual(sent[0]["assets"], {})              # it already holds it
+        self.assertEqual(sent[0]["asset_refs"], [self.sha])
+
+    def test_a_file_gone_from_the_worker_is_sent_again(self):
+        import tempfile
+        from modeling import engine
+
+        run_script(self.code, assets={self.sha: self.step})
+        os.remove(os.path.join(tempfile.gettempdir(), "assets", f"{self.sha}.step"))
+        r = run_script(self.code, assets={self.sha: self.step})   # recovers, no error
+        self.assertEqual(len(r["faces"]), 6)
+        self.assertIn(self.sha, engine._worker.assets)
+
+    def test_a_new_worker_holds_no_files(self):
+        from modeling import engine
+
+        run_script(self.code, assets={self.sha: self.step})
+        engine._shutdown_worker()
+        run_script("part = Box(1, 1, 1)")
+        self.assertEqual(engine._worker.assets, set())
+
+
+class WorkerProtocolTests(SimpleTestCase):
+    def test_output_on_stdout_does_not_desync_the_worker(self):
+        # a script's print() and OCP's native STEP-reader chatter both write to
+        # fd 1; the next build must still get its own result
+        run_script("print('hello')\nimport os\nos.write(1, b'native\\n')\npart = Box(1, 1, 1)")
+        r = run_script("part = Box(2, 2, 2)")
+        self.assertAlmostEqual(r["metrics"]["volume"], 8.0, places=6)
