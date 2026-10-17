@@ -7,12 +7,17 @@ import { DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
 import type { ChatMessage } from '@/types/document';
 import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim, type PlacedHandle } from '@/build/webglViewer';
 import { handleOptions, add, scale, dot, len, sub, type HandleOption, type Vec3 } from '@/build/dragHandle';
+import { VIEW_KEYS, type StandardView } from '@/build/viewOrient';
 import { highlightPython, DARK_SYNTAX, LIGHT_SYNTAX } from '@/build/pyHighlight';
 import { downloadTextFile } from '@/export/download';
 import { buildKey, getCachedBuild, putCachedBuild, putCachedSens } from '@/build/buildCache';
 import { importScript, importLabel, STEP_ACCEPT } from '@/build/importStep';
 import { PartVersionsPanel } from './PartVersionsPanel';
 import { PartHelpModal } from './PartHelpModal';
+
+// the view buttons, in key order (1–6, then 0)
+const VIEW_BUTTONS = (['1', '2', '3', '4', '5', '6', '0'] as const)
+  .map((k) => [k, VIEW_KEYS[k]!] as [string, StandardView]);
 
 interface Props {
   onClose: () => void;
@@ -88,6 +93,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   // each frame (no React re-render on orbit)
   const gLine = useRef<(SVGLineElement | null)[]>([]);
   const gLabel = useRef<(SVGTextElement | null)[]>([]);
+  const gHit = useRef<(SVGCircleElement | null)[]>([]);   // click targets over the labels
   const onAxes = (dirs: AxisDir[]) => {
     const C = 34, R = 22;
     dirs.forEach((d, i) => {
@@ -101,6 +107,8 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
         lb.setAttribute('x', `${C + d.x * (R + 8)}`); lb.setAttribute('y', `${C - d.y * (R + 8) + 4}`);
         lb.setAttribute('opacity', op);
       }
+      const hit = gHit.current[i];
+      if (hit) { hit.setAttribute('cx', `${C + d.x * (R + 8)}`); hit.setAttribute('cy', `${C - d.y * (R + 8)}`); }
     });
   };
 
@@ -640,6 +648,44 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // standard views: 1–6 front/back/left/right/top/bottom, 0 iso; N looks
+  // straight at the (last) selected face; O toggles orthographic. Capture
+  // phase + stopPropagation: when this opens over the sketch editor, its
+  // tools mustn't also see the key (N there toggles parallel).
+  const [ortho, setOrtho] = useState(false);
+  const [viewHint, setViewHint] = useState('');
+  const viewHintTimer = useRef(0);
+  const viewBtn: CSSProperties = {
+    background: 'rgba(0,0,0,0.25)', border: `1px solid ${palette.border}`, borderRadius: '4px',
+    color: palette.textSecondary, fontSize: '11px', padding: '2px 7px', cursor: 'pointer', lineHeight: 1.4,
+  };
+  // N / the Normal button: the last face clicked
+  const lookAtSelection = () => {
+    const s = selRef.current;
+    const f = s.length ? resRef.current?.faces.find((x) => x.index === s[s.length - 1]) : undefined;
+    if (f) { viewerRef.current?.lookAlong(f.normal); return; }
+    setViewHint('Select a face, then press N');
+    window.clearTimeout(viewHintTimer.current);
+    viewHintTimer.current = window.setTimeout(() => setViewHint(''), 2500);
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.target instanceof HTMLElement && e.target !== document.body) return;
+      const v = viewerRef.current;
+      if (!v) return;
+      const view = VIEW_KEYS[e.key];
+      if (view) v.setView(view);
+      else if (e.key === 'n' || e.key === 'N') lookAtSelection();
+      else if (e.key === 'o' || e.key === 'O') setOrtho(v.toggleOrtho());
+      else return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => { window.removeEventListener('keydown', onKey, true); window.clearTimeout(viewHintTimer.current); };
+  }, []);
+
   // after a drop, build() reselects the face found where the drag put it
   const reselectRef = useRef<{ param: string; value: number; center: Vec3; normal: Vec3; tol: number } | null>(null);
   const onHandleDrop = (value: number) => {
@@ -1019,8 +1065,9 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
                 )}
               </div>
             )}
-            {/* orientation gizmo (bottom-left): X red, Y green, Z blue from origin */}
-            <svg width={68} height={68} style={{ position: 'absolute', left: 10, bottom: 10, pointerEvents: 'none' }}>
+            {/* orientation gizmo (bottom-left): X red, Y green, Z blue from origin.
+                Click a label to view from that axis; again for the opposite side. */}
+            <svg width={68} height={68} style={{ position: 'absolute', left: 10, bottom: 10, pointerEvents: 'none', overflow: 'visible' }}>
               <circle cx={34} cy={34} r={2.5} fill={palette.textSecondary} />
               {(['X', 'Y', 'Z'] as const).map((n, i) => (
                 <g key={n}>
@@ -1029,9 +1076,36 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
                   <text ref={(el) => { gLabel.current[i] = el; }} x={34} y={34}
                     fill={['#d95555', '#5fb36a', '#6a8cd9'][i]} fontSize={12} fontWeight={700}
                     textAnchor="middle" style={{ paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.5)', strokeWidth: 3 }}>{n}</text>
+                  <circle ref={(el) => { gHit.current[i] = el; }} cx={34} cy={34} r={9} fill="transparent"
+                    style={{ pointerEvents: 'all', cursor: 'pointer' }} onClick={() => viewerRef.current?.viewAxis(n)}>
+                    <title>{`View from +${n} (click again for −${n})`}</title>
+                  </circle>
                 </g>
               ))}
             </svg>
+            {/* view buttons (keys 1–6, 0, N, O do the same) */}
+            <div style={{ position: 'absolute', left: 84, right: 130, bottom: 12, display: 'flex', alignItems: 'center',
+                          flexWrap: 'wrap', gap: '4px', fontSize: '11px', color: palette.textSecondary }}
+                 onMouseDown={(e) => e.preventDefault()}>{/* don't take focus: keys keep working */}
+              {VIEW_BUTTONS.map(([key, view]) => (
+                <button key={view} style={viewBtn} title={`${view[0]!.toUpperCase()}${view.slice(1)} view (${key})`}
+                        onClick={() => viewerRef.current?.setView(view)}>
+                  {view === 'iso' ? 'Iso' : `${view[0]!.toUpperCase()}${view.slice(1)}`}
+                </button>
+              ))}
+              <button style={{ ...viewBtn, marginLeft: '6px', opacity: sel.length ? 1 : 0.45,
+                               cursor: sel.length ? 'pointer' : 'default' }}
+                      disabled={!sel.length} onClick={lookAtSelection}
+                      title={sel.length ? 'Look straight at the selected face (N)' : 'Select a face first (then N or this button)'}>
+                Normal
+              </button>
+              <button style={{ ...viewBtn, marginLeft: '6px', ...(ortho ? { color: palette.accent, borderColor: palette.accent } : {}) }}
+                      onClick={() => { const v = viewerRef.current; if (v) setOrtho(v.toggleOrtho()); }}
+                      title={ortho ? 'Orthographic: click for perspective (O)' : 'Perspective: click for orthographic (O)'}>
+                {ortho ? 'Ortho' : 'Persp'}
+              </button>
+              {viewHint && <span style={{ color: palette.text, marginLeft: '6px', pointerEvents: 'none' }}>{viewHint}</span>}
+            </div>
             {/* dimension overlay (hold Opt/Alt): each param drawn on its geometry */}
             <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%',
                           pointerEvents: 'none', overflow: 'hidden' }}>

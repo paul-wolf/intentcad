@@ -34,6 +34,16 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
     ],
   },
   {
+    title: 'View',
+    items: [
+      ['Drag · scroll', 'Drag to orbit (the part turns about its vertical Z axis), scroll to zoom.'],
+      ['Front … Iso', 'The buttons along the bottom of the 3D view. Keys 1–6 and 0 do the same, in that order.'],
+      ['Normal', 'Look straight at the selected face (key N).'],
+      ['Persp / Ortho', 'Perspective or orthographic — no perspective, for checking alignment (key O).'],
+      ['Click X / Y / Z', 'In the axes at bottom left: view from that axis. Click again for the opposite side.'],
+    ],
+  },
+  {
     title: 'Reading the footer',
     items: [
       ['rounded N edges', 'Edges rounded, plus any skipped (too tight to round — "show skipped" highlights them) '

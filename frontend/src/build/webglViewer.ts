@@ -3,11 +3,15 @@
  * (flat positions + per-face normals, as returned by /api/build/).
  *
  * Deliberately not three.js — this only needs to draw one static solid with
- * orbit + zoom. Column-major 4x4 math, two light directions for winding-
+ * orbit + zoom, perspective or orthographic. Column-major 4x4 math, two light directions for winding-
  * independent shading, render-on-demand.
  */
 
 import { add, scale, faceMotion, dragAmount, snapToStep, snapToPlane, type Vec3 } from './dragHandle';
+import {
+  lookFrom, axisView, orbit, slerp, quatToMat4, easeInOutCubic, VIEW_DIRS,
+  type Quat, type StandardView,
+} from './viewOrient';
 
 export interface ViewerMesh {
   positions: number[];
@@ -34,6 +38,17 @@ function perspective(fovy: number, aspect: number, near: number, far: number): M
   return m;
 }
 
+/** Orthographic projection of a view-space box (half extents, near/far). */
+function ortho(halfW: number, halfH: number, near: number, far: number): Mat4 {
+  const m = new Float32Array(16);
+  m[0] = 1 / halfW;
+  m[5] = 1 / halfH;
+  m[10] = -2 / (far - near);
+  m[14] = -(far + near) / (far - near);
+  m[15] = 1;
+  return m;
+}
+
 function multiply(a: Mat4, b: Mat4): Mat4 {
   const out = new Float32Array(16);
   for (let c = 0; c < 4; c++) {
@@ -44,20 +59,6 @@ function multiply(a: Mat4, b: Mat4): Mat4 {
     }
   }
   return out;
-}
-
-function rotationX(rad: number): Mat4 {
-  const c = Math.cos(rad), s = Math.sin(rad);
-  const m = identity();
-  m[5] = c; m[6] = s; m[9] = -s; m[10] = c;
-  return m;
-}
-
-function rotationY(rad: number): Mat4 {
-  const c = Math.cos(rad), s = Math.sin(rad);
-  const m = identity();
-  m[0] = c; m[2] = -s; m[8] = s; m[10] = c;
-  return m;
 }
 
 function translation(x: number, y: number, z: number): Mat4 {
@@ -184,6 +185,15 @@ export interface Viewer {
   /** Capture the current view as a transparent PNG data URL of just the solid
    *  (no grid/overlays) — for a part thumbnail. Returns '' if nothing built. */
   capture(w?: number, h?: number): string;
+  /** Animate to a standard view (front, back, …, iso). */
+  setView(view: StandardView): void;
+  /** Animate to look straight at a face with this outward normal. */
+  lookAlong(normal: Vec3): void;
+  /** Animate to look from the + side of a world axis, or the − side if
+   *  already there (the gizmo's axis labels). */
+  viewAxis(axis: 'X' | 'Y' | 'Z'): void;
+  /** Switch perspective ↔ orthographic; returns true if now orthographic. */
+  toggleOrtho(): boolean;
   dispose(): void;
 }
 
@@ -269,9 +279,12 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   gl.depthFunc(gl.LEQUAL);  // so re-drawing a selected face's own triangles passes
   gl.clearColor(0, 0, 0, 0);
 
-  // orbit state
-  let azimuth = 0.6;
-  let elevation = -0.5;
+  // orbit state: q rotates world → view; `anim` eases it to a new view
+  const FOVY = (45 * Math.PI) / 180;
+  const VIEW_MS = 200;
+  let q: Quat = lookFrom(VIEW_DIRS.iso);
+  let anim: { from: Quat; to: Quat; t0: number } | null = null;
+  let orthographic = false;
   let distance = 5;
   let center: [number, number, number] = [0, 0, 0];
   let vertexCount = 0;
@@ -332,9 +345,13 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   }
 
   function mvp(w: number, h: number) {
-    const proj = perspective((45 * Math.PI) / 180, w / h, distance * 0.01, distance * 100);
+    // ortho shows the same size as perspective does at the orbit centre
+    const halfH = distance * Math.tan(FOVY / 2);
+    const proj = orthographic
+      ? ortho(halfH * (w / h), halfH, -distance * 100, distance * 100)
+      : perspective(FOVY, w / h, distance * 0.01, distance * 100);
     const view = translation(0, 0, -distance);
-    const rot = multiply(rotationY(azimuth), rotationX(elevation));
+    const rot = quatToMat4(q);
     const model = multiply(rot, translation(-center[0], -center[1], -center[2]));
     return { proj, view, model, rot };
   }
@@ -418,6 +435,11 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       canvas.height = h;
     }
     gl!.viewport(0, 0, w, h);
+    if (anim && !thumbMode) {
+      const k = Math.min(1, (performance.now() - anim.t0) / VIEW_MS);
+      q = slerp(anim.from, anim.to, easeInOutCubic(k));
+      if (k < 1) scheduleRender(); else anim = null;
+    }
     gl!.clear(gl!.COLOR_BUFFER_BIT | gl!.DEPTH_BUFFER_BIT);
     // draw even with no solid, so the coordinate frame is always visible
 
@@ -611,6 +633,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       scheduleRender();
       return;
     }
+    anim = null;   // grabbing the view stops a view animation where it is
     mode = 'orbit';
   }
   function onMove(e: PointerEvent) {
@@ -620,13 +643,8 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       return;
     }
     moved += Math.abs(e.clientX - lastX) + Math.abs(e.clientY - lastY);
-    // Full vertical orbit: rolling past the poles lets you see the bottom. When
-    // upside-down (cos < 0) horizontal drag would feel reversed, so invert it.
-    const flipped = Math.cos(elevation) < 0;
-    azimuth += (e.clientX - lastX) * 0.01 * (flipped ? -1 : 1);
-    elevation += (e.clientY - lastY) * 0.01;
-    if (elevation > Math.PI) elevation -= 2 * Math.PI;
-    else if (elevation < -Math.PI) elevation += 2 * Math.PI;
+    // Z-up turntable; vertical is unlimited, so rolling past the poles shows the bottom
+    q = orbit(q, e.clientX - lastX, e.clientY - lastY);
     lastX = e.clientX; lastY = e.clientY;
     scheduleRender();
   }
@@ -652,6 +670,11 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   canvas.addEventListener('pointermove', onMove);
   canvas.addEventListener('pointerup', onUp);
   canvas.addEventListener('wheel', onWheel, { passive: false });
+
+  function animateTo(to: Quat) {
+    anim = { from: q, to, t0: performance.now() };
+    scheduleRender();
+  }
 
   const ro = new ResizeObserver(() => scheduleRender());
   ro.observe(canvas);
@@ -695,6 +718,16 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       const url = off.toDataURL('image/png');
       scheduleRender();                    // restore the normal (grid + overlays) view
       return url;
+    },
+    setView(view: StandardView) { animateTo(lookFrom(VIEW_DIRS[view])); },
+    lookAlong(normal: Vec3) {
+      if (Math.hypot(...normal) > 1e-9) animateTo(lookFrom(normal));
+    },
+    viewAxis(axis: 'X' | 'Y' | 'Z') { animateTo(axisView(axis, anim ? anim.to : q)); },
+    toggleOrtho() {
+      orthographic = !orthographic;
+      scheduleRender();
+      return orthographic;
     },
     dispose() {
       if (raf) cancelAnimationFrame(raf);
