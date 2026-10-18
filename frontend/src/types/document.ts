@@ -233,6 +233,8 @@ export interface Sketch {
   visible: boolean;
   suppressed?: boolean;
   plane?: import('@/types/geometry').Plane;
+  /** Drawn on a part's face: that face (centre, normal, area) for re-binding. */
+  face?: { center: [number, number, number]; normal: [number, number, number]; area: number };
   entities: Entity[];
   constraints: Constraint[];
 }

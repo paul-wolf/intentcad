@@ -3,7 +3,7 @@ import { useDocumentStore } from '@/stores/documentStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useUIStateStore } from '@/stores/uiStateStore';
 import { useThemeStore } from '@/theme';
-import { useCanvasRenderer } from './useCanvasRenderer';
+import { useCanvasRenderer, type InitialViewport } from './useCanvasRenderer';
 import { useMouseHandlers } from './useMouseHandlers';
 import { getDimensionTextScreenPos, getDiameterTextScreenPos, computeAngleDimensionGeom, getAngleDimensionTextScreenPos } from '@/rendering/dimensionRenderer';
 import { MirrorDialog } from '@/components/MirrorDialog';
@@ -188,8 +188,9 @@ function DimensionEditInput({
 
 /** Lets a host drive or follow the sketch viewport (e.g. a 3D view underneath). */
 export interface SketchViewportController {
-  /** Starting offset/scale; overrides the per-document saved viewport. */
-  initial?: { offset: Point; scale: number };
+  /** Starting offset/scale (or a function of the canvas size giving them);
+   *  overrides the per-document saved viewport. */
+  initial?: InitialViewport;
   /** Called after every frame with the viewport it was drawn with and the canvas. */
   onFrame?: (viewport: ViewportImpl, canvas: HTMLCanvasElement) => void;
 }

@@ -31,6 +31,8 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
       ['Parameters', 'The named sizes at the top. Edit a value and the part rebuilds; hover one to see which faces it moves.'],
       ['Protect', 'With a face selected on a rounded part: keeps that face flat and its edges sharp.'],
       ['Hold ⌥', 'Shows dimensions in the 3D view.'],
+      ['Sketch on face', 'Select a flat face and press K (or the button): the full 2D sketcher opens on that face. '
+        + 'Esc or Done returns to 3D; the sketch stays drawn on the part. Double-click it to edit again.'],
     ],
   },
   {

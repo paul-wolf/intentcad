@@ -118,8 +118,17 @@ const rowStyle: React.CSSProperties = {
   alignItems: 'center',
 };
 
-export function Toolbar() {
+interface ToolbarProps {
+  /** Hosted over the 3D part editor (sketch on a face): same layout, but the
+   *  buttons that would leave or replace the part editor are disabled. */
+  embedded?: boolean;
+}
+
+export function Toolbar({ embedded = false }: ToolbarProps = {}) {
   const navigate = useNavigate();
+  // a disabled-in-embedded button keeps its place so nothing moves
+  const off = (style: React.CSSProperties): { style: React.CSSProperties; disabled?: boolean } =>
+    embedded ? { style: { ...style, opacity: 0.35, cursor: 'default' }, disabled: true } : { style };
   const [showBuild, setShowBuild] = useState(false);
   const activeTool = useEditorStore((s) => s.activeTool);
   const setActiveTool = useEditorStore((s) => s.setActiveTool);
@@ -212,15 +221,15 @@ export function Toolbar() {
 
       {/* ── Row 1: Draw ── */}
       <div style={rowStyle}>
-        <button onClick={() => navigate('/')} style={btn(palette)} title="Back to project list">Home</button>
+        <button onClick={() => navigate('/')} {...off(btn(palette))} title="Back to project list">Home</button>
         {getProjectId() && (
-          <button onClick={() => navigate(`/project/${getProjectId()}`)} style={btn(palette)} title="Back to project sketches">Project</button>
+          <button onClick={() => navigate(`/project/${getProjectId()}`)} {...off(btn(palette))} title="Back to project sketches">Project</button>
         )}
-        <button onClick={handleNewSketch} style={btn(palette)} title="Create a new sketch in this project">New Sketch</button>
+        <button onClick={handleNewSketch} {...off(btn(palette))} title="Create a new sketch in this project">New Sketch</button>
         <Sep color={palette.border} />
         <button
           onClick={toggleDrawer}
-          style={{ ...btn(palette, drawerOpen), fontSize: '16px' }}
+          {...off({ ...btn(palette, drawerOpen), fontSize: '16px' })}
           title="Toggle document drawer"
         >
           {'\u2261'}
@@ -245,7 +254,7 @@ export function Toolbar() {
         <Sep color={palette.border} />
         <button
           onClick={() => setShowBuild(true)}
-          style={{ ...btn(palette), color: palette.textSecondary }}
+          {...off({ ...btn(palette), color: palette.textSecondary })}
           title="Build a 3D solid from the active sketch (server, experimental)"
         >
           3D
@@ -323,7 +332,7 @@ export function Toolbar() {
           JPG
         </button>
         <Sep color={palette.border} />
-        <button onClick={toggleCamPanel} style={btn(palette, camPanelOpen)} title="Toggle CAM panel for G-code generation">
+        <button onClick={toggleCamPanel} {...off(btn(palette, camPanelOpen))} title="Toggle CAM panel for G-code generation">
           CAM
         </button>
         <button onClick={toggleTheme} style={{ ...btn(palette), color: palette.textSecondary }} title="Toggle light/dark theme">

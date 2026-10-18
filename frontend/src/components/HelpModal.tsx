@@ -74,6 +74,7 @@ export function HelpModal({ onClose }: HelpModalProps) {
         background: 'rgba(0,0,0,0.5)',
         zIndex: 1000,
       }}
+      data-modal
       onClick={onClose}
     >
       <div

@@ -244,3 +244,13 @@ export function startAutoSave() {
     flushSave();
   };
 }
+
+/** Persist the document as it stands NOW (parts don't autosave from store
+ *  changes; face sketches are saved explicitly while and after editing). */
+export function persistSketches() {
+  if (!backendId) return;
+  const state = useDocumentStore.getState();
+  const doc = { ...state.document } as unknown as Record<string, unknown>;
+  const history = { undo: state.undoStack, redo: state.redoStack };
+  doSave(backendId, doc, history);
+}

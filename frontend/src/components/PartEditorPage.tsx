@@ -49,5 +49,5 @@ export function PartEditorPage() {
     navigate(pid ? `/project/${pid}` : '/');
   };
 
-  return <ScriptViewer onClose={toProject} onHome={() => navigate('/')} onProject={toProject} />;
+  return <ScriptViewer onClose={toProject} onHome={() => navigate('/')} onProject={toProject} sketchOnFace />;
 }

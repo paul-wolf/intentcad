@@ -10,6 +10,10 @@ import type { SegmentHit } from '@/hittest/hitTest';
 import { useThemeStore } from '@/theme';
 import { useCamStore } from '@/stores/camStore';
 
+export type InitialViewport =
+  | { offset: { x: number; y: number }; scale: number }
+  | ((width: number, height: number) => { offset: { x: number; y: number }; scale: number });
+
 interface UseCanvasRendererOpts {
   getDocument: () => Document;
   getSelectedEntityIds: () => Set<string>;
@@ -17,7 +21,8 @@ interface UseCanvasRendererOpts {
   getSelectedSegments: () => SegmentHit[];
   getActiveTool: () => Tool | null;
   getAltKeyHeld: () => boolean;
-  initialViewport?: { offset: { x: number; y: number }; scale: number };
+  /** Starting offset/scale, or a function of the canvas size (CSS px) giving them. */
+  initialViewport?: InitialViewport;
   /** Per-frame display options (read every frame). */
   getRenderOptions?: () => Pick<RenderContext, 'transparent' | 'showGrid' | 'soloActiveSketch'>;
   /** Called after every frame is drawn, with the viewport it was drawn with. */
@@ -37,8 +42,10 @@ export function useCanvasRenderer(opts: UseCanvasRendererOpts) {
 
   const updateSize = useCallback((width: number, height: number) => {
     const prev = viewportRef.current;
-    const offset = prev?.offset ?? opts.initialViewport?.offset;
-    const scale = prev?.scale ?? opts.initialViewport?.scale;
+    const init = prev ? undefined
+      : typeof opts.initialViewport === 'function' ? opts.initialViewport(width, height) : opts.initialViewport;
+    const offset = prev?.offset ?? init?.offset;
+    const scale = prev?.scale ?? init?.scale;
     viewportRef.current = new ViewportImpl(width, height, offset, scale);
   }, [opts.initialViewport]);
 

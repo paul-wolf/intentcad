@@ -14,6 +14,7 @@ import { buildKey, getCachedBuild, putCachedBuild, putCachedSens } from '@/build
 import { importScript, importLabel, STEP_ACCEPT } from '@/build/importStep';
 import { PartVersionsPanel } from './PartVersionsPanel';
 import { PartHelpModal } from './PartHelpModal';
+import { useFaceSketch } from './FaceSketchMode';
 
 // the view buttons, in key order (1–6, then 0)
 const VIEW_BUTTONS = (['1', '2', '3', '4', '5', '6', '0'] as const)
@@ -24,6 +25,9 @@ interface Props {
   /** When the editor is a standalone page, breadcrumb nav (saves first). */
   onHome?: () => void;
   onProject?: () => void;
+  /** Offer sketching on a face (only where no other sketcher is mounted:
+   *  the sketch stores are global, so not when opened over the 2D editor). */
+  sketchOnFace?: boolean;
 }
 
 // stable empty reference so the zustand selector below doesn't return a fresh
@@ -53,7 +57,7 @@ part += Pos(0, 0, zc) * (Cylinder(P["boss_d"]/2, P["boss_h"])
 part -= Pos(0, 0, zc) * Rot(90, 0, 0) * Cylinder(P["bolt_d"]/2, P["boss_d"]*2)
 `;
 
-export function ScriptViewer({ onClose, onHome, onProject }: Props) {
+export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false }: Props) {
   const palette = useThemeStore((s) => s.palette);
   const isDark = useThemeStore((s) => s.theme === 'dark');
   const docName = useDocumentStore((s) => s.document.name);
@@ -210,6 +214,10 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   const [sel, setSel] = useState<number[]>([]);   // selected face indices (≤ 2)
   const resRef = useRef<RunResponse | null>(null);
   const selRef = useRef<number[]>([]);
+  const faceSketch = useFaceSketch(viewerRef, canvasRef, resRef);
+  const faceSketchRef = useRef(faceSketch);
+  faceSketchRef.current = faceSketch;
+  const [sketchTip, setSketchTip] = useState<{ name: string; x: number; y: number } | null>(null);
   // highlight the edges auto_round couldn't round (the footer's toggle)
   const [showSkipped, setShowSkipped] = useState(false);
   const showSkippedRef = useRef(false);
@@ -391,7 +399,14 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
       setCode(initial);
       if (canvasRef.current && !viewerRef.current) {
         try {
-          viewerRef.current = createViewer(canvasRef.current, { onFacePick: onPick, onAxes, onDims, onHandle, onHandleDrop });
+          viewerRef.current = createViewer(canvasRef.current, {
+            onFacePick: onPick, onAxes, onDims, onHandle, onHandleDrop,
+            ...(sketchOnFace ? {
+              onSketchHover: (h: { name: string; x: number; y: number } | null) => setSketchTip(h),
+              onSketchOpen: (id: string) => { setSketchTip(null); faceSketchRef.current.open(id); },
+            } : {}),
+          });
+          if (sketchOnFace) faceSketchRef.current.pushLines();
         } catch (err) {
           setStatus('error');
           setMessage(errorText(err));
@@ -523,7 +538,9 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   // drives (like the sketch editor's dimension overlay).
   const [dimsOn, setDimsOn] = useState(false);
   useEffect(() => {
-    const down = (e: KeyboardEvent) => { if (e.key === 'Alt') { setDimsOn(true); ensureSens(); } };
+    const down = (e: KeyboardEvent) => {
+      if (e.key === 'Alt' && !faceSketchRef.current.activeRef.current) { setDimsOn(true); ensureSens(); }
+    };
     const up = (e: KeyboardEvent) => { if (e.key === 'Alt') setDimsOn(false); };
     const off = () => setDimsOn(false);
     window.addEventListener('keydown', down);
@@ -626,7 +643,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   }, [handle, selFace]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Tab' || nHandlesRef.current < 2) return;
+      if (e.key !== 'Tab' || nHandlesRef.current < 2 || faceSketchRef.current.activeRef.current) return;
       // only when nothing has focus (the canvas isn't focusable), so Tab still
       // moves between the editor's fields
       if (e.target instanceof HTMLElement && e.target !== document.body) return;
@@ -642,6 +659,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== '?' || (e.target instanceof HTMLElement && e.target !== document.body)) return;
+      if (faceSketchRef.current.activeRef.current) return;   // the sketcher's own help
       setShowHelp((v) => !v);
     };
     window.addEventListener('keydown', onKey);
@@ -668,14 +686,25 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
     window.clearTimeout(viewHintTimer.current);
     viewHintTimer.current = window.setTimeout(() => setViewHint(''), 2500);
   };
+  // K / "Sketch on face": the one selected face, if it's flat
+  const sketchOnSelection = () => {
+    const s = selRef.current;
+    const f = s.length === 1 ? resRef.current?.faces.find((x) => x.index === s[0]) : undefined;
+    if (f && f.kind === 'plane') { setSketchTip(null); faceSketchRef.current.enter(f); return; }
+    setViewHint('Select one flat face, then press K');
+    window.clearTimeout(viewHintTimer.current);
+    viewHintTimer.current = window.setTimeout(() => setViewHint(''), 2500);
+  };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (faceSketchRef.current.activeRef.current) return;   // the sketcher owns the keys
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.target instanceof HTMLElement && e.target !== document.body) return;
       const v = viewerRef.current;
       if (!v) return;
       const view = VIEW_KEYS[e.key];
       if (view) v.setView(view);
+      else if (sketchOnFace && (e.key === 'k' || e.key === 'K')) sketchOnSelection();
       else if (e.key === 'n' || e.key === 'N') lookAtSelection();
       else if (e.key === 'o' || e.key === 'O') setOrtho(v.toggleOrtho());
       else return;
@@ -1021,7 +1050,15 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
           </div>
           <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
             <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block',
-                     cursor: 'grab', touchAction: 'none' }} />
+                     cursor: 'grab', touchAction: 'none', ...faceSketch.canvasStyle }} />
+            {sketchTip && !faceSketch.active && (
+              <div style={{ position: 'absolute', left: sketchTip.x + 12, top: sketchTip.y + 12, padding: '3px 8px',
+                            background: 'rgba(20,22,26,0.86)', border: '1px solid rgba(255,255,255,0.12)',
+                            borderRadius: '4px', color: '#eef1f5', fontSize: '12px', pointerEvents: 'none',
+                            whiteSpace: 'nowrap' }}>
+                {sketchTip.name} <span style={{ opacity: 0.6 }}>· double-click to edit</span>
+              </div>
+            )}
             {/* measure readout: center-to-center distance for a 2-face selection */}
             {measure && (
               <div style={{ position: 'absolute', left: 12, top: 12, padding: '8px 11px',
@@ -1099,6 +1136,16 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
                       title={sel.length ? 'Look straight at the selected face (N)' : 'Select a face first (then N or this button)'}>
                 Normal
               </button>
+              {sketchOnFace && (() => {
+                const ok = !!selFace && selFace.kind === 'plane';
+                return (
+                  <button style={{ ...viewBtn, marginLeft: '6px', opacity: ok ? 1 : 0.45, cursor: ok ? 'pointer' : 'default' }}
+                          disabled={!ok} onClick={sketchOnSelection}
+                          title={ok ? 'Sketch on the selected face (K)' : 'Select one flat face first (then K or this button)'}>
+                    Sketch on face
+                  </button>
+                );
+              })()}
               <button style={{ ...viewBtn, marginLeft: '6px', ...(ortho ? { color: palette.accent, borderColor: palette.accent } : {}) }}
                       onClick={() => { const v = viewerRef.current; if (v) setOrtho(v.toggleOrtho()); }}
                       title={ortho ? 'Orthographic: click for perspective (O)' : 'Perspective: click for orthographic (O)'}>
@@ -1352,6 +1399,7 @@ export function ScriptViewer({ onClose, onHome, onProject }: Props) {
         </div>
       </div>
       {showHelp && <PartHelpModal onClose={() => setShowHelp(false)} />}
+      {faceSketch.overlay}
       {showVersions && getBackendId() && (
         <PartVersionsPanel docId={getBackendId()!} currentCode={code}
           onRestore={restoreVersion} onClose={() => setShowVersions(false)} />
