@@ -14,7 +14,8 @@ import { buildKey, getCachedBuild, putCachedBuild, putCachedSens } from '@/build
 import { importScript, importLabel, STEP_ACCEPT } from '@/build/importStep';
 import { PartVersionsPanel } from './PartVersionsPanel';
 import { PartHelpModal } from './PartHelpModal';
-import { useFaceSketch } from './FaceSketchMode';
+import { useFaceSketch, type ExtrudeOptions } from './FaceSketchMode';
+import { referencedProfiles } from '@/build/faceSketch';
 
 // the view buttons, in key order (1–6, then 0)
 const VIEW_BUTTONS = (['1', '2', '3', '4', '5', '6', '0'] as const)
@@ -70,14 +71,21 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // lazy sensitivity: compute the param→face map only when first needed
   const builtCodeRef = useRef<string>('');
   const sensKeyRef = useRef<string | null>(null);
+  // A build is a pure function of the script and the face sketches it
+  // extrudes (sketch("name")): both go to the engine and into the cache key.
+  const buildInputs = (src: string) => {
+    const sketches = referencedProfiles(src, useDocumentStore.getState().document.sketches);
+    const extra = Object.keys(sketches).length ? `\n# sketches ${JSON.stringify(sketches)}` : '';
+    return { sketches, key: buildKey(src + extra) };
+  };
   const ensureSens = () => {
     const src = builtCodeRef.current;
     if (!src) return;
-    const key = buildKey(src);
+    const { key, sketches } = buildInputs(src);
     if (sensKeyRef.current === key) return;   // already computed or in flight
     sensKeyRef.current = key;
     setSensState('loading');
-    buildApi.sensitivity(src, getBackendId() ?? '')
+    buildApi.sensitivity(src, getBackendId() ?? '', sketches)
       .then((r) => {
         if (sensKeyRef.current !== key) return;
         setSens(r.params); setSensState('ready'); putCachedSens(key, r.params);
@@ -214,7 +222,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const [sel, setSel] = useState<number[]>([]);   // selected face indices (≤ 2)
   const resRef = useRef<RunResponse | null>(null);
   const selRef = useRef<number[]>([]);
-  const faceSketch = useFaceSketch(viewerRef, canvasRef, resRef);
+  const faceSketch = useFaceSketch(viewerRef, canvasRef, resRef, (name, ex) => { void sketchDoneRef.current(name, ex); });
   const faceSketchRef = useRef(faceSketch);
   faceSketchRef.current = faceSketch;
   const [sketchTip, setSketchTip] = useState<{ name: string; x: number; y: number } | null>(null);
@@ -303,9 +311,9 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     try {
       // Deterministic: same code → same mesh. Serve an unchanged part from the
       // IndexedDB cache with no engine call.
-      const key = buildKey(src);
+      const { key, sketches } = buildInputs(src);
       const cached = await getCachedBuild(key);
-      const res = cached?.run ?? await buildApi.run(src, ctrl.signal, getBackendId() ?? '');
+      const res = cached?.run ?? await buildApi.run(src, ctrl.signal, getBackendId() ?? '', sketches);
       const took = Math.round(performance.now() - t0);
       setWarn(res.warning ?? '');
       setFix(res.fix?.param ? res.fix : null);
@@ -614,6 +622,26 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       if (applying.current === key) applying.current = null;
     }
   };
+  // A face sketch was closed. Extrude asked for: append the script line (its
+  // depth a new parameter) and build. Otherwise rebuild if the script already
+  // extrudes this sketch — its shapes are part of the build's inputs.
+  const sketchDone = async (name: string, ex: ExtrudeOptions | null) => {
+    if (!ex) {
+      if (referencedProfiles(code, useDocumentStore.getState().document.sketches)[name]) await build(code);
+      return;
+    }
+    try {
+      const r = await buildApi.addExtrude({ code, sketch: name, ...ex });
+      setCode(r.code);
+      const out = await build(r.code, `${ex.op === 'cut' ? 'Cut' : 'Join'} ${name}`);
+      if (out.kind === 'ok') saveDraft(r.code);
+    } catch (err) {
+      setMessage(errorText(err));
+    }
+  };
+  const sketchDoneRef = useRef(sketchDone);
+  sketchDoneRef.current = sketchDone;
+
   // the viewer keeps its mount-time callbacks, so a drop reaches the current
   // applyParam (which closes over the current code) through a ref
   const applyParamRef = useRef(applyParam);

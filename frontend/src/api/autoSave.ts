@@ -1,6 +1,7 @@
 import { useDocumentStore } from '@/stores/documentStore';
 import { addLog } from '@/stores/logStore';
 import { api } from './cachedClient';
+import { sketchProfile } from '@/build/faceSketch';
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 let backendId: string | null = null;
@@ -92,7 +93,9 @@ export function persistBuildFeatures(features: unknown[]) {
   useDocumentStore.getState().setBuildFeatures(features as never);
   if (!backendId) return;
   const state = useDocumentStore.getState();
-  const doc = { ...state.document } as unknown as Record<string, unknown>;
+  // face sketches carry their closed shapes, for scripts that extrude them
+  const sketches = state.document.sketches.map((s) => (s.plane ? { ...s, profile: sketchProfile(s) ?? undefined } : s));
+  const doc = { ...state.document, sketches } as unknown as Record<string, unknown>;
   const history = { undo: state.undoStack, redo: state.redoStack };
   doSave(backendId, doc, history);
 }
@@ -116,7 +119,9 @@ export function persistName(name: string) {
   useDocumentStore.getState().setDocumentName(name);
   if (!backendId) return;
   const state = useDocumentStore.getState();
-  const doc = { ...state.document } as unknown as Record<string, unknown>;
+  // face sketches carry their closed shapes, for scripts that extrude them
+  const sketches = state.document.sketches.map((s) => (s.plane ? { ...s, profile: sketchProfile(s) ?? undefined } : s));
+  const doc = { ...state.document, sketches } as unknown as Record<string, unknown>;
   const history = { undo: state.undoStack, redo: state.redoStack };
   doSave(backendId, doc, history);
 }
@@ -126,7 +131,9 @@ export function persistProductionNotes(notes: string) {
   useDocumentStore.getState().setProductionNotes(notes);
   if (!backendId) return;
   const state = useDocumentStore.getState();
-  const doc = { ...state.document } as unknown as Record<string, unknown>;
+  // face sketches carry their closed shapes, for scripts that extrude them
+  const sketches = state.document.sketches.map((s) => (s.plane ? { ...s, profile: sketchProfile(s) ?? undefined } : s));
+  const doc = { ...state.document, sketches } as unknown as Record<string, unknown>;
   const history = { undo: state.undoStack, redo: state.redoStack };
   doSave(backendId, doc, history);
 }
@@ -136,7 +143,9 @@ export function persistChat(chat: import('@/types/document').ChatMessage[]) {
   useDocumentStore.getState().setChat(chat);
   if (!backendId) return;
   const state = useDocumentStore.getState();
-  const doc = { ...state.document } as unknown as Record<string, unknown>;
+  // face sketches carry their closed shapes, for scripts that extrude them
+  const sketches = state.document.sketches.map((s) => (s.plane ? { ...s, profile: sketchProfile(s) ?? undefined } : s));
+  const doc = { ...state.document, sketches } as unknown as Record<string, unknown>;
   const history = { undo: state.undoStack, redo: state.redoStack };
   doSave(backendId, doc, history);
 }
@@ -146,7 +155,9 @@ export function persistThumbnail(dataUrl: string) {
   useDocumentStore.getState().setThumbnail(dataUrl);
   if (!backendId) return;
   const state = useDocumentStore.getState();
-  const doc = { ...state.document } as unknown as Record<string, unknown>;
+  // face sketches carry their closed shapes, for scripts that extrude them
+  const sketches = state.document.sketches.map((s) => (s.plane ? { ...s, profile: sketchProfile(s) ?? undefined } : s));
+  const doc = { ...state.document, sketches } as unknown as Record<string, unknown>;
   const history = { undo: state.undoStack, redo: state.redoStack };
   doSave(backendId, doc, history);
 }
@@ -250,7 +261,9 @@ export function startAutoSave() {
 export function persistSketches() {
   if (!backendId) return;
   const state = useDocumentStore.getState();
-  const doc = { ...state.document } as unknown as Record<string, unknown>;
+  // face sketches carry their closed shapes, for scripts that extrude them
+  const sketches = state.document.sketches.map((s) => (s.plane ? { ...s, profile: sketchProfile(s) ?? undefined } : s));
+  const doc = { ...state.document, sketches } as unknown as Record<string, unknown>;
   const history = { undo: state.undoStack, redo: state.redoStack };
   doSave(backendId, doc, history);
 }

@@ -9,11 +9,12 @@ is testable with a fake llm.
 
 from __future__ import annotations
 
+import json
 import os
 from collections import defaultdict
 from typing import Callable
 
-from .engine import EngineError, asset_refs, load_assets, run_script
+from .engine import EngineError, asset_refs, load_assets, load_sketches, run_script
 from .paramedit import ParamError, set_params
 from .llm_models import is_known, list_models, price_for
 
@@ -156,6 +157,12 @@ def _system(production: str = "") -> str:
         "usual. To target imported geometry, write selectors from the GEOMETRY "
         "SUMMARY (face normals, plane offsets, cylinder axes/radii) — e.g. "
         "part.faces().filter_by(Axis.Z).sort_by(Axis.Z)[-1] for the top face.\n\n"
+        "FACE SKETCHES: sketch(\"<name>\") (no import) is a sketch the user drew on "
+        "a face of the part (listed under FACE SKETCHES below), as a Face or Compound "
+        "of faces on that face's plane, normal pointing out of the part. "
+        "part -= extrude(sketch(\"<name>\"), amount=-P[\"cut_depth\"]) cuts it in; "
+        "part += extrude(sketch(\"<name>\"), amount=P[\"height\"]) grows it out. Use "
+        "the exact name; never invent one.\n\n"
         "ROUNDING THE WHOLE PART: auto_round(part, convex=…, concave=…, keep=[…]) "
         "is available (no import) and rounds every eligible edge — convex edges "
         "to `convex`, concave edges to `concave` — capping each radius to the "
@@ -248,6 +255,30 @@ ASK_TOOL = {
 }
 
 
+
+def _face_sketches(document_id: str | None) -> list[str]:
+    """One line per face sketch of the document that has closed shapes."""
+    if not document_id:
+        return []
+    from django.core.exceptions import ValidationError
+    from documents.models import Document
+
+    try:
+        data = Document.objects.filter(id=document_id).values_list("data", flat=True).first() or {}
+    except (ValidationError, ValueError):   # not a document id
+        return []
+    out = []
+    for s in data.get("sketches") or []:
+        prof = s.get("profile") if isinstance(s, dict) else None
+        if not prof or not prof.get("loops"):
+            continue
+        pl = prof.get("plane") or {}
+        n = [round(v, 3) for v in pl.get("normal", [])]
+        o = [round(v, 2) for v in pl.get("origin", [])]
+        out.append(f"- {json.dumps(s.get('name'))}: {len(prof['loops'])} closed shape(s) on the plane "
+                   f"through {o} with outward normal {n}")
+    return out
+
 def _anthropic_call(system: str, user: str, tools: list[dict], model: str) -> dict:
     try:
         import anthropic
@@ -335,13 +366,16 @@ def edit_script(
     summary = ""
     if assets:
         try:
-            cur = run_script(code, assets=assets)
+            cur = run_script(code, assets=assets, sketches=load_sketches(code, document_id))
             summary = geometry_summary(cur.get("faces", []), cur.get("metrics"))
         except EngineError:
             pass    # the current script doesn't build: no inventory to describe
 
+    drawn = _face_sketches(document_id)
+
     def prompt(extra: str = "") -> str:
         sel = f"SELECTION: {context}\n\n" if context.strip() else ""
+        sk = ("FACE SKETCHES (usable as sketch(\"<name>\")):\n" + "\n".join(drawn) + "\n\n") if drawn else ""
         berr = (f"BUILD ERROR (the current script fails with this):\n{build_error.strip()}\n\n"
                 if build_error.strip() else "")
         convo = ""
@@ -355,7 +389,7 @@ def edit_script(
                 if summary else "")
         return (
             f"CURRENT SCRIPT:\n```python\n{code}\n```\n\n"
-            f"{geom}{convo}{berr}{sel}INSTRUCTION: {instruction}\n{extra}"
+            f"{geom}{sk}{convo}{berr}{sel}INSTRUCTION: {instruction}\n{extra}"
         )
 
     tok_in = tok_out = 0

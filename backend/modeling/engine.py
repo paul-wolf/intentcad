@@ -187,8 +187,36 @@ def load_assets(code: str, document_id: str | None) -> dict[str, bytes]:
     return {sha: bytes(data) for sha, data in rows.items()}
 
 
+# A face sketch is referenced by name: sketch("Sketch on top face"). Its closed
+# loops (the profile the frontend stores with the sketch) travel with the build.
+SKETCH_REF = re.compile(r"""\bsketch\(\s*(["'])(.+?)\1\s*\)""")
+
+
+def sketch_refs(code: str) -> set[str]:
+    """The sketch names `code` references."""
+    return {m.group(2) for m in SKETCH_REF.finditer(code)}
+
+
+def load_sketches(code: str, document_id: str | None,
+                  given: dict[str, dict] | None = None) -> dict[str, dict]:
+    """{name: profile} for every sketch `code` references: from `given` (the
+    editor sends what it has on screen, saved or not), else from the document.
+    A name found nowhere is left to sketch() to report."""
+    refs = sketch_refs(code)
+    out = {n: given[n] for n in refs if given and n in given}
+    if refs - out.keys() and document_id:
+        from documents.models import Document  # the engine is otherwise Django-free
+
+        data = Document.objects.filter(id=document_id).values_list("data", flat=True).first() or {}
+        for s in data.get("sketches") or []:
+            if isinstance(s, dict) and s.get("name") in refs and s["name"] not in out and s.get("profile"):
+                out[s["name"]] = s["profile"]
+    return out
+
+
 def run_script(code: str, *, export: list[str] | None = None, timeout: float = 60.0,
-               document_id: str | None = None, assets: dict[str, bytes] | None = None) -> dict:
+               document_id: str | None = None, assets: dict[str, bytes] | None = None,
+               sketches: dict[str, dict] | None = None) -> dict:
     """Execute `code` (a build123d script that binds `part`) and return
     {mesh, faces, edges, params, metrics, exports}. `export` requests STEP/STL
     text. Raises EngineError with the script's error message on failure.
@@ -196,6 +224,8 @@ def run_script(code: str, *, export: list[str] | None = None, timeout: float = 6
     Uploaded files the script references (ASSETS["<sha256>"]) are loaded from
     `document_id`'s assets, or taken from `assets` ({sha256: bytes}) when the
     caller already has them (sensitivity rebuilds one script many times).
+    Face sketches it references (sketch("name")) likewise: `sketches`
+    ({name: profile}) first, the document's stored profiles for the rest.
 
     Runs on the warm worker; serialized by a lock. On timeout or crash the worker
     is discarded so the next call gets a fresh one."""
@@ -205,6 +235,7 @@ def run_script(code: str, *, export: list[str] | None = None, timeout: float = 6
     missing = sorted(refs - assets.keys())
     if missing:
         raise EngineError(f"uploaded file ASSETS[\"{missing[0]}\"] is not part of this document")
+    profiles = load_sketches(code, document_id, sketches) if sketch_refs(code) else {}
 
     for attempt in range(2):
         with _worker_lock:
@@ -218,6 +249,7 @@ def run_script(code: str, *, export: list[str] | None = None, timeout: float = 6
                 "assets": {sha: base64.b64encode(assets[sha]).decode()
                            for sha in sorted(refs) if sha not in w.assets},
                 "asset_refs": sorted(refs),
+                "sketches": profiles,
             })
             try:
                 w.proc.stdin.write(payload + "\n")

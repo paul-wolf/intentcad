@@ -1,6 +1,7 @@
 """Tests for the build123d execution engine (the new modeler core)."""
 
 import json
+import math
 import os
 from unittest import mock
 
@@ -255,3 +256,35 @@ class WorkerProtocolTests(SimpleTestCase):
         run_script("print('hello')\nimport os\nos.write(1, b'native\\n')\npart = Box(1, 1, 1)")
         r = run_script("part = Box(2, 2, 2)")
         self.assertAlmostEqual(r["metrics"]["volume"], 8.0, places=6)
+
+
+def _rect(x0, y0, x1, y1):
+    p = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+    return [{"t": "line", "p": [p[i], p[(i + 1) % 4]]} for i in range(4)]
+
+
+class SketchEngineTests(SimpleTestCase):
+    """sketch("name") — a face sketch's closed loops as faces on its plane."""
+
+    top = {"origin": [0, 0, 6], "normal": [0, 0, 1], "xAxis": [1, 0, 0]}
+    base = "part = Pos(0, 0, 3) * Box(60, 40, 6)\nv0 = part.volume\n"
+
+    def test_circles_cut_holes_through_the_part(self):
+        prof = {"plane": self.top, "loops": [[{"t": "circle", "c": [-10, 0], "r": 3}],
+                                             [{"t": "circle", "c": [10, 5], "r": 3}]]}
+        code = self.base + 'part -= extrude(sketch("holes"), amount=-part.bounding_box().diagonal)\n'
+        r = run_script(code, sketches={"holes": prof})
+        self.assertAlmostEqual(r["metrics"]["volume"], 60 * 40 * 6 - 2 * math.pi * 9 * 6, delta=0.5)
+        # sketch y points down: (10, 5) lands at world y = -5
+        self.assertAlmostEqual(r["metrics"]["bbox_min"][2], 0, places=3)
+
+    def test_join_grows_out_of_the_face_and_holes_nest(self):
+        prof = {"plane": self.top, "loops": [_rect(-5, -5, 5, 5),
+                                             [{"t": "circle", "c": [0, 0], "r": 2}]]}
+        r = run_script(self.base + 'part += extrude(sketch("peg"), amount=4)\n', sketches={"peg": prof})
+        self.assertAlmostEqual(r["metrics"]["bbox_max"][2], 10, places=3)
+        self.assertAlmostEqual(r["metrics"]["volume"], 60 * 40 * 6 + (100 - math.pi * 4) * 4, delta=0.5)
+
+    def test_unknown_sketch_is_reported(self):
+        r = run_script(self.base + 'part -= extrude(sketch("nope"), amount=-2)\n')
+        self.assertIn("no sketch named 'nope'", r.get("warning") or "")

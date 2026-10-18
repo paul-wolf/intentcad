@@ -59,6 +59,30 @@ class RunApiTests(TestCase):
             self.assertIn(int(face), info["faces"])
             self.assertEqual(len(shift), 3)
 
+    def test_extrude_a_face_sketch_stored_with_the_document(self):
+        from documents.models import Document
+
+        self.client.force_login(self.user)
+        prof = {"plane": {"origin": [0, 0, 3], "normal": [0, 0, 1], "xAxis": [1, 0, 0]},
+                "loops": [[{"t": "circle", "c": [5, 5], "r": 2}]]}
+        doc = Document.objects.create(name="p", created_by=self.user,
+                                      data={"sketches": [{"name": "Holes", "profile": prof}]})
+        code = "part = Box(20, 20, 6)\n"
+        resp = self.client.post("/api/build/add_extrude", content_type="application/json",
+                                data=json.dumps({"code": code, "sketch": "Holes", "op": "cut", "through": True}))
+        self.assertEqual(resp.status_code, 200)
+        cut = resp.json()["code"]
+        self.assertIn('sketch("Holes")', cut)
+        resp = self.client.post(RUN_URL, content_type="application/json",
+                                data=json.dumps({"code": cut, "document_id": str(doc.id)}))
+        self.assertEqual(resp.status_code, 200)
+        self.assertAlmostEqual(resp.json()["metrics"]["volume"], 20 * 20 * 6 - 3.14159265 * 4 * 6, delta=0.5)
+        # a profile sent with the request wins over the stored one (unsaved edits)
+        bigger = {**prof, "loops": [[{"t": "circle", "c": [5, 5], "r": 3}]]}
+        resp = self.client.post(RUN_URL, content_type="application/json",
+                                data=json.dumps({"code": cut, "document_id": str(doc.id), "sketches": {"Holes": bigger}}))
+        self.assertAlmostEqual(resp.json()["metrics"]["volume"], 20 * 20 * 6 - 3.14159265 * 9 * 6, delta=0.5)
+
     def test_bad_script_returns_422(self):
         self.client.force_login(self.user)
         resp = self._post("part = Box(1, 1, 1")  # syntax error

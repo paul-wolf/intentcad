@@ -11,8 +11,10 @@ from .assistant import AssistantError, edit_script
 from .models import AiEdit
 from .engine import EngineError, run_script
 from .llm_models import list_models
-from .paramedit import ParamError, set_params
+from .paramedit import ParamError, add_extrude, set_params
 from .schemas import (
+    AddExtrudeRequest,
+    AddExtrudeResponse,
     EditRequest,
     EditResponse,
     ExportRequest,
@@ -59,7 +61,8 @@ def run_model(request, payload: RunRequest):
     if err:
         return err
     try:
-        r = run_script(payload.code, document_id=payload.document_id)
+        r = run_script(payload.code, document_id=payload.document_id,
+                       sketches=payload.sketches)
     except EngineError as exc:
         body = {"message": str(exc), "params": exc.params}
         if exc.fix:
@@ -88,7 +91,8 @@ def export_model(request, payload: ExportRequest):
     if fmt not in ("stl", "step", "stl-parts", "dxf", "dxf-views"):
         return JsonResponse({"message": f"unknown format {payload.format!r}"}, status=422)
     try:
-        r = run_script(payload.code, export=[fmt], document_id=payload.document_id)
+        r = run_script(payload.code, export=[fmt], document_id=payload.document_id,
+                       sketches=payload.sketches)
     except EngineError as exc:
         return JsonResponse({"message": str(exc)}, status=422)
     return ExportResponse(format=fmt, data=r.get("exports", {}).get(fmt, ""))
@@ -108,6 +112,21 @@ def set_params_endpoint(request, payload: SetParamsRequest):
     return SetParamsResponse(code=code)
 
 
+@router.post("/add_extrude", response=AddExtrudeResponse)
+def add_extrude_endpoint(request, payload: AddExtrudeRequest):
+    """Append an extrude (cut or join) of a face sketch to the script, with its
+    depth as a new parameter, and return the updated script."""
+    err = require_auth(request)
+    if err:
+        return err
+    try:
+        code, param = add_extrude(payload.code, payload.sketch, payload.op, payload.depth,
+                                  payload.through, payload.flip)
+    except (ParamError, SyntaxError) as exc:
+        return JsonResponse({"message": str(exc)}, status=422)
+    return AddExtrudeResponse(code=code, param=param)
+
+
 @router.post("/sensitivity", response=SensitivityResponse)
 def sensitivity_endpoint(request, payload: SensitivityRequest):
     """Which parameters control which faces (by perturbation). Lets the UI light
@@ -116,7 +135,7 @@ def sensitivity_endpoint(request, payload: SensitivityRequest):
     if err:
         return err
     try:
-        m = sensitivity(payload.code, document_id=payload.document_id)
+        m = sensitivity(payload.code, document_id=payload.document_id, sketches=payload.sketches)
     except EngineError as exc:
         return JsonResponse({"message": str(exc)}, status=422)
     return SensitivityResponse(params=m)

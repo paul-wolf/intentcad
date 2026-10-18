@@ -33,6 +33,9 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
       ['Hold ⌥', 'Shows dimensions in the 3D view.'],
       ['Sketch on face', 'Select a flat face and press K (or the button): the full 2D sketcher opens on that face. '
         + 'Esc or Done returns to 3D; the sketch stays drawn on the part. Double-click it to edit again.'],
+      ['Extrude…', 'In the sketch banner: Cut the sketch\'s closed shapes into the part (through all, or to a depth) '
+        + 'or Join them on as pegs/bosses; Flip reverses the direction. It adds one script line and a depth '
+        + 'parameter; editing the sketch later rebuilds the part.'],
     ],
   },
   {

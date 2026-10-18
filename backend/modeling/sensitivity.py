@@ -13,7 +13,7 @@ from __future__ import annotations
 import math
 from concurrent.futures import ThreadPoolExecutor
 
-from .engine import EngineError, load_assets, run_script
+from .engine import EngineError, load_assets, load_sketches, run_script
 from .paramedit import ParamError, set_params
 
 
@@ -71,7 +71,8 @@ def _match(f: dict, candidates: list[dict]) -> tuple[dict, float] | None:
     return match, md
 
 
-def sensitivity(code: str, document_id: str | None = None) -> dict[str, dict]:
+def sensitivity(code: str, document_id: str | None = None,
+                sketches: dict[str, dict] | None = None) -> dict[str, dict]:
     """Return {param_name: dimension-info} for the script's params.
 
     Each entry is {faces, value, shifts, radial, anchor, dir, kind}:
@@ -91,7 +92,8 @@ def sensitivity(code: str, document_id: str | None = None) -> dict[str, dict]:
     # load uploaded files once, here: the perturbed builds run on pool threads
     # (no DB there), and only change P, so they import the same files
     assets = load_assets(code, document_id)
-    base = run_script(code, assets=assets)
+    sketches = load_sketches(code, document_id, sketches)
+    base = run_script(code, assets=assets, sketches=sketches)
     params = base.get("params", {})
     base_faces = base.get("faces", [])
     if not params or not base_faces:
@@ -103,7 +105,7 @@ def sensitivity(code: str, document_id: str | None = None) -> dict[str, dict]:
         delta = max(abs(val) * 0.15, 1.0)
         try:
             perturbed = set_params(code, {name: val + delta})
-            pert = run_script(perturbed, assets=assets)
+            pert = run_script(perturbed, assets=assets, sketches=sketches)
         except (EngineError, ParamError, SyntaxError):
             return name, empty  # perturbation didn't build — can't attribute
         pert_faces = pert.get("faces", [])

@@ -380,7 +380,8 @@ def _stage_assets(assets: dict | None, refs: list | None) -> dict[str, str]:
 
 
 def _run(code: str, export: list | None = None,
-         assets: dict | None = None, asset_refs: list | None = None) -> dict:
+         assets: dict | None = None, asset_refs: list | None = None,
+         sketches: dict | None = None) -> dict:
     from build123d import export_step, export_stl
 
     _instrument()
@@ -417,6 +418,11 @@ def _run(code: str, export: list | None = None,
             return 2.0
 
     ns.update(organic.bind(organic_events.append, min_wall))
+    # sketch("name") — a face sketch's closed shapes as faces on its plane
+    # (modeling/sketch_profile.py); the engine sends the profiles referenced
+    from modeling import sketch_profile
+
+    ns.update(sketch_profile.bind(sketches or {}))
     # Run the script. If an operation fails partway (e.g. a chamfer too big),
     # `part` still holds the model built up to that line — render THAT plus the
     # error as a warning, instead of blanking the whole model.
@@ -625,7 +631,7 @@ def main() -> None:
     try:
         payload = json.loads(sys.stdin.read() or "{}")
         result = _run(payload.get("code", ""), payload.get("export"),
-                      payload.get("assets"), payload.get("asset_refs"))
+                      payload.get("assets"), payload.get("asset_refs"), payload.get("sketches"))
     except Exception as exc:  # any script/engine error → structured, not a crash
         import traceback
         result = {"ok": False, "error": f"{type(exc).__name__}: {exc}",

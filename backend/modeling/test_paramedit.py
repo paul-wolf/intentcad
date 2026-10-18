@@ -2,7 +2,7 @@
 
 from django.test import SimpleTestCase
 
-from modeling.paramedit import ParamError, set_params
+from modeling.paramedit import ParamError, add_extrude, add_param, set_params
 
 
 class ParamEditTests(SimpleTestCase):
@@ -36,3 +36,55 @@ class ParamEditTests(SimpleTestCase):
     def test_empty_overrides_is_noop(self):
         code = "P = dict(a=1)\npart = Box(1,1,1)"
         self.assertEqual(set_params(code, {}), code)
+
+
+class AddParamTests(SimpleTestCase):
+    def test_one_line_dict_call(self):
+        out = add_param("P = dict(a=1)  # keep\npart = Box(1,1,1)", "b", 2.0)
+        self.assertIn("P = dict(a=1, b=2)  # keep", out)
+
+    def test_one_entry_per_line_keeps_the_layout(self):
+        code = "P = dict(\n    a=1,   # first\n    b=2.5\n)\npart = Box(1,1,1)"
+        out = add_param(code, "c", 3.0)
+        self.assertEqual(out.split("\n")[:5], ["P = dict(", "    a=1,   # first", "    b=2.5,", "    c=3,", ")"])
+
+    def test_brace_dict_and_empty_dict(self):
+        self.assertIn('"b": 4', add_param("P = {'a': 1}\n", "b", 4.0))
+        self.assertIn("P = dict(b=4)", add_param("P = dict()\n", "b", 4.0))
+
+    def test_no_dict_creates_one_after_the_imports(self):
+        out = add_param("import math\npart = Box(1,1,1)\n", "d", 5.0)
+        self.assertEqual(out.split("\n")[:3], ["import math", "P = dict(d=5)", ""])
+        compile(out, "<t>", "exec")
+
+
+class AddExtrudeTests(SimpleTestCase):
+    code = "P = dict(w=10)\npart = Box(P['w'], 10, 2)\n"
+
+    def test_cut_to_a_depth_adds_a_param(self):
+        out, param = add_extrude(self.code, "Sketch 1", "cut", 3)
+        self.assertEqual(param, "cut1_depth")
+        self.assertIn("P = dict(w=10, cut1_depth=3)", out)
+        self.assertTrue(out.endswith('part -= extrude(sketch("Sketch 1"), amount=-P["cut1_depth"])\n'))
+
+    def test_second_cut_gets_a_fresh_name(self):
+        once, _ = add_extrude(self.code, "S", "cut", 3)
+        _, param = add_extrude(once, "S", "cut", 4)
+        self.assertEqual(param, "cut2_depth")
+
+    def test_through_all_has_no_param(self):
+        out, param = add_extrude(self.code, "S", "cut", 3, through=True)
+        self.assertIsNone(param)
+        self.assertIn("amount=-part.bounding_box().diagonal)", out)
+        self.assertNotIn("cut1", out)
+
+    def test_join_grows_out_and_flip_reverses(self):
+        out, param = add_extrude(self.code, "S", "join", 5)
+        self.assertEqual(param, "join1_height")
+        self.assertIn('part += extrude(sketch("S"), amount=P["join1_height"])', out)
+        flipped, _ = add_extrude(self.code, "S", "join", 5, flip=True)
+        self.assertIn('amount=-P["join1_height"]', flipped)
+
+    def test_unknown_op_raises(self):
+        with self.assertRaises(ParamError):
+            add_extrude(self.code, "S", "revolve", 5)

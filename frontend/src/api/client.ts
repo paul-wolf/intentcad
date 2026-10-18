@@ -301,8 +301,9 @@ export const buildApi = {
     return request('/build/chat', { method: 'POST', body: JSON.stringify(payload) });
   },
   // `documentId`: the part whose uploaded files the script imports (ASSETS[...])
-  run(code: string, signal?: AbortSignal, documentId = ''): Promise<RunResponse> {
-    return request('/build/run', { method: 'POST', body: JSON.stringify({ code, document_id: documentId }), signal });
+  // `sketches`: the face sketches it extrudes (sketch("name")) as on screen — saved or not
+  run(code: string, signal?: AbortSignal, documentId = '', sketches: Record<string, unknown> = {}): Promise<RunResponse> {
+    return request('/build/run', { method: 'POST', body: JSON.stringify({ code, document_id: documentId, sketches }), signal });
   },
   export(code: string, format: 'stl' | 'step' | 'stl-parts' | 'dxf' | 'dxf-views', documentId = ''): Promise<{ format: string; data: string }> {
     return request('/build/export', { method: 'POST', body: JSON.stringify({ code, format, document_id: documentId }) });
@@ -323,8 +324,13 @@ export const buildApi = {
   setParams(code: string, params: Record<string, number>): Promise<{ code: string }> {
     return request('/build/set_params', { method: 'POST', body: JSON.stringify({ code, params }) });
   },
-  sensitivity(code: string, documentId = ''): Promise<{ params: Record<string, DimInfo> }> {
-    return request('/build/sensitivity', { method: 'POST', body: JSON.stringify({ code, document_id: documentId }) });
+  // append an extrude of a face sketch to the script (its depth becomes a new P key)
+  addExtrude(payload: { code: string; sketch: string; op: 'cut' | 'join'; depth: number; through: boolean; flip: boolean }):
+    Promise<{ code: string; param: string | null }> {
+    return request('/build/add_extrude', { method: 'POST', body: JSON.stringify(payload) });
+  },
+  sensitivity(code: string, documentId = '', sketches: Record<string, unknown> = {}): Promise<{ params: Record<string, DimInfo> }> {
+    return request('/build/sensitivity', { method: 'POST', body: JSON.stringify({ code, document_id: documentId, sketches }) });
   },
 };
 

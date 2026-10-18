@@ -2,14 +2,15 @@
  * Sketches drawn on a part's planar faces: finding the sketch for a face,
  * creating one (with the face outline as fixed construction geometry, so it
  * snaps like any other sketch geometry), and flattening a sketch into 3D
- * line segments on its plane for the viewer.
+ * line segments on its plane for the viewer. Its closed shapes become the
+ * "profile" the script's sketch("name") extrudes (modeling/sketch_profile.py).
  */
 
 import type { Constraint, Entity, Point, Sketch } from '@/types/document';
 import type { RunEdge } from '@/api/client';
 import { generateId } from '@/utils/id';
-import { arcFromBulge, bulgeFromMidpoint } from '@/utils/arcGeometry';
-import { rectangleOutline } from '@/utils/rectPath';
+import { arcFromBulge, arcMidpoint, bulgeFromMidpoint } from '@/utils/arcGeometry';
+import { rectangleOutline, rectanglePath } from '@/utils/rectPath';
 import { bezierPoint } from '@/utils/bezierGeometry';
 import { dot, len, sub, type Vec3 } from './dragHandle';
 import { planeBasis, planeForFace, sketchToWorld, worldToSketch, type PlaneBasis } from './sketchPlane';
@@ -183,6 +184,126 @@ export function sketchSegments(sketch: Sketch): number[] {
         out.push(...sketchToWorld(b, line[i]!), ...sketchToWorld(b, line[i + 1]!));
       }
     }
+  }
+  return out;
+}
+
+type XY = [number, number];
+
+/** One edge of a closed shape, in sketch coordinates (y down). */
+export type ProfileSegment =
+  | { t: 'line'; p: [XY, XY] }
+  | { t: 'arc'; p: [XY, XY, XY] }                  // start, a point on it, end
+  | { t: 'circle'; c: XY; r: number }
+  | { t: 'bezier'; p: [XY, XY, XY, XY] };
+
+/** A face sketch's closed shapes on its plane — what sketch("name") builds from. */
+export interface SketchProfile { plane: NonNullable<Sketch['plane']>; loops: ProfileSegment[][] }
+
+const xy = (p: Point): XY => [Math.round(p.x * 1e6) / 1e6, Math.round(p.y * 1e6) / 1e6];
+const JOIN_TOL = 1e-4;
+
+function ends(s: ProfileSegment): [XY, XY] | null {
+  return s.t === 'circle' ? null : [s.p[0], s.p[s.p.length - 1]!];
+}
+
+function reversed(s: ProfileSegment): ProfileSegment {
+  return s.t === 'circle' ? s : ({ ...s, p: [...s.p].reverse() } as ProfileSegment);
+}
+
+const near = (a: XY, b: XY) => Math.hypot(a[0] - b[0], a[1] - b[1]) < JOIN_TOL;
+
+// a polyline's segments: straight, or an arc where it has a bulge
+function pathSegments(points: Point[], bulge: number[] | undefined, closed: boolean): ProfileSegment[] {
+  const out: ProfileSegment[] = [];
+  const n = closed ? points.length : points.length - 1;
+  for (let i = 0; i < n; i++) {
+    const a = points[i]!, b = points[(i + 1) % points.length]!;
+    if (Math.hypot(a.x - b.x, a.y - b.y) < 1e-9) continue;
+    const k = bulge?.[i] ?? 0;
+    out.push(k ? { t: 'arc', p: [xy(a), xy(arcMidpoint(a, b, k)), xy(b)] } : { t: 'line', p: [xy(a), xy(b)] });
+  }
+  return out;
+}
+
+/** The closed shapes of a sketch's real (non-construction) geometry: circles,
+ *  closed polylines and rectangles as they are, and open lines, arcs and
+ *  curves chained end to end. `open` counts chains that don't close. */
+export function sketchLoops(sketch: Sketch): { loops: ProfileSegment[][]; open: number } {
+  const loops: ProfileSegment[][] = [];
+  const pool: ProfileSegment[] = [];
+  for (const e of sketch.entities) {
+    if ('construction' in e && e.construction) continue;
+    switch (e.type) {
+      case 'circle':
+        if (e.radius > 0) loops.push([{ t: 'circle', c: xy(e.center), r: e.radius }]);
+        break;
+      case 'rectangle': {
+        const path = rectanglePath(e);
+        if (e.width > 0 && e.height > 0) loops.push(pathSegments(path.points, path.bulge, true));
+        break;
+      }
+      case 'line': {
+        const segs = pathSegments(e.points, e.bulge, !!e.closed);
+        if (e.closed && segs.length) loops.push(segs);
+        else pool.push(...segs);
+        break;
+      }
+      case 'bezier':
+        pool.push({ t: 'bezier', p: e.controlPoints.map(xy) as [XY, XY, XY, XY] });
+        break;
+      default:
+        break;   // points, dimensions, text
+    }
+  }
+  // chain the loose pieces: grow each chain from its end until it meets its start
+  let open = 0;
+  const used = new Array(pool.length).fill(false);
+  for (let i = 0; i < pool.length; i++) {
+    if (used[i]) continue;
+    used[i] = true;
+    const chain = [pool[i]!];
+    const start = ends(pool[i]!)![0];
+    let end = ends(pool[i]!)![1];
+    for (;;) {
+      if (chain.length > 1 && near(end, start)) break;
+      let next = -1, flip = false;
+      for (let j = 0; j < pool.length && next < 0; j++) {
+        if (used[j]) continue;
+        const [a, b] = ends(pool[j]!)!;
+        if (near(a, end)) next = j;
+        else if (near(b, end)) { next = j; flip = true; }
+      }
+      if (next < 0) break;
+      used[next] = true;
+      const seg = flip ? reversed(pool[next]!) : pool[next]!;
+      chain.push(seg);
+      end = ends(seg)![1];
+    }
+    // a single segment closes only as a full curve (a bezier ending where it began)
+    if (near(end, start) && (chain.length > 1 || chain[0]!.t === 'bezier')) loops.push(chain);
+    else open++;
+  }
+  return { loops, open };
+}
+
+/** The profile stored with a face sketch (null for a sketch with no plane). */
+export function sketchProfile(sketch: Sketch): SketchProfile | null {
+  if (!sketch.plane) return null;
+  return { plane: sketch.plane, loops: sketchLoops(sketch).loops };
+}
+
+// matches the engine's SKETCH_REF (modeling/engine.py)
+const SKETCH_REF = /\bsketch\(\s*(["'])(.+?)\1\s*\)/g;
+
+/** The profiles of the face sketches `code` extrudes, by name — sent with a
+ *  build, and part of its cache key (the build depends on them too). */
+export function referencedProfiles(code: string, sketches: Sketch[]): Record<string, SketchProfile> {
+  const out: Record<string, SketchProfile> = {};
+  for (const m of code.matchAll(SKETCH_REF)) {
+    const s = sketches.find((k) => k.name === m[2]);
+    const p = s && sketchProfile(s);
+    if (p) out[m[2]!] = p;
   }
   return out;
 }

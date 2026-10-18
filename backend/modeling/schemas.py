@@ -189,6 +189,7 @@ class RunRequest(Schema):
     """Execute a build123d script (the model is the script)."""
     code: str
     document_id: str = ""   # whose uploaded files ASSETS["<sha256>"] resolves to
+    sketches: dict[str, dict] = {}   # name -> profile, for sketch("name"); else the document's
 
 
 class RunMetrics(Schema):
@@ -280,6 +281,7 @@ class ExportRequest(Schema):
     code: str
     format: str        # 'stl' | 'step' | 'stl-parts' | 'dxf'
     document_id: str = ""
+    sketches: dict[str, dict] = {}
 
 
 class ExportResponse(Schema):
@@ -296,9 +298,24 @@ class SetParamsResponse(Schema):
     code: str                       # the script with those values changed
 
 
+class AddExtrudeRequest(Schema):
+    code: str
+    sketch: str                     # the face sketch's name
+    op: str                         # 'cut' | 'join'
+    depth: float = 10.0
+    through: bool = False           # cut through the whole part (no depth param)
+    flip: bool = False              # reverse the direction
+
+
+class AddExtrudeResponse(Schema):
+    code: str
+    param: str | None = None        # the new P key holding the depth
+
+
 class SensitivityRequest(Schema):
     code: str
     document_id: str = ""
+    sketches: dict[str, dict] = {}
 
 
 class DimInfo(Schema):

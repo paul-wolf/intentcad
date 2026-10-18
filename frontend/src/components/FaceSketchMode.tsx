@@ -16,10 +16,14 @@ import type { RunResponse } from '@/api/client';
 import type { FaceRange, Viewer } from '@/build/webglViewer';
 import { dot, len, sub } from '@/build/dragHandle';
 import { planeBasis, sketchCamera, fitViewport, type PlaneBasis, type Rect } from '@/build/sketchPlane';
-import { findFaceSketch, newFaceSketch, sketchBounds, sketchSegments } from '@/build/faceSketch';
+import { findFaceSketch, newFaceSketch, sketchBounds, sketchLoops, sketchSegments } from '@/build/faceSketch';
 import type { Sketch } from '@/types/document';
 
 const FADE_MS = 250;
+
+/** What the Extrude dialog asks for: the script line it becomes is built by
+ *  the backend (/build/add_extrude). */
+export interface ExtrudeOptions { op: 'cut' | 'join'; depth: number; through: boolean; flip: boolean }
 
 interface Session {
   sketchId: string;
@@ -89,6 +93,8 @@ export function useFaceSketch(
   viewerRef: RefObject<Viewer | null>,
   canvasRef: RefObject<HTMLCanvasElement | null>,
   resRef: RefObject<RunResponse | null>,
+  /** Sketching finished (saved): `extrude` when it ended with Extrude. */
+  onDone?: (sketchName: string, extrude: ExtrudeOptions | null) => void,
 ): FaceSketchApi {
   const palette = useThemeStore((s) => s.palette);
   const [session, setSession] = useState<Session | null>(null);
@@ -102,6 +108,11 @@ export function useFaceSketch(
   const [shown, setShown] = useState(false);       // panels faded in
   const [strokes, setStrokes] = useState(false);   // the sketch canvas showing
   const [grid, setGrid] = useState(false);
+  const [extruding, setExtruding] = useState(false);   // the Extrude dialog is open
+  const [ex, setEx] = useState<ExtrudeOptions>({ op: 'cut', depth: 5, through: true, flip: false });
+  const pendingExtrude = useRef<ExtrudeOptions | null>(null);
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const timers = useRef<number[]>([]);
   const later = (ms: number, f: () => void) => { timers.current.push(window.setTimeout(f, ms)); };
@@ -118,7 +129,8 @@ export function useFaceSketch(
     const es = useEditorStore.getState();
     es.setActiveTool('select');
     es.clearSelection();
-    setGlRect(null); setShown(false); setStrokes(false);
+    setGlRect(null); setShown(false); setStrokes(false); setExtruding(false);
+    pendingExtrude.current = null;
     setSession({ sketchId: sk.id, label: faceLabel(sk.plane.normal), face, plane: planeBasis(sk.plane),
                  prevActive, phase: 'enter' });
   }, []);
@@ -149,6 +161,7 @@ export function useFaceSketch(
     if (!s || s.phase === 'exit') return;
     setStrokes(false);   // the 3D lines take over in place
     setShown(false);
+    setExtruding(false);
     setGlRect(null);
     setSession({ ...s, phase: 'exit' });
   }, []);
@@ -194,6 +207,9 @@ export function useFaceSketch(
         }));
         persistSketches();
         setSession(null);
+        const extrude = pendingExtrude.current;
+        pendingExtrude.current = null;
+        if (sk && !empty) onDoneRef.current?.(sk.name, extrude);
       });
     }
   }, [glRect, session?.phase, viewerRef, canvasRef, palette.background]);
@@ -231,6 +247,8 @@ export function useFaceSketch(
     return () => { unsub(); clearTimeout(t); };
   }, [session?.sketchId]);
 
+  const extrudingRef = useRef(false);
+  extrudingRef.current = extruding;
   // Esc finishes — only once the sketcher has nothing left to cancel
   useEffect(() => {
     if (!session?.sketchId) return;
@@ -239,6 +257,7 @@ export function useFaceSketch(
       const t = e.target as HTMLElement;
       if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') return;
       if (document.querySelector('[data-modal]')) return;   // the shortcuts help is open
+      if (extrudingRef.current) { e.preventDefault(); e.stopPropagation(); setExtruding(false); return; }
       const es = useEditorStore.getState();
       if (es.activeTool !== 'select' || es.selectedEntityIds.size || es.selectedPoints.length
           || es.selectedSegments.length || es.editingDimensionId || es.mirrorEntityIds || es.mirrorPickingLine
@@ -261,6 +280,14 @@ export function useFaceSketch(
     );
   }, [viewerRef]);
   useEffect(() => { pushLines(); }, [sketches, pushLines]);
+
+  const current = session ? sketches.find((x) => x.id === session.sketchId) : undefined;
+  const shapes = useMemo(() => (current ? sketchLoops(current) : { loops: [], open: 0 }), [current]);
+  const applyExtrude = () => {
+    if (!shapes.loops.length || !(ex.depth > 0 || (ex.op === 'cut' && ex.through))) return;
+    pendingExtrude.current = { ...ex, through: ex.op === 'cut' && ex.through };
+    exit();
+  };
 
   const fade = `opacity ${FADE_MS}ms ease`;
   const btn: CSSProperties = {
@@ -293,8 +320,15 @@ export function useFaceSketch(
               <span>Sketching on <b style={{ color: palette.text }}>{session.label}</b> · Esc to finish</span>
               <button style={{ ...btn, ...(grid ? { color: palette.accent, borderColor: palette.accent } : {}) }}
                       onClick={() => setGrid((g) => !g)} title="Show the grid on the face plane">Grid</button>
+              <button style={{ ...btn, ...(extruding ? { color: palette.accent, borderColor: palette.accent } : {}) }}
+                      onClick={() => setExtruding((o) => !o)}
+                      title="Cut the closed shapes into the part, or grow them out of it">Extrude…</button>
               <button style={{ ...btn, background: palette.accent, borderColor: palette.accent, color: '#fff' }}
                       onClick={exit}>Done</button>
+              {extruding && (
+                <ExtrudeDialog value={ex} onChange={setEx} shapes={shapes.loops.length} open={shapes.open}
+                               onApply={applyExtrude} onCancel={() => setExtruding(false)} />
+              )}
             </div>
           }
         />
@@ -314,4 +348,68 @@ export function useFaceSketch(
     pushLines,
     overlay,
   };
+}
+
+function ExtrudeDialog({ value, onChange, shapes, open, onApply, onCancel }: {
+  value: ExtrudeOptions; onChange: (v: ExtrudeOptions) => void;
+  shapes: number; open: number; onApply: () => void; onCancel: () => void;
+}) {
+  const palette = useThemeStore((s) => s.palette);
+  const through = value.op === 'cut' && value.through;
+  const ok = shapes > 0 && (through || value.depth > 0);
+  const set = (p: Partial<ExtrudeOptions>) => onChange({ ...value, ...p });
+  const seg = (on: boolean): CSSProperties => ({
+    flex: 1, padding: '3px 0', fontSize: '12px', cursor: 'pointer', border: `1px solid ${on ? palette.accent : palette.border}`,
+    background: on ? palette.accent : palette.buttonBg, color: on ? '#fff' : palette.text,
+  });
+  const row: CSSProperties = { display: 'flex', alignItems: 'center', gap: '8px', color: palette.text };
+  return (
+    // the banner swallows mousedown (keeps the sketch focused): let the fields have it
+    <div role="dialog" aria-label="Extrude" onMouseDown={(e) => e.stopPropagation()}
+         onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter' && ok) onApply(); }}
+         style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, width: 230, padding: '10px 12px',
+                  display: 'flex', flexDirection: 'column', gap: '9px', textAlign: 'left',
+                  background: palette.panelBg, border: `1px solid ${palette.border}`, borderRadius: '6px',
+                  boxShadow: '0 4px 14px rgba(0,0,0,0.3)', fontSize: '12px' }}>
+      <div style={{ display: 'flex' }}>
+        <button style={{ ...seg(value.op === 'cut'), borderRadius: '4px 0 0 4px' }} onClick={() => set({ op: 'cut' })}
+                title="Remove the shapes from the part (holes, pockets)">Cut</button>
+        <button style={{ ...seg(value.op === 'join'), borderRadius: '0 4px 4px 0', borderLeft: 'none' }}
+                onClick={() => set({ op: 'join' })} title="Add the shapes to the part (pegs, bosses)">Join</button>
+      </div>
+      {value.op === 'cut' && (
+        <label style={row}>
+          <input type="checkbox" checked={value.through} onChange={(e) => set({ through: e.target.checked })} />
+          Through all
+        </label>
+      )}
+      <label style={{ ...row, opacity: through ? 0.45 : 1 }}>
+        <span style={{ width: 52 }}>{value.op === 'cut' ? 'Depth' : 'Height'}</span>
+        <input type="number" min={0} step={0.5} value={value.depth} disabled={through}
+               onChange={(e) => set({ depth: parseFloat(e.target.value) })}
+               style={{ width: 70, fontSize: '12px', padding: '2px 4px', background: palette.inputBg,
+                        color: palette.text, border: `1px solid ${palette.border}`, borderRadius: '3px' }} />
+        <span style={{ color: palette.textSecondary }}>mm</span>
+      </label>
+      <label style={row} title={value.op === 'cut' ? 'Cut out of the face instead of into the part' : 'Grow into the part instead of out of the face'}>
+        <input type="checkbox" checked={value.flip} onChange={(e) => set({ flip: e.target.checked })} />
+        Flip direction
+      </label>
+      <div style={{ color: shapes ? palette.textSecondary : palette.danger, lineHeight: 1.4 }}>
+        {shapes ? `${shapes} closed shape${shapes > 1 ? 's' : ''}` : 'No closed shapes to extrude'}
+        {open ? ` · ${open} open (ignored)` : ''}
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px' }}>
+        <button onClick={onCancel} style={{ fontSize: '12px', padding: '2px 10px', cursor: 'pointer', borderRadius: '4px',
+                                            background: palette.buttonBg, color: palette.text, border: `1px solid ${palette.border}` }}>
+          Cancel
+        </button>
+        <button onClick={onApply} disabled={!ok}
+                style={{ fontSize: '12px', padding: '2px 10px', cursor: ok ? 'pointer' : 'default', borderRadius: '4px', opacity: ok ? 1 : 0.5,
+                         background: palette.accent, color: '#fff', border: `1px solid ${palette.accent}` }}>
+          {value.op === 'cut' ? 'Cut' : 'Join'}
+        </button>
+      </div>
+    </div>
+  );
 }
