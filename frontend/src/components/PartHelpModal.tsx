@@ -33,9 +33,12 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
       ['Hold ⌥', 'Shows dimensions in the 3D view.'],
       ['Sketch on face', 'Select a flat face and press K (or the button): the full 2D sketcher opens on that face. '
         + 'Esc or Done returns to 3D; the sketch stays drawn on the part. Double-click it to edit again.'],
-      ['Extrude…', 'In the sketch banner: Cut the sketch\'s closed shapes into the part (through all, or to a depth) '
-        + 'or Join them on as pegs/bosses; Flip reverses the direction. It adds one script line and a depth '
-        + 'parameter; editing the sketch later rebuilds the part.'],
+      ['Sketch on a plane', 'With nothing selected, K (or Sketch…) offers the Top, Front and Right planes through '
+        + 'the origin (keys T, F, R). This is how a new part starts: sketch the outline, then Extrude → New body.'],
+      ['Extrude…', 'In the sketch banner. With no part yet, New body makes the shapes the part, at a height. '
+        + 'After that: Cut the closed shapes into the part (through all, or to a depth) or Join them on as '
+        + 'pegs/bosses; Flip reverses the direction. It adds one script line and a depth parameter; editing '
+        + 'the sketch later rebuilds the part.'],
     ],
   },
   {

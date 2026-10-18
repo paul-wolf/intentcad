@@ -117,27 +117,46 @@ def param_names(code: str) -> set[str]:
     return set()
 
 
+def _assigns_part(tree: ast.Module) -> bool:
+    return any(isinstance(n, (ast.Assign, ast.AnnAssign))
+               and any(isinstance(t, ast.Name) and t.id == "part"
+                       for t in (n.targets if isinstance(n, ast.Assign) else [n.target]))
+               for n in tree.body)
+
+
 def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
-                through: bool = False, flip: bool = False) -> tuple[str, str | None]:
-    """Append an extrude of face sketch `sketch` to the script: op "cut"
-    removes it from `part`, "join" adds it. The depth becomes a new P key
-    (unless `through`: a cut through the whole part). Cuts go into the part
-    and joins grow out of the face; `flip` reverses that.
+                through: bool = False, flip: bool = False, datum: bool = False) -> tuple[str, str | None]:
+    """Append an extrude of sketch `sketch` to the script: op "cut" removes
+    it from `part`, "join" adds it, "new" makes it the part (a script with no
+    `part` yet). The depth becomes a new P key (unless `through`: a cut
+    through the whole part).
+
+    A face sketch's plane faces out of the part, so cuts go into the part and
+    joins grow out of the face. A `datum` sketch (on a base plane: Top, Front,
+    Right) has no outside: everything goes along the plane's normal, and a
+    through cut goes both ways. `flip` reverses the direction.
 
     Returns (code, the new param name or None)."""
-    if op not in ("cut", "join"):
+    if op not in ("cut", "join", "new"):
         raise ParamError(f"unknown extrude operation {op!r}")
-    ast.parse(code)
-    into = (op == "cut") != flip          # negative amount: into the part
-    sign = "-" if into else ""
+    tree = ast.parse(code)
+    blank = not code.strip()
+    if op == "new" and _assigns_part(tree):
+        raise ParamError("the script already makes a part: Cut or Join this sketch instead")
+    into = op == "cut" and not datum      # negative amount: into the part
+    sign = "-" if into != flip else ""
     ref = f"sketch({json.dumps(sketch)})"
     param = None
     if op == "cut" and through:
-        amount = f"{sign}part.bounding_box().diagonal"
+        bb = "part.bounding_box()"
+        amount = f"{bb}.diagonal + {bb}.center().length, both=True" if datum else f"{sign}{bb}.diagonal"
     else:
-        param = _unique(param_names(code), op, "depth" if op == "cut" else "height")
+        stem, suffix = {"cut": ("cut", "depth"), "join": ("join", "height"), "new": ("body", "height")}[op]
+        param = _unique(param_names(code), stem, suffix)
         code = add_param(code, param, float(depth))
         amount = f'{sign}P["{param}"]'
-    sym = "-=" if op == "cut" else "+="
+    sym = {"cut": "-=", "join": "+=", "new": "="}[op]
     line = f"part {sym} extrude({ref}, amount={amount})"
-    return code.rstrip("\n") + "\n" + line + "\n", param
+    code = code.strip() if blank else code.rstrip("\n")
+    gap = "\n\n" if op == "new" else "\n"
+    return code + gap + line + "\n", param

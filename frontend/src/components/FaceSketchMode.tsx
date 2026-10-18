@@ -16,20 +16,25 @@ import type { RunResponse } from '@/api/client';
 import type { FaceRange, Viewer } from '@/build/webglViewer';
 import { dot, len, sub } from '@/build/dragHandle';
 import { planeBasis, sketchCamera, fitViewport, type PlaneBasis, type Rect } from '@/build/sketchPlane';
-import { findFaceSketch, newFaceSketch, sketchBounds, sketchLoops, sketchSegments } from '@/build/faceSketch';
+import {
+  BASE_PLANES, findFaceSketch, newFaceSketch, newPlaneSketch, sketchBasePlane, sketchBounds, sketchLoops, sketchSegments,
+  type BasePlane,
+} from '@/build/faceSketch';
 import type { Sketch } from '@/types/document';
 
 const FADE_MS = 250;
 
 /** What the Extrude dialog asks for: the script line it becomes is built by
- *  the backend (/build/add_extrude). */
-export interface ExtrudeOptions { op: 'cut' | 'join'; depth: number; through: boolean; flip: boolean }
+ *  the backend (/build/add_extrude). "new" makes the part (no part yet);
+ *  `datum`: the sketch is on a base plane, not a part face. */
+export interface ExtrudeOptions { op: 'cut' | 'join' | 'new'; depth: number; through: boolean; flip: boolean; datum?: boolean }
 
 interface Session {
   sketchId: string;
   label: string;
   face: number;            // highlighted face index (−1: none matched)
   plane: PlaneBasis;
+  datum: boolean;          // on a base plane (no part face)
   prevActive: string;      // the document's active sketch before, restored after
   phase: 'enter' | 'on' | 'exit';
 }
@@ -68,8 +73,16 @@ function matchFace(sk: Sketch, faces: FaceRange[]): FaceRange | null {
   return best;
 }
 
+// a base plane's sketch frames at least ±50 mm around the origin (its only
+// geometry may be the origin marker)
+const PLANE_VIEW = 50;
 const initialFor = (sk: Sketch | undefined) => (w: number, h: number) => {
-  const b = sk ? sketchBounds(sk) : null;
+  let b = sk ? sketchBounds(sk) : null;
+  if (sk && sketchBasePlane(sk)) {
+    const m = PLANE_VIEW;
+    b = { min: { x: Math.min(b?.min.x ?? 0, -m), y: Math.min(b?.min.y ?? 0, -m) },
+          max: { x: Math.max(b?.max.x ?? 0, m), y: Math.max(b?.max.y ?? 0, m) } };
+  }
   return b ? fitViewport(b.min, b.max, w, h) : { offset: { x: w / 2, y: h / 2 }, scale: 4 };
 };
 
@@ -79,6 +92,8 @@ export interface FaceSketchApi {
   activeRef: RefObject<boolean>;
   /** Sketch on this planar face: reopen its sketch, or start one. */
   enter(face: FaceRange): void;
+  /** Sketch on a base plane through the origin: reopen its sketch, or start one. */
+  enterPlane(which: BasePlane): void;
   /** Reopen a stored face sketch (double-click on the part). */
   open(sketchId: string): void;
   exit(): void;
@@ -95,6 +110,8 @@ export function useFaceSketch(
   resRef: RefObject<RunResponse | null>,
   /** Sketching finished (saved): `extrude` when it ended with Extrude. */
   onDone?: (sketchName: string, extrude: ExtrudeOptions | null) => void,
+  /** The script makes a part already: Extrude offers Cut / Join, else New body. */
+  hasPart: () => boolean = () => true,
 ): FaceSketchApi {
   const palette = useThemeStore((s) => s.palette);
   const [session, setSession] = useState<Session | null>(null);
@@ -131,8 +148,9 @@ export function useFaceSketch(
     es.clearSelection();
     setGlRect(null); setShown(false); setStrokes(false); setExtruding(false);
     pendingExtrude.current = null;
-    setSession({ sketchId: sk.id, label: faceLabel(sk.plane.normal), face, plane: planeBasis(sk.plane),
-                 prevActive, phase: 'enter' });
+    const base = sketchBasePlane(sk);
+    setSession({ sketchId: sk.id, label: base ? BASE_PLANES[base].name : faceLabel(sk.plane.normal), face,
+                 plane: planeBasis(sk.plane), datum: !sk.face, prevActive, phase: 'enter' });
   }, []);
 
   const enter = useCallback((f: FaceRange) => {
@@ -149,6 +167,21 @@ export function useFaceSketch(
     }
     start(sk, f.index);
   }, [resRef, start]);
+
+  const enterPlane = useCallback((which: BasePlane) => {
+    if (sessionRef.current) return;
+    const doc = useDocumentStore.getState().document;
+    let sk = doc.sketches.find((s) => sketchBasePlane(s) === which);
+    if (!sk) {
+      const base = `Sketch on ${BASE_PLANES[which].name}`;
+      let name = base;
+      for (let i = 2; doc.sketches.some((s) => s.name === name); i++) name = `${base} ${i}`;
+      sk = newPlaneSketch(name, which);
+      const added = sk;
+      useDocumentStore.setState((s) => ({ document: { ...s.document, sketches: [...s.document.sketches, added] } }));
+    }
+    start(sk, -1);
+  }, [start]);
 
   const open = useCallback((id: string) => {
     const sk = useDocumentStore.getState().document.sketches.find((s) => s.id === id);
@@ -186,7 +219,8 @@ export function useFaceSketch(
       const sk = useDocumentStore.getState().document.sketches.find((x) => x.id === s.sketchId);
       const vp = initialFor(sk)(glRect.width, glRect.height);
       const cam = sketchCamera(s.plane, vp, glRect, gl.getBoundingClientRect());
-      v.enterSketch({ plane: s.plane, face: s.face, bg: hexRgb(palette.background), center: cam.center, halfH: cam.halfH });
+      v.enterSketch({ plane: s.plane, face: s.face, bg: hexRgb(palette.background), center: cam.center, halfH: cam.halfH,
+                      clip: !s.datum });
       requestAnimationFrame(() => setShown(true));
       later(FADE_MS, () => {
         setStrokes(true);
@@ -275,7 +309,7 @@ export function useFaceSketch(
   const pushLines = useCallback(() => {
     viewerRef.current?.setSketchLines(
       useDocumentStore.getState().document.sketches
-        .filter((s) => s.face && s.plane && s.visible !== false)
+        .filter((s) => s.plane && s.visible !== false)
         .map((s) => ({ id: s.id, name: s.name, segments: sketchSegments(s) })),
     );
   }, [viewerRef]);
@@ -283,9 +317,19 @@ export function useFaceSketch(
 
   const current = session ? sketches.find((x) => x.id === session.sketchId) : undefined;
   const shapes = useMemo(() => (current ? sketchLoops(current) : { loops: [], open: 0 }), [current]);
+  const hasPartRef = useRef(hasPart);
+  hasPartRef.current = hasPart;
+  // the dialog offers New body only while there is no part, Cut / Join after
+  const toggleExtrude = () => {
+    if (!extruding) {
+      const part = hasPartRef.current();
+      setEx((e) => (part ? (e.op === 'new' ? { ...e, op: 'cut' } : e) : { ...e, op: 'new', depth: e.op === 'new' ? e.depth : 10 }));
+    }
+    setExtruding((o) => !o);
+  };
   const applyExtrude = () => {
     if (!shapes.loops.length || !(ex.depth > 0 || (ex.op === 'cut' && ex.through))) return;
-    pendingExtrude.current = { ...ex, through: ex.op === 'cut' && ex.through };
+    pendingExtrude.current = { ...ex, through: ex.op === 'cut' && ex.through, datum: !!session?.datum };
     exit();
   };
 
@@ -321,12 +365,12 @@ export function useFaceSketch(
               <button style={{ ...btn, ...(grid ? { color: palette.accent, borderColor: palette.accent } : {}) }}
                       onClick={() => setGrid((g) => !g)} title="Show the grid on the face plane">Grid</button>
               <button style={{ ...btn, ...(extruding ? { color: palette.accent, borderColor: palette.accent } : {}) }}
-                      onClick={() => setExtruding((o) => !o)}
-                      title="Cut the closed shapes into the part, or grow them out of it">Extrude…</button>
+                      onClick={toggleExtrude}
+                      title="Turn the closed shapes into 3D: the part's first shape, or cut into / grow out of it">Extrude…</button>
               <button style={{ ...btn, background: palette.accent, borderColor: palette.accent, color: '#fff' }}
                       onClick={exit}>Done</button>
               {extruding && (
-                <ExtrudeDialog value={ex} onChange={setEx} shapes={shapes.loops.length} open={shapes.open}
+                <ExtrudeDialog value={ex} onChange={setEx} shapes={shapes.loops.length} open={shapes.open} datum={session.datum}
                                onApply={applyExtrude} onCancel={() => setExtruding(false)} />
               )}
             </div>
@@ -340,6 +384,7 @@ export function useFaceSketch(
     active: !!session,
     activeRef,
     enter,
+    enterPlane,
     open,
     exit,
     canvasStyle: glRect
@@ -350,9 +395,9 @@ export function useFaceSketch(
   };
 }
 
-function ExtrudeDialog({ value, onChange, shapes, open, onApply, onCancel }: {
+function ExtrudeDialog({ value, onChange, shapes, open, datum, onApply, onCancel }: {
   value: ExtrudeOptions; onChange: (v: ExtrudeOptions) => void;
-  shapes: number; open: number; onApply: () => void; onCancel: () => void;
+  shapes: number; open: number; datum: boolean; onApply: () => void; onCancel: () => void;
 }) {
   const palette = useThemeStore((s) => s.palette);
   const through = value.op === 'cut' && value.through;
@@ -371,16 +416,23 @@ function ExtrudeDialog({ value, onChange, shapes, open, onApply, onCancel }: {
                   display: 'flex', flexDirection: 'column', gap: '9px', textAlign: 'left',
                   background: palette.panelBg, border: `1px solid ${palette.border}`, borderRadius: '6px',
                   boxShadow: '0 4px 14px rgba(0,0,0,0.3)', fontSize: '12px' }}>
-      <div style={{ display: 'flex' }}>
-        <button style={{ ...seg(value.op === 'cut'), borderRadius: '4px 0 0 4px' }} onClick={() => set({ op: 'cut' })}
-                title="Remove the shapes from the part (holes, pockets)">Cut</button>
-        <button style={{ ...seg(value.op === 'join'), borderRadius: '0 4px 4px 0', borderLeft: 'none' }}
-                onClick={() => set({ op: 'join' })} title="Add the shapes to the part (pegs, bosses)">Join</button>
-      </div>
+      {value.op === 'new' ? (
+        <div style={{ color: palette.text, lineHeight: 1.4 }}>
+          <b>New body</b>
+          <div style={{ color: palette.textSecondary }}>The shapes become the part, extruded to a height.</div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex' }}>
+          <button style={{ ...seg(value.op === 'cut'), borderRadius: '4px 0 0 4px' }} onClick={() => set({ op: 'cut' })}
+                  title="Remove the shapes from the part (holes, pockets)">Cut</button>
+          <button style={{ ...seg(value.op === 'join'), borderRadius: '0 4px 4px 0', borderLeft: 'none' }}
+                  onClick={() => set({ op: 'join' })} title="Add the shapes to the part (pegs, bosses)">Join</button>
+        </div>
+      )}
       {value.op === 'cut' && (
         <label style={row}>
           <input type="checkbox" checked={value.through} onChange={(e) => set({ through: e.target.checked })} />
-          Through all
+          Through all{datum ? ' (both ways)' : ''}
         </label>
       )}
       <label style={{ ...row, opacity: through ? 0.45 : 1 }}>
@@ -391,7 +443,9 @@ function ExtrudeDialog({ value, onChange, shapes, open, onApply, onCancel }: {
                         color: palette.text, border: `1px solid ${palette.border}`, borderRadius: '3px' }} />
         <span style={{ color: palette.textSecondary }}>mm</span>
       </label>
-      <label style={row} title={value.op === 'cut' ? 'Cut out of the face instead of into the part' : 'Grow into the part instead of out of the face'}>
+      <label style={row} title={datum || value.op === 'new'
+        ? 'Extrude to the other side of the plane'
+        : value.op === 'cut' ? 'Cut out of the face instead of into the part' : 'Grow into the part instead of out of the face'}>
         <input type="checkbox" checked={value.flip} onChange={(e) => set({ flip: e.target.checked })} />
         Flip direction
       </label>
@@ -407,7 +461,7 @@ function ExtrudeDialog({ value, onChange, shapes, open, onApply, onCancel }: {
         <button onClick={onApply} disabled={!ok}
                 style={{ fontSize: '12px', padding: '2px 10px', cursor: ok ? 'pointer' : 'default', borderRadius: '4px', opacity: ok ? 1 : 0.5,
                          background: palette.accent, color: '#fff', border: `1px solid ${palette.accent}` }}>
-          {value.op === 'cut' ? 'Cut' : 'Join'}
+          {value.op === 'cut' ? 'Cut' : value.op === 'join' ? 'Join' : 'Create'}
         </button>
       </div>
     </div>

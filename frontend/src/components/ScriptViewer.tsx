@@ -15,7 +15,7 @@ import { importScript, importLabel, STEP_ACCEPT } from '@/build/importStep';
 import { PartVersionsPanel } from './PartVersionsPanel';
 import { PartHelpModal } from './PartHelpModal';
 import { useFaceSketch, type ExtrudeOptions } from './FaceSketchMode';
-import { referencedProfiles } from '@/build/faceSketch';
+import { BASE_PLANES, referencedProfiles, type BasePlane } from '@/build/faceSketch';
 
 // the view buttons, in key order (1–6, then 0)
 const VIEW_BUTTONS = (['1', '2', '3', '4', '5', '6', '0'] as const)
@@ -222,7 +222,12 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const [sel, setSel] = useState<number[]>([]);   // selected face indices (≤ 2)
   const resRef = useRef<RunResponse | null>(null);
   const selRef = useRef<number[]>([]);
-  const faceSketch = useFaceSketch(viewerRef, canvasRef, resRef, (name, ex) => { void sketchDoneRef.current(name, ex); });
+  // a part to cut / join into: any script that assigns `part`, except the
+  // unbuilt starter (New body replaces that)
+  const hasPartRef = useRef(false);
+  hasPartRef.current = !(code === STARTER && status !== 'done') && /^part\s*=[^=]/m.test(code);
+  const faceSketch = useFaceSketch(viewerRef, canvasRef, resRef, (name, ex) => { void sketchDoneRef.current(name, ex); },
+                                   () => hasPartRef.current);
   const faceSketchRef = useRef(faceSketch);
   faceSketchRef.current = faceSketch;
   const [sketchTip, setSketchTip] = useState<{ name: string; x: number; y: number } | null>(null);
@@ -424,7 +429,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       // A brand-new part shows the STARTER seed but does NOT auto-build it —
       // you almost always replace it, so kicking off a build of the default is
       // wasted work. Saved parts build on open so you see the model immediately.
-      if (initial === STARTER) { setStatus('idle'); setMessage('Edit the script or ask the AI, then Build.'); }
+      if (initial === STARTER) {
+        setStatus('idle');
+        setMessage(sketchOnFace ? 'Edit the script or ask the AI, then Build — or press K to sketch the first shape.'
+                                : 'Edit the script or ask the AI, then Build.');
+      }
       else build(initial);
     };
     const seedWhenLoaded = () => {
@@ -631,9 +640,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       return;
     }
     try {
-      const r = await buildApi.addExtrude({ code, sketch: name, ...ex });
+      // New body starts the script over when it is still the unbuilt starter
+      const base = ex.op === 'new' && code === STARTER ? '' : code;
+      const r = await buildApi.addExtrude({ code: base, sketch: name, ...ex });
       setCode(r.code);
-      const out = await build(r.code, `${ex.op === 'cut' ? 'Cut' : 'Join'} ${name}`);
+      const out = await build(r.code, `${{ cut: 'Cut', join: 'Join', new: 'New body from' }[ex.op]} ${name}`);
       if (out.kind === 'ok') saveDraft(r.code);
     } catch (err) {
       setMessage(errorText(err));
@@ -714,12 +725,23 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     window.clearTimeout(viewHintTimer.current);
     viewHintTimer.current = window.setTimeout(() => setViewHint(''), 2500);
   };
-  // K / "Sketch on face": the one selected face, if it's flat
+  // K / "Sketch": on the one selected face, if it's flat; with nothing
+  // selected, pick a base plane (Top / Front / Right)
+  const [planeMenu, setPlaneMenu] = useState(false);
+  const planeMenuRef = useRef(false);
+  planeMenuRef.current = planeMenu;
+  const sketchOnPlane = (which: BasePlane) => {
+    setPlaneMenu(false);
+    setSketchTip(null);
+    faceSketchRef.current.enterPlane(which);
+  };
   const sketchOnSelection = () => {
     const s = selRef.current;
+    if (!s.length) { setPlaneMenu((o) => !o); return; }
+    setPlaneMenu(false);
     const f = s.length === 1 ? resRef.current?.faces.find((x) => x.index === s[0]) : undefined;
     if (f && f.kind === 'plane') { setSketchTip(null); faceSketchRef.current.enter(f); return; }
-    setViewHint('Select one flat face, then press K');
+    setViewHint('Select one flat face (or nothing, for a base plane), then press K');
     window.clearTimeout(viewHintTimer.current);
     viewHintTimer.current = window.setTimeout(() => setViewHint(''), 2500);
   };
@@ -730,6 +752,12 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       if (e.target instanceof HTMLElement && e.target !== document.body) return;
       const v = viewerRef.current;
       if (!v) return;
+      if (planeMenuRef.current) {   // the plane chooser: T / F / R, Esc closes
+        const pick = ({ t: 'top', f: 'front', r: 'right' } as Record<string, BasePlane>)[e.key.toLowerCase()];
+        if (pick) sketchOnPlane(pick);
+        else if (e.key === 'Escape') setPlaneMenu(false);
+        if (pick || e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); return; }
+      }
       const view = VIEW_KEYS[e.key];
       if (view) v.setView(view);
       else if (sketchOnFace && (e.key === 'k' || e.key === 'K')) sketchOnSelection();
@@ -1165,13 +1193,39 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                 Normal
               </button>
               {sketchOnFace && (() => {
-                const ok = !!selFace && selFace.kind === 'plane';
+                const onFace = !!selFace && selFace.kind === 'plane';
+                const ok = onFace || !sel.length;
                 return (
-                  <button style={{ ...viewBtn, marginLeft: '6px', opacity: ok ? 1 : 0.45, cursor: ok ? 'pointer' : 'default' }}
-                          disabled={!ok} onClick={sketchOnSelection}
-                          title={ok ? 'Sketch on the selected face (K)' : 'Select one flat face first (then K or this button)'}>
-                    Sketch on face
-                  </button>
+                  <span style={{ position: 'relative', marginLeft: '6px' }}>
+                    <button style={{ ...viewBtn, opacity: ok ? 1 : 0.45, cursor: ok ? 'pointer' : 'default',
+                                     ...(planeMenu ? { color: palette.accent, borderColor: palette.accent } : {}) }}
+                            disabled={!ok} onClick={sketchOnSelection}
+                            title={onFace ? 'Sketch on the selected face (K)'
+                              : ok ? 'Sketch on a base plane: Top, Front or Right (K)'
+                                : 'Select one flat face, or nothing for a base plane (then K or this button)'}>
+                      {onFace ? 'Sketch on face' : 'Sketch…'}
+                    </button>
+                    {planeMenu && (
+                      <div role="menu" aria-label="Sketch on a plane"
+                           style={{ position: 'absolute', bottom: 'calc(100% + 6px)', left: 0, minWidth: 150, padding: '4px',
+                                    display: 'flex', flexDirection: 'column', gap: '2px', background: palette.panelBg,
+                                    border: `1px solid ${palette.border}`, borderRadius: '6px',
+                                    boxShadow: '0 4px 14px rgba(0,0,0,0.3)' }}>
+                        <div style={{ padding: '2px 6px 4px', color: palette.textSecondary }}>Sketch on</div>
+                        {(Object.keys(BASE_PLANES) as BasePlane[]).map((k) => (
+                          <button key={k} role="menuitem" onClick={() => sketchOnPlane(k)}
+                                  style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', padding: '4px 8px',
+                                           background: 'none', border: 'none', borderRadius: '4px', cursor: 'pointer',
+                                           color: palette.text, fontSize: '12px', textAlign: 'left' }}
+                                  onMouseEnter={(e) => { e.currentTarget.style.background = palette.buttonBg; }}
+                                  onMouseLeave={(e) => { e.currentTarget.style.background = 'none'; }}>
+                            <span><u>{BASE_PLANES[k].name[0]}</u>{BASE_PLANES[k].name.slice(1)}</span>
+                            <span style={{ color: palette.textSecondary }}>{BASE_PLANES[k].axes}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </span>
                 );
               })()}
               <button style={{ ...viewBtn, marginLeft: '6px', ...(ortho ? { color: palette.accent, borderColor: palette.accent } : {}) }}

@@ -88,3 +88,19 @@ class AddExtrudeTests(SimpleTestCase):
     def test_unknown_op_raises(self):
         with self.assertRaises(ParamError):
             add_extrude(self.code, "S", "revolve", 5)
+
+    def test_new_body_starts_an_empty_script(self):
+        out, param = add_extrude("", "Sketch on Top plane", "new", 12)
+        self.assertEqual(param, "body1_height")
+        self.assertEqual(out, 'P = dict(body1_height=12)\n\n'
+                              'part = extrude(sketch("Sketch on Top plane"), amount=P["body1_height"])\n')
+
+    def test_new_body_refuses_a_script_that_has_a_part(self):
+        with self.assertRaises(ParamError):
+            add_extrude(self.code, "S", "new", 5)
+
+    def test_datum_sketch_cuts_along_the_normal_and_through_both_ways(self):
+        out, _ = add_extrude(self.code, "S", "cut", 3, datum=True)
+        self.assertIn('amount=P["cut1_depth"])', out)
+        through, _ = add_extrude(self.code, "S", "cut", 3, through=True, datum=True)
+        self.assertIn("both=True)", through)

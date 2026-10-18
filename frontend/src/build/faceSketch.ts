@@ -74,6 +74,35 @@ export function newFaceSketch(name: string, face: FaceInfo, edges: RunEdge[]): S
   };
 }
 
+/** The base planes through the origin, for sketching before there is a part
+ *  (or independent of its faces). Normals as the standard views look from. */
+export const BASE_PLANES = {
+  top: { name: 'Top plane', axes: 'XY', normal: [0, 0, 1] as Vec3 },
+  front: { name: 'Front plane', axes: 'XZ', normal: [0, -1, 0] as Vec3 },
+  right: { name: 'Right plane', axes: 'YZ', normal: [1, 0, 0] as Vec3 },
+};
+export type BasePlane = keyof typeof BASE_PLANES;
+
+/** The base plane a sketch is on (null: on a part face, or none). */
+export function sketchBasePlane(s: Sketch): BasePlane | null {
+  if (!s.plane || s.face) return null;
+  const b = planeBasis(s.plane);
+  if (len(b.origin) > 1e-6) return null;
+  for (const [k, p] of Object.entries(BASE_PLANES)) if (dot(b.normal, p.normal) > 0.999) return k as BasePlane;
+  return null;
+}
+
+/** A new sketch on a base plane, with the origin as a fixed reference point. */
+export function newPlaneSketch(name: string, which: BasePlane): Sketch {
+  const plane = planeForFace([0, 0, 0], BASE_PLANES[which].normal);
+  const origin: Entity = { id: generateId('e'), type: 'point', position: { x: 0, y: 0 }, construction: true, reference: true };
+  return {
+    id: generateId('sk'), name, visible: true, entities: [origin],
+    constraints: [{ id: generateId('c'), type: 'fixed', entityId: origin.id }],
+    plane: { origin: [0, 0, 0], normal: round(plane.normal), xAxis: round(plane.xAxis) },
+  };
+}
+
 // samples within 0.01 mm of the circle through the first, middle and last points
 function fitsArc(pts: Point[]): boolean {
   if (pts.length < 3) return false;

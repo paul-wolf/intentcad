@@ -260,10 +260,11 @@ export interface Viewer {
    * right after the canvas has moved/resized for sketch mode: the first frame
    * is compensated so the part doesn't jump. Orbit, zoom and picking are off;
    * the part dims, the face stays lit, and geometry in front of the plane is
-   * cut away. Rendered synchronously.
+   * cut away (unless `clip` is false: a base plane, where the part is kept
+   * whole). Rendered synchronously.
    */
   enterSketch(s: { plane: PlaneBasis; face: number; bg: [number, number, number];
-                   center: Vec3; halfH: number }): void;
+                   center: Vec3; halfH: number; clip?: boolean }): void;
   /** Sketch mode: the sketch viewport moved — follow it (synchronous render). */
   setSketchCamera(center: Vec3, halfH: number): void;
   /** Leave sketch mode: animate back to the view before enterSketch. Call
@@ -991,7 +992,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
         to: { q: planeQuat(s.plane), center: s.center, distance: s.halfH / TAN_HALF, lens: [0, 0] },
         t0: performance.now(),
         dim: [dimK, 1],
-        clip: [Number.isFinite(clipD) ? clipD : far, Math.max(0.02, modelRadius * 1e-3)],
+        clip: [Number.isFinite(clipD) ? clipD : far, s.clip === false ? 1e9 : Math.max(0.02, modelRadius * 1e-3)],
       };
       stepCamAnim();
       renderNow();

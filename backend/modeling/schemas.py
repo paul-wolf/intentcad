@@ -300,11 +300,12 @@ class SetParamsResponse(Schema):
 
 class AddExtrudeRequest(Schema):
     code: str
-    sketch: str                     # the face sketch's name
-    op: str                         # 'cut' | 'join'
+    sketch: str                     # the sketch's name
+    op: str                         # 'cut' | 'join' | 'new' (the first body)
     depth: float = 10.0
     through: bool = False           # cut through the whole part (no depth param)
     flip: bool = False              # reverse the direction
+    datum: bool = False             # sketched on a base plane, not a part face
 
 
 class AddExtrudeResponse(Schema):

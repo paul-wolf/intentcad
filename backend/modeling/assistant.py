@@ -162,7 +162,9 @@ def _system(production: str = "") -> str:
         "of faces on that face's plane, normal pointing out of the part. "
         "part -= extrude(sketch(\"<name>\"), amount=-P[\"cut_depth\"]) cuts it in; "
         "part += extrude(sketch(\"<name>\"), amount=P[\"height\"]) grows it out. Use "
-        "the exact name; never invent one.\n\n"
+        "the exact name; never invent one. A sketch on a base plane (\"Sketch on "
+        "Top plane\", Front, Right) lies on that plane through the origin; with no part "
+        "yet, part = extrude(sketch(\"<name>\"), amount=P[\"height\"]) makes the part.\n\n"
         "ROUNDING THE WHOLE PART: auto_round(part, convex=…, concave=…, keep=[…]) "
         "is available (no import) and rounds every eligible edge — convex edges "
         "to `convex`, concave edges to `concave` — capping each radius to the "
@@ -276,7 +278,7 @@ def _face_sketches(document_id: str | None) -> list[str]:
         n = [round(v, 3) for v in pl.get("normal", [])]
         o = [round(v, 2) for v in pl.get("origin", [])]
         out.append(f"- {json.dumps(s.get('name'))}: {len(prof['loops'])} closed shape(s) on the plane "
-                   f"through {o} with outward normal {n}")
+                   f"through {o} with normal {n}")
     return out
 
 def _anthropic_call(system: str, user: str, tools: list[dict], model: str) -> dict:

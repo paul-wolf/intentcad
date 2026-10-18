@@ -114,14 +114,14 @@ def set_params_endpoint(request, payload: SetParamsRequest):
 
 @router.post("/add_extrude", response=AddExtrudeResponse)
 def add_extrude_endpoint(request, payload: AddExtrudeRequest):
-    """Append an extrude (cut or join) of a face sketch to the script, with its
-    depth as a new parameter, and return the updated script."""
+    """Append an extrude (cut, join, or the first body) of a sketch to the
+    script, with its depth as a new parameter, and return the updated script."""
     err = require_auth(request)
     if err:
         return err
     try:
         code, param = add_extrude(payload.code, payload.sketch, payload.op, payload.depth,
-                                  payload.through, payload.flip)
+                                  payload.through, payload.flip, payload.datum)
     except (ParamError, SyntaxError) as exc:
         return JsonResponse({"message": str(exc)}, status=422)
     return AddExtrudeResponse(code=code, param=param)

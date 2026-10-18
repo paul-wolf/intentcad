@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Entity, Sketch } from '@/types/document';
-import { sketchLoops, sketchProfile } from './faceSketch';
+import { newPlaneSketch, sketchBasePlane, sketchLoops, sketchProfile } from './faceSketch';
 
 const sketch = (entities: Entity[], plane = true): Sketch => ({
   id: 'sk', name: 'S', visible: true, constraints: [], entities,
@@ -74,5 +74,24 @@ describe('sketchProfile', () => {
     const s = sketch([{ id: 'c', type: 'circle', center: { x: 0, y: 0 }, radius: 1 }]);
     expect(sketchProfile(s)!.plane.origin).toEqual([0, 0, 6]);
     expect(sketchProfile(sketch([], false))).toBeNull();
+  });
+});
+
+describe('base plane sketches', () => {
+  it('sit on the plane through the origin, with the origin as a fixed reference point', () => {
+    const top = newPlaneSketch('Sketch on Top plane', 'top');
+    expect(top.plane).toEqual({ origin: [0, 0, 0], normal: [0, 0, 1], xAxis: [1, 0, 0] });
+    expect(top.face).toBeUndefined();
+    expect(top.entities).toMatchObject([{ type: 'point', position: { x: 0, y: 0 }, construction: true }]);
+    expect(top.constraints).toMatchObject([{ type: 'fixed', entityId: top.entities[0]!.id }]);
+    expect(sketchLoops(top).loops).toEqual([]);   // the origin point is not a shape
+    expect(newPlaneSketch('F', 'front').plane!.xAxis.map((v) => v + 0)).toEqual([1, 0, 0]);
+    expect(newPlaneSketch('R', 'right').plane!.xAxis.map((v) => v + 0)).toEqual([0, 1, 0]);
+  });
+
+  it('are told apart from face sketches', () => {
+    expect(sketchBasePlane(newPlaneSketch('F', 'front'))).toBe('front');
+    expect(sketchBasePlane(sketch([]))).toBeNull();   // a plane off the origin
+    expect(sketchBasePlane({ ...newPlaneSketch('T', 'top'), face: { center: [0, 0, 0], normal: [0, 0, 1], area: 1 } })).toBeNull();
   });
 });

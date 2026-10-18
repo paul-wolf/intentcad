@@ -54,6 +54,15 @@ function hasModelCode(doc: Record<string, unknown>): boolean {
 }
 
 function doSave(id: string, doc: Record<string, unknown>, history?: unknown, versionLabel?: string, snapshot = false) {
+  // A save supersedes an older debounced snapshot of the same doc — e.g. one
+  // queued while a script-less part was sketched, before New body wrote its code
+  if (pendingId === id) {
+    if (timer) clearTimeout(timer);
+    timer = null;
+    pendingId = null;
+    pendingDoc = null;
+    pendingHistory = null;
+  }
   if (hasModelCode(doc)) {
     sawModelCode = true;
   } else if (sawModelCode) {

@@ -8,6 +8,7 @@ from unittest import mock
 from django.test import SimpleTestCase
 
 from modeling.engine import EngineError, run_script, _sandbox, _min_env
+from modeling.paramedit import add_extrude
 
 
 class EngineTests(SimpleTestCase):
@@ -284,6 +285,18 @@ class SketchEngineTests(SimpleTestCase):
         r = run_script(self.base + 'part += extrude(sketch("peg"), amount=4)\n', sketches={"peg": prof})
         self.assertAlmostEqual(r["metrics"]["bbox_max"][2], 10, places=3)
         self.assertAlmostEqual(r["metrics"]["volume"], 60 * 40 * 6 + (100 - math.pi * 4) * 4, delta=0.5)
+
+    def test_new_body_from_a_base_plane_then_a_through_cut(self):
+        top0 = {"origin": [0, 0, 0], "normal": [0, 0, 1], "xAxis": [1, 0, 0]}
+        front = {"origin": [0, 0, 0], "normal": [0, -1, 0], "xAxis": [1, 0, 0]}
+        code = (add_extrude("", "Top", "new", 6)[0]
+                + 'part -= extrude(sketch("Front"), amount=part.bounding_box().diagonal'
+                  ' + part.bounding_box().center().length, both=True)\n')
+        # a 60x40x6 plate minus a slot 10 wide through it, front to back
+        r = run_script(code, sketches={"Top": {"plane": top0, "loops": [_rect(-30, -20, 30, 20)]},
+                                       "Front": {"plane": front, "loops": [_rect(-5, -10, 5, 10)]}})
+        self.assertFalse(r.get("warning"))
+        self.assertAlmostEqual(r["metrics"]["volume"], 60 * 40 * 6 - 10 * 6 * 40, delta=0.5)
 
     def test_unknown_sketch_is_reported(self):
         r = run_script(self.base + 'part -= extrude(sketch("nope"), amount=-2)\n')
