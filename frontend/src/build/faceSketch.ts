@@ -12,7 +12,7 @@ import { generateId } from '@/utils/id';
 import { arcFromBulge, arcMidpoint, bulgeFromMidpoint } from '@/utils/arcGeometry';
 import { rectangleOutline, rectanglePath } from '@/utils/rectPath';
 import { bezierPoint } from '@/utils/bezierGeometry';
-import { dot, len, sub, type Vec3 } from './dragHandle';
+import { dot, len, scale, sub, type Vec3 } from './dragHandle';
 import { planeBasis, planeForFace, sketchToWorld, worldToSketch, type PlaneBasis } from './sketchPlane';
 
 /** The face a sketch was drawn on, kept for re-binding after a rebuild. */
@@ -335,4 +335,140 @@ export function referencedProfiles(code: string, sketches: Sketch[]): Record<str
     if (p) out[m[2]!] = p;
   }
   return out;
+}
+
+// ── extrude preview ──
+
+/** What an extrude does, as far as its direction and reach go. */
+export interface ExtrudeShape {
+  op: 'cut' | 'join' | 'new';
+  depth: number;
+  through: boolean;   // cut through the part (op 'cut' only)
+  flip: boolean;
+  both?: boolean;     // symmetric: `depth` each way (not with through)
+  datum?: boolean;    // on a base plane, not a part face
+}
+
+/** +1: along the plane normal, −1: against it. A face sketch's normal points
+ *  out of the part, so a cut goes in (−1) and a join grows out (+1); a base
+ *  plane has no outside, so everything goes along it. Flip reverses. Matches
+ *  the script line paramedit.add_extrude writes. */
+export function extrudeSign(o: ExtrudeShape): 1 | -1 {
+  const into = o.op === 'cut' && !o.datum;
+  return into !== o.flip ? -1 : 1;
+}
+
+/** The offsets along the plane normal an extrude spans, [from, to] (from ≤ to).
+ *  A through cut reaches across the part: `extent` is the part's [min, max]
+ *  signed distance from the plane (null: no part, e.g. a first body). */
+export function extrudeSpan(o: ExtrudeShape, extent: [number, number] | null): [number, number] {
+  const s = extrudeSign(o);
+  if (o.op === 'cut' && o.through) {
+    const [lo, hi] = extent ?? [-50, 50];
+    if (o.datum) return [Math.min(lo, 0), Math.max(hi, 0)];   // both ways
+    const reach = s < 0 ? -lo : hi;
+    const d = reach > 1e-3 ? reach : Math.max(hi - lo, 1);    // flipped out of the face: nothing to cut
+    return s < 0 ? [-d, 0] : [0, d];
+  }
+  const d = Math.max(o.depth || 0, 0);
+  if (o.both) return [-d, d];
+  return s < 0 ? [-d, 0] : [0, d];
+}
+
+const AXIS_WORDS: [Vec3, string, string][] = [
+  [[0, 0, 1], 'up', 'Z'], [[0, 0, -1], 'down', 'Z'],
+  [[0, -1, 0], 'toward the front', 'Y'], [[0, 1, 0], 'toward the back', 'Y'],
+  [[1, 0, 0], 'to the right', 'X'], [[-1, 0, 0], 'to the left', 'X'],
+];
+
+/** Where the extrude goes, in words: "Into the part · down (−Z)". */
+export function extrudeDirectionText(o: ExtrudeShape, normal: Vec3): string {
+  const d = scale(normal, extrudeSign(o));
+  const ax = AXIS_WORDS.find(([v]) => dot(v, d) > 0.999);
+  if (o.op === 'cut' && o.through && o.datum) return 'Through the part, both ways from the plane';
+  if (o.both && !(o.op === 'cut' && o.through)) return `Both ways from the plane${ax ? ` (±${ax[2]})` : ''}`;
+  const s = extrudeSign(o);
+  const what = o.datum
+    ? 'From the plane'
+    : o.op === 'cut'
+      ? (s < 0 ? 'Into the part' : 'Out of the face — cuts nothing there')
+      : (s > 0 ? 'Out of the face' : 'Into the part');
+  if (!ax) return what;
+  const sign = dot(ax[0], [1, 1, 1]) > 0 ? '+' : '−';
+  return `${what} · ${ax[1]} (${sign}${ax[2]})`;
+}
+
+// a closed shape as a sketch-space polyline, plus its corners (where side
+// edges of the extruded prism are drawn)
+function loopOutline(loop: ProfileSegment[]): { pts: Point[]; corners: Point[] } {
+  const P = (p: XY): Point => ({ x: p[0], y: p[1] });
+  const pts: Point[] = [], corners: Point[] = [];
+  for (const s of loop) {
+    if (s.t === 'circle') {
+      for (let i = 0; i <= 48; i++) {
+        const a = (i / 48) * Math.PI * 2;
+        pts.push({ x: s.c[0] + s.r * Math.cos(a), y: s.c[1] + s.r * Math.sin(a) });
+      }
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2;
+        corners.push({ x: s.c[0] + s.r * Math.cos(a), y: s.c[1] + s.r * Math.sin(a) });
+      }
+      continue;
+    }
+    corners.push(P(s.p[0]));
+    // each piece adds its start and inside points: the next piece's start ends it
+    if (s.t === 'line') pts.push(P(s.p[0]));
+    else if (s.t === 'bezier') {
+      const [a, b, c, d] = s.p.map(P) as [Point, Point, Point, Point];
+      for (let i = 0; i < 24; i++) pts.push(bezierPoint(a, b, c, d, i / 24));
+    } else {
+      const [a, m, b] = s.p.map(P) as [Point, Point, Point];
+      const k = bulgeFromMidpoint(a, b, m);
+      pts.push(a, ...arcPoints(a, b, k));
+      corners.push(m);
+    }
+  }
+  if (loop[0]?.t !== 'circle' && pts.length) pts.push(pts[0]!);   // close it
+  return { pts, corners };
+}
+
+/** A preview of an extrude, as 3D segment pairs: the shapes at each end of
+ *  `span` (and on the plane, when the span crosses it), side edges at their
+ *  corners, and arrows from the shapes' middle showing which way it goes. */
+export function extrudeGhost(sketch: Sketch, span: [number, number]): { edges: number[]; arrows: number[] } {
+  const edges: number[] = [], arrows: number[] = [];
+  if (!sketch.plane) return { edges, arrows };
+  const b = planeBasis(sketch.plane);
+  const at = (p: Point, off: number): Vec3 => {
+    const w = sketchToWorld(b, p);
+    return [w[0] + b.normal[0] * off, w[1] + b.normal[1] * off, w[2] + b.normal[2] * off];
+  };
+  const levels = [span[0], span[1]];
+  if (span[0] < -1e-6 && span[1] > 1e-6) levels.push(0);
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const loop of sketchLoops(sketch).loops) {
+    const { pts, corners } = loopOutline(loop);
+    for (const off of levels) {
+      for (let i = 0; i + 1 < pts.length; i++) edges.push(...at(pts[i]!, off), ...at(pts[i + 1]!, off));
+    }
+    for (const c of corners) edges.push(...at(c, span[0]), ...at(c, span[1]));
+    for (const p of pts) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    }
+  }
+  if (!Number.isFinite(minX)) return { edges, arrows };
+  const mid: Point = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+  const size = Math.max(maxX - minX, maxY - minY);
+  for (const end of span) {
+    if (Math.abs(end) < 1e-6) continue;
+    const tip = at(mid, end);
+    const head = Math.min(Math.abs(end) * 0.35, size * 0.2, 12);
+    const back = end - Math.sign(end) * head;
+    arrows.push(...at(mid, 0), ...tip);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      arrows.push(...tip, ...at({ x: mid.x + dx! * head * 0.45, y: mid.y + dy! * head * 0.45 }, back));
+    }
+  }
+  return { edges, arrows };
 }

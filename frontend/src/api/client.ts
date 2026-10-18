@@ -326,7 +326,7 @@ export const buildApi = {
   },
   // append an extrude of a face sketch to the script (its depth becomes a new P key)
   addExtrude(payload: { code: string; sketch: string; op: 'cut' | 'join' | 'new'; depth: number; through: boolean; flip: boolean;
-                        datum?: boolean }):
+                        datum?: boolean; both?: boolean }):
     Promise<{ code: string; param: string | null }> {
     return request('/build/add_extrude', { method: 'POST', body: JSON.stringify(payload) });
   },

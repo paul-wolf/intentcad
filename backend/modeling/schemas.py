@@ -306,6 +306,7 @@ class AddExtrudeRequest(Schema):
     through: bool = False           # cut through the whole part (no depth param)
     flip: bool = False              # reverse the direction
     datum: bool = False             # sketched on a base plane, not a part face
+    both: bool = False              # the depth to each side of a base plane
 
 
 class AddExtrudeResponse(Schema):

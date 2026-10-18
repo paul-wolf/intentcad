@@ -17,17 +17,26 @@ import type { FaceRange, Viewer } from '@/build/webglViewer';
 import { dot, len, sub } from '@/build/dragHandle';
 import { planeBasis, sketchCamera, fitViewport, type PlaneBasis, type Rect } from '@/build/sketchPlane';
 import {
-  BASE_PLANES, findFaceSketch, newFaceSketch, newPlaneSketch, sketchBasePlane, sketchBounds, sketchLoops, sketchSegments,
-  type BasePlane,
+  BASE_PLANES, extrudeDirectionText, extrudeGhost, extrudeSpan, findFaceSketch, newFaceSketch, newPlaneSketch,
+  sketchBasePlane, sketchBounds, sketchLoops, sketchSegments, type BasePlane,
 } from '@/build/faceSketch';
 import type { Sketch } from '@/types/document';
 
 const FADE_MS = 250;
+const TURN_MS = 260;   // the viewer's turn into / out of the extrude preview
+
+// the extrude preview's colour per operation
+const GHOST: Record<ExtrudeOptions['op'], [number, number, number]> = {
+  cut: [0.95, 0.45, 0.35], join: [0.35, 0.85, 0.5], new: [0.25, 0.62, 1.0],
+};
 
 /** What the Extrude dialog asks for: the script line it becomes is built by
  *  the backend (/build/add_extrude). "new" makes the part (no part yet);
- *  `datum`: the sketch is on a base plane, not a part face. */
-export interface ExtrudeOptions { op: 'cut' | 'join' | 'new'; depth: number; through: boolean; flip: boolean; datum?: boolean }
+ *  `datum`: the sketch is on a base plane, not a part face; `both`: the depth
+ *  goes each way from a base plane (symmetric). */
+export interface ExtrudeOptions {
+  op: 'cut' | 'join' | 'new'; depth: number; through: boolean; flip: boolean; both?: boolean; datum?: boolean;
+}
 
 interface Session {
   sketchId: string;
@@ -329,9 +338,38 @@ export function useFaceSketch(
   };
   const applyExtrude = () => {
     if (!shapes.loops.length || !(ex.depth > 0 || (ex.op === 'cut' && ex.through))) return;
-    pendingExtrude.current = { ...ex, through: ex.op === 'cut' && ex.through, datum: !!session?.datum };
+    pendingExtrude.current = shapeOf(ex, !!session?.datum);
     exit();
   };
+
+  // while the dialog is open the view turns off the plane and shows what the
+  // extrude makes: the shapes at each end, and arrows the way it goes
+  const previewing = useRef(false);
+  const phase = session?.phase;
+  useEffect(() => {
+    const v = viewerRef.current, s = sessionRef.current;
+    if (!v || !s || phase === 'exit') { previewing.current = false; return; }
+    if (!extruding || !current) {
+      if (!previewing.current) return;
+      previewing.current = false;
+      v.setExtrudePreview(null);
+      later(TURN_MS, () => { if (sessionRef.current && sessionRef.current.phase !== 'exit') setStrokes(true); });
+      return;
+    }
+    const o = shapeOf(ex, s.datum);
+    const m = resRef.current?.metrics;
+    let extent: [number, number] | null = null;
+    if (m && hasPartRef.current()) {
+      const ds: number[] = [];
+      for (const x of [m.bbox_min[0], m.bbox_max[0]]) for (const y of [m.bbox_min[1], m.bbox_max[1]])
+        for (const z of [m.bbox_min[2], m.bbox_max[2]]) ds.push(dot(sub([x, y, z], s.plane.origin), s.plane.normal));
+      extent = [Math.min(...ds), Math.max(...ds)];
+    }
+    const g = extrudeGhost(current, extrudeSpan(o, extent));
+    setStrokes(false);   // the flat drawing doesn't line up once the view turns
+    previewing.current = true;
+    v.setExtrudePreview({ ...g, color: GHOST[ex.op] });
+  }, [extruding, ex, current, phase, viewerRef, resRef]);
 
   const fade = `opacity ${FADE_MS}ms ease`;
   const btn: CSSProperties = {
@@ -371,6 +409,7 @@ export function useFaceSketch(
                       onClick={exit}>Done</button>
               {extruding && (
                 <ExtrudeDialog value={ex} onChange={setEx} shapes={shapes.loops.length} open={shapes.open} datum={session.datum}
+                               direction={extrudeDirectionText(shapeOf(ex, session.datum), session.plane.normal)}
                                onApply={applyExtrude} onCancel={() => setExtruding(false)} />
               )}
             </div>
@@ -395,12 +434,20 @@ export function useFaceSketch(
   };
 }
 
-function ExtrudeDialog({ value, onChange, shapes, open, datum, onApply, onCancel }: {
+/** The options as the script line will take them: through is for cuts, and
+ *  both ways is for base planes, not with through. */
+function shapeOf(ex: ExtrudeOptions, datum: boolean): ExtrudeOptions {
+  const through = ex.op === 'cut' && ex.through;
+  return { ...ex, through, both: datum && !through && !!ex.both, datum };
+}
+
+function ExtrudeDialog({ value, onChange, shapes, open, datum, direction, onApply, onCancel }: {
   value: ExtrudeOptions; onChange: (v: ExtrudeOptions) => void;
-  shapes: number; open: number; datum: boolean; onApply: () => void; onCancel: () => void;
+  shapes: number; open: number; datum: boolean; direction: string; onApply: () => void; onCancel: () => void;
 }) {
   const palette = useThemeStore((s) => s.palette);
   const through = value.op === 'cut' && value.through;
+  const both = datum && !through && !!value.both;
   const ok = shapes > 0 && (through || value.depth > 0);
   const set = (p: Partial<ExtrudeOptions>) => onChange({ ...value, ...p });
   const seg = (on: boolean): CSSProperties => ({
@@ -436,19 +483,29 @@ function ExtrudeDialog({ value, onChange, shapes, open, datum, onApply, onCancel
         </label>
       )}
       <label style={{ ...row, opacity: through ? 0.45 : 1 }}>
-        <span style={{ width: 52 }}>{value.op === 'cut' ? 'Depth' : 'Height'}</span>
+        <span style={{ width: 52 }}>{both ? 'Each way' : value.op === 'cut' ? 'Depth' : 'Height'}</span>
         <input type="number" min={0} step={0.5} value={value.depth} disabled={through}
                onChange={(e) => set({ depth: parseFloat(e.target.value) })}
                style={{ width: 70, fontSize: '12px', padding: '2px 4px', background: palette.inputBg,
                         color: palette.text, border: `1px solid ${palette.border}`, borderRadius: '3px' }} />
         <span style={{ color: palette.textSecondary }}>mm</span>
       </label>
-      <label style={row} title={datum || value.op === 'new'
-        ? 'Extrude to the other side of the plane'
-        : value.op === 'cut' ? 'Cut out of the face instead of into the part' : 'Grow into the part instead of out of the face'}>
-        <input type="checkbox" checked={value.flip} onChange={(e) => set({ flip: e.target.checked })} />
+      {datum && !through && (
+        <label style={row} title="Extrude the depth to both sides of the plane, so the plane is the middle">
+          <input type="checkbox" checked={both} onChange={(e) => set({ both: e.target.checked })} />
+          Both ways (symmetric)
+        </label>
+      )}
+      <label style={{ ...row, opacity: both || (through && datum) ? 0.45 : 1 }}
+             title="Send it the other way along the face's normal — the arrows in the view show where it goes">
+        <input type="checkbox" checked={value.flip && !(both || (through && datum))} disabled={both || (through && datum)}
+               onChange={(e) => set({ flip: e.target.checked })} />
         Flip direction
       </label>
+      <div style={{ color: palette.text, lineHeight: 1.4, padding: '4px 6px', borderRadius: '4px',
+                    background: palette.buttonBg }}>
+        {direction}
+      </div>
       <div style={{ color: shapes ? palette.textSecondary : palette.danger, lineHeight: 1.4 }}>
         {shapes ? `${shapes} closed shape${shapes > 1 ? 's' : ''}` : 'No closed shapes to extrude'}
         {open ? ` · ${open} open (ignored)` : ''}

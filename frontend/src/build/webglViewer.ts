@@ -274,6 +274,11 @@ export interface Viewer {
    *  sketching). Hover reports the name via onSketchHover; double-click
    *  calls onSketchOpen. */
   setSketchLines(sketches: SketchLines[]): void;
+  /** Sketch mode: preview an extrude as world-space segment pairs (the shapes
+   *  at each end + side edges, and arrows the way it goes). The first call
+   *  tilts the view off the plane, framed on the part and the preview; null
+   *  turns back to the sketch. */
+  setExtrudePreview(p: { edges: number[]; arrows: number[]; color: Vec3 } | null): void;
   dispose(): void;
 }
 
@@ -408,6 +413,12 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   let saved: { q: Quat; center: Vec3; distance: number; orthographic: boolean } | null = null;
   let camAnim: { from: Pose; to: Pose; t0: number; dim: [number, number]; clip: [number, number] } | null = null;
   const SKETCH_MS = 250;
+  let sketchClip = 0;        // clipD while sketching (huge: a base plane, nothing cut)
+  // an extrude preview, drawn from ghostBuf; while it shows, the sketch's
+  // camera is kept in sketchPose for the turn back
+  const ghostBuf = gl.createBuffer()!;
+  let ghost: { edges: number; arrows: number; color: Vec3 } | null = null;
+  let sketchPose: { center: Vec3; distance: number } | null = null;
   let dimK = 0;              // 0 normal … 1 fully dimmed
   let clipD = Infinity;      // cut away beyond plane offset + clipD
   let lastRect: DOMRect | null = null;   // the canvas's page rect at the last render
@@ -419,6 +430,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   let selected: number[] = [];
   let dims: DimAnchor[] = [];
   let modelRadius = 40;
+  let modelCenter: Vec3 = [0, 0, 0];
   let thumbMode = false;   // when capturing a thumbnail: draw the solid only (no grid/overlays)
   const SELECT: [number, number, number] = [1.0, 0.62, 0.2];
   const SNAP: [number, number, number] = [0.18, 0.83, 0.75];
@@ -464,6 +476,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     );
     distance = radius / Math.tan((45 * Math.PI) / 180 / 2) * 1.4;
     modelRadius = radius;
+    modelCenter = center;
     buildFrame(radius);
   }
 
@@ -702,6 +715,34 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
         gl!.uniform3fv(tColor, r.id === hoverSketch ? SKETCH_HOVER : SKETCH_LINE);
         gl!.drawArrays(gl!.TRIANGLES, r.first, r.count);
       }
+      gl!.disableVertexAttribArray(tOther);
+      gl!.disableVertexAttribArray(tSide);
+    }
+
+    // the extrude preview: faint through the part, bright where it's in front
+    if (ghost && sk && !thumbMode) {
+      gl!.useProgram(thickProg);
+      gl!.uniformMatrix4fv(tPV, false, multiply(proj, multiply(view, model)));
+      gl!.uniform2f(tHalfPx, w / 2, h / 2);
+      gl!.uniform1f(tBias, 3e-5);
+      gl!.bindBuffer(gl!.ARRAY_BUFFER, ghostBuf);
+      gl!.enableVertexAttribArray(tPos);
+      gl!.enableVertexAttribArray(tOther);
+      gl!.enableVertexAttribArray(tSide);
+      gl!.vertexAttribPointer(tPos, 3, gl!.FLOAT, false, 28, 0);
+      gl!.vertexAttribPointer(tOther, 3, gl!.FLOAT, false, 28, 12);
+      gl!.vertexAttribPointer(tSide, 1, gl!.FLOAT, false, 28, 24);
+      const g = ghost;
+      const faint = g.color.map((c, i) => c * 0.45 + sk.bg[i]! * 0.55) as Vec3;
+      for (const [depth, col] of [[false, faint], [true, g.color]] as [boolean, Vec3][]) {
+        if (depth) gl!.enable(gl!.DEPTH_TEST); else gl!.disable(gl!.DEPTH_TEST);
+        gl!.uniform3fv(tColor, col);
+        gl!.uniform1f(tWidth, 1.6 * dpr);
+        gl!.drawArrays(gl!.TRIANGLES, 0, g.edges);
+        gl!.uniform1f(tWidth, 2.6 * dpr);
+        gl!.drawArrays(gl!.TRIANGLES, g.edges, g.arrows);
+      }
+      gl!.enable(gl!.DEPTH_TEST);
       gl!.disableVertexAttribArray(tOther);
       gl!.disableVertexAttribArray(tSide);
     }
@@ -986,13 +1027,15 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       orthographic = true;
       sketch = { plane: s.plane, face: s.face, bg: s.bg, phase: 'enter' };
       hoverSketch = null;
+      ghost = null; sketchPose = null;
       const far = modelRadius * 3;
+      sketchClip = s.clip === false ? 1e9 : Math.max(0.02, modelRadius * 1e-3);
       camAnim = {
         from: { q, center, distance: distance * hold.k, lens: hold.lens },
         to: { q: planeQuat(s.plane), center: s.center, distance: s.halfH / TAN_HALF, lens: [0, 0] },
         t0: performance.now(),
         dim: [dimK, 1],
-        clip: [Number.isFinite(clipD) ? clipD : far, s.clip === false ? 1e9 : Math.max(0.02, modelRadius * 1e-3)],
+        clip: [Number.isFinite(clipD) ? clipD : far, sketchClip],
       };
       stepCamAnim();
       renderNow();
@@ -1000,6 +1043,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     setSketchCamera(c, halfH) {
       if (!sketch || sketch.phase === 'exit') return;
       const d = halfH / TAN_HALF;
+      if (ghost) { sketchPose = { center: c, distance: d }; return; }
       if (camAnim) { camAnim.to.center = c; camAnim.to.distance = d; renderNow(); return; }
       if (d === distance && c[0] === center[0] && c[1] === center[1] && c[2] === center[2] && !raf) return;
       center = c; distance = d;
@@ -1009,6 +1053,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       if (!sketch || !saved || sketch.phase === 'exit') return;
       const hold = holdPicture();
       sketch.phase = 'exit';
+      ghost = null; sketchPose = null;
       camAnim = {
         from: { q, center, distance: distance * hold.k, lens: hold.lens },
         to: { q: saved.q, center: saved.center, distance: saved.distance, lens: [0, 0] },
@@ -1033,6 +1078,54 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       if (hoverSketch && !sketchLines.some((s) => s.id === hoverSketch)) hoverSketch = null;
       scheduleRender();
     },
+    setExtrudePreview(p) {
+      if (!sketch || sketch.phase === 'exit') return;
+      const t0 = performance.now();
+      if (!p) {
+        if (!ghost) return;
+        const back = sketchPose ?? { center, distance };
+        ghost = null; sketchPose = null;
+        camAnim = {
+          from: { q, center, distance, lens },
+          to: { q: planeQuat(sketch.plane), center: back.center, distance: back.distance, lens: [0, 0] },
+          t0, dim: [dimK, 1], clip: [clipD, sketchClip],
+        };
+        stepCamAnim();
+        renderNow();
+        return;
+      }
+      gl!.bindBuffer(gl!.ARRAY_BUFFER, ghostBuf);
+      gl!.bufferData(gl!.ARRAY_BUFFER, thickVerts([...p.edges, ...p.arrows]), gl!.DYNAMIC_DRAW);
+      const first = !ghost;
+      ghost = { edges: p.edges.length, arrows: p.arrows.length, color: p.color };
+      if (first) {
+        sketchPose = camAnim ? { center: camAnim.to.center, distance: camAnim.to.distance } : { center, distance };
+        // frame the part and the preview together, seen from off the plane
+        let lo: Vec3 = [Infinity, Infinity, Infinity], hi: Vec3 = [-Infinity, -Infinity, -Infinity];
+        const grow = (x: number, y: number, z: number) => {
+          lo = [Math.min(lo[0], x), Math.min(lo[1], y), Math.min(lo[2], z)];
+          hi = [Math.max(hi[0], x), Math.max(hi[1], y), Math.max(hi[2], z)];
+        };
+        if (vertexCount) {
+          grow(modelCenter[0] - modelRadius, modelCenter[1] - modelRadius, modelCenter[2] - modelRadius);
+          grow(modelCenter[0] + modelRadius, modelCenter[1] + modelRadius, modelCenter[2] + modelRadius);
+        }
+        for (let i = 0; i + 2 < p.edges.length; i += 3) grow(p.edges[i]!, p.edges[i + 1]!, p.edges[i + 2]!);
+        const c: Vec3 = Number.isFinite(lo[0]) ? scale(add(lo, hi), 0.5) : center;
+        const r = Number.isFinite(lo[0]) ? Math.max(Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) / 2, 1) : modelRadius;
+        const n = sketch.plane.normal, iso = VIEW_DIRS.iso;
+        let w = add(iso, scale(n, -dot3(iso, n)));
+        if (Math.hypot(...w) < 0.2) w = sketch.plane.xDir;
+        w = scale(w, 1 / Math.hypot(...w));
+        camAnim = {
+          from: { q, center, distance, lens },
+          to: { q: lookFrom(add(scale(n, 0.85), w)), center: c, distance: (r * 1.1) / TAN_HALF, lens: [0, 0] },
+          t0, dim: [dimK, 0.3], clip: [clipD, modelRadius * 3],
+        };
+        stepCamAnim();
+      }
+      renderNow();
+    },
     dispose() {
       if (raf) cancelAnimationFrame(raf);
       ro.disconnect();
@@ -1049,6 +1142,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       gl.deleteBuffer(lineBuf);
       gl.deleteBuffer(gridBuf);
       gl.deleteBuffer(sketchBuf);
+      gl.deleteBuffer(ghostBuf);
       gl.deleteProgram(prog);
       gl.deleteProgram(lineProg);
       gl.deleteProgram(thickProg);

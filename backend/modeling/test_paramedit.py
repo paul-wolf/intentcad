@@ -104,3 +104,10 @@ class AddExtrudeTests(SimpleTestCase):
         self.assertIn('amount=P["cut1_depth"])', out)
         through, _ = add_extrude(self.code, "S", "cut", 3, through=True, datum=True)
         self.assertIn("both=True)", through)
+
+    def test_both_ways_from_a_base_plane(self):
+        out, param = add_extrude(self.code, "S", "join", 4, datum=True, both=True, flip=True)
+        self.assertIn('part += extrude(sketch("S"), amount=P["join1_height"], both=True)', out)
+        # a face sketch has no "both": it stays one-sided
+        face, _ = add_extrude(self.code, "S", "join", 4, both=True)
+        self.assertNotIn("both=True", face)

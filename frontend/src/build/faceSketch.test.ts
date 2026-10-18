@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import type { Entity, Sketch } from '@/types/document';
-import { newPlaneSketch, sketchBasePlane, sketchLoops, sketchProfile } from './faceSketch';
+import {
+  extrudeDirectionText, extrudeGhost, extrudeSign, extrudeSpan, newPlaneSketch, sketchBasePlane, sketchLoops, sketchProfile,
+  type ExtrudeShape,
+} from './faceSketch';
 
 const sketch = (entities: Entity[], plane = true): Sketch => ({
   id: 'sk', name: 'S', visible: true, constraints: [], entities,
@@ -93,5 +96,47 @@ describe('base plane sketches', () => {
     expect(sketchBasePlane(newPlaneSketch('F', 'front'))).toBe('front');
     expect(sketchBasePlane(sketch([]))).toBeNull();   // a plane off the origin
     expect(sketchBasePlane({ ...newPlaneSketch('T', 'top'), face: { center: [0, 0, 0], normal: [0, 0, 1], area: 1 } })).toBeNull();
+  });
+});
+
+describe('extrude preview', () => {
+  const ex = (o: Partial<ExtrudeShape>): ExtrudeShape => ({ op: 'cut', depth: 5, through: false, flip: false, ...o });
+
+  it('goes the way the script line will: face cuts in, joins out, base planes along the normal', () => {
+    expect(extrudeSign(ex({}))).toBe(-1);
+    expect(extrudeSign(ex({ flip: true }))).toBe(1);
+    expect(extrudeSign(ex({ op: 'join' }))).toBe(1);
+    expect(extrudeSign(ex({ op: 'join', flip: true }))).toBe(-1);
+    expect(extrudeSign(ex({ datum: true }))).toBe(1);
+    expect(extrudeSign(ex({ op: 'new', datum: true, flip: true }))).toBe(-1);
+  });
+
+  it('spans the depth, both ways, or across the part', () => {
+    expect(extrudeSpan(ex({}), null)).toEqual([-5, 0]);
+    expect(extrudeSpan(ex({ op: 'join', both: true, datum: true }), null)).toEqual([-5, 5]);
+    // a face cut through the part reaches its far side; flipped there's nothing, so a token length
+    expect(extrudeSpan(ex({ through: true }), [-12, 0])).toEqual([-12, 0]);
+    expect(extrudeSpan(ex({ through: true, flip: true }), [-12, 0])).toEqual([0, 12]);
+    expect(extrudeSpan(ex({ through: true, datum: true }), [-3, 20])).toEqual([-3, 20]);
+  });
+
+  it('says where it goes in words', () => {
+    // the arch on a left face: a join grows out to the left; flipped it crosses the part
+    const left: [number, number, number] = [-1, 0, 0];
+    expect(extrudeDirectionText(ex({ op: 'join' }), left)).toBe('Out of the face · to the left (−X)');
+    expect(extrudeDirectionText(ex({ op: 'join', flip: true }), left)).toBe('Into the part · to the right (+X)');
+    expect(extrudeDirectionText(ex({ flip: true }), [0, 0, 1])).toBe('Out of the face — cuts nothing there · up (+Z)');
+    expect(extrudeDirectionText(ex({ op: 'join', datum: true }), [0, -1, 0])).toBe('From the plane · toward the front (−Y)');
+    expect(extrudeDirectionText(ex({ op: 'join', datum: true, both: true }), [0, -1, 0])).toBe('Both ways from the plane (±Y)');
+  });
+
+  it('draws the shape at both ends with side edges, and an arrow the way it goes', () => {
+    const s = sketch([{ id: 'r', type: 'rectangle', center: { x: 0, y: 0 }, width: 20, height: 10 }]);
+    const { edges, arrows } = extrudeGhost(s, [-4, 0]);
+    const zs = new Set<number>();
+    for (let i = 2; i < edges.length; i += 3) zs.add(Math.round(edges[i]! * 1e6) / 1e6);
+    expect([...zs].sort((a, b) => a - b)).toEqual([2, 6]);    // plane at z=6, 4 mm down
+    expect(edges.length / 6).toBe(4 + 4 + 4);                 // two outlines + four side edges
+    expect(arrows.slice(0, 6)).toEqual([0, 0, 6, 0, 0, 2]);   // shaft: middle of the shape, downward
   });
 });

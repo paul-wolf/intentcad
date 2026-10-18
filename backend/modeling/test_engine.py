@@ -298,6 +298,18 @@ class SketchEngineTests(SimpleTestCase):
         self.assertFalse(r.get("warning"))
         self.assertAlmostEqual(r["metrics"]["volume"], 60 * 40 * 6 - 10 * 6 * 40, delta=0.5)
 
+    def test_join_both_ways_from_the_front_plane(self):
+        top0 = {"origin": [0, 0, 0], "normal": [0, 0, 1], "xAxis": [1, 0, 0]}
+        front = {"origin": [0, 0, 0], "normal": [0, -1, 0], "xAxis": [1, 0, 0]}
+        code = add_extrude("", "Top", "new", 6)[0]
+        code = add_extrude(code, "Front", "join", 30, datum=True, both=True)[0]
+        # a 20x20x6 block, and a 10x10 rib on the Front plane, 30 each way in Y
+        r = run_script(code, sketches={"Top": {"plane": top0, "loops": [_rect(-10, -10, 10, 10)]},
+                                       "Front": {"plane": front, "loops": [_rect(-5, 0, 5, 10)]}})
+        self.assertFalse(r.get("warning"))
+        self.assertAlmostEqual(r["metrics"]["bbox_min"][1], -30, places=3)
+        self.assertAlmostEqual(r["metrics"]["bbox_max"][1], 30, places=3)
+
     def test_unknown_sketch_is_reported(self):
         r = run_script(self.base + 'part -= extrude(sketch("nope"), amount=-2)\n')
         self.assertIn("no sketch named 'nope'", r.get("warning") or "")

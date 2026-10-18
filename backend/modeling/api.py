@@ -121,7 +121,7 @@ def add_extrude_endpoint(request, payload: AddExtrudeRequest):
         return err
     try:
         code, param = add_extrude(payload.code, payload.sketch, payload.op, payload.depth,
-                                  payload.through, payload.flip, payload.datum)
+                                  payload.through, payload.flip, payload.datum, payload.both)
     except (ParamError, SyntaxError) as exc:
         return JsonResponse({"message": str(exc)}, status=422)
     return AddExtrudeResponse(code=code, param=param)

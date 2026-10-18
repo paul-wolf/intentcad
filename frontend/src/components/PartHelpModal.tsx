@@ -37,8 +37,11 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
         + 'the origin (keys T, F, R). This is how a new part starts: sketch the outline, then Extrude → New body.'],
       ['Extrude…', 'In the sketch banner. With no part yet, New body makes the shapes the part, at a height. '
         + 'After that: Cut the closed shapes into the part (through all, or to a depth) or Join them on as '
-        + 'pegs/bosses; Flip reverses the direction. It adds one script line and a depth parameter; editing '
-        + 'the sketch later rebuilds the part.'],
+        + 'pegs/bosses. While the dialog is open the view tilts to preview it: the shapes at each end and '
+        + 'arrows the way it goes (red cut, green join), with the direction in words. Flip sends it the other '
+        + 'way; on a base plane, Both ways extrudes the depth to each side. It adds one script line and a '
+        + 'depth parameter; editing the sketch later rebuilds the part. Wrong way? Versions restores the '
+        + 'previous script, or negate the amount in that line.'],
     ],
   },
   {

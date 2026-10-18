@@ -125,7 +125,8 @@ def _assigns_part(tree: ast.Module) -> bool:
 
 
 def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
-                through: bool = False, flip: bool = False, datum: bool = False) -> tuple[str, str | None]:
+                through: bool = False, flip: bool = False, datum: bool = False,
+                both: bool = False) -> tuple[str, str | None]:
     """Append an extrude of sketch `sketch` to the script: op "cut" removes
     it from `part`, "join" adds it, "new" makes it the part (a script with no
     `part` yet). The depth becomes a new P key (unless `through`: a cut
@@ -134,7 +135,8 @@ def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
     A face sketch's plane faces out of the part, so cuts go into the part and
     joins grow out of the face. A `datum` sketch (on a base plane: Top, Front,
     Right) has no outside: everything goes along the plane's normal, and a
-    through cut goes both ways. `flip` reverses the direction.
+    through cut goes both ways. `flip` reverses the direction; `both` extrudes
+    the depth to each side of a base plane (symmetric) instead.
 
     Returns (code, the new param name or None)."""
     if op not in ("cut", "join", "new"):
@@ -154,7 +156,7 @@ def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
         stem, suffix = {"cut": ("cut", "depth"), "join": ("join", "height"), "new": ("body", "height")}[op]
         param = _unique(param_names(code), stem, suffix)
         code = add_param(code, param, float(depth))
-        amount = f'{sign}P["{param}"]'
+        amount = f'P["{param}"], both=True' if both and datum else f'{sign}P["{param}"]'
     sym = {"cut": "-=", "join": "+=", "new": "="}[op]
     line = f"part {sym} extrude({ref}, amount={amount})"
     code = code.strip() if blank else code.rstrip("\n")
