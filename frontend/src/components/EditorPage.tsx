@@ -1,39 +1,21 @@
 import { useMemo, useEffect, useState, useRef, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
-import { Toolbar } from './Toolbar';
-import { StatusBar } from './StatusBar';
-import { RightPanel } from './RightPanel';
 import { DocumentDrawer } from './DocumentDrawer';
-import { LogPanel } from './LogPanel';
-import { HistoryPanel } from './HistoryPanel';
-import { DocumentPropertiesPanel } from './DocumentPropertiesPanel';
 import { GcodePanel } from './GcodePanel';
 import { CamOperationsPanel } from './CamOperationsPanel';
 import { OperationCuttingPanel } from './OperationCuttingPanel';
-import { HelpModal } from './HelpModal';
-import { CanvasContainer } from '@/canvas/CanvasContainer';
+import { SketchWorkspace } from './SketchWorkspace';
 import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useCamStore, setCamDocumentId } from '@/stores/camStore';
 import { useBuildStore } from '@/stores/buildStore';
 import { useThemeStore } from '@/theme';
-import { createLineTool } from '@/tools/lineTool';
-import { createSelectTool } from '@/tools/selectTool';
-import { createCircleTool } from '@/tools/circleTool';
-import { createRectangleTool } from '@/tools/rectangleTool';
-import { createPolygonTool } from '@/tools/polygonTool';
-import { createPointTool } from '@/tools/pointTool';
-import { createDimensionTool } from '@/tools/dimensionTool';
-import { createRect2ptTool } from '@/tools/rect2ptTool';
-import { createAxisRectTool } from '@/tools/axisRectTool';
-import { createBezierTool } from '@/tools/bezierTool';
 import { startAutoSave, setBackendId, getBackendId, setProjectContext, requestSave } from '@/api/autoSave';
 import { api } from '@/api/cachedClient';
 import { projectApi } from '@/api/projectClient';
 import { migrateDocument } from '@/utils/document';
 import type { Document } from '@/types/document';
 import { addLog } from '@/stores/logStore';
-import type { Tool } from '@/tools/types';
 
 function SimDepthIndicator() {
   const simState = useCamStore((s) => s.simState);
@@ -192,12 +174,9 @@ function CamRightPanel() {
 
 export function EditorPage() {
   const { id } = useParams<{ id: string }>();
-  const activeTool = useEditorStore((s) => s.activeTool);
-  const setActiveTool = useEditorStore((s) => s.setActiveTool);
   const camPanelOpen = useCamStore((s) => s.camPanelOpen);
   const focusedOperationIndex = useCamStore((s) => s.focusedOperationIndex);
   const [showCuttingPanel, setShowCuttingPanel] = useState(true);
-  const [showHelp, setShowHelp] = useState(false);
 
   // Load document from backend if navigated directly and backendId not set
   useEffect(() => {
@@ -249,58 +228,19 @@ export function EditorPage() {
     return unsub;
   }, []);
 
-  // In CAM mode, force select tool
-  const effectiveTool = camPanelOpen ? 'select' : activeTool;
-
-  const toolInstance: Tool = useMemo(() => {
-    switch (effectiveTool) {
-      case 'line':
-        return createLineTool();
-      case 'point':
-        return createPointTool();
-      case 'circle':
-        return createCircleTool();
-      case 'rectangle':
-        return createRectangleTool();
-      case 'rect2pt':
-        return createRect2ptTool();
-      case 'axisrect':
-        return createAxisRectTool();
-      case 'polygon':
-        return createPolygonTool();
-      case 'select':
-        return createSelectTool();
-      case 'dimension':
-        return createDimensionTool();
-      case 'bezier':
-        return createBezierTool();
-    }
-  }, [effectiveTool]);
-
-  // Keyboard shortcuts for tool switching
+  // CAM shortcuts; the sketch shortcuts live in SketchWorkspace. Pasting a
+  // document replaces the whole document, so it belongs to this page too.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
-      // The 3D Build panel owns the keyboard while open (don't undo the sketch, etc.)
+      // The 3D Build panel owns the keyboard while open
       if (useBuildStore.getState().panelOpen) return;
+      const camState = useCamStore.getState();
+      if (!camState.camPanelOpen) return;
 
-      const ctrl = e.ctrlKey || e.metaKey;
-
-      // Viewport shortcuts work in both modes
-      if (e.key === 'Home') {
-        e.preventDefault();
-        useEditorStore.getState().setViewportCommand('center-origin');
-        return;
-      }
-      if (e.key === 'F' && e.shiftKey) {
-        useEditorStore.getState().setViewportCommand('fit-entities');
-        return;
-      }
-
-      // Escape in CAM mode: stop simulator first, then exit CAM
-      if (e.key === 'Escape' && useCamStore.getState().camPanelOpen) {
-        const camState = useCamStore.getState();
+      // Escape: stop simulator first, then exit CAM
+      if (e.key === 'Escape') {
         if (camState.simState !== 'idle') {
           camState.simStop();
           return;
@@ -308,48 +248,19 @@ export function EditorPage() {
         camState.toggleCamPanel();
         return;
       }
-
-      // In CAM mode: simulator shortcuts
-      if (useCamStore.getState().camPanelOpen) {
-        if (e.key === ' ') {
-          e.preventDefault();
-          const camState = useCamStore.getState();
-          if (camState.simState === 'playing') {
-            camState.simPause();
-          } else {
-            camState.simPlay();
-          }
-          return;
-        }
-        if (e.key === 'ArrowRight') {
-          e.preventDefault();
-          useCamStore.getState().simStep();
-          return;
+      if (e.key === ' ') {
+        e.preventDefault();
+        if (camState.simState === 'playing') {
+          camState.simPause();
+        } else {
+          camState.simPlay();
         }
         return;
       }
-
-      if (ctrl && e.key === 'z' && !e.shiftKey) {
+      if (e.key === 'ArrowRight') {
         e.preventDefault();
-        useDocumentStore.getState().undo();
-        return;
+        camState.simStep();
       }
-      if (ctrl && (e.key === 'Z' || e.key === 'y')) {
-        e.preventDefault();
-        useDocumentStore.getState().redo();
-        return;
-      }
-
-      if (e.key === '.') setActiveTool('point');
-      if (e.key === 'l' || e.key === 'L') setActiveTool('line');
-      if (e.key === 'c' || e.key === 'C') setActiveTool('circle');
-      if (e.key === 'r') setActiveTool('rectangle');
-      if (e.key === 'R') setActiveTool('rect2pt');
-      if (e.key === 'e' || e.key === 'E') setActiveTool('axisrect');
-      if (e.key === 'p' || e.key === 'P') setActiveTool('polygon');
-      if (e.key === 'd' || e.key === 'D') setActiveTool('dimension');
-      if (e.key === 's' || e.key === 'S') setActiveTool('bezier');
-      if (e.key === '?') setShowHelp((v) => !v);
     };
     const pasteHandler = (e: ClipboardEvent) => {
       const target = e.target as HTMLElement;
@@ -375,41 +286,27 @@ export function EditorPage() {
       window.removeEventListener('keydown', handler);
       window.removeEventListener('paste', pasteHandler);
     };
-  }, [setActiveTool]);
+  }, []);
 
   return (
-    <div style={styles.container}>
-      <Toolbar />
-      <div style={styles.middle}>
-        {!camPanelOpen && <HistoryPanel />}
-        {camPanelOpen && <CamOperationsPanel onShowCutting={() => setShowCuttingPanel(true)} />}
-        {camPanelOpen && showCuttingPanel && focusedOperationIndex !== null && (
-          <OperationCuttingPanel onClose={() => setShowCuttingPanel(false)} />
-        )}
-        <CanvasContainer activeTool={toolInstance} docId={id} />
-        {camPanelOpen && <SimDepthIndicator />}
-        {!camPanelOpen && <DocumentPropertiesPanel />}
-        {camPanelOpen ? <CamRightPanel /> : <RightPanel />}
-      </div>
-      <LogPanel />
-      <StatusBar />
+    <>
+      <SketchWorkspace
+        docId={id}
+        // In CAM mode, force select tool
+        toolOverride={camPanelOpen ? 'select' : undefined}
+        keys={camPanelOpen ? 'viewport' : 'all'}
+        left={camPanelOpen ? (
+          <>
+            <CamOperationsPanel onShowCutting={() => setShowCuttingPanel(true)} />
+            {showCuttingPanel && focusedOperationIndex !== null && (
+              <OperationCuttingPanel onClose={() => setShowCuttingPanel(false)} />
+            )}
+          </>
+        ) : undefined}
+        overlay={camPanelOpen ? <SimDepthIndicator /> : undefined}
+        right={camPanelOpen ? <CamRightPanel /> : undefined}
+      />
       <DocumentDrawer />
-      {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
-    </div>
+    </>
   );
 }
-
-const styles = {
-  container: {
-    display: 'flex',
-    flexDirection: 'column',
-    width: '100%',
-    height: '100%',
-  } as React.CSSProperties,
-  middle: {
-    display: 'flex',
-    flex: 1,
-    overflow: 'hidden',
-    position: 'relative',
-  } as React.CSSProperties,
-};

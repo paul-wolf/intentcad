@@ -186,22 +186,43 @@ function DimensionEditInput({
   );
 }
 
+/** Lets a host drive or follow the sketch viewport (e.g. a 3D view underneath). */
+export interface SketchViewportController {
+  /** Starting offset/scale; overrides the per-document saved viewport. */
+  initial?: { offset: Point; scale: number };
+  /** Called after every frame with the viewport it was drawn with and the canvas. */
+  onFrame?: (viewport: ViewportImpl, canvas: HTMLCanvasElement) => void;
+}
+
 interface CanvasContainerProps {
   activeTool: Tool | null;
   docId?: string;
+  /** See-through canvas: no background fill. */
+  transparent?: boolean;
+  /** Draw the grid (default true). */
+  grid?: boolean;
+  /** Don't ghost the document's other visible sketches. */
+  soloActiveSketch?: boolean;
+  /** External viewport control. With one, the viewport isn't saved per document. */
+  viewport?: SketchViewportController;
 }
 
-export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
+export function CanvasContainer({ activeTool, docId, transparent, grid, soloActiveSketch, viewport }: CanvasContainerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const activeToolRef = useRef<Tool | null>(activeTool);
   activeToolRef.current = activeTool;
+  const displayRef = useRef({ transparent, showGrid: grid, soloActiveSketch });
+  displayRef.current = { transparent, showGrid: grid, soloActiveSketch };
+  const controllerRef = useRef(viewport);
+  controllerRef.current = viewport;
 
   const getActiveTool = useCallback(() => activeToolRef.current, []);
 
-  const initialViewport = docId
-    ? useUIStateStore.getState().getViewport(docId)
-    : undefined;
+  // An externally controlled viewport is the host's to keep; don't save it per document.
+  const persistId = viewport ? undefined : docId;
+  const initialViewport = viewport?.initial
+    ?? (persistId ? useUIStateStore.getState().getViewport(persistId) : undefined);
 
   const { initCanvas, updateSize, startLoop, stopLoop, viewportRef } =
     useCanvasRenderer({
@@ -212,6 +233,11 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
       getActiveTool,
       getAltKeyHeld: () => useEditorStore.getState().altKeyHeld,
       initialViewport,
+      getRenderOptions: () => displayRef.current,
+      onFrame: (vp) => {
+        const canvas = canvasRef.current;
+        if (canvas) controllerRef.current?.onFrame?.(vp, canvas);
+      },
     });
 
   const { onMouseDown, onMouseMove, onMouseUp } = useMouseHandlers(
@@ -220,7 +246,7 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
     getActiveTool,
   );
 
-  usePanZoom(canvasRef, viewportRef, docId);
+  usePanZoom(canvasRef, viewportRef, persistId);
 
   // Handle resize
   const handleResize = useCallback(() => {
@@ -378,11 +404,11 @@ export function CanvasContainer({ activeTool, docId }: CanvasContainerProps) {
     }
 
     useEditorStore.getState().setViewportScale(vp.scale);
-    if (docId) {
-      useUIStateStore.getState().setViewport(docId, vp.offset, vp.scale);
+    if (persistId) {
+      useUIStateStore.getState().setViewport(persistId, vp.offset, vp.scale);
     }
     useEditorStore.getState().setViewportCommand(null);
-  }, [viewportCommand, viewportRef, docId]);
+  }, [viewportCommand, viewportRef, persistId]);
 
   const editingDimensionId = useEditorStore((s) => s.editingDimensionId);
 

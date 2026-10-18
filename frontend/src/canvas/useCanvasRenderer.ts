@@ -18,6 +18,10 @@ interface UseCanvasRendererOpts {
   getActiveTool: () => Tool | null;
   getAltKeyHeld: () => boolean;
   initialViewport?: { offset: { x: number; y: number }; scale: number };
+  /** Per-frame display options (read every frame). */
+  getRenderOptions?: () => Pick<RenderContext, 'transparent' | 'showGrid' | 'soloActiveSketch'>;
+  /** Called after every frame is drawn, with the viewport it was drawn with. */
+  onFrame?: (viewport: ViewportImpl) => void;
 }
 
 export function useCanvasRenderer(opts: UseCanvasRendererOpts) {
@@ -67,12 +71,14 @@ export function useCanvasRenderer(opts: UseCanvasRendererOpts) {
           altKeyHeld: opts.getAltKeyHeld(),
           palette: useThemeStore.getState().palette,
           camMode: useCamStore.getState().camPanelOpen,
+          ...opts.getRenderOptions?.(),
         };
         try {
           renderFrame(ctx);
         } catch (err) {
           console.error('Render error:', err);
         }
+        opts.onFrame?.(viewport);
       }
       rafRef.current = requestAnimationFrame(loop);
     };

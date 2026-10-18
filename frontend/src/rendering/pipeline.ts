@@ -34,11 +34,17 @@ export interface RenderContext {
   fontSizeScale?: number;
   /** Printable output: no grid, no origin axes, no editing handles. */
   exportMode?: boolean;
+  /** Leave the canvas see-through instead of filling it with the theme background. */
+  transparent?: boolean;
+  /** Draw the grid (default true). */
+  showGrid?: boolean;
+  /** Draw only the active sketch: other visible sketches are not ghosted in. */
+  soloActiveSketch?: boolean;
 }
 
 /** Step 1: Clear background */
 function renderBackground(ctx: RenderContext) {
-  ctx.renderer.clear(ctx.palette.background);
+  ctx.renderer.clear(ctx.transparent ? 'transparent' : ctx.palette.background);
 }
 
 /** Step 2: Draw grid */
@@ -155,6 +161,7 @@ function renderGhostedSketches(ctx: RenderContext) {
 
   for (const sketch of doc.sketches) {
     if (sketch.id === doc.activeSketchId || !sketch.visible || sketch.suppressed) continue;
+    if (ctx.soloActiveSketch) continue;
 
     if (ctx.camMode) {
       const isSelected = camSelectedSketchIds!.has(sketch.id);
@@ -869,7 +876,7 @@ function renderCamToolpath(ctx: RenderContext) {
 export function renderFrame(ctx: RenderContext): void {
   renderBackground(ctx);
   if (!ctx.exportMode) {
-    renderGrid(ctx);
+    if (ctx.showGrid !== false) renderGrid(ctx);
     renderOrigin(ctx);
   }
   renderGhostedSketches(ctx);

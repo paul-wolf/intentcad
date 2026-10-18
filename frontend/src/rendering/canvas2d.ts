@@ -8,8 +8,13 @@ export class Canvas2DRenderer implements Renderer {
     this.ctx = ctx;
   }
 
+  /** Fill the canvas with `color`; 'transparent' clears it instead. */
   clear(color: string): void {
     const { canvas } = this.ctx;
+    if (color === 'transparent') {
+      this.ctx.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
     this.ctx.fillStyle = color;
     this.ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
