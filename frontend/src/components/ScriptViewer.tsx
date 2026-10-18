@@ -21,6 +21,14 @@ import { BASE_PLANES, referencedProfiles, type BasePlane } from '@/build/faceSke
 const VIEW_BUTTONS = (['1', '2', '3', '4', '5', '6', '0'] as const)
   .map((k) => [k, VIEW_KEYS[k]!] as [string, StandardView]);
 
+// the window layouts, in the order L (or Ctrl/⌘+\) steps through them
+type Layout = 'code' | 'chat' | 'model';
+const LAYOUTS: [Layout, string, string][] = [
+  ['code', 'Code', 'Script on the left, chat along the bottom'],
+  ['chat', 'Chat', 'Chat on the left in place of the script'],
+  ['model', '3D', 'The 3D view alone, as large as the window allows'],
+];
+
 interface Props {
   onClose: () => void;
   /** When the editor is a standalone page, breadcrumb nav (saves first). */
@@ -538,11 +546,30 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const modelTitle = (m: ModelInfo) =>
     `${m.label} — ${m.note}. $${m.input_per_m}/M in · $${m.output_per_m}/M out (released ${m.released})`;
   const [usage, setUsage] = useState<UsageResponse | null>(null);
+  // what the window shows beside the 3D view: the script, the chat, or nothing
+  // (the 3D view maximised); the parameters are shown or hidden separately
+  const [layout, setLayoutState] = useState<Layout>(() => {
+    try { const l = localStorage.getItem('intentcad-part-layout'); return LAYOUTS.some(([k]) => k === l) ? l as Layout : 'code'; }
+    catch { return 'code'; }
+  });
+  const setLayout = (l: Layout) => { setLayoutState(l); try { localStorage.setItem('intentcad-part-layout', l); } catch { /* ignore */ } };
+  const cycleLayout = () => setLayoutState((cur) => {
+    const next = LAYOUTS[(LAYOUTS.findIndex(([k]) => k === cur) + 1) % LAYOUTS.length]![0];
+    try { localStorage.setItem('intentcad-part-layout', next); } catch { /* ignore */ }
+    return next;
+  });
+  const [showParams, setShowParamsState] = useState(() => {
+    try { return localStorage.getItem('intentcad-part-params') !== 'hide'; } catch { return true; }
+  });
+  const toggleParams = () => setShowParamsState((cur) => {
+    try { localStorage.setItem('intentcad-part-params', cur ? 'hide' : 'show'); } catch { /* ignore */ }
+    return !cur;
+  });
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const el = chatScrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;   // keep the latest message in view
-  }, [chat, asking]);
+  }, [chat, asking, layout]);
   const fetchUsage = () => buildApi.usage(getBackendId() ?? '').then(setUsage).catch(() => {});
   const [paramVals, setParamVals] = useState<Record<string, number>>({});
   const paramBase = useRef<Record<string, number>>({});   // values as of the last build (good or failed)
@@ -748,6 +775,9 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (faceSketchRef.current.activeRef.current) return;   // the sketcher owns the keys
+      if ((e.metaKey || e.ctrlKey) && e.key === '\\') {   // works while typing, too
+        cycleLayout(); e.preventDefault(); e.stopPropagation(); return;
+      }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.target instanceof HTMLElement && e.target !== document.body) return;
       const v = viewerRef.current;
@@ -763,6 +793,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       else if (sketchOnFace && (e.key === 'k' || e.key === 'K')) sketchOnSelection();
       else if (e.key === 'n' || e.key === 'N') lookAtSelection();
       else if (e.key === 'o' || e.key === 'O') setOrtho(v.toggleOrtho());
+      else if (e.key === 'l' || e.key === 'L') cycleLayout();
+      else if (e.key === 'p' || e.key === 'P') toggleParams();
       else return;
       e.preventDefault();
       e.stopPropagation();
@@ -897,6 +929,177 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     </button>
   );
 
+  // the pieces the layouts arrange (see LAYOUTS): the parameters stand on
+  // their own, at the top of the left column or floating over the 3D view
+  const hasParams = Object.keys(paramVals).length > 0;
+  const paramsPane = (style: CSSProperties) => (
+    <div style={{ padding: '8px 12px', display: 'flex', flexWrap: 'wrap', gap: '8px 14px',
+                  overflowY: 'auto', alignContent: 'flex-start', ...style }}>
+      <div style={{ width: '100%', display: 'flex', alignItems: 'center', fontSize: '11px', fontWeight: 600,
+                    letterSpacing: '0.5px', textTransform: 'uppercase', color: palette.textSecondary }}>
+        <span style={{ flex: 1 }}>Parameters</span>
+        <button onClick={toggleParams} onMouseDown={(e) => e.preventDefault()} title="Hide the parameters (P)"
+          aria-label="Hide the parameters"
+          style={{ background: 'none', border: 'none', color: palette.textSecondary, cursor: 'pointer',
+                   fontSize: '14px', lineHeight: 1, padding: '0 2px' }}>&times;</button>
+      </div>
+      {Object.entries(paramVals).map(([name, val]) => {
+        const controls = sens[name]?.faces ?? [];
+        const active = sel.length > 0 && controls.some((i) => sel.includes(i));
+        return (
+          <label key={name}
+            onMouseEnter={() => { ensureSens(); if (controls.length) viewerRef.current?.selectFaces(controls); }}
+            onMouseLeave={() => viewerRef.current?.selectFaces(sel)}
+            title={controls.length ? `controls ${controls.length} face(s) — hover to preview` : ''}
+            style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px',
+                     color: active ? palette.text : palette.textSecondary,
+                     fontWeight: active ? 600 : 400 }}>
+            {name}
+            <input
+              type="number" value={val} step="any"
+              onChange={(e) => setParamVals((p) => ({ ...p, [name]: Number(e.target.value) }))}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyParam(name, paramVals[name]!); } }}
+              onBlur={() => { if (paramVals[name] !== paramBase.current[name]) applyParam(name, paramVals[name]!); }}
+              style={{ width: '64px', padding: '3px 6px', background: palette.inputBg,
+                       border: `1px solid ${active ? palette.primaryBtn : palette.inputBorder}`,
+                       borderRadius: '4px', color: palette.text, fontSize: '12px' }}
+            />
+          </label>
+        );
+      })}
+      {paramReject && (() => {
+        const pr = paramReject;
+        const lines = pr.message.split('\n').map((l) => l.trim()).filter(Boolean);
+        const why = lines[lines.length - 1] ?? pr.message;   // the plain-language line
+        return (
+          <div title={pr.message}
+            style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
+                     fontSize: '11px', color: palette.danger }}>
+            <span>
+              {pr.name} = {pr.tried} doesn't build{pr.kept !== undefined ? ` — kept ${pr.kept}` : ''}. {why}
+            </span>
+            {pr.fix?.param && fixButton(pr.fix)}
+          </div>
+        );
+      })()}
+    </div>
+  );
+  // the script stays mounted when another layout hides it, keeping its scroll
+  const codePane = (() => {
+    // no soft-wrap so line numbers line up 1:1 with logical lines
+    const GUTTER = 46;
+    const monoBase: CSSProperties = {
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '13px',
+      lineHeight: 1.5, tabSize: 4, whiteSpace: 'pre',
+    };
+    const editorStyle: CSSProperties = {
+      ...monoBase, margin: 0, padding: `12px 14px 12px ${GUTTER + 8}px`,
+      border: 0, boxSizing: 'border-box',
+    };
+    let html = highlightPython(code, isDark ? DARK_SYNTAX : LIGHT_SYNTAX);
+    if (code.endsWith('\n')) html += '\n';   // keep the empty last line in sync
+    const lineCount = code.split('\n').length;
+    return (
+      <div style={{ flex: 1, display: layout === 'code' ? 'block' : 'none', position: 'relative', minHeight: 0, overflow: 'hidden',
+                    background: palette.inputBg }}>
+        <pre ref={preRef} aria-hidden
+          style={{ ...editorStyle, position: 'absolute', inset: 0, overflow: 'auto',
+                   color: palette.text, pointerEvents: 'none' }}
+          dangerouslySetInnerHTML={{ __html: html }} />
+        <textarea
+          ref={taRef}
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+          onScroll={syncScroll}
+          onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); rebuild(); } }}
+          spellCheck={false} autoCapitalize="off" autoCorrect="off" wrap="off"
+          style={{ ...editorStyle, position: 'absolute', inset: 0, resize: 'none',
+                   background: 'transparent', color: 'transparent',
+                   caretColor: palette.text, outline: 'none', overflow: 'auto' }}
+        />
+        {/* line-number gutter (opaque; scrolls vertically with the editor) */}
+        <div ref={gutterRef} aria-hidden
+          style={{ ...monoBase, position: 'absolute', left: 0, top: 0, bottom: 0, width: GUTTER,
+                   overflow: 'hidden', padding: '12px 8px 12px 0', boxSizing: 'border-box',
+                   textAlign: 'right', color: palette.textSecondary, background: palette.inputBg,
+                   borderRight: `1px solid ${palette.border}`, userSelect: 'none', pointerEvents: 'none' }}>
+          {Array.from({ length: lineCount }, (_, i) => i + 1).join('\n')}
+        </div>
+      </div>
+    );
+  })();
+  const chatHistory = (
+    <div ref={chatScrollRef} style={{ ...(layout === 'chat' ? { flex: 1, minHeight: 0 } : { maxHeight: '30vh' }), overflowY: 'auto', padding: '10px 16px',
+                                      display: 'flex', flexDirection: 'column', gap: '7px' }}>
+      {chat.map((m, i) => {
+        const mine = m.role === 'user';
+        const revertable = m.role === 'assistant' && m.kind === 'edit' && !!m.code;
+        const isQ = m.kind === 'question';
+        return (
+          <div key={`${m.at}-${i}`} style={{ alignSelf: mine ? 'flex-end' : 'flex-start', maxWidth: '82%' }}>
+            <div onClick={revertable ? () => restoreVersion(m.code!) : undefined}
+              title={revertable ? 'Revert the model to this version' : undefined}
+              style={{ padding: '7px 11px', borderRadius: '10px', fontSize: '13px', lineHeight: 1.45,
+                       whiteSpace: 'pre-wrap', color: mine ? '#fff' : palette.text,
+                       background: mine ? palette.primaryBtn : palette.inputBg,
+                       border: `1px solid ${isQ ? (palette.warning ?? '#c78a1a') : palette.border}`,
+                       cursor: revertable ? 'pointer' : 'default' }}>
+              {isQ && <span style={{ color: palette.warning ?? '#c78a1a', fontWeight: 700, marginRight: 5 }}>?</span>}
+              {m.text}
+              {revertable && (
+                <span style={{ display: 'block', fontSize: '11px', opacity: 0.6, marginTop: 3 }}>
+                  ↩ click to revert here
+                </span>
+              )}
+            </div>
+          </div>
+        );
+      })}
+      {asking && (
+        <div style={{ alignSelf: 'flex-start', fontSize: '12px', color: palette.textSecondary }}>thinking…</div>
+      )}
+    </div>
+  );
+  const chatInput = (
+  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px' }}>
+  <input
+    value={ask}
+    onChange={(e) => setAsk(e.target.value)}
+    onKeyDown={(e) => { if (e.key === 'Enter') void sendChat(); }}
+    placeholder={sel.length ? 'e.g. chamfer this edge 2mm  (targets your selection)' : 'Describe a change — e.g. add four M4 corner bolt holes'}
+    disabled={asking}
+    style={{ flex: 1, padding: '6px 10px', background: palette.inputBg,
+             border: `1px solid ${palette.inputBorder}`, borderRadius: '4px',
+             color: palette.text, fontSize: '13px', outline: 'none' }}
+  />
+  <select value={model} onChange={(e) => pickModel(e.target.value)} disabled={asking || models.length === 0}
+    title={models.find((m) => m.id === model) ? modelTitle(models.find((m) => m.id === model)!)
+           : 'Model for AI edits — stronger tiers cost more; use them for hard tasks'}
+    style={{ padding: '6px 8px', background: palette.inputBg, color: palette.textSecondary,
+             border: `1px solid ${palette.inputBorder}`, borderRadius: '4px', fontSize: '12px', cursor: 'pointer' }}>
+    {models.length === 0 && <option value={model}>{model || 'default model'}</option>}
+    {models.map((m) => (
+      <option key={m.id} value={m.id} title={modelTitle(m)}>
+        {m.label}{m.tier === 'fable' || m.tier === 'mythos' ? ' ✦' : ''}
+      </option>
+    ))}
+  </select>
+  <button onClick={() => void sendChat()} disabled={asking || !ask.trim()}
+    style={{ padding: '6px 14px', background: palette.primaryBtn, color: '#fff', border: 'none',
+             borderRadius: '4px', fontSize: '13px', cursor: ask.trim() && !asking ? 'pointer' : 'default',
+             opacity: ask.trim() && !asking ? 1 : 0.5 }}>
+    {asking ? 'Editing…' : 'Ask'}
+  </button>
+  {chat.length > 0 && (
+    <button onClick={() => persistChat([])} title="Clear the conversation"
+      style={{ padding: '6px 10px', background: 'none', color: palette.textSecondary,
+               border: `1px solid ${palette.border}`, borderRadius: '4px', fontSize: '12px', cursor: 'pointer' }}>
+      Clear
+    </button>
+  )}
+  </div>
+  );
+
   return (
     <div style={{ position: 'fixed', inset: 0, background: palette.panelBg, zIndex: 1000,
                   display: 'flex', flexDirection: 'column' }}>
@@ -945,6 +1148,29 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
             </span>
           )}
           <div style={{ flex: 1 }} />
+          {/* layout: what sits beside the 3D view; not focusable on click, so keys keep working */}
+          <div role="group" aria-label="Layout" onMouseDown={(e) => e.preventDefault()}
+            style={{ display: 'flex', flexShrink: 0, border: `1px solid ${palette.border}`, borderRadius: '4px', overflow: 'hidden' }}>
+            {LAYOUTS.map(([k, label, title], i) => (
+              <button key={k} onClick={() => setLayout(k)} aria-pressed={layout === k}
+                title={`${title} (L or Ctrl/⌘+\\ steps through the layouts)`}
+                style={{ ...btn, padding: '5px 10px', borderRadius: 0, whiteSpace: 'nowrap',
+                         borderLeft: i ? `1px solid ${palette.border}` : 'none',
+                         background: layout === k ? palette.buttonBg : 'none',
+                         color: layout === k ? palette.accent : palette.textSecondary,
+                         fontWeight: layout === k ? 600 : 400 }}>
+                {label}
+              </button>
+            ))}
+          </div>
+          {hasParams && (
+            <button onClick={toggleParams} onMouseDown={(e) => e.preventDefault()} aria-pressed={showParams}
+              title={showParams ? 'Hide the parameters (P)' : 'Show the parameters (P)'}
+              style={{ ...btn, flexShrink: 0, background: 'none', color: showParams ? palette.accent : palette.textSecondary,
+                       border: `1px solid ${showParams ? palette.accent : palette.border}` }}>
+              Params
+            </button>
+          )}
           <button onClick={openProduction} title="Target production process — the AI designs to this (clearances, fits, wall thickness)"
             style={{ ...btn, background: 'none', color: palette.textSecondary,
                      border: `1px solid ${palette.border}` }}>
@@ -1009,104 +1235,34 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                    color: palette.textSecondary, fontSize: '18px', cursor: 'pointer', padding: '0 4px' }}>&times;</button>
         </div>
 
-        {/* body: parameters + code editor (left) | viewport (right) */}
+        {/* body: parameters + script or chat (left) | 3D view (right) */}
         <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
-          <div style={{ width: '46%', display: 'flex', flexDirection: 'column', minHeight: 0,
-                        borderRight: `1px solid ${palette.border}` }}>
-            {Object.keys(paramVals).length > 0 && (
-              <div style={{ padding: '8px 12px', borderBottom: `1px solid ${palette.border}`,
-                            display: 'flex', flexWrap: 'wrap', gap: '8px 14px', maxHeight: '30%',
-                            overflowY: 'auto', alignContent: 'flex-start' }}>
-                <div style={{ width: '100%', fontSize: '11px', fontWeight: 600, letterSpacing: '0.5px',
-                              textTransform: 'uppercase', color: palette.textSecondary }}>Parameters</div>
-                {Object.entries(paramVals).map(([name, val]) => {
-                  const controls = sens[name]?.faces ?? [];
-                  const active = sel.length > 0 && controls.some((i) => sel.includes(i));
-                  return (
-                    <label key={name}
-                      onMouseEnter={() => { ensureSens(); if (controls.length) viewerRef.current?.selectFaces(controls); }}
-                      onMouseLeave={() => viewerRef.current?.selectFaces(sel)}
-                      title={controls.length ? `controls ${controls.length} face(s) — hover to preview` : ''}
-                      style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px',
-                               color: active ? palette.text : palette.textSecondary,
-                               fontWeight: active ? 600 : 400 }}>
-                      {name}
-                      <input
-                        type="number" value={val} step="any"
-                        onChange={(e) => setParamVals((p) => ({ ...p, [name]: Number(e.target.value) }))}
-                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyParam(name, paramVals[name]!); } }}
-                        onBlur={() => { if (paramVals[name] !== paramBase.current[name]) applyParam(name, paramVals[name]!); }}
-                        style={{ width: '64px', padding: '3px 6px', background: palette.inputBg,
-                                 border: `1px solid ${active ? palette.primaryBtn : palette.inputBorder}`,
-                                 borderRadius: '4px', color: palette.text, fontSize: '12px' }}
-                      />
-                    </label>
-                  );
-                })}
-                {paramReject && (() => {
-                  const pr = paramReject;
-                  const lines = pr.message.split('\n').map((l) => l.trim()).filter(Boolean);
-                  const why = lines[lines.length - 1] ?? pr.message;   // the plain-language line
-                  return (
-                    <div title={pr.message}
-                      style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
-                               fontSize: '11px', color: palette.danger }}>
-                      <span>
-                        {pr.name} = {pr.tried} doesn't build{pr.kept !== undefined ? ` — kept ${pr.kept}` : ''}. {why}
-                      </span>
-                      {pr.fix?.param && fixButton(pr.fix)}
-                    </div>
-                  );
-                })()}
-              </div>
-            )}
-            {(() => {
-              // no soft-wrap so line numbers line up 1:1 with logical lines
-              const GUTTER = 46;
-              const monoBase: CSSProperties = {
-                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '13px',
-                lineHeight: 1.5, tabSize: 4, whiteSpace: 'pre',
-              };
-              const editorStyle: CSSProperties = {
-                ...monoBase, margin: 0, padding: `12px 14px 12px ${GUTTER + 8}px`,
-                border: 0, boxSizing: 'border-box',
-              };
-              let html = highlightPython(code, isDark ? DARK_SYNTAX : LIGHT_SYNTAX);
-              if (code.endsWith('\n')) html += '\n';   // keep the empty last line in sync
-              const lineCount = code.split('\n').length;
-              return (
-                <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden',
-                              background: palette.inputBg }}>
-                  <pre ref={preRef} aria-hidden
-                    style={{ ...editorStyle, position: 'absolute', inset: 0, overflow: 'auto',
-                             color: palette.text, pointerEvents: 'none' }}
-                    dangerouslySetInnerHTML={{ __html: html }} />
-                  <textarea
-                    ref={taRef}
-                    value={code}
-                    onChange={(e) => setCode(e.target.value)}
-                    onScroll={syncScroll}
-                    onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); rebuild(); } }}
-                    spellCheck={false} autoCapitalize="off" autoCorrect="off" wrap="off"
-                    style={{ ...editorStyle, position: 'absolute', inset: 0, resize: 'none',
-                             background: 'transparent', color: 'transparent',
-                             caretColor: palette.text, outline: 'none', overflow: 'auto' }}
-                  />
-                  {/* line-number gutter (opaque; scrolls vertically with the editor) */}
-                  <div ref={gutterRef} aria-hidden
-                    style={{ ...monoBase, position: 'absolute', left: 0, top: 0, bottom: 0, width: GUTTER,
-                             overflow: 'hidden', padding: '12px 8px 12px 0', boxSizing: 'border-box',
-                             textAlign: 'right', color: palette.textSecondary, background: palette.inputBg,
-                             borderRight: `1px solid ${palette.border}`, userSelect: 'none', pointerEvents: 'none' }}>
-                    {Array.from({ length: lineCount }, (_, i) => i + 1).join('\n')}
+          <div style={{ width: '46%', display: layout === 'model' ? 'none' : 'flex', flexDirection: 'column',
+                        minHeight: 0, borderRight: `1px solid ${palette.border}` }}>
+            {hasParams && showParams && paramsPane({ borderBottom: `1px solid ${palette.border}`, maxHeight: '30%' })}
+            {codePane}
+            {layout === 'chat' && (
+              <>
+                {chat.length > 0 ? chatHistory : (
+                  <div style={{ flex: 1, padding: '14px 16px', fontSize: '13px', lineHeight: 1.5,
+                                color: palette.textSecondary }}>
+                    No conversation yet. Describe a change below; each edit the AI makes is kept
+                    here, and clicking one reverts the part to that version.
                   </div>
-                </div>
-              );
-            })()}
+                )}
+                <div style={{ borderTop: `1px solid ${palette.border}` }}>{chatInput}</div>
+              </>
+            )}
           </div>
           <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
             <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block',
                      cursor: 'grab', touchAction: 'none', ...faceSketch.canvasStyle }} />
+            {/* the parameters float over the maximised 3D view */}
+            {layout === 'model' && hasParams && showParams && !faceSketch.active && paramsPane({
+              position: 'absolute', top: 12, right: 12, maxWidth: 'min(440px, 60%)', maxHeight: '45%',
+              background: palette.panelBg, border: `1px solid ${palette.border}`, borderRadius: '6px',
+              boxShadow: '0 4px 14px rgba(0,0,0,0.3)', zIndex: 2,
+            })}
             {sketchTip && !faceSketch.active && (
               <div style={{ position: 'absolute', left: sketchTip.x + 12, top: sketchTip.y + 12, padding: '3px 8px',
                             background: 'rgba(20,22,26,0.86)', border: '1px solid rgba(255,255,255,0.12)',
@@ -1311,81 +1467,16 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
             )}
           </div>
         </div>
-
         {/* chat — the AI modeling conversation: history is fed back to the model,
             it can ask a question instead of guessing, and each edit is a
-            checkpoint you can click to revert to */}
-        <div style={{ borderTop: `1px solid ${palette.border}`, display: 'flex', flexDirection: 'column' }}>
-          {chat.length > 0 && (
-            <div ref={chatScrollRef} style={{ maxHeight: '30vh', overflowY: 'auto', padding: '10px 16px',
-                                              display: 'flex', flexDirection: 'column', gap: '7px' }}>
-              {chat.map((m, i) => {
-                const mine = m.role === 'user';
-                const revertable = m.role === 'assistant' && m.kind === 'edit' && !!m.code;
-                const isQ = m.kind === 'question';
-                return (
-                  <div key={`${m.at}-${i}`} style={{ alignSelf: mine ? 'flex-end' : 'flex-start', maxWidth: '82%' }}>
-                    <div onClick={revertable ? () => restoreVersion(m.code!) : undefined}
-                      title={revertable ? 'Revert the model to this version' : undefined}
-                      style={{ padding: '7px 11px', borderRadius: '10px', fontSize: '13px', lineHeight: 1.45,
-                               whiteSpace: 'pre-wrap', color: mine ? '#fff' : palette.text,
-                               background: mine ? palette.primaryBtn : palette.inputBg,
-                               border: `1px solid ${isQ ? (palette.warning ?? '#c78a1a') : palette.border}`,
-                               cursor: revertable ? 'pointer' : 'default' }}>
-                      {isQ && <span style={{ color: palette.warning ?? '#c78a1a', fontWeight: 700, marginRight: 5 }}>?</span>}
-                      {m.text}
-                      {revertable && (
-                        <span style={{ display: 'block', fontSize: '11px', opacity: 0.6, marginTop: 3 }}>
-                          ↩ click to revert here
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-              {asking && (
-                <div style={{ alignSelf: 'flex-start', fontSize: '12px', color: palette.textSecondary }}>thinking…</div>
-              )}
-            </div>
-          )}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px' }}>
-          <input
-            value={ask}
-            onChange={(e) => setAsk(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') void sendChat(); }}
-            placeholder={sel.length ? 'e.g. chamfer this edge 2mm  (targets your selection)' : 'Describe a change — e.g. add four M4 corner bolt holes'}
-            disabled={asking}
-            style={{ flex: 1, padding: '6px 10px', background: palette.inputBg,
-                     border: `1px solid ${palette.inputBorder}`, borderRadius: '4px',
-                     color: palette.text, fontSize: '13px', outline: 'none' }}
-          />
-          <select value={model} onChange={(e) => pickModel(e.target.value)} disabled={asking || models.length === 0}
-            title={models.find((m) => m.id === model) ? modelTitle(models.find((m) => m.id === model)!)
-                   : 'Model for AI edits — stronger tiers cost more; use them for hard tasks'}
-            style={{ padding: '6px 8px', background: palette.inputBg, color: palette.textSecondary,
-                     border: `1px solid ${palette.inputBorder}`, borderRadius: '4px', fontSize: '12px', cursor: 'pointer' }}>
-            {models.length === 0 && <option value={model}>{model || 'default model'}</option>}
-            {models.map((m) => (
-              <option key={m.id} value={m.id} title={modelTitle(m)}>
-                {m.label}{m.tier === 'fable' || m.tier === 'mythos' ? ' ✦' : ''}
-              </option>
-            ))}
-          </select>
-          <button onClick={() => void sendChat()} disabled={asking || !ask.trim()}
-            style={{ padding: '6px 14px', background: palette.primaryBtn, color: '#fff', border: 'none',
-                     borderRadius: '4px', fontSize: '13px', cursor: ask.trim() && !asking ? 'pointer' : 'default',
-                     opacity: ask.trim() && !asking ? 1 : 0.5 }}>
-            {asking ? 'Editing…' : 'Ask'}
-          </button>
-          {chat.length > 0 && (
-            <button onClick={() => persistChat([])} title="Clear the conversation"
-              style={{ padding: '6px 10px', background: 'none', color: palette.textSecondary,
-                       border: `1px solid ${palette.border}`, borderRadius: '4px', fontSize: '12px', cursor: 'pointer' }}>
-              Clear
-            </button>
-          )}
+            checkpoint you can click to revert to. In the Chat layout it fills the
+            left column instead; the 3D layout leaves it out */}
+        {layout === 'code' && (
+          <div style={{ borderTop: `1px solid ${palette.border}`, display: 'flex', flexDirection: 'column' }}>
+            {chat.length > 0 && chatHistory}
+            {chatInput}
           </div>
-        </div>
+        )}
 
         {/* footer */}
         <div style={{ padding: '8px 16px', borderTop: `1px solid ${palette.border}`,

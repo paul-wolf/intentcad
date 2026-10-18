@@ -52,6 +52,11 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
       ['Normal', 'Look straight at the selected face (key N).'],
       ['Persp / Ortho', 'Perspective or orthographic — no perspective, for checking alignment (key O).'],
       ['Click X / Y / Z', 'In the axes at bottom left: view from that axis. Click again for the opposite side.'],
+      ['Code · Chat · 3D', 'At the top: what sits beside the 3D view. Code shows the script with the chat along the '
+        + 'bottom; Chat puts the conversation where the script was; 3D gives the whole window to the part. '
+        + 'Key L (or Ctrl/⌘+\\, even while typing) steps through them.'],
+      ['Params', 'Shows or hides the parameters (key P, or × on the pane). They sit above the script or chat, '
+        + 'and float at the top right of the 3D view when it is maximised.'],
     ],
   },
   {
