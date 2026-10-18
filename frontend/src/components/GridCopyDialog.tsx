@@ -1,19 +1,38 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useThemeStore } from '@/theme';
 import { requestSave } from '@/api/autoSave';
+import { gridCopies } from '@/utils/gridCopy';
 
 export function GridCopyDialog() {
   const gridCopyEntityIds = useEditorStore((s) => s.gridCopyEntityIds);
   const palette = useThemeStore((s) => s.palette);
 
-  const [countX, setCountX] = useState(3);
-  const [countY, setCountY] = useState(3);
-  const [spacingX, setSpacingX] = useState(20);
-  const [spacingY, setSpacingY] = useState(20);
+  // the fields as typed (so "-" or "" can be on the way to a value)
+  const [cx, setCx] = useState('3');
+  const [cy, setCy] = useState('3');
+  const [sx, setSx] = useState('20');
+  const [sy, setSy] = useState('20');
+  const countX = Math.max(1, parseInt(cx) || 1);
+  const countY = Math.max(1, parseInt(cy) || 1);
+  const spacingX = parseFloat(sx) || 0;
+  const spacingY = parseFloat(sy) || 0;
+
+  // the copies, drawn in the sketch while the dialog is open
+  const entities = useDocumentStore((s) => s.document.sketches.find((sk) => sk.id === s.document.activeSketchId)?.entities);
+  const preview = useMemo(() => {
+    if (!gridCopyEntityIds || !entities) return null;
+    let n = 0;
+    return gridCopies(entities, gridCopyEntityIds, countX, countY, spacingX, spacingY, () => `grid-preview-${n++}`);
+  }, [gridCopyEntityIds, entities, countX, countY, spacingX, spacingY]);
+  useEffect(() => {
+    useEditorStore.getState().setCopyPreview(preview);
+    return () => useEditorStore.getState().setCopyPreview(null);
+  }, [preview]);
 
   if (!gridCopyEntityIds) return null;
+  const shapes = gridCopyEntityIds.filter((id) => entities?.some((e) => e.id === id && e.type !== 'dimension')).length;
 
   const cancel = () => {
     useEditorStore.getState().setGridCopyEntityIds(null);
@@ -61,10 +80,10 @@ export function GridCopyDialog() {
   return (
     <div
       style={{
+        // at the side, so the copies it previews stay in view
         position: 'absolute',
-        top: '50%',
-        left: '50%',
-        transform: 'translate(-50%, -50%)',
+        top: '12px',
+        right: '12px',
         background: palette.panelBg,
         border: `1px solid ${palette.border}`,
         borderRadius: '8px',
@@ -93,8 +112,8 @@ export function GridCopyDialog() {
           style={inputStyle}
           type="number"
           min={1}
-          value={countX}
-          onChange={(e) => setCountX(Math.max(1, parseInt(e.target.value) || 1))}
+          value={cx}
+          onChange={(e) => setCx(e.target.value)}
         />
       </div>
 
@@ -104,29 +123,38 @@ export function GridCopyDialog() {
           style={inputStyle}
           type="number"
           min={1}
-          value={countY}
-          onChange={(e) => setCountY(Math.max(1, parseInt(e.target.value) || 1))}
+          value={cy}
+          onChange={(e) => setCy(e.target.value)}
         />
       </div>
 
       <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-        <label style={{ color: palette.textSecondary, fontSize: '12px', width: '55px' }}>H Space</label>
+        <label style={{ color: palette.textSecondary, fontSize: '12px', width: '55px' }}
+               title="Centre to centre: the copies overlap if it is smaller than the shape">H Space</label>
         <input
           style={inputStyle}
           type="number"
-          value={spacingX}
-          onChange={(e) => setSpacingX(parseFloat(e.target.value) || 0)}
+          value={sx}
+          onChange={(e) => setSx(e.target.value)}
         />
       </div>
 
       <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-        <label style={{ color: palette.textSecondary, fontSize: '12px', width: '55px' }}>V Space</label>
+        <label style={{ color: palette.textSecondary, fontSize: '12px', width: '55px' }}
+               title="Centre to centre: the copies overlap if it is smaller than the shape">V Space</label>
         <input
           style={inputStyle}
           type="number"
-          value={spacingY}
-          onChange={(e) => setSpacingY(parseFloat(e.target.value) || 0)}
+          value={sy}
+          onChange={(e) => setSy(e.target.value)}
         />
+      </div>
+
+      <div style={{ color: palette.textSecondary, fontSize: '12px', textAlign: 'center', lineHeight: 1.4 }}>
+        {countX} × {countY} grid · {(countX * countY - 1) * shapes} new
+        {shapes > 1 ? ` (${shapes} shapes)` : ''}
+        <br />
+        <span style={{ color: palette.accent }}>Preview shown in the sketch</span>
       </div>
 
       <button style={btnStyle} onClick={apply}>

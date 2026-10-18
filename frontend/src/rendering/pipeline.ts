@@ -40,6 +40,8 @@ export interface RenderContext {
   showGrid?: boolean;
   /** Draw only the active sketch: other visible sketches are not ghosted in. */
   soloActiveSketch?: boolean;
+  /** Shapes a copy dialog would add (not in the document yet). */
+  copyPreview?: Entity[] | null;
 }
 
 /** Step 1: Clear background */
@@ -630,6 +632,14 @@ function renderArcMidpointHandles(ctx: RenderContext) {
   }
 }
 
+/** The shapes an open copy dialog would add, in the accent colour */
+function renderCopyPreview(ctx: RenderContext) {
+  if (!ctx.copyPreview?.length) return;
+  const styles = getStyles(ctx.palette, ctx.lineWidthScale, ctx.fontSizeScale);
+  const style: LineStyle = { color: ctx.palette.accent, width: styles.line.width, opacity: 0.75 };
+  for (const entity of ctx.copyPreview) renderEntity(ctx.renderer, ctx.viewport, entity, style, false, true);
+}
+
 /** Step 5: Draw tool overlay (preview line, snap indicator, selection rect) */
 function renderToolOverlay(ctx: RenderContext) {
   if (ctx.activeTool?.renderOverlay) {
@@ -881,6 +891,7 @@ export function renderFrame(ctx: RenderContext): void {
   }
   renderGhostedSketches(ctx);
   renderActiveSketch(ctx);
+  if (!ctx.exportMode) renderCopyPreview(ctx);
 
   if (!ctx.camMode) {
     // Sketch-only rendering steps

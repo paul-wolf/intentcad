@@ -9,6 +9,7 @@ import type { SelectedPoint } from '@/stores/editorStore';
 import type { SegmentHit } from '@/hittest/hitTest';
 import { useThemeStore } from '@/theme';
 import { useCamStore } from '@/stores/camStore';
+import { useEditorStore } from '@/stores/editorStore';
 
 export type InitialViewport =
   | { offset: { x: number; y: number }; scale: number }
@@ -78,6 +79,7 @@ export function useCanvasRenderer(opts: UseCanvasRendererOpts) {
           altKeyHeld: opts.getAltKeyHeld(),
           palette: useThemeStore.getState().palette,
           camMode: useCamStore.getState().camPanelOpen,
+          copyPreview: useEditorStore.getState().copyPreview,
           ...opts.getRenderOptions?.(),
         };
         try {

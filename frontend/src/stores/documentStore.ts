@@ -1,7 +1,8 @@
 import { create } from 'zustand';
+import { gridCopies } from '@/utils/gridCopy';
 import type { Document, DocumentMetadata, Entity, OriginAlignMode, Point, Sketch, Constraint, HorizontalConstraint, VerticalConstraint } from '@/types/document';
 import { createEmptyDocument, createEmptySketch } from '@/utils/document';
-import { createMirroredEntity, createRotatedEntity, createTranslatedEntity, propagateDerived } from '@/utils/propagate';
+import { createMirroredEntity, createRotatedEntity, propagateDerived } from '@/utils/propagate';
 import { rotatePoint, lineLineIntersection } from '@/utils/geometry';
 import { getEntityPoints, getEntityPoint, setEntityPoint } from '@/utils/entityPoints';
 import { solveConstraints, validateConstraint } from '@/utils/constraintSolver';
@@ -861,20 +862,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     const { document } = get();
     const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
     if (!sketch) return [];
-    const newEntities: Entity[] = [];
-    for (const id of entityIds) {
-      const source = sketch.entities.find((e) => e.id === id);
-      if (!source) continue;
-      for (let row = 0; row < countY; row++) {
-        for (let col = 0; col < countX; col++) {
-          if (row === 0 && col === 0) continue; // skip source position
-          const transform = { type: 'translate' as const, dx: col * spacingX, dy: row * spacingY };
-          const newId = crypto.randomUUID();
-          const translated = createTranslatedEntity(source, transform, newId);
-          if (translated) newEntities.push(translated);
-        }
-      }
-    }
+    const newEntities = gridCopies(sketch.entities, entityIds, countX, countY, spacingX, spacingY);
     if (newEntities.length === 0) return [];
     set({
       document: {

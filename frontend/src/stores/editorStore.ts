@@ -34,6 +34,8 @@ interface EditorStore {
   circularCopyPickingCenter: boolean;
   circularCopyCenter: Point | null;
   gridCopyEntityIds: string[] | null;
+  /** Shapes a copy dialog would add, drawn as a preview while it is open. */
+  copyPreview: Entity[] | null;
   pendingDxfImport: PendingDxfImport | null;
   viewportScale: number;
   viewportCommand: 'center-origin' | 'fit-entities' | null;
@@ -56,6 +58,7 @@ interface EditorStore {
   setCircularCopyPickingCenter(picking: boolean): void;
   setCircularCopyCenter(center: Point | null): void;
   setGridCopyEntityIds(ids: string[] | null): void;
+  setCopyPreview(entities: Entity[] | null): void;
   setPendingDxfImport(pending: PendingDxfImport | null): void;
   setViewportScale(scale: number): void;
   setViewportCommand(cmd: 'center-origin' | 'fit-entities' | null): void;
@@ -101,6 +104,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
   circularCopyPickingCenter: false,
   circularCopyCenter: null,
   gridCopyEntityIds: null,
+  copyPreview: null,
   pendingDxfImport: null,
   viewportScale: 1,
   viewportCommand: null,
@@ -195,7 +199,11 @@ export const useEditorStore = create<EditorStore>((set) => ({
   },
 
   setGridCopyEntityIds(ids) {
-    set({ gridCopyEntityIds: ids });
+    set({ gridCopyEntityIds: ids, ...(ids ? {} : { copyPreview: null }) });
+  },
+
+  setCopyPreview(entities) {
+    set({ copyPreview: entities });
   },
 
   setPendingDxfImport(pending) {
