@@ -33,9 +33,13 @@ interface EditorStore {
   circularCopyEntityIds: string[] | null;
   circularCopyPickingCenter: boolean;
   circularCopyCenter: Point | null;
+  /** Where the pointer would put the centre, while picking it */
+  circularCopyHover: Point | null;
   gridCopyEntityIds: string[] | null;
   /** Shapes a copy dialog would add, drawn as a preview while it is open. */
   copyPreview: Entity[] | null;
+  /** The centre a circular copy preview turns about, marked in the sketch. */
+  copyPreviewCenter: Point | null;
   pendingDxfImport: PendingDxfImport | null;
   viewportScale: number;
   viewportCommand: 'center-origin' | 'fit-entities' | null;
@@ -57,8 +61,9 @@ interface EditorStore {
   setCircularCopyEntityIds(ids: string[] | null): void;
   setCircularCopyPickingCenter(picking: boolean): void;
   setCircularCopyCenter(center: Point | null): void;
+  setCircularCopyHover(p: Point | null): void;
   setGridCopyEntityIds(ids: string[] | null): void;
-  setCopyPreview(entities: Entity[] | null): void;
+  setCopyPreview(entities: Entity[] | null, center?: Point | null): void;
   setPendingDxfImport(pending: PendingDxfImport | null): void;
   setViewportScale(scale: number): void;
   setViewportCommand(cmd: 'center-origin' | 'fit-entities' | null): void;
@@ -103,8 +108,10 @@ export const useEditorStore = create<EditorStore>((set) => ({
   circularCopyEntityIds: null,
   circularCopyPickingCenter: false,
   circularCopyCenter: null,
+  circularCopyHover: null,
   gridCopyEntityIds: null,
   copyPreview: null,
+  copyPreviewCenter: null,
   pendingDxfImport: null,
   viewportScale: 1,
   viewportCommand: null,
@@ -187,23 +194,30 @@ export const useEditorStore = create<EditorStore>((set) => ({
   },
 
   setCircularCopyEntityIds(ids) {
-    set({ circularCopyEntityIds: ids, circularCopyPickingCenter: false, circularCopyCenter: null });
+    set({
+      circularCopyEntityIds: ids, circularCopyPickingCenter: false, circularCopyCenter: null, circularCopyHover: null,
+      ...(ids ? {} : { copyPreview: null, copyPreviewCenter: null }),
+    });
   },
 
   setCircularCopyPickingCenter(picking) {
-    set({ circularCopyPickingCenter: picking });
+    set({ circularCopyPickingCenter: picking, circularCopyHover: null });
   },
 
   setCircularCopyCenter(center) {
-    set({ circularCopyCenter: center, circularCopyPickingCenter: false });
+    set({ circularCopyCenter: center, circularCopyPickingCenter: false, circularCopyHover: null });
+  },
+
+  setCircularCopyHover(p) {
+    set({ circularCopyHover: p });
   },
 
   setGridCopyEntityIds(ids) {
-    set({ gridCopyEntityIds: ids, ...(ids ? {} : { copyPreview: null }) });
+    set({ gridCopyEntityIds: ids, ...(ids ? {} : { copyPreview: null, copyPreviewCenter: null }) });
   },
 
-  setCopyPreview(entities) {
-    set({ copyPreview: entities });
+  setCopyPreview(entities, center = null) {
+    set({ copyPreview: entities, copyPreviewCenter: center });
   },
 
   setPendingDxfImport(pending) {

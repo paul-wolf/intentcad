@@ -80,6 +80,7 @@ export function useCanvasRenderer(opts: UseCanvasRendererOpts) {
           palette: useThemeStore.getState().palette,
           camMode: useCamStore.getState().camPanelOpen,
           copyPreview: useEditorStore.getState().copyPreview,
+          copyPreviewCenter: useEditorStore.getState().copyPreviewCenter,
           ...opts.getRenderOptions?.(),
         };
         try {

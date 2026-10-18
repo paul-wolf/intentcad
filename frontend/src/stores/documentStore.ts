@@ -1,8 +1,9 @@
 import { create } from 'zustand';
 import { gridCopies } from '@/utils/gridCopy';
+import { circularCopies } from '@/utils/circularCopy';
 import type { Document, DocumentMetadata, Entity, OriginAlignMode, Point, Sketch, Constraint, HorizontalConstraint, VerticalConstraint } from '@/types/document';
 import { createEmptyDocument, createEmptySketch } from '@/utils/document';
-import { createMirroredEntity, createRotatedEntity, propagateDerived } from '@/utils/propagate';
+import { createMirroredEntity, propagateDerived } from '@/utils/propagate';
 import { rotatePoint, lineLineIntersection } from '@/utils/geometry';
 import { getEntityPoints, getEntityPoint, setEntityPoint } from '@/utils/entityPoints';
 import { solveConstraints, validateConstraint } from '@/utils/constraintSolver';
@@ -831,18 +832,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     const { document } = get();
     const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
     if (!sketch) return [];
-    const newEntities: Entity[] = [];
-    for (const id of entityIds) {
-      const source = sketch.entities.find((e) => e.id === id);
-      if (!source) continue;
-      for (let i = 1; i < count; i++) {
-        const angle = (2 * Math.PI / count) * i;
-        const transform = { type: 'rotate' as const, center, angle };
-        const newId = crypto.randomUUID();
-        const rotated = createRotatedEntity(source, transform, newId);
-        if (rotated) newEntities.push(rotated);
-      }
-    }
+    const newEntities = circularCopies(sketch.entities, entityIds, center, count);
     if (newEntities.length === 0) return [];
     set({
       document: {

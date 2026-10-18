@@ -226,6 +226,13 @@ export function createSelectTool(): Tool {
     },
 
     onMouseMove(worldPos: Point, screenPos: Point, ctx: ToolContext) {
+      // Picking a circular copy's centre: preview the copies round the pointer
+      const es = useEditorStore.getState();
+      if (es.circularCopyPickingCenter && es.circularCopyEntityIds) {
+        const snap = snapPosition(worldPos, ctx.viewport, useDocumentStore.getState().document);
+        es.setCircularCopyHover(snap.point);
+        return;
+      }
       if (!mouseDownScreen) return;
 
       // Decide drag mode at threshold

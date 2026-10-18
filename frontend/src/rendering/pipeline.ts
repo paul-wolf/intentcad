@@ -42,6 +42,8 @@ export interface RenderContext {
   soloActiveSketch?: boolean;
   /** Shapes a copy dialog would add (not in the document yet). */
   copyPreview?: Entity[] | null;
+  /** The centre a circular copy preview turns about. */
+  copyPreviewCenter?: Point | null;
 }
 
 /** Step 1: Clear background */
@@ -634,10 +636,17 @@ function renderArcMidpointHandles(ctx: RenderContext) {
 
 /** The shapes an open copy dialog would add, in the accent colour */
 function renderCopyPreview(ctx: RenderContext) {
-  if (!ctx.copyPreview?.length) return;
   const styles = getStyles(ctx.palette, ctx.lineWidthScale, ctx.fontSizeScale);
   const style: LineStyle = { color: ctx.palette.accent, width: styles.line.width, opacity: 0.75 };
-  for (const entity of ctx.copyPreview) renderEntity(ctx.renderer, ctx.viewport, entity, style, false, true);
+  for (const entity of ctx.copyPreview ?? []) renderEntity(ctx.renderer, ctx.viewport, entity, style, false, true);
+  if (ctx.copyPreviewCenter) {
+    // a crosshair in a ring where the copies turn about
+    const c = ctx.viewport.worldToScreen(ctx.copyPreviewCenter);
+    const mark: LineStyle = { color: ctx.palette.accent, width: 1.5 };
+    ctx.renderer.drawCircle(c, 6, mark);
+    ctx.renderer.drawLine({ x: c.x - 10, y: c.y }, { x: c.x + 10, y: c.y }, mark);
+    ctx.renderer.drawLine({ x: c.x, y: c.y - 10 }, { x: c.x, y: c.y + 10 }, mark);
+  }
 }
 
 /** Step 5: Draw tool overlay (preview line, snap indicator, selection rect) */
