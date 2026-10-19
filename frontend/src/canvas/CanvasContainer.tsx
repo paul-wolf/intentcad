@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, useMemo, type RefObject } from 'react';
+import { useRef, useEffect, useCallback, useMemo, useState, type RefObject } from 'react';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useUIStateStore } from '@/stores/uiStateStore';
@@ -16,7 +16,8 @@ import type { ViewportImpl } from '@/rendering/viewport';
 import type { Point, LineEntity } from '@/types/document';
 import { getSegmentCount, getSegmentPointIndices, getEntitySegmentEndpoints } from '@/utils/lineSegments';
 import { computeDerivedDimensionIds } from '@/utils/dof';
-import { isExpression, evaluateExpression } from '@/utils/expression';
+import { getEntityPoint } from '@/utils/entityPoints';
+import { isExpression, evaluateExpression, expressionNames, completeName } from '@/utils/expression';
 
 function usePanZoom(
   canvasRef: RefObject<HTMLCanvasElement | null>,
@@ -106,6 +107,12 @@ function DimensionEditInput({
   expression?: string;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // sketching on a part: the part's P can be used too (and wins a clash)
+  const partParams = useEditorStore((s) => s.partParams);
+  const docParams = useDocumentStore((s) => s.document.parameters);
+  const [text, setText] = useState<string | null>(null);
+  const [caret, setCaret] = useState(0);
+  const [pick, setPick] = useState(0);
 
   useEffect(() => {
     const el = inputRef.current;
@@ -115,11 +122,13 @@ function DimensionEditInput({
     }
   }, []);
 
+  const vars = () => ({ ...(useDocumentStore.getState().document.parameters ?? {}), ...(partParams ?? {}) });
+
   const commit = (input: string) => {
     const store = useDocumentStore.getState();
     if (isExpression(input)) {
-      // Expression input: evaluate against document parameters
-      const params = store.document.parameters ?? {};
+      // Expression input: evaluate against document parameters (and the part's P)
+      const params = vars();
       try {
         const v = evaluateExpression(input, params);
         if (!isFinite(v) || v <= 0) return false;
@@ -150,7 +159,39 @@ function DimensionEditInput({
 
   const defaultVal = expression ?? (isAngle ? value.toFixed(1) : (value >= 10 ? value.toFixed(1) : value.toFixed(2)));
 
+  // the P names to complete the word at the caret, what the expression comes
+  // to, and names that are both a sketch parameter and in P
+  const current = text ?? defaultVal;
+  const done = partParams ? completeName(current, caret, Object.keys(partParams)) : null;
+  const matches = done?.matches.slice(0, 8) ?? [];
+  const accept = (name: string) => {
+    const el = inputRef.current;
+    if (!el || !done) return;
+    const next = current.slice(0, done.start) + name + current.slice(caret);
+    el.value = next;
+    const at = done.start + name.length;
+    el.setSelectionRange(at, at);
+    setText(next); setCaret(at); setPick(0);
+  };
+  let result: string | null = null;
+  let resultBad = false;
+  const clashes: string[] = [];
+  if (partParams && isExpression(current)) {
+    const missing = expressionNames(current).filter((n) => !(n in partParams) && !(n in (docParams ?? {})));
+    if (missing.length) { result = `unknown: ${missing.join(', ')}`; resultBad = true; }
+    else {
+      try {
+        const v = evaluateExpression(current, vars());
+        result = `= ${Math.round(v * 1000) / 1000}`;
+        resultBad = !isFinite(v) || v <= 0;
+      } catch { result = '…'; resultBad = true; }
+    }
+    for (const n of expressionNames(current)) if (docParams && n in docParams && n in partParams) clashes.push(n);
+  }
+  const track = (el: HTMLInputElement) => { setText(el.value); setCaret(el.selectionStart ?? el.value.length); };
+
   return (
+    <>
     <input
       ref={inputRef}
       defaultValue={defaultVal}
@@ -158,7 +199,8 @@ function DimensionEditInput({
         position: 'absolute',
         left: pos.x - 50,
         top: pos.y - 12,
-        width: 100,
+        width: partParams ? 140 : 100,
+        ...(partParams ? { left: pos.x - 70 } : {}),
         height: 24,
         background: '#1e293b',
         border: '1px solid #3b82f6',
@@ -172,7 +214,14 @@ function DimensionEditInput({
         zIndex: 10,
         boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)',
       }}
+      onChange={partParams ? (e) => { track(e.currentTarget); setPick(0); } : undefined}
+      onSelect={partParams ? (e) => track(e.currentTarget) : undefined}
       onKeyDown={(e) => {
+        if (matches.length) {
+          if (e.key === 'ArrowDown') { e.preventDefault(); setPick((pick + 1) % matches.length); return; }
+          if (e.key === 'ArrowUp') { e.preventDefault(); setPick((pick + matches.length - 1) % matches.length); return; }
+          if (e.key === 'Tab' || e.key === 'Enter') { e.preventDefault(); accept(matches[pick] ?? matches[0]!); return; }
+        }
         if (e.key === 'Enter') {
           const ok = commit(e.currentTarget.value);
           if (!ok) return; // invalid: keep input open
@@ -183,6 +232,37 @@ function DimensionEditInput({
       }}
       onBlur={cancel}
     />
+    {partParams && (matches.length > 0 || result || clashes.length > 0) && (
+      <div
+        style={{
+          position: 'absolute', left: pos.x - 70, top: pos.y + 14, minWidth: 140, zIndex: 11,
+          background: '#1e293b', border: '1px solid #334155', borderRadius: 4,
+          fontFamily: 'monospace', fontSize: 12, color: '#cbd5e1', boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)',
+        }}
+        // keep the focus in the input
+        onMouseDown={(e) => e.preventDefault()}
+      >
+        {result && <div style={{ padding: '3px 8px', color: resultBad ? '#f87171' : '#93c5fd' }}>{result}</div>}
+        {clashes.map((n) => (
+          <div key={n} style={{ padding: '3px 8px', color: '#fbbf24', whiteSpace: 'nowrap' }}>
+            ⚠ {n}: the part's P ({partParams[n]}) is used, not the sketch parameter ({docParams![n]})
+          </div>
+        ))}
+        {matches.map((n, i) => (
+          <div
+            key={n}
+            onClick={() => accept(n)}
+            style={{
+              padding: '3px 8px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', gap: 12,
+              background: i === pick ? '#334155' : undefined,
+            }}
+          >
+            <span>{n}</span><span style={{ color: '#94a3b8' }}>{partParams[n]}</span>
+          </div>
+        ))}
+      </div>
+    )}
+    </>
   );
 }
 
@@ -434,9 +514,7 @@ export function CanvasContainer({ activeTool, docId, transparent, grid, soloActi
 
     // Point-to-segment dimension
     if (dim.pointIndex != null && dim.pointIndex2 == null && dim.targetEntityId2 != null) {
-      const a = target.type === 'circle' ? target.center
-        : target.type === 'point' ? target.position
-        : null;
+      const a = getEntityPoint(target, dim.pointIndex);
       if (!a) return null;
       const target2 = sketch.entities.find((e) => e.id === dim.targetEntityId2);
       if (!target2) return null;

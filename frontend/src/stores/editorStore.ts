@@ -44,6 +44,11 @@ interface EditorStore {
   copyPreviewCenter: Point | null;
   /** Copies left out of the drawing while a dialog previews their replacements. */
   copyPreviewHides: Set<string> | null;
+  /** The part's parameters (its script's P) while sketching on a part: a
+   *  dimension expression can use them too, and shows its value. null in the
+   *  2D sketch editor. */
+  partParams: Record<string, number> | null;
+  setPartParams(params: Record<string, number> | null): void;
   pendingDxfImport: PendingDxfImport | null;
   viewportScale: number;
   viewportCommand: 'center-origin' | 'fit-entities' | null;
@@ -118,9 +123,14 @@ export const useEditorStore = create<EditorStore>((set) => ({
   copyPreview: null,
   copyPreviewCenter: null,
   copyPreviewHides: null,
+  partParams: null,
   pendingDxfImport: null,
   viewportScale: 1,
   viewportCommand: null,
+
+  setPartParams(partParams) {
+    set({ partParams });
+  },
 
   setActiveTool(tool) {
     addLog('info', `Tool: ${tool}`);

@@ -82,6 +82,7 @@ export function useCanvasRenderer(opts: UseCanvasRendererOpts) {
           copyPreview: useEditorStore.getState().copyPreview,
           copyPreviewCenter: useEditorStore.getState().copyPreviewCenter,
           copyPreviewHides: useEditorStore.getState().copyPreviewHides,
+          expressionValues: useEditorStore.getState().partParams != null,
           ...opts.getRenderOptions?.(),
         };
         try {

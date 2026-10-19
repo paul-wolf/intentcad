@@ -127,7 +127,7 @@ export function drawDimension(
 
   // Text label
   const length = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
-  const displayLabel = label ?? (derived ? `(${formatLength(length)})` : formatLength(length));
+  const displayLabel = label?.replace('{v}', formatLength(length)) ?? (derived ? `(${formatLength(length)})` : formatLength(length));
   const mid: Point = { x: (soa.x + sob.x) / 2, y: (soa.y + sob.y) / 2 };
 
   const metrics = renderer.measureText(displayLabel, textStyle);
@@ -217,7 +217,7 @@ export function drawDiameterDimension(
 
   // Text label with diameter symbol
   const diameter = radius * 2;
-  const displayLabel = label ?? (derived ? `(\u2300${formatLength(diameter)})` : `\u2300${formatLength(diameter)}`);
+  const displayLabel = label?.replace('{v}', `\u2300${formatLength(diameter)}`) ?? (derived ? `(\u2300${formatLength(diameter)})` : `\u2300${formatLength(diameter)}`);
   const mid: Point = { x: (soa.x + sob.x) / 2, y: (soa.y + sob.y) / 2 };
 
   const metrics = renderer.measureText(displayLabel, textStyle);
@@ -403,7 +403,7 @@ export function drawAngleDimension(
 
   // Text label at arc midpoint
   const angleDeg = absSweep * 180 / Math.PI;
-  const displayLabel = label ?? (derived ? `(${angleDeg.toFixed(1)}°)` : `${angleDeg.toFixed(1)}°`);
+  const displayLabel = label?.replace('{v}', `${angleDeg.toFixed(1)}°`) ?? (derived ? `(${angleDeg.toFixed(1)}°)` : `${angleDeg.toFixed(1)}°`);
   const textPos = getAngleDimensionTextScreenPos(viewport, geom);
 
   const metrics = renderer.measureText(displayLabel, textStyle);

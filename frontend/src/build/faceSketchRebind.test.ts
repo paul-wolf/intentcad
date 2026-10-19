@@ -98,12 +98,25 @@ describe('status line notes', () => {
       'Boss hole': { status: 'ambiguous', moved_by: 0, plane },
       Rib: { status: 'same', moved_by: 0, plane: base.plane! },
     };
-    const notes = sketchBindNotes(now, [a, b, c, base]);
+    // the build before had the hole at z=6: it followed its face this time
+    const before: SketchBindings = { ...now, Hole: { status: 'same', moved_by: 0, plane } };
+    const notes = sketchBindNotes(now, [a, b, c, base], before);
     expect(notes.moved).toBe(1);
     expect(notes.warnings).toEqual([
       "Sketch 'USB cutout' lost its face (right face); drawn where it was",
       "Sketch 'Boss hole' matched more than one face (top face); used the closest",
     ]);
     expect(sketchBindNotes(undefined, [a])).toEqual({ moved: 0, warnings: [] });
+  });
+
+  it('says a sketch followed its face only when it is somewhere else than the build before put it', () => {
+    const a = holeSketch();
+    const up: SketchBindings = { Hole: { status: 'moved', moved_by: 4, plane: { ...a.plane!, origin: [0, 0, 10] } } };
+    // still 4 mm up from where it was drawn, but where the last build had it too (another parameter changed)
+    expect(sketchBindNotes(up, [a], up).moved).toBe(0);
+    expect(sketchBindNotes(up, [a], structuredClone(up)).moved).toBe(0);
+    // a first build has nothing to compare with
+    expect(sketchBindNotes(up, [a], null).moved).toBe(0);
+    expect(sketchBindNotes(up, [a], { Hole: { status: 'same', moved_by: 0, plane: a.plane! } }).moved).toBe(1);
   });
 });

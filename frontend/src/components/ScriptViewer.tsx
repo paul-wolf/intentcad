@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
 import { api, buildApi, errorText, ApiError, type RunResponse, type UsageResponse, type DimInfo, type ModelInfo, type SizeFix } from '@/api/client';
-import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, getBackendId } from '@/api/autoSave';
+import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, persistSketches, getBackendId } from '@/api/autoSave';
 import { DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
 import type { ChatMessage } from '@/types/document';
 import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim, type PlacedHandle } from '@/build/webglViewer';
@@ -15,7 +15,10 @@ import { importScript, importLabel, STEP_ACCEPT } from '@/build/importStep';
 import { PartVersionsPanel } from './PartVersionsPanel';
 import { PartHelpModal } from './PartHelpModal';
 import { useFaceSketch, type ExtrudeOptions } from './FaceSketchMode';
-import { BASE_PLANES, referencedProfiles, sketchBindNotes, type BasePlane } from '@/build/faceSketch';
+import { BASE_PLANES, referencedProfiles, referencedSketchNames, sketchBindNotes, type BasePlane, type SketchBindings } from '@/build/faceSketch';
+import { resolvePartSketches, sketchParamWarning } from '@/build/sketchParams';
+import { partParams } from '@/build/scriptParams';
+import { usesNames } from '@/utils/resolveSketch';
 
 // the view buttons, in key order (1–6, then 0)
 const VIEW_BUTTONS = (['1', '2', '3', '4', '5', '6', '0'] as const)
@@ -45,6 +48,8 @@ const humanBytes = (b: number): string =>
   b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
 
 const NO_CHAT: ChatMessage[] = [];
+// the drag preview can't show P moving a face sketch: said once a session
+let sketchDragNoted = false;
 
 // a sensitivity map cached before per-face `shifts` existed can't drive drag
 // handles — treat it as missing so it's recomputed
@@ -188,12 +193,24 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const hEls = useRef<HandleEls>({ line: null, knob: null, label: null, sub: null });
   const handleRef = useRef<HandleOption | null>(null);
   const handleHintRef = useRef('');   // "Tab ⇄ 1/2" when several params move the face
+  // the live preview moves faces by the engine's sensitivity map, worked out
+  // with the face sketches' shapes fixed: a sketch dimension using this param
+  // only moves when the drop rebuilds
+  const noteSketchDrag = (param: string) => {
+    const doc = useDocumentStore.getState().document;
+    const used = new Set(referencedSketchNames(builtCodeRef.current));
+    if (!doc.sketches.some((s) => s.plane && used.has(s.name) && usesNames(s, [param]))) return;
+    sketchDragNoted = true;
+    setNotice(`The drag preview doesn't move sketches whose dimensions use ${param}; they move when you let go`);
+    window.setTimeout(() => setNotice(''), 10000);
+  };
   const onHandle = (p: PlacedHandle | null) => {
     const { line, knob, label, sub: subEl } = hEls.current;
     const h = handleRef.current;
     const show = !!(p && h && p.visible);
     for (const el of [line, knob, label, subEl]) el?.setAttribute('opacity', show ? '1' : '0');
     if (!show || !p || !h) return;
+    if (p.dragging && !sketchDragNoted) noteSketchDrag(h.name);
     line?.setAttribute('x1', `${p.x}`); line?.setAttribute('y1', `${p.y}`);
     line?.setAttribute('x2', `${p.ax}`); line?.setAttribute('y2', `${p.ay}`);
     knob?.setAttribute('cx', `${p.x}`); knob?.setAttribute('cy', `${p.y}`);
@@ -223,6 +240,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const [status, setStatus] = useState<'idle' | 'building' | 'done' | 'error'>('idle');
   const [message, setMessage] = useState('');
   const [warn, setWarn] = useState('');
+  // face-sketch dimensions whose expression names something not in P (kept as they were)
+  const [sketchWarns, setSketchWarns] = useState<string[]>([]);
+  const [notice, setNotice] = useState('');
+  // where the build before the last put each face sketch
+  const prevBindRef = useRef<SketchBindings | null>(null);
   // the engine's one-click remedy for a fillet/chamfer that doesn't fit (a
   // param to set), from the last build error or warning
   const [fix, setFix] = useState<SizeFix | null>(null);
@@ -234,8 +256,10 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // unbuilt starter (New body replaces that)
   const hasPartRef = useRef(false);
   hasPartRef.current = !(code === STARTER && status !== 'done') && /^part\s*=[^=]/m.test(code);
+  const codeRef = useRef(code);
+  codeRef.current = code;
   const faceSketch = useFaceSketch(viewerRef, canvasRef, resRef, (name, ex) => { void sketchDoneRef.current(name, ex); },
-                                   () => hasPartRef.current);
+                                   () => hasPartRef.current, () => partParams(codeRef.current, paramBase.current));
   const faceSketchRef = useRef(faceSketch);
   faceSketchRef.current = faceSketch;
   const [sketchTip, setSketchTip] = useState<{ name: string; x: number; y: number } | null>(null);
@@ -313,6 +337,19 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     | { kind: 'aborted' }
     | { kind: 'warning' | 'error'; message: string; fix: SizeFix | null };
 
+  // Face sketches whose dimensions use the part's P (`floor + 2`): re-solved
+  // with the script's P before anything reads their profiles — stored with
+  // no undo step, one document update at most.
+  const resolveSketches = (src: string) => {
+    const st = useDocumentStore.getState();
+    const r = resolvePartSketches(src, st.document.sketches, st.document.parameters, paramBase.current);
+    if (r.changed.length) {
+      useDocumentStore.setState({ document: { ...st.document, sketches: r.sketches } });
+      persistSketches();
+    }
+    setSketchWarns(r.warnings.map(sketchParamWarning));
+  };
+
   const build = async (src: string, versionLabel?: string): Promise<BuildOutcome> => {
     if (!viewerRef.current) return { kind: 'aborted' };
     buildAbort.current?.abort();                 // supersede any in-flight build
@@ -322,6 +359,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     setMessage('');
     const t0 = performance.now();
     try {
+      resolveSketches(src);
       // Deterministic: same code → same mesh. Serve an unchanged part from the
       // IndexedDB cache with no engine call.
       const { key, sketches } = buildInputs(src);
@@ -331,6 +369,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       setWarn(res.warning ?? '');
       setFix(res.fix?.param ? res.fix : null);
       viewerRef.current.update(res.mesh, res.faces);
+      prevBindRef.current = resRef.current?.sketches ?? null;
       resRef.current = res;
       if (sketchOnFace) faceSketchRef.current.pushLines();   // each on its face, where the build put it
       setParamVals(res.params);
@@ -894,6 +933,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     if (status !== 'done' || exporting) return;
     setExporting(format);
     try {
+      resolveSketches(code);
       const r = await buildApi.export(code, format, getBackendId() ?? '', buildInputs(code).sketches);
       if (format === 'stl-parts' || format === 'dxf-views') {
         // r.data is a base64 zip (STL per body, or top/front/side DXFs)
@@ -1492,7 +1532,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
             </span>
           )}
           {status === 'done' && resRef.current?.sketches && (() => {
-            const { moved, warnings } = sketchBindNotes(resRef.current.sketches, useDocumentStore.getState().document.sketches);
+            const { moved, warnings } = sketchBindNotes(resRef.current.sketches, useDocumentStore.getState().document.sketches,
+                                                        prevBindRef.current);
             if (!moved && !warnings.length) return null;
             return <span style={{ marginRight: '10px', display: 'inline-flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
               {moved > 0 && <span title="A face sketch moves along its face's normal when the part changes">
@@ -1502,6 +1543,13 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
               <span>·</span>
             </span>;
           })()}
+          {sketchWarns.length > 0 && status !== 'building' && (
+            <span style={{ marginRight: '10px', display: 'inline-flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+              {sketchWarns.map((w) => <span key={w} style={{ color: palette.warning ?? '#c78a1a' }}>⚠ {w}</span>)}
+              <span>·</span>
+            </span>
+          )}
+          {notice && <span style={{ marginRight: '10px' }}>{notice} ·</span>}
           {status === 'done' && resRef.current?.auto_round && (() => {
             const r = resRef.current.auto_round;
             return <span style={{ marginRight: '10px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>

@@ -14,6 +14,8 @@ import { rectangleOutline, rectanglePath } from '@/utils/rectPath';
 import { bezierPoint } from '@/utils/bezierGeometry';
 import { dot, len, scale, sub, type Vec3 } from './dragHandle';
 import { planeBasis, planeForFace, sketchToWorld, worldToSketch, type PlaneBasis } from './sketchPlane';
+import { solveConstraints } from '@/utils/constraintSolver';
+import { dimensionEntities, measureDimension, sameGeometry } from '@/utils/resolveSketch';
 
 /** The face a sketch was drawn on, kept so the build can find it again when
  *  the part changes (modeling/sketch_profile.rebind). Sketches drawn before
@@ -62,34 +64,47 @@ export function faceLabel(n: readonly number[]): string {
 export function findFaceSketch(sketches: Sketch[], face: FaceInfo, bound?: SketchBindings | null): Sketch | null {
   let best: Sketch | null = null, bestD = Infinity;
   for (const s of sketches) {
-    const plane = boundPlane(s, bound);
-    if (!plane || !s.face) continue;
-    const b = planeBasis(plane);
-    if (dot(b.normal, face.normal) < 0.999) continue;
-    if (Math.abs(dot(sub(face.center, b.origin), b.normal)) > 0.01) continue;
-    // across the plane only: the face may have moved along its normal since
-    const off = sub(s.face.center, face.center);
-    const d = len(sub(off, scale(b.normal, dot(off, b.normal))));
-    if (d < bestD) { bestD = d; best = s; }
+    const d = acrossDistance(s, face, bound);
+    if (d != null && d < bestD) { bestD = d; best = s; }
   }
   return best;
+}
+
+// how far across its plane the face a sketch was drawn on is from `face`
+// (null: the sketch isn't on that face's plane, where the last build put it)
+function acrossDistance(s: Sketch, face: FaceInfo, bound?: SketchBindings | null): number | null {
+  const plane = boundPlane(s, bound);
+  if (!plane || !s.face) return null;
+  const b = planeBasis(plane);
+  if (dot(b.normal, face.normal) < 0.999) return null;
+  if (Math.abs(dot(sub(face.center, b.origin), b.normal)) > 0.01) return null;
+  // across the plane only: the face may have moved along its normal since
+  const off = sub(s.face.center, face.center);
+  return len(sub(off, scale(b.normal, dot(off, b.normal))));
 }
 
 /** What the last build did with the face sketches, for the status line: how
  *  many followed their face, and a warning for each that lost it or matched
  *  more than one. */
-export function sketchBindNotes(bound: SketchBindings | null | undefined, sketches: Sketch[]): { moved: number; warnings: string[] } {
+export function sketchBindNotes(bound: SketchBindings | null | undefined, sketches: Sketch[],
+                                prev?: SketchBindings | null): { moved: number; warnings: string[] } {
   let moved = 0;
   const warnings: string[] = [];
+  // followed: put somewhere other than the build before put it (a first
+  // build, or one that left them where they were, says nothing)
+  const followed = (name: string, b: SketchBindings[string]) => {
+    const was = prev?.[name]?.plane?.origin;
+    const now = b.plane?.origin;
+    return !!was && !!now && was.some((x, i) => Math.abs(x - now[i]!) > 1e-6);
+  };
   for (const [name, b] of Object.entries(bound ?? {})) {
     const s = sketches.find((k) => k.name === name);
     if (!s?.face) continue;   // a base-plane sketch has no face to follow
     const hint = s.face.hint ?? faceLabel(s.face.normal);
-    if (b.status === 'moved') moved++;
-    else if (b.status === 'not_found') warnings.push(`Sketch '${name}' lost its face (${hint}); drawn where it was`);
-    else if (b.status === 'ambiguous') {
-      if (Math.abs(b.moved_by) > 1e-6) moved++;
-      warnings.push(`Sketch '${name}' matched more than one face (${hint}); used the closest`);
+    if (b.status === 'not_found') warnings.push(`Sketch '${name}' lost its face (${hint}); drawn where it was`);
+    else {
+      if (followed(name, b)) moved++;
+      if (b.status === 'ambiguous') warnings.push(`Sketch '${name}' matched more than one face (${hint}); used the closest`);
     }
   }
   return { moved, warnings };
@@ -97,13 +112,12 @@ export function sketchBindNotes(bound: SketchBindings | null | undefined, sketch
 
 const round = (v: Vec3): Vec3 => v.map((x) => Math.round(x * 1e6) / 1e6) as Vec3;
 
-/** A new sketch on the face: plane + face description, and the face's edges
- *  as fixed construction lines/circles. */
-export function newFaceSketch(name: string, face: FaceInfo, edges: RunEdge[]): Sketch {
-  const plane = planeForFace(face.center, face.normal);
-  const b = planeBasis(plane);
+interface Outline { entities: Entity[]; box?: FaceRef['box']; perimeter: number; count: number }
+
+/** The face's edges as fixed reference (construction) lines and circles in
+ *  the plane basis `b`, and the outline's box and perimeter. */
+function faceOutline(face: FaceInfo, edges: RunEdge[], b: PlaneBasis): Outline {
   const entities: Entity[] = [];
-  const constraints: Constraint[] = [];
   // the outline, for finding the face again after the part changes
   let umin = Infinity, vmin = Infinity, umax = -Infinity, vmax = -Infinity, perimeter = 0, count = 0;
   for (const e of edges) {
@@ -135,18 +149,127 @@ export function newFaceSketch(name: string, face: FaceInfo, edges: RunEdge[]): S
       ent = { id: generateId('e'), type: 'line', points: closed ? ring : simplify(ring, 0.01), closed: closed || undefined, ...ref };
     }
     entities.push(ent);
-    constraints.push({ id: generateId('c'), type: 'fixed', entityId: ent.id });
   }
+  const r6 = (x: number) => Math.round(x * 1e6) / 1e6;
+  return { entities, perimeter: r6(perimeter), count,
+           ...(count ? { box: [umin, vmin, umax, vmax].map(r6) as FaceRef['box'] } : {}) };
+}
+
+/** A new sketch on the face: plane + face description, and the face's edges
+ *  as fixed construction lines/circles. */
+export function newFaceSketch(name: string, face: FaceInfo, edges: RunEdge[]): Sketch {
+  const plane = planeForFace(face.center, face.normal);
+  const out = faceOutline(face, edges, planeBasis(plane));
   return {
-    id: generateId('sk'), name, visible: true, entities, constraints,
+    id: generateId('sk'), name, visible: true, entities: out.entities,
+    constraints: out.entities.map((e): Constraint => ({ id: generateId('c'), type: 'fixed', entityId: e.id })),
     plane: { origin: round(plane.origin), normal: round(plane.normal), xAxis: round(plane.xAxis) },
     face: {
       center: face.center, normal: face.normal, area: face.area,
-      ...(count ? { box: [umin, vmin, umax, vmax].map((x) => Math.round(x * 1e6) / 1e6) as FaceRef['box'],
-                    perimeter: Math.round(perimeter * 1e6) / 1e6, edges: count } : {}),
+      ...(out.count ? { box: out.box, perimeter: out.perimeter, edges: out.count } : {}),
       hint: faceLabel(face.normal),
     },
   };
+}
+
+const isRef = (e: Entity) => 'reference' in e && !!e.reference && 'construction' in e && !!e.construction;
+
+// the ids an entity names: constraints and dimensions pointing at others
+function targetsOf(x: Constraint | Entity): string[] {
+  const out: string[] = [];
+  const walk = (v: unknown, key: string) => {
+    if (typeof v === 'string' && /entityid/i.test(key)) out.push(v);
+    else if (Array.isArray(v)) v.forEach((y) => walk(y, key));
+    else if (v && typeof v === 'object') for (const [k, y] of Object.entries(v)) walk(y, k);
+  };
+  for (const [k, v] of Object.entries(x)) if (k !== 'id') walk(v, k);
+  return out;
+}
+
+// how far apart two reference entities are (Infinity: not the same kind of thing)
+function refDistance(a: Entity, b: Entity): number {
+  if (a.type === 'circle' && b.type === 'circle') {
+    return Math.hypot(a.center.x - b.center.x, a.center.y - b.center.y) + Math.abs(a.radius - b.radius);
+  }
+  if (a.type === 'line' && b.type === 'line' && a.points.length === b.points.length
+      && !!a.closed === !!b.closed && !!a.bulge?.[0] === !!b.bulge?.[0]) {
+    return Math.max(...a.points.map((p, i) => Math.hypot(p.x - b.points[i]!.x, p.y - b.points[i]!.y)));
+  }
+  return Infinity;
+}
+
+/** The sketch with its reference outline drawn again from the face as it is
+ *  now (`plane`: where the last build put the sketch), or null when the
+ *  outline hasn't changed. Each new edge takes the id of the old one it is
+ *  nearest (same kind, same number of points), so what was constrained or
+ *  dimensioned to the old outline follows the new one: those dimensions keep
+ *  the value they had, and the constraints are solved again. Old edges with
+ *  no match go, unless something uses them. Expression dimensions are set
+ *  afterwards by the caller (resolveSketch). */
+export function refreshOutline(sk: Sketch, face: FaceInfo, edges: RunEdge[], plane: NonNullable<Sketch['plane']>): Sketch | null {
+  if (!sk.face) return null;
+  const fresh = faceOutline(face, edges, planeBasis(plane)).entities;
+  if (!fresh.length) return null;   // the face's edges aren't known: leave it
+  const old = sk.entities.filter(isRef);
+  // nearest pairs first
+  const pairs: [number, number, number][] = [];
+  fresh.forEach((n, i) => old.forEach((o, j) => {
+    const d = refDistance(n, o);
+    if (d < Infinity) pairs.push([d, i, j]);
+  }));
+  pairs.sort((a, b) => a[0] - b[0]);
+  const takenNew = new Set<number>(), takenOld = new Set<number>();
+  const outline = [...fresh];
+  for (const [, i, j] of pairs) {
+    if (takenNew.has(i) || takenOld.has(j)) continue;
+    takenNew.add(i); takenOld.add(j);
+    outline[i] = { ...fresh[i]!, id: old[j]!.id };
+  }
+  const user = sk.entities.filter((e) => !isRef(e));
+  const used = new Set([...sk.constraints.filter((c) => c.type !== 'fixed'), ...user].flatMap(targetsOf));
+  const kept = old.filter((o, j) => !takenOld.has(j) && used.has(o.id));
+  if (sameGeometry([...kept, ...outline], old)) return null;
+
+  // what the dimensions on the outline measure now, to keep them after it moves
+  const refIds = new Set(old.map((o) => o.id));
+  const held: [string, number][] = [];
+  for (const d of user) {
+    if (d.type !== 'dimension' || !targetsOf(d).some((id) => refIds.has(id))) continue;
+    const v = measureDimension(d, sk.entities);
+    if (v != null) held.push([d.id, v]);
+  }
+  const ids = new Set([...kept, ...outline].map((e) => e.id));
+  const constraints = sk.constraints.filter((c) => c.type !== 'fixed' || !refIds.has(c.entityId) || ids.has(c.entityId));
+  for (const e of outline) {
+    if (!constraints.some((c) => c.type === 'fixed' && c.entityId === e.id)) {
+      constraints.push({ id: generateId('c'), type: 'fixed', entityId: e.id });
+    }
+  }
+  let next: Sketch = { ...sk, entities: [...kept, ...outline, ...user], constraints };
+  next = { ...next, entities: solveConstraints(next.entities, constraints).entities };
+  for (const [id, v] of held) {
+    const ents = dimensionEntities(next, id, v);
+    if (Array.isArray(ents)) next = { ...next, entities: ents };
+  }
+  return next;
+}
+
+/** What K / "Sketch on face" offers on a face that has sketches already:
+ *  each of them (nearest first, with how many things are drawn in it) and a
+ *  new one. null: none yet, start one straight away. */
+export interface FaceSketchMenu { face: FaceInfo; items: { id: string; name: string; count: number }[] }
+
+export function faceSketchMenu(sketches: Sketch[], face: FaceInfo, bound?: SketchBindings | null): FaceSketchMenu | null {
+  const items: { id: string; name: string; count: number; d: number }[] = [];
+  for (const s of sketches) {
+    const d = acrossDistance(s, face, bound);
+    if (d == null) continue;
+    items.push({ id: s.id, name: s.name, d,
+                 count: s.entities.filter((e) => !isRef(e) && e.type !== 'dimension').length });
+  }
+  if (!items.length) return null;
+  items.sort((a, b) => a.d - b.d);
+  return { face, items: items.map(({ id, name, count }) => ({ id, name, count })) };
 }
 
 /** The base planes through the origin, for sketching before there is a part
@@ -401,6 +524,11 @@ export function sketchProfile(sketch: Sketch): SketchProfile | null {
 
 // matches the engine's SKETCH_REF (modeling/engine.py)
 const SKETCH_REF = /\bsketch\(\s*(["'])(.+?)\1\s*\)/g;
+
+/** The names of the sketches `code` uses (sketch("name")), each once. */
+export function referencedSketchNames(code: string): string[] {
+  return [...new Set([...code.matchAll(SKETCH_REF)].map((m) => m[2]!))];
+}
 
 /** The profiles of the face sketches `code` extrudes, by name — sent with a
  *  build, and part of its cache key (the build depends on them too). */

@@ -150,3 +150,23 @@ export function isExpression(input: string): boolean {
 export function isValidParamName(name: string): boolean {
   return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name);
 }
+
+/** The variable names an expression uses, in order, each once ([] if it doesn't tokenize). */
+export function expressionNames(input: string): string[] {
+  try {
+    return [...new Set(tokenize(input.trim()).filter((t) => t.type === 'ident').map((t) => t.value))];
+  } catch {
+    return [];
+  }
+}
+
+/** The name being typed at `caret` in an expression and the `names` that
+ *  start with it: replace text[start, caret) with the one picked. No word at
+ *  the caret (or a number): no matches. */
+export function completeName(text: string, caret: number, names: string[]): { start: number; prefix: string; matches: string[] } {
+  const m = /[A-Za-z_][A-Za-z0-9_]*$/.exec(text.slice(0, caret));
+  if (!m || /[0-9.]$/.test(text.slice(0, m.index))) return { start: caret, prefix: '', matches: [] };
+  const prefix = m[0];
+  const matches = names.filter((n) => n.startsWith(prefix) && n !== prefix).sort();
+  return { start: m.index, prefix, matches };
+}

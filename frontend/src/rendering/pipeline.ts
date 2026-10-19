@@ -46,6 +46,9 @@ export interface RenderContext {
   copyPreviewCenter?: Point | null;
   /** Shapes left out while a copy dialog previews their replacements. */
   copyPreviewHides?: Set<string> | null;
+  /** Label an expression dimension "floor + 2 = 5", not just "floor + 2"
+   *  (sketching on a part, where the expression's names live in the script). */
+  expressionValues?: boolean;
 }
 
 /** Step 1: Clear background */
@@ -389,12 +392,14 @@ function renderActiveSketch(ctx: RenderContext) {
         const textStyle = styles.dimensionText;
 
         const ws = ctx.lineWidthScale ?? 1;
+        // {v}: the measured value, filled in by the renderer
+        const dimLabel = entity.expression && ctx.expressionValues ? `${entity.expression} = {v}` : entity.expression;
 
         // Point-to-point dimension (vertex-based)
         if (entity.pointIndex != null) {
           const endpoints = resolveDimensionEndpoints(entity, activeSketch.entities);
           if (endpoints) {
-            drawDimension(renderer, viewport, { a: endpoints.a, b: endpoints.b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression, ws);
+            drawDimension(renderer, viewport, { a: endpoints.a, b: endpoints.b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, dimLabel, ws);
           }
           break;
         }
@@ -408,7 +413,7 @@ function renderActiveSketch(ctx: RenderContext) {
 
           // Circle-to-circle center distance
           if (target.type === 'circle' && target2.type === 'circle') {
-            drawDimension(renderer, viewport, { a: target.center, b: target2.center, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression, ws);
+            drawDimension(renderer, viewport, { a: target.center, b: target2.center, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, dimLabel, ws);
             break;
           }
 
@@ -422,7 +427,7 @@ function renderActiveSketch(ctx: RenderContext) {
           if (entity.angleMode && target.type === 'line' && target2.type === 'line') {
             const angleGeom = computeAngleDimensionGeom(p1, p2, q1, q2, entity.offset);
             if (angleGeom) {
-              drawAngleDimension(renderer, viewport, angleGeom, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression, ws);
+              drawAngleDimension(renderer, viewport, angleGeom, lineStyle, textStyle, ctx.palette.background, isDerived, dimLabel, ws);
             }
             break;
           }
@@ -434,12 +439,12 @@ function renderActiveSketch(ctx: RenderContext) {
           if (lenSq === 0) break;
           const t = ((a.x - q1.x) * dx + (a.y - q1.y) * dy) / lenSq;
           const b: Point = { x: q1.x + t * dx, y: q1.y + t * dy };
-          drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression, ws);
+          drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, dimLabel, ws);
           break;
         }
 
         if (target.type === 'circle') {
-          drawDiameterDimension(renderer, viewport, target.center, target.radius, entity.offset, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression, ws);
+          drawDiameterDimension(renderer, viewport, target.center, target.radius, entity.offset, lineStyle, textStyle, ctx.palette.background, isDerived, dimLabel, ws);
           break;
         }
         if (target.type === 'rectangle') {
@@ -454,7 +459,7 @@ function renderActiveSketch(ctx: RenderContext) {
             a = { x: c.x + hw, y: c.y + hh };
             b = { x: c.x + hw, y: c.y - hh };
           }
-          drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression, ws);
+          drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, dimLabel, ws);
           break;
         }
         if (target.type !== 'line') break;
@@ -465,7 +470,7 @@ function renderActiveSketch(ctx: RenderContext) {
             x: (target.points[0]!.x + target.points[1]!.x) / 2,
             y: (target.points[0]!.y + target.points[1]!.y) / 2,
           };
-          drawDimension(renderer, viewport, { a: center, b: midA, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression, ws);
+          drawDimension(renderer, viewport, { a: center, b: midA, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, dimLabel, ws);
           break;
         }
         const idx = entity.segmentIndex;
@@ -473,7 +478,7 @@ function renderActiveSketch(ctx: RenderContext) {
         const [ai, bi] = getSegmentPointIndices(target, idx);
         const a = target.points[ai]!;
         const b = target.points[bi]!;
-        drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, entity.expression, ws);
+        drawDimension(renderer, viewport, { a, b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, dimLabel, ws);
         break;
       }
     }
