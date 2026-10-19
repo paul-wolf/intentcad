@@ -26,7 +26,10 @@ import {
   BASE_PLANES, faceLabel, findFaceSketch, referencedProfiles, referencedSketchNames, sketchBindNotes, sketchHolePoints,
   type BasePlane, type SketchBindings,
 } from '@/build/faceSketch';
-import { resolvePartSketches, sketchParamWarning } from '@/build/sketchParams';
+import {
+  buildFollowingSketches, followPartSketches, resolvePartSketches, sketchParamWarning, sketchVars,
+} from '@/build/sketchParams';
+import { brokenRefWarning, dimensionedToEdges } from '@/build/sketchRefs';
 import { partParams } from '@/build/scriptParams';
 import { usesNames } from '@/utils/resolveSketch';
 
@@ -206,12 +209,19 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // the live preview moves faces by the engine's sensitivity map, worked out
   // with the face sketches' shapes fixed: a sketch dimension using this param
   // only moves when the drop rebuilds
+  // (nor anything dimensioned to a face sketch's reference edges: those
+  // follow the face's edges only after a full build)
   const noteSketchDrag = (param: string) => {
     const doc = useDocumentStore.getState().document;
     const used = new Set(referencedSketchNames(builtCodeRef.current));
-    if (!doc.sketches.some((s) => s.plane && used.has(s.name) && usesNames(s, [param]))) return;
+    const sketches = doc.sketches.filter((s) => s.plane && used.has(s.name));
+    const byParam = sketches.some((s) => usesNames(s, [param]));
+    const byEdges = sketches.some(dimensionedToEdges);
+    if (!byParam && !byEdges) return;
     sketchDragNoted = true;
-    setNotice(`The drag preview doesn't move sketches whose dimensions use ${param}; they move when you let go`);
+    setNotice(byParam
+      ? `The drag preview doesn't move sketches whose dimensions use ${param}; they move when you let go`
+      : "The drag preview doesn't move sketch points dimensioned to their face's edges; they follow when you let go");
     window.setTimeout(() => setNotice(''), 10000);
   };
   const onHandle = (p: PlacedHandle | null) => {
@@ -255,6 +265,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const [notice, setNotice] = useState('');
   // where the build before the last put each face sketch
   const prevBindRef = useRef<SketchBindings | null>(null);
+  // what the last build did to the face sketches' reference outlines: the
+  // sketches whose edges moved with the part, whether it built again to
+  // apply that, and those that still moved after that second build
+  const [followNote, setFollowNote] = useState<{ moved: string[]; rebuilt: boolean; unsettled: string[] }>(
+    { moved: [], rebuilt: false, unsettled: [] });
   // the engine's one-click remedy for a fillet/chamfer that doesn't fit (a
   // param to set), from the last build error or warning
   const [fix, setFix] = useState<SizeFix | null>(null);
@@ -366,6 +381,23 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     setSketchWarns(r.warnings.map(sketchParamWarning));
   };
 
+  // After a build: each face sketch's reference outline moves onto the edges
+  // of the face the build put it on, and what is dimensioned to those edges
+  // follows — stored with no undo step, like the P re-solve. True when that
+  // changed a profile the build used (so it must build again to show it).
+  const followSketches = (src: string, res: RunResponse, moved: Set<string>, profiles: Set<string>): boolean => {
+    const st = useDocumentStore.getState();
+    const f = followPartSketches(st.document.sketches, res.sketches,
+                                 sketchVars(src, st.document.parameters, res.params));
+    profiles.clear();
+    if (!f.changed.length) return false;
+    useDocumentStore.setState({ document: { ...st.document, sketches: f.sketches } });
+    persistSketches();
+    f.moved.forEach((n) => moved.add(n));
+    f.profileChanged.forEach((n) => profiles.add(n));
+    return f.profileChanged.length > 0;
+  };
+
   const build = async (src: string, versionLabel?: string): Promise<BuildOutcome> => {
     if (!viewerRef.current) return { kind: 'aborted' };
     buildAbort.current?.abort();                 // supersede any in-flight build
@@ -378,9 +410,20 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       resolveSketches(src);
       // Deterministic: same code → same mesh. Serve an unchanged part from the
       // IndexedDB cache with no engine call.
-      const { key, sketches } = buildInputs(src);
-      const cached = await getCachedBuild(key);
-      const res = cached?.run ?? await buildApi.run(src, ctrl.signal, getBackendId() ?? '', sketches);
+      const runOnce = async () => {
+        const { key, sketches } = buildInputs(src);
+        const cached = await getCachedBuild(key);
+        const run = cached?.run ?? await buildApi.run(src, ctrl.signal, getBackendId() ?? '', sketches);
+        if (!cached) putCachedBuild(key, run);
+        return { run, key, cached };
+      };
+      // the face sketches follow what was built; when that moves a shape the
+      // build extrudes, it builds once more to apply it (once only)
+      const moved = new Set<string>(), unsettled = new Set<string>();
+      const { result: { run: res, key, cached }, rebuilt } = await buildFollowingSketches(
+        runOnce, (b) => followSketches(src, b.run, moved, unsettled));
+      if (!rebuilt) unsettled.clear();
+      setFollowNote({ moved: [...moved], rebuilt, unsettled: [...unsettled] });
       const took = Math.round(performance.now() - t0);
       setWarn(res.warning ?? '');
       setFix(res.fix?.param ? res.fix : null);
@@ -390,7 +433,6 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       if (sketchOnFace) faceSketchRef.current.pushLines();   // each on its face, where the build put it
       setParamVals(res.params);
       paramBase.current = res.params;
-      if (!cached) putCachedBuild(key, res);
       // sensitivity (perturbation = N rebuilds) is computed LAZILY — only when
       // something actually needs the param→face links (hover a param, ⌥, or a
       // selection). Just prime the state here; ensureSens() does the work.
@@ -1801,14 +1843,38 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
             </span>
           )}
           {status === 'done' && resRef.current?.sketches && (() => {
-            const { moved, warnings } = sketchBindNotes(resRef.current.sketches, useDocumentStore.getState().document.sketches,
-                                                        prevBindRef.current);
-            if (!moved && !warnings.length) return null;
-            return <span style={{ marginRight: '10px', display: 'inline-flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-              {moved > 0 && <span title="A face sketch moves along its face's normal when the part changes">
+            const docSketches = useDocumentStore.getState().document.sketches;
+            const { moved, warnings } = sketchBindNotes(resRef.current.sketches, docSketches, prevBindRef.current);
+            // reference edges whose face edge is gone, in the sketches this build used
+            const used = new Set(Object.keys(resRef.current.sketches));
+            const broken = docSketches.flatMap((s) => (used.has(s.name) ? [brokenRefWarning(s)] : []))
+              .filter((w): w is string => !!w);
+            const { moved: edges, rebuilt, unsettled } = followNote;
+            if (!moved && !warnings.length && !broken.length && !edges.length && !rebuilt) return null;
+            const warnStyle = { color: palette.warning ?? '#c78a1a' };
+            const notes = [
+              moved > 0 && <span key="m" title="A face sketch moves along its face's normal when the part changes">
                 {moved} sketch{moved === 1 ? '' : 'es'} followed {moved === 1 ? 'its face' : 'their faces'}
-              </span>}
-              {warnings.map((w) => <span key={w} style={{ color: palette.warning ?? '#c78a1a' }}>⚠ {w}</span>)}
+              </span>,
+              ...edges.map((n) => <span key={`e:${n}`}
+                title="What is dimensioned or constrained to the face's edges kept its distance from them">
+                Sketch '{n}' followed its face's edges
+              </span>),
+              rebuilt && <span key="r" title="The sketch changes moved a shape the part is built from, so it was built once more">
+                rebuilt to apply sketch changes
+              </span>,
+              ...unsettled.map((n) => <span key={`u:${n}`} style={warnStyle}
+                title="The rebuild moved the face's edges again; it builds at most once more, so build again to apply it">
+                ⚠ Sketch '{n}' changed again after the rebuild; build again to apply it
+              </span>),
+              ...warnings.map((w) => <span key={w} style={warnStyle}>⚠ {w}</span>),
+              ...broken.map((w) => <span key={w} style={warnStyle}
+                title="Open the sketch (K on its face): the dimensions on the missing edge are shown in red. Dimension them to another edge, or delete them">
+                ⚠ {w}
+              </span>),
+            ].filter(Boolean);
+            return <span style={{ marginRight: '10px', display: 'inline-flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+              {notes.flatMap((x, i) => (i ? [<span key={`s${i}`}>·</span>, x] : [x]))}
               <span>·</span>
             </span>;
           })()}

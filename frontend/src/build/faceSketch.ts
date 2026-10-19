@@ -14,8 +14,8 @@ import { rectangleOutline, rectanglePath } from '@/utils/rectPath';
 import { bezierPoint } from '@/utils/bezierGeometry';
 import { dot, len, scale, sub, type Vec3 } from './dragHandle';
 import { planeBasis, planeForFace, sketchToWorld, worldToSketch, type PlaneBasis } from './sketchPlane';
-import { solveConstraints } from '@/utils/constraintSolver';
-import { dimensionEntities, measureDimension, sameGeometry } from '@/utils/resolveSketch';
+import { isRef } from '@/utils/brokenRefs';
+import { followRefs, type OutlineEdge } from './sketchRefs';
 
 /** The face a sketch was drawn on, kept so the build can find it again when
  *  the part changes (modeling/sketch_profile.rebind). Sketches drawn before
@@ -41,6 +41,10 @@ export interface SketchBinding {
   /** mm along the sketch's normal */
   moved_by: number;
   plane: NonNullable<Sketch['plane']>;
+  /** the matched face's edges in the sketch's coordinates on `plane`, for
+   *  its reference outline to follow (sketchRefs.followRefs); absent when
+   *  no face was matched */
+  outline?: OutlineEdge[];
 }
 export type SketchBindings = Record<string, SketchBinding>;
 
@@ -172,86 +176,15 @@ export function newFaceSketch(name: string, face: FaceInfo, edges: RunEdge[]): S
   };
 }
 
-const isRef = (e: Entity) => 'reference' in e && !!e.reference && 'construction' in e && !!e.construction;
-
-// the ids an entity names: constraints and dimensions pointing at others
-function targetsOf(x: Constraint | Entity): string[] {
-  const out: string[] = [];
-  const walk = (v: unknown, key: string) => {
-    if (typeof v === 'string' && /entityid/i.test(key)) out.push(v);
-    else if (Array.isArray(v)) v.forEach((y) => walk(y, key));
-    else if (v && typeof v === 'object') for (const [k, y] of Object.entries(v)) walk(y, k);
-  };
-  for (const [k, v] of Object.entries(x)) if (k !== 'id') walk(v, k);
-  return out;
-}
-
-// how far apart two reference entities are (Infinity: not the same kind of thing)
-function refDistance(a: Entity, b: Entity): number {
-  if (a.type === 'circle' && b.type === 'circle') {
-    return Math.hypot(a.center.x - b.center.x, a.center.y - b.center.y) + Math.abs(a.radius - b.radius);
-  }
-  if (a.type === 'line' && b.type === 'line' && a.points.length === b.points.length
-      && !!a.closed === !!b.closed && !!a.bulge?.[0] === !!b.bulge?.[0]) {
-    return Math.max(...a.points.map((p, i) => Math.hypot(p.x - b.points[i]!.x, p.y - b.points[i]!.y)));
-  }
-  return Infinity;
-}
-
 /** The sketch with its reference outline drawn again from the face as it is
  *  now (`plane`: where the last build put the sketch), or null when the
- *  outline hasn't changed. Each new edge takes the id of the old one it is
- *  nearest (same kind, same number of points), so what was constrained or
- *  dimensioned to the old outline follows the new one: those dimensions keep
- *  the value they had, and the constraints are solved again. Old edges with
- *  no match go, unless something uses them. Expression dimensions are set
- *  afterwards by the caller (resolveSketch). */
+ *  outline hasn't changed: followRefs with the viewer's edges, for a sketch
+ *  opened before a build has reported its face's outline. Expression
+ *  dimensions are set afterwards by the caller (resolveSketch). */
 export function refreshOutline(sk: Sketch, face: FaceInfo, edges: RunEdge[], plane: NonNullable<Sketch['plane']>): Sketch | null {
   if (!sk.face) return null;
-  const fresh = faceOutline(face, edges, planeBasis(plane)).entities;
-  if (!fresh.length) return null;   // the face's edges aren't known: leave it
-  const old = sk.entities.filter(isRef);
-  // nearest pairs first
-  const pairs: [number, number, number][] = [];
-  fresh.forEach((n, i) => old.forEach((o, j) => {
-    const d = refDistance(n, o);
-    if (d < Infinity) pairs.push([d, i, j]);
-  }));
-  pairs.sort((a, b) => a[0] - b[0]);
-  const takenNew = new Set<number>(), takenOld = new Set<number>();
-  const outline = [...fresh];
-  for (const [, i, j] of pairs) {
-    if (takenNew.has(i) || takenOld.has(j)) continue;
-    takenNew.add(i); takenOld.add(j);
-    outline[i] = { ...fresh[i]!, id: old[j]!.id };
-  }
-  const user = sk.entities.filter((e) => !isRef(e));
-  const used = new Set([...sk.constraints.filter((c) => c.type !== 'fixed'), ...user].flatMap(targetsOf));
-  const kept = old.filter((o, j) => !takenOld.has(j) && used.has(o.id));
-  if (sameGeometry([...kept, ...outline], old)) return null;
-
-  // what the dimensions on the outline measure now, to keep them after it moves
-  const refIds = new Set(old.map((o) => o.id));
-  const held: [string, number][] = [];
-  for (const d of user) {
-    if (d.type !== 'dimension' || !targetsOf(d).some((id) => refIds.has(id))) continue;
-    const v = measureDimension(d, sk.entities);
-    if (v != null) held.push([d.id, v]);
-  }
-  const ids = new Set([...kept, ...outline].map((e) => e.id));
-  const constraints = sk.constraints.filter((c) => c.type !== 'fixed' || !refIds.has(c.entityId) || ids.has(c.entityId));
-  for (const e of outline) {
-    if (!constraints.some((c) => c.type === 'fixed' && c.entityId === e.id)) {
-      constraints.push({ id: generateId('c'), type: 'fixed', entityId: e.id });
-    }
-  }
-  let next: Sketch = { ...sk, entities: [...kept, ...outline, ...user], constraints };
-  next = { ...next, entities: solveConstraints(next.entities, constraints).entities };
-  for (const [id, v] of held) {
-    const ents = dimensionEntities(next, id, v);
-    if (Array.isArray(ents)) next = { ...next, entities: ents };
-  }
-  return next;
+  const r = followRefs(sk, faceOutline(face, edges, planeBasis(plane)).entities);
+  return r.changed ? r.sketch : null;
 }
 
 /** What K / "Sketch on face" offers on a face that has sketches already:

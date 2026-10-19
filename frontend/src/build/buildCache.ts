@@ -9,7 +9,7 @@
 import { db, type CachedBuild } from '@/api/db';
 import type { RunResponse, DimInfo } from '@/api/client';
 
-const CACHE_VERSION = 'v2';   // v2: face sketches follow their faces (RunResponse.sketches)
+const CACHE_VERSION = 'v3';   // v3: face sketches' face outlines (RunResponse.sketches[name].outline)
 const MAX_ENTRIES = 40;
 
 /** cyrb53 — a fast, well-distributed string hash (returns a hex-ish string). */

@@ -34,7 +34,7 @@ the plate gets thicker (see rebind()).
 
 from __future__ import annotations
 
-from build123d import Compound, Edge, Face, Plane, Vector, Wire
+from build123d import Compound, Edge, Face, GeomType, Plane, Vector, Wire
 
 from modeling import face_ref
 
@@ -144,9 +144,35 @@ def _plane_spec(spec: dict, origin: Vector | None = None) -> dict:
     return out
 
 
+def _xy(pl: Plane, p) -> list[float]:
+    """A point as sketch (x, y) on `pl`: (u, -v)."""
+    q = pl.to_local_coords(p)
+    return [round(q.X, 6), round(-q.Y, 6)]
+
+
+def face_outline(face: Face, pl: Plane) -> list[dict]:
+    """The face's edges in the sketch coordinates of plane `pl` (y flipped,
+    as the profile): {"t": "line", "p": [a, b]}, {"t": "circle", "c", "r"},
+    {"t": "arc", "c", "r", "p": [start, mid, end]}, anything else as
+    {"t": "poly", "p": [points along it]}."""
+    out = []
+    for e in face.edges():
+        if e.geom_type == GeomType.LINE:
+            out.append({"t": "line", "p": [_xy(pl, e @ 0), _xy(pl, e @ 1)]})
+        elif e.geom_type == GeomType.CIRCLE:
+            c, r = _xy(pl, e.arc_center), round(e.radius, 6)
+            if e.is_closed:
+                out.append({"t": "circle", "c": c, "r": r})
+            else:
+                out.append({"t": "arc", "c": c, "r": r, "p": [_xy(pl, e @ k) for k in (0, 0.5, 1)]})
+        else:
+            out.append({"t": "poly", "p": [_xy(pl, e @ (k / 16)) for k in range(17)]})
+    return out
+
+
 def rebind(profile: dict, part) -> dict:
     """Where the sketch goes on `part` (the part built so far):
-    {status, moved_by, plane}.
+    {status, moved_by, plane, outline}.
 
     The face it was drawn on is looked for among part's planar faces facing
     the same way (face_ref.find: centre across and along the normal, area,
@@ -154,7 +180,10 @@ def rebind(profile: dict, part) -> dict:
     x axis (so the sketch's coordinates still mean the same place).
 
     status: "same" (not moved), "moved", "ambiguous" (another face scored
-    within 10% — the best is used), "not_found" (the stored plane is used)."""
+    within 10% — the best is used), "not_found" (the stored plane is used).
+    outline: the matched face's edges in the sketch's own coordinates on the
+    new plane (face_outline), so the sketch's reference outline can follow
+    the face; only when a face was matched."""
     spec = profile.get("plane") or {}
     face = profile.get("face")
     keep = {"status": "same", "moved_by": 0.0, "plane": _plane_spec(spec) if spec else spec}
@@ -174,8 +203,13 @@ def rebind(profile: dict, part) -> dict:
     status = "moved" if abs(moved) > 1e-6 else "same"
     if m["status"] == "ambiguous":
         status = "ambiguous"
-    return {"status": status, "moved_by": moved if status != "same" else 0.0,
-            "plane": _plane_spec(spec, pl.origin + n * offset)}
+    plane = _plane_spec(spec, pl.origin + n * offset)
+    try:
+        outline = face_outline(m["face"], _plane(plane))
+    except Exception:  # noqa: BLE001 - an edge OCCT can't sample: no outline, the sketch keeps its own
+        outline = None
+    return {"status": status, "moved_by": moved if status != "same" else 0.0, "plane": plane,
+            **({"outline": outline} if outline else {})}
 
 
 def bind(profiles: dict, ns: dict | None = None, report: dict | None = None) -> dict:

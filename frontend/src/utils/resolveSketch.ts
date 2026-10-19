@@ -11,6 +11,7 @@ import { computeDerivedDimensionIds } from '@/utils/dof';
 import { getSegmentCount, getSegmentPointIndices, getEntitySegmentEndpoints } from '@/utils/lineSegments';
 import { evaluateExpression, expressionNames } from '@/utils/expression';
 import { resolveDimensionEndpoints } from '@/utils/dimensionGeom';
+import { brokenIds, onBroken } from '@/utils/brokenRefs';
 
 /** What dimension `dim` measures now (mm, or degrees for an angle); null
  *  when its targets are gone. */
@@ -496,14 +497,16 @@ export function usesNames(sketch: Sketch, names: Iterable<string>): boolean {
 /** The sketch with every expression dimension set from `vars` and the
  *  constraints re-solved, one dimension after another (as the editor does).
  *  A dimension whose expression names something not in `vars` is left as it
- *  is and reported; one that is driven by others, or evaluates to zero or
+ *  is and reported; one on a broken reference edge (its face edge is gone) is
+ *  left as it is; one that is driven by others, or evaluates to zero or
  *  less, is left alone. Pure: neither the sketch nor the undo history is
  *  touched. */
 export function resolveSketch(sketch: Sketch, vars: Record<string, number>): Resolved {
   let entities = sketch.entities;
   const warnings: ResolveWarning[] = [];
+  const broken = brokenIds(sketch.entities);
   for (const dim of sketch.entities) {
-    if (dim.type !== 'dimension' || !dim.expression) continue;
+    if (dim.type !== 'dimension' || !dim.expression || onBroken(dim, broken)) continue;
     const missing = expressionNames(dim.expression).filter((n) => !Object.prototype.hasOwnProperty.call(vars, n));
     if (missing.length) {
       warnings.push({ sketch: sketch.name, dimensionId: dim.id, expression: dim.expression, missing });

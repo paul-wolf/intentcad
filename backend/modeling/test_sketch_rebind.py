@@ -2,6 +2,7 @@
 (modeling/sketch_profile.rebind): along the face's normal, onto the face found
 again in the part built so far."""
 
+import json
 import math
 
 from django.test import SimpleTestCase
@@ -174,3 +175,66 @@ class RebindTests(SimpleTestCase):
         m = sensitivity(code, sketches={"hole": prof})
         shift = m["thick"]["shifts"][cyl]
         self.assertAlmostEqual(shift[2], 1, places=3)   # up as fast as the top
+
+
+# an off-centre plate with rounded corners and a through hole: its top face's
+# outline has lines, arcs and a circle, and isn't symmetric in y
+ROUNDED = ('P = dict(thick={t})\n'
+           'part = Pos(5, 7, P["thick"]/2) * Box(60, 40, P["thick"])\n'
+           'part = fillet(part.edges().filter_by(Axis.Z), radius=3)\n'
+           'part -= Pos(10, 5, 0) * Cylinder(3, 100)\n'
+           'part -= extrude(sketch("hole"), amount=-1)\n')
+
+
+class OutlineTests(SimpleTestCase):
+    """The rebind also returns the matched face's outline in the sketch's own
+    (x, y) — y flipped, as the profile — for its reference outline to follow."""
+
+    def _outline(self, thick):
+        face = {"center": [5, 7, 6], "normal": [0, 0, 1], "area": 2364.0,
+                "box": [-25, -13, 35, 27], "hint": "top face"}
+        prof = {"plane": TOP, "loops": [_circle(-10, 0, 2)], "face": face}
+        r = run_script(ROUNDED.format(t=thick), sketches={"hole": prof})
+        b = r["sketches"]["hole"]
+        self.assertEqual(b["plane"]["origin"][2], thick)
+        return b["outline"]
+
+    def test_the_outline_of_a_moved_face_is_that_face_in_sketch_coordinates(self):
+        out = self._outline(9)
+        kinds = sorted(e["t"] for e in out)
+        self.assertEqual(kinds, ["arc"] * 4 + ["circle"] + ["line"] * 4)
+        # the hole at world (10, 5): sketch y is minus world y
+        circle = next(e for e in out if e["t"] == "circle")
+        self.assertAlmostEqual(circle["c"][0], 10, places=4)
+        self.assertAlmostEqual(circle["c"][1], -5, places=4)
+        self.assertAlmostEqual(circle["r"], 3, places=4)
+        # the back edge (world y = 27) is the line at sketch y = -27, between the corner arcs
+        lines = [e for e in out if e["t"] == "line"]
+        back = [e for e in lines if all(abs(p[1] + 27) < 1e-4 for p in e["p"])]
+        self.assertEqual(len(back), 1)
+        self.assertEqual(sorted(round(p[0], 4) for p in back[0]["p"]), [-22, 32])
+        front = [e for e in lines if all(abs(p[1] - 13) < 1e-4 for p in e["p"])]
+        self.assertEqual(len(front), 1)
+        # the corner arcs: radius 3 about (5 ± 27, -(7 ± 17)), their points on them
+        centres = sorted((round(e["c"][0], 4), round(e["c"][1], 4)) for e in out if e["t"] == "arc")
+        self.assertEqual(centres, [(-22, -24), (-22, 10), (32, -24), (32, 10)])
+        for a in (e for e in out if e["t"] == "arc"):
+            self.assertAlmostEqual(a["r"], 3, places=4)
+            for p in a["p"]:
+                self.assertAlmostEqual(math.hypot(p[0] - a["c"][0], p[1] - a["c"][1]), 3, places=4)
+
+    def test_the_outline_is_the_same_wherever_the_face_moves_along_its_normal(self):
+        def key(out):
+            return sorted(json.dumps(e, sort_keys=True) for e in out)
+        self.assertEqual(key(self._outline(6)), key(self._outline(11)))
+
+    def test_no_outline_without_a_face(self):
+        prof = {"plane": TOP, "loops": [_circle(10, 0, 2.5)]}
+        r = run_script(PLATE.format(t=6) + HOLE, sketches={"hole": prof})
+        self.assertNotIn("outline", r["sketches"]["hole"])
+
+    def test_no_outline_when_the_face_is_gone(self):
+        far = {**TOP_FACE, "center": [500, 0, 6], "box": [470, -20, 530, 20]}
+        r = run_script(PLATE.format(t=6) + HOLE, sketches={"hole": {"plane": TOP, "loops": [_circle(10, 0, 2.5)], "face": far}})
+        self.assertEqual(r["sketches"]["hole"]["status"], "not_found")
+        self.assertNotIn("outline", r["sketches"]["hole"])

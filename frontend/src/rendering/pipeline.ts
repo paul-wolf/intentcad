@@ -12,6 +12,7 @@ import { drawDimension, drawDiameterDimension, drawSegmentLabel, drawDiameterLab
 import { computeSketchDoF, computeDerivedDimensionIds } from '@/utils/dof';
 import { getEntityPoint } from '@/utils/entityPoints';
 import { resolveDimensionEndpoints } from '@/utils/dimensionGeom';
+import { brokenIds, onBroken } from '@/utils/brokenRefs';
 import { getConstraintPartners, getEntityRepresentativePoint, CONSTRAINT_SYMBOLS } from '@/utils/constraints';
 import { getSegmentCount, getSegmentPointIndices, getSegmentBulge, getEntitySegmentEndpoints } from '@/utils/lineSegments';
 import { arcFromBulge, arcMidpoint } from '@/utils/arcGeometry';
@@ -280,6 +281,10 @@ function renderActiveSketch(ctx: RenderContext) {
   const dofMap = ctx.camMode ? new Map() : computeSketchDoF(activeSketch.entities, activeSketch.constraints);
   const derivedDimIds = ctx.camMode ? new Set<string>() : computeDerivedDimensionIds(activeSketch.entities, activeSketch.constraints);
   const { relatedIds } = ctx.camMode ? { relatedIds: new Set<string>() } : getConstraintPartners(selectedEntityIds, activeSketch.constraints);
+  // a face sketch's reference edges whose face edge is gone, and what is
+  // dimensioned to them: red, so they can be found and re-dimensioned
+  const broken = ctx.camMode ? new Set<string>() : brokenIds(activeSketch.entities);
+  const brokenStyle: LineStyle = { ...styles.reference, color: ctx.palette.danger };
 
   for (const entity of activeSketch.entities) {
     if (ctx.copyPreviewHides?.has(entity.id)) continue;   // being replaced (see renderCopyPreview)
@@ -308,13 +313,15 @@ function renderActiveSketch(ctx: RenderContext) {
     switch (entity.type) {
       case 'line': {
         const isConstrained = dofMap.get(entity.id) === 0;
-        const style = camStyle ?? pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated, isReference);
+        const style = camStyle ?? (!isSelected && broken.has(entity.id) ? brokenStyle
+          : pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated, isReference));
         renderEntity(renderer, viewport, entity, style, !!(entity.fill && entity.closed && !entity.construction), ctx.exportMode);
         break;
       }
       case 'circle': {
         const isConstrained = dofMap.get(entity.id) === 0;
-        const style = camStyle ?? pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated, isReference);
+        const style = camStyle ?? (!isSelected && broken.has(entity.id) ? brokenStyle
+          : pickStyle(styles, isSelected, !!entity.construction, isConstrained, isRelated, isReference));
         const screenCenter = viewport.worldToScreen(entity.center);
         const screenRadius = entity.radius * viewport.scale;
         if (entity.fill && !entity.construction) {
@@ -388,8 +395,10 @@ function renderActiveSketch(ctx: RenderContext) {
         );
         if (!target) break;
         const isDerived = derivedDimIds.has(entity.id);
-        const lineStyle = isSelected ? styles.dimensionSelected : styles.dimensionLine;
-        const textStyle = styles.dimensionText;
+        const onGone = onBroken(entity, broken);
+        const lineStyle = isSelected ? styles.dimensionSelected
+          : onGone ? { ...styles.dimensionLine, color: ctx.palette.danger } : styles.dimensionLine;
+        const textStyle = onGone ? { ...styles.dimensionText, color: ctx.palette.danger } : styles.dimensionText;
 
         const ws = ctx.lineWidthScale ?? 1;
         // {v}: the measured value, filled in by the renderer

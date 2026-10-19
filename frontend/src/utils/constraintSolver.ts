@@ -3,6 +3,7 @@ import { propagateDerived } from '@/utils/propagate';
 import { rotatePoint } from '@/utils/geometry';
 import { getEntityPoint, setEntityPoint } from '@/utils/entityPoints';
 import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
+import { liveConstraints } from '@/utils/brokenRefs';
 
 // --- Validation API ---
 
@@ -142,6 +143,7 @@ export function solveConstraints(
 ): SolveResult {
   const maxIterations = options?.maxIterations ?? 10;
   const tolerance = options?.tolerance ?? 1e-6;
+  constraints = liveConstraints(entities, constraints);   // not those on a face edge that's gone
   let movedIds = options?.movedIds ?? new Set(entities.map((e) => e.id));
 
   const entityMap = new Map(entities.map((e) => [e.id, e]));

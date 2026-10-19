@@ -279,6 +279,10 @@ class SketchBinding(Schema):
     status: str                     # 'same' | 'moved' | 'ambiguous' | 'not_found'
     moved_by: float = 0.0           # mm along the sketch's normal
     plane: SketchPlaneOut           # the plane it was built on
+    # the matched face's edges in the sketch's (x, y), y flipped like the
+    # profile: lines {t, p: [a, b]}, circles {t, c, r}, arcs {t, c, r, p:
+    # [start, mid, end]}, other curves {t: "poly", p}. None: no face matched
+    outline: list[dict] | None = None
 
 
 class FaceRefReport(Schema):

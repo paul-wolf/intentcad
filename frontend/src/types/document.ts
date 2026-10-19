@@ -20,6 +20,10 @@ export interface LineEntity {
    *  exported and built like anything else — but excluded from the bounding
    *  box used to align a sketch, so a marker outside the outline cannot skew it. */
   reference?: boolean;
+  /** A face sketch's reference edge whose face edge is gone (the part
+   *  changed): kept where it was so what uses it isn't lost, but the
+   *  constraints on it are left out of the solve (see utils/brokenRefs.ts). */
+  broken?: boolean;
   fill?: boolean;
   sourceId?: string;
   sourceTransform?: SourceTransform;
@@ -35,6 +39,10 @@ export interface CircleEntity {
    *  exported and built like anything else — but excluded from the bounding
    *  box used to align a sketch, so a marker outside the outline cannot skew it. */
   reference?: boolean;
+  /** A face sketch's reference edge whose face edge is gone (the part
+   *  changed): kept where it was so what uses it isn't lost, but the
+   *  constraints on it are left out of the solve (see utils/brokenRefs.ts). */
+  broken?: boolean;
   fill?: boolean;
   sourceId?: string;
   sourceTransform?: SourceTransform;
