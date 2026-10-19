@@ -451,6 +451,21 @@ export interface HolePresets {
 
 export interface RunEdge {
   index: number; kind: string; faceIndices: number[]; polyline: [number, number, number][];
+  /** edge_ref({...}): how a script line names it (none: a seam, or on one face only) */
+  ref?: EdgeRefSpec | null;
+}
+
+/** edge_ref({...}): an edge, by the two faces it lies between (backend modeling/edge_ref.py). */
+export interface EdgeRefSpec {
+  faces: FaceRefSpec[];
+  kind: string;
+  midpoint: [number, number, number];
+  length: number;
+  /** a line */
+  direction?: [number, number, number];
+  /** a circle or arc */
+  center?: [number, number, number]; radius?: number; axis?: [number, number, number];
+  hint?: string;
 }
 
 export interface RunResponse {
@@ -469,6 +484,8 @@ export interface RunResponse {
   sketches?: import('@/build/faceSketch').SketchBindings;
   /** Each face_ref() lookup (shell's removed faces...), in order. */
   face_refs?: FaceRefReport[];
+  /** each edge_ref() lookup (moved_by: mm from where it was) */
+  edge_refs?: FaceRefReport[];
 }
 
 /** Mirrors backend modeling.schemas.AutoRoundReport. */

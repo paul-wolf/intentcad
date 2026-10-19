@@ -85,6 +85,8 @@ def run_model(request, payload: RunRequest):
         auto_round=r.get("auto_round"),
         organic=r.get("organic"),
         sketches=r.get("sketches") or {},
+        face_refs=r.get("face_refs") or [],
+        edge_refs=r.get("edge_refs") or [],
     )
 
 

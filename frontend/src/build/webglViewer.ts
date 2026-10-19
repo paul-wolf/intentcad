@@ -13,6 +13,7 @@ import {
   type Quat, type StandardView,
 } from './viewOrient';
 import { planeQuat, type PlaneBasis } from './sketchPlane';
+import { choosePick, edgesNear, selectable, type EdgeCandidate, type EdgeLike, type PickFilter, type ScreenEdge } from './edgePick';
 
 export interface ViewerMesh {
   positions: number[];
@@ -235,6 +236,17 @@ export interface Viewer {
   highlightEdges(segments: number[]): void;
   /** Highlight faces by inventory index. */
   selectFaces(indices: number[]): void;
+  /** The part's edges (the build result's), for picking and drawing. Call
+   *  after update(); clears the edge selection. */
+  setEdges(edges: EdgeLike[]): void;
+  /** Draw these edges as selected: thick, in the selection colour, dimmer
+   *  where the part hides them. */
+  selectEdges(indices: number[]): void;
+  /** Light one edge brightly, through anything in front (a dialog row being
+   *  hovered); null for none. */
+  hoverEdge(index: number | null): void;
+  /** What a click picks: faces + edges (an edge near the cursor wins), faces, edges. */
+  setPickFilter(f: PickFilter): void;
   /** Set the dimension overlay (empty to clear). Reported back via onDims. */
   setDims(dims: DimAnchor[]): void;
   /** Show a drag handle on a face (null to remove). Cancels any drag. */
@@ -296,10 +308,17 @@ export interface Viewer {
  * z toward the viewer) — for drawing an orientation gizmo. */
 export interface AxisDir { name: string; x: number; y: number; z: number; color: string }
 
+/** What a click picked: a face, an edge (build-result index), or nothing. */
+export type ViewerPick = { face: FaceRange } | { edge: number } | null;
+
 export interface ViewerOpts {
   color?: [number, number, number];
-  /** A click picked a face (null: empty space); `shift` adds to a selection. */
-  onFacePick?: (face: FaceRange | null, mods: { shift: boolean }) => void;
+  /** A click picked a face or an edge (null: empty space); `shift` adds to a
+   *  selection. Which can be picked follows setPickFilter. */
+  onPick?: (hit: ViewerPick, mods: { shift: boolean; alt: boolean }) => void;
+  /** An edge was double-clicked (not a drawn sketch): `face` is the face it
+   *  borders that the cursor was over (or the one facing the camera). */
+  onEdgeDoubleClick?: (hit: { edge: number; face: number | null }, mods: { shift: boolean; alt: boolean }) => void;
   /** Called each frame with the view-space directions of the X/Y/Z axes. */
   onAxes?: (dirs: AxisDir[]) => void;
   /** Called each frame with the projected dimension overlay (see setDims). */
@@ -384,6 +403,16 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   let hoverSketch: string | null = null;
   const SKETCH_LINE: [number, number, number] = [0.25, 0.62, 1.0];
   const SKETCH_HOVER: [number, number, number] = [0.55, 0.82, 1.0];
+  // the part's edges: all of them in one thick-line buffer, a range each, so
+  // the selected and hovered ones can be drawn on their own
+  const edgeBuf = gl.createBuffer()!;
+  let edges: EdgeLike[] = [];
+  let edgeRanges = new Map<number, { first: number; count: number }>();
+  let selEdges: number[] = [];
+  let hoverEdgeExt: number | null = null;   // a dialog row (hoverEdge)
+  let filter: PickFilter = 'both';
+  // what a click at the pointer would pick, lit while hovering
+  let hoverPick: { edge: number } | { face: number } | null = null;
 
   // coordinate frame: a ground grid on the engine's Z=0 plane. Orientation
   // (which way is +X/+Y/+Z) is shown by the corner gizmo, not axis lines.
@@ -523,6 +552,11 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
 
   // screen-space pick: project every triangle, return the face under (px,py)
   function pick(px: number, py: number): FaceRange | null {
+    return hitAt(px, py)?.face ?? null;
+  }
+
+  // the frontmost face under (px, py) CSS px, and its NDC depth there
+  function hitAt(px: number, py: number): { face: FaceRange; depth: number } | null {
     if (!vertexCount || faces.length === 0) return null;
     const w = canvas.width, h = canvas.height;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -554,7 +588,65 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
         if (depth < bestDepth) { bestDepth = depth; bestFace = f; }
       }
     }
-    return bestFace;
+    return bestFace ? { face: bestFace, depth: bestDepth } : null;
+  }
+
+  // world → [CSS x, CSS y, NDC depth] (null: behind the camera)
+  function ndcProjector() {
+    const { proj, view, model, rot } = mvp(canvas.width, canvas.height);
+    const pv = multiply(proj, multiply(view, model));
+    const cw = canvas.clientWidth, ch = canvas.clientHeight;
+    const toCss = (p: Vec3): [number, number, number] | null => {
+      const [x, y, z] = p;
+      const clw = pv[3]! * x + pv[7]! * y + pv[11]! * z + pv[15]!;
+      if (clw <= 0) return null;
+      const cx = pv[0]! * x + pv[4]! * y + pv[8]! * z + pv[12]!;
+      const cy = pv[1]! * x + pv[5]! * y + pv[9]! * z + pv[13]!;
+      const cz = pv[2]! * x + pv[6]! * y + pv[10]! * z + pv[14]!;
+      return [(cx / clw * 0.5 + 0.5) * cw, (1 - (cy / clw * 0.5 + 0.5)) * ch, cz / clw];
+    };
+    // toward the viewer from p: to the eye (perspective), or along the view axis
+    const back: Vec3 = [rot[2]!, rot[6]!, rot[10]!];
+    const eye = add(center, scale(back, distance));
+    const toward = (p: Vec3): Vec3 => {
+      if (orthographic) return back;
+      const d: Vec3 = [eye[0] - p[0], eye[1] - p[1], eye[2] - p[2]];
+      const l = Math.hypot(...d) || 1;
+      return [d[0] / l, d[1] / l, d[2] / l];
+    };
+    return { toCss, toward };
+  }
+
+  // an edge candidate is visible when nothing of the part is in front of it:
+  // its nearest point, nudged toward the viewer (off its own faces), is at
+  // least as near as the frontmost triangle at that pixel
+  function edgeVisible(c: EdgeCandidate, P: ReturnType<typeof ndcProjector>): boolean {
+    const e = edges.find((x) => x.index === c.index);
+    const a = e?.polyline[c.seg], b = e?.polyline[c.seg + 1];
+    if (!a || !b) return false;
+    const p: Vec3 = [a[0] + (b[0] - a[0]) * c.t, a[1] + (b[1] - a[1]) * c.t, a[2] + (b[2] - a[2]) * c.t];
+    const tol = Math.max(0.15, modelRadius * 0.004);
+    const q2 = P.toCss(add(p, scale(P.toward(p), tol)));
+    if (!q2) return false;
+    const hit = hitAt(q2[0], q2[1]);
+    return !hit || hit.depth >= q2[2];
+  }
+
+  // what a click at (px, py) CSS px picks, under the filter
+  function pickAt(px: number, py: number): ViewerPick {
+    const P = ndcProjector();
+    let near: EdgeCandidate[] = [];
+    if (filter !== 'faces' && edges.length) {
+      const screen: ScreenEdge[] = edges.filter(selectable).map((e) => ({
+        index: e.index, pts: e.polyline.map((p) => { const s = P.toCss(p); return s ? [s[0], s[1]] as [number, number] : null; }),
+      }));
+      near = edgesNear(screen, px, py);
+    }
+    const face = filter !== 'edges' ? pick(px, py) : null;
+    const p = choosePick(near, face?.index ?? null, filter, (c) => edgeVisible(c, P), new Set(selEdges));
+    if (!p) return null;
+    if ('edge' in p) return p;
+    return face ? { face } : null;
   }
 
   // world → CSS px in the canvas, for the HTML overlays and handle hit-testing
@@ -703,6 +795,17 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       gl!.uniform3fv(uColor, HOVER);
       if (f) gl!.drawArrays(gl!.TRIANGLES, f.start, f.count);
     }
+    // the face a click would pick: a light tint over it
+    const hf = hoverPick && 'face' in hoverPick && !sk && !showCand && !drag ? faceByIndex.get(hoverPick.face) : undefined;
+    if (hf && hf.index !== hovered) {
+      gl!.enable(gl!.BLEND);
+      gl!.blendFuncSeparate(gl!.SRC_ALPHA, gl!.ONE_MINUS_SRC_ALPHA, gl!.ZERO, gl!.ONE);  // keep canvas alpha
+      gl!.uniform3fv(uColor, HOVER);
+      gl!.uniform1f(uAlpha, 0.35);
+      gl!.drawArrays(gl!.TRIANGLES, hf.start, hf.count);
+      gl!.uniform1f(uAlpha, 1);
+      gl!.disable(gl!.BLEND);
+    }
 
     if (df && drag) {
       // the face whose plane the drag snapped to
@@ -778,6 +881,43 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       for (const r of sketchRanges) {
         gl!.uniform3fv(tColor, r.id === hoverSketch ? SKETCH_HOVER : SKETCH_LINE);
         gl!.drawArrays(gl!.TRIANGLES, r.first, r.count);
+      }
+      gl!.disableVertexAttribArray(tOther);
+      gl!.disableVertexAttribArray(tSide);
+    }
+
+    // selected edges: thick, dimmer through the part where it hides them, in
+    // full where seen; the hovered one (what a click would pick) on top
+    const hoverE = hoverEdgeExt ?? (hoverPick && 'edge' in hoverPick && !drag ? hoverPick.edge : null);
+    if ((selEdges.length || hoverE !== null) && !thumbMode && !sk) {
+      gl!.useProgram(thickProg);
+      gl!.uniformMatrix4fv(tPV, false, multiply(proj, multiply(view, model)));
+      gl!.uniform2f(tHalfPx, w / 2, h / 2);
+      gl!.uniform1f(tBias, 6e-5);
+      gl!.bindBuffer(gl!.ARRAY_BUFFER, edgeBuf);
+      gl!.enableVertexAttribArray(tPos);
+      gl!.enableVertexAttribArray(tOther);
+      gl!.enableVertexAttribArray(tSide);
+      gl!.vertexAttribPointer(tPos, 3, gl!.FLOAT, false, 28, 0);
+      gl!.vertexAttribPointer(tOther, 3, gl!.FLOAT, false, 28, 12);
+      gl!.vertexAttribPointer(tSide, 1, gl!.FLOAT, false, 28, 24);
+      const drawEdge = (i: number) => {
+        const r = edgeRanges.get(i);
+        if (r) gl!.drawArrays(gl!.TRIANGLES, r.first, r.count);
+      };
+      gl!.uniform1f(tWidth, 3 * dpr);
+      gl!.disable(gl!.DEPTH_TEST);
+      gl!.uniform3fv(tColor, SELECT.map((c) => c * 0.5) as Vec3);
+      selEdges.forEach(drawEdge);
+      gl!.enable(gl!.DEPTH_TEST);
+      gl!.uniform3fv(tColor, SELECT);
+      selEdges.forEach(drawEdge);
+      if (hoverE !== null) {
+        gl!.disable(gl!.DEPTH_TEST);
+        gl!.uniform1f(tWidth, 4 * dpr);
+        gl!.uniform3fv(tColor, HOVER);
+        drawEdge(hoverE);
+        gl!.enable(gl!.DEPTH_TEST);
       }
       gl!.disableVertexAttribArray(tOther);
       gl!.disableVertexAttribArray(tSide);
@@ -967,6 +1107,8 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     }
     anim = null;   // grabbing the view stops a view animation where it is
     mode = 'orbit';
+    hoverXY = null;
+    setHoverPick(null);
   }
   function onMove(e: PointerEvent) {
     if (mode === 'handle') { if (drag && !drag.pending) dragTo(e); return; }
@@ -978,7 +1120,8 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       const s = onHandle ? null : sketchAt(px, py);
       if ((s?.id ?? null) !== hoverSketch) { hoverSketch = s?.id ?? null; scheduleRender(); }
       opts.onSketchHover?.(s ? { id: s.id, name: s.name, x: px, y: py } : null);
-      canvas.style.cursor = onHandle || s ? 'pointer' : baseCursor;
+      if (onHandle || s) { setHoverPick(null); canvas.style.cursor = 'pointer'; }
+      else hoverLater(px, py);
       return;
     }
     moved += Math.abs(e.clientX - lastX) + Math.abs(e.clientY - lastY);
@@ -987,6 +1130,27 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     lastX = e.clientX; lastY = e.clientY;
     scheduleRender();
   }
+  // the hover pick, worked out once a frame at the latest pointer position
+  let hoverXY: [number, number] | null = null;
+  let hoverRaf = 0;
+  function hoverLater(px: number, py: number) {
+    hoverXY = [px, py];
+    if (hoverRaf) return;
+    hoverRaf = requestAnimationFrame(() => {
+      hoverRaf = 0;
+      if (!hoverXY || mode !== 'none' || sketch) return;
+      const p = opts.onPick ? pickAt(hoverXY[0], hoverXY[1]) : null;
+      setHoverPick(p && ('edge' in p ? { edge: p.edge } : { face: p.face.index }));
+      canvas.style.cursor = p && 'edge' in p ? 'pointer' : baseCursor;
+    });
+  }
+  function setHoverPick(p: { edge: number } | { face: number } | null) {
+    const key = (x: typeof p) => (x ? ('edge' in x ? `e${x.edge}` : `f${x.face}`) : '');
+    if (key(p) === key(hoverPick)) return;
+    hoverPick = p;
+    scheduleRender();
+  }
+
   function onUp(e: PointerEvent) {
     const was = mode;
     mode = 'none';
@@ -995,9 +1159,9 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       if (drag && !drag.pending) endHandleDrag(false);
       return;
     }
-    if (was === 'orbit' && moved < 4 && opts.onFacePick) {  // a click, not a drag → pick a face
+    if (was === 'orbit' && moved < 4 && opts.onPick) {  // a click, not a drag → pick a face or an edge
       const rect = canvas.getBoundingClientRect();
-      opts.onFacePick(pick(downX - rect.left, downY - rect.top), { shift: e.shiftKey });  // caller sets selection
+      opts.onPick(pickAt(downX - rect.left, downY - rect.top), { shift: e.shiftKey, alt: e.altKey });  // caller sets selection
     }
   }
   function onWheel(e: WheelEvent) {
@@ -1007,14 +1171,37 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     scheduleRender();
   }
   function onDblClick(e: MouseEvent) {
-    if (sketch || !opts.onSketchOpen) return;
+    if (sketch) return;
     const rect = canvas.getBoundingClientRect();
-    const s = sketchAt(e.clientX - rect.left, e.clientY - rect.top);
-    if (s) opts.onSketchOpen(s.id);
+    const px = e.clientX - rect.left, py = e.clientY - rect.top;
+    const s = opts.onSketchOpen ? sketchAt(px, py) : null;
+    if (s) { opts.onSketchOpen!(s.id); return; }
+    if (!opts.onEdgeDoubleClick || filter === 'faces') return;
+    const p = pickAt(px, py);
+    if (!p || !('edge' in p)) return;
+    // the face it borders that the cursor is over, else the one facing the viewer
+    const e0 = edges.find((x) => x.index === p.edge);
+    const own = [...new Set(e0?.faceIndices ?? [])];
+    const under = pick(px, py)?.index ?? null;
+    let face: number | null = under !== null && own.includes(under) ? under : null;
+    if (face === null && own.length) {
+      const { toward } = ndcProjector();
+      const at = e0!.polyline[Math.floor(e0!.polyline.length / 2)] ?? center;
+      const v = toward(at);
+      let best = -Infinity;
+      for (const i of own) {
+        const f = faceByIndex.get(i);
+        const d = f ? dot3(f.normal, v) : -Infinity;
+        if (d > best) { best = d; face = i; }
+      }
+    }
+    opts.onEdgeDoubleClick({ edge: p.edge, face }, { shift: e.shiftKey, alt: e.altKey });
   }
   function onLeave() {
     if (hoverSketch) { hoverSketch = null; scheduleRender(); }
     opts.onSketchHover?.(null);
+    hoverXY = null;
+    setHoverPick(null);
   }
   canvas.addEventListener('pointerdown', onDown);
   canvas.addEventListener('pointermove', onMove);
@@ -1039,6 +1226,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       faceByIndex = new Map(faces.map((f) => [f.index, f]));
       selected = [];
       hovered = null;
+      hoverPick = null;
       handle = null;
       if (drag) endHandleDrag(true);
       scheduleRender();
@@ -1050,6 +1238,34 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       scheduleRender();
     },
     selectFaces(indices: number[]) { selected = indices; scheduleRender(); },
+    setEdges(list: EdgeLike[]) {
+      edges = list;
+      const all: number[] = [];
+      edgeRanges = new Map();
+      for (const e of list) {
+        const first = all.length;
+        for (let i = 0; i + 1 < e.polyline.length; i++) all.push(...e.polyline[i]!, ...e.polyline[i + 1]!);
+        // 6 floats a segment in, 6 vertices out
+        if (all.length > first) edgeRanges.set(e.index, { first, count: all.length - first });
+      }
+      gl!.bindBuffer(gl!.ARRAY_BUFFER, edgeBuf);
+      gl!.bufferData(gl!.ARRAY_BUFFER, thickVerts(all), gl!.STATIC_DRAW);
+      selEdges = [];
+      hoverEdgeExt = null;
+      hoverPick = null;
+      scheduleRender();
+    },
+    selectEdges(indices: number[]) { selEdges = indices; scheduleRender(); },
+    hoverEdge(index: number | null) {
+      if (index === hoverEdgeExt) return;
+      hoverEdgeExt = index;
+      scheduleRender();
+    },
+    setPickFilter(f: PickFilter) {
+      filter = f;
+      hoverPick = null;
+      scheduleRender();
+    },
     setPreviewMesh(p) {
       if (!p) { cand = null; scheduleRender(); return; }
       gl!.bindBuffer(gl!.ARRAY_BUFFER, candPosBuf);
@@ -1111,6 +1327,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       orthographic = true;
       sketch = { plane: s.plane, face: s.face, bg: s.bg, phase: 'enter' };
       hoverSketch = null;
+      hoverPick = null;
       ghost = null; sketchPose = null;
       const far = modelRadius * 3;
       sketchClip = s.clip === false ? 1e9 : Math.max(0.02, modelRadius * 1e-3);
@@ -1212,6 +1429,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     },
     dispose() {
       if (raf) cancelAnimationFrame(raf);
+      if (hoverRaf) cancelAnimationFrame(hoverRaf);
       ro.disconnect();
       canvas.removeEventListener('pointerdown', onDown);
       canvas.removeEventListener('pointermove', onMove);
@@ -1227,6 +1445,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       gl.deleteBuffer(gridBuf);
       gl.deleteBuffer(sketchBuf);
       gl.deleteBuffer(ghostBuf);
+      gl.deleteBuffer(edgeBuf);
       gl.deleteProgram(prog);
       gl.deleteProgram(lineProg);
       gl.deleteProgram(thickProg);

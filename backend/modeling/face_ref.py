@@ -136,6 +136,24 @@ def find(part, ref: dict, pl: Plane | None = None) -> dict:
     the sketch rebinding passes the sketch's plane. status is "found",
     "ambiguous" (another face scored within 10% — the best is still given) or
     "not_found" (face None). Raises on a reference it can't read."""
+    size, scored = rank(part, ref, pl)
+    none = {"status": "not_found", "face": None, "center": None, "across": None, "along": None}
+    if not scored:
+        return none
+    score, across, along, ov, c, f = scored[0]
+    if not ov and across > size:
+        return none
+    status = "found"
+    if len(scored) > 1 and scored[1][0] <= score * (1 + AMBIGUOUS) + 1e-9:
+        status = "ambiguous"
+    return {"status": status, "face": f, "center": c, "across": across, "along": along}
+
+
+def rank(part, ref: dict, pl: Plane | None = None) -> tuple[float, list[tuple]]:
+    """The face's size (sqrt of its area) and the part's faces that could be
+    the one `ref` names, best first, as (score, across, along, overlap,
+    center, face). find() takes the first; edge_ref tries the first few of
+    each of an edge's two faces."""
     n = vec(ref["normal"]).normalized()
     c0 = vec(ref["center"])
     area0 = float(ref["area"])
@@ -161,17 +179,8 @@ def find(part, ref: dict, pl: Plane | None = None) -> dict:
         score = ((across + ALONG * abs(along)) / size + abs(math.log(f.area / area0))
                  + (1 - ov if ov is not None else 0))
         scored.append((score, across, along, ov, c, f))
-    none = {"status": "not_found", "face": None, "center": None, "across": None, "along": None}
-    if not scored:
-        return none
     scored.sort(key=lambda t: t[0])
-    score, across, along, ov, c, f = scored[0]
-    if not ov and across > size:
-        return none
-    status = "found"
-    if len(scored) > 1 and scored[1][0] <= score * (1 + AMBIGUOUS) + 1e-9:
-        status = "ambiguous"
-    return {"status": status, "face": f, "center": c, "across": across, "along": along}
+    return size, scored
 
 
 def bind(ns: dict, report: list | None = None) -> dict:

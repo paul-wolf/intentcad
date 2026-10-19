@@ -224,6 +224,7 @@ class RunEdge(Schema):
     kind: str
     faceIndices: list[int] = []
     polyline: list[list[float]] = []
+    ref: dict | None = None       # edge_ref({...}): how a script line names this edge
 
 
 class AutoRoundSkip(Schema):
@@ -286,7 +287,8 @@ class SketchBinding(Schema):
 
 
 class FaceRefReport(Schema):
-    """A face_ref() lookup in this build (modeling/face_ref.py)."""
+    """A face_ref() or edge_ref() lookup in this build (modeling/face_ref.py,
+    edge_ref.py)."""
     hint: str                       # what the face is called: "top face"
     status: str                     # 'found' | 'ambiguous' | 'not_found'
     moved_by: float = 0.0           # mm along its normal from where it was
@@ -304,6 +306,7 @@ class RunResponse(Schema):
     organic: OrganicReport | None = None        # ... spoke/frame/window/truss_windows
     sketches: dict[str, SketchBinding] = {}     # name -> where each face sketch went
     face_refs: list[FaceRefReport] = []         # each face_ref() lookup, in order
+    edge_refs: list[FaceRefReport] = []         # each edge_ref() lookup (moved_by: mm), in order
 
 
 class ExportRequest(Schema):

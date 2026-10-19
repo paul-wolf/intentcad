@@ -43,8 +43,14 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
   {
     title: 'Select and tweak',
     items: [
-      ['Click a face', 'Shows what it is in the footer. Click a second face to pick the edge between them. '
-        + 'Shift-click adds (or drops) a face, for picking several (e.g. the faces Shell leaves open).'],
+      ['Click a face or edge', 'Selects it (the footer says what it is). Within a few pixels of an edge, the '
+        + 'edge is picked, else the face under the cursor; whatever a click would pick lights up as you hover. '
+        + 'Shift-click adds (or drops) one, for picking several; Shift-click two faces to measure between them '
+        + 'and see the edge they share. Click empty space or press Esc to clear.'],
+      ['Double-click an edge', 'Selects its whole loop: every edge round the face it borders that the cursor '
+        + 'is over (e.g. all the edges round the top). Alt/⌥-double-click selects the chain of edges that run '
+        + 'smoothly on from it. With one face selected, "Edges of this face" selects its boundary.'],
+      ['Faces + edges · Faces · Edges', 'Along the bottom of the 3D view: what a click picks (key E steps through them).'],
       ['Drag the arrow', 'A selected face that a parameter moves gets a blue arrow: drag it to change that '
         + 'parameter (Tab cycles if several do).'],
       ['Parameters', 'The named sizes at the top. Edit a value and the part rebuilds; hover one to see which faces it moves.'],

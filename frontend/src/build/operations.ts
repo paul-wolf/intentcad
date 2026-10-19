@@ -10,6 +10,7 @@
  */
 import type { StandardView } from './viewOrient';
 import type { BasePlane } from './faceSketch';
+import { FILTER_KEY } from './edgePick';
 
 export type OpGroup = 'Sketch' | 'Create' | 'Modify' | 'Pattern' | 'Inspect' | 'View' | 'File';
 /** The order the groups are shown in (an empty one isn't shown: the part
@@ -23,9 +24,10 @@ export type OpIcon =
   | 'export' | 'stl' | 'parts' | 'dxf' | 'views3' | 'versions' | 'process'
   | `view-${StandardView}`;
 
-/** What's selected: the faces, in the order they were picked. */
+/** What's selected: the faces and the edges, in the order they were picked. */
 export interface OpSelection {
   faces: { kind: string }[];
+  edges: { kind: string }[];
 }
 
 /** The state of the model the operations depend on. */
@@ -431,6 +433,7 @@ export function toggleOps(cur: Layout, prev: Layout): Layout {
 export const RESERVED_KEYS: Record<string, string> = {
   L: 'next layout (Shift+L: the one before)',
   [OPS_KEY]: 'Operations layout, and back',
+  [FILTER_KEY]: 'what a click picks: faces + edges, faces, edges',
   '?': 'help',
   T: 'Top plane, in the Sketch… menu',
   F: 'Front plane, in the Sketch… menu',

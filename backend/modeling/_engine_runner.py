@@ -430,10 +430,14 @@ def _run(code: str, export: list | None = None,
     # face_ref({...}) — a face found again on the `part` built so far by what
     # it looks like (modeling/face_ref.py); each lookup → result["face_refs"].
     # shell() / holes() — the editor's Shell and Hole operations
-    from modeling import face_ref, shell_hole
+    # edge_ref({...}) / edges_ref([...]) — an edge found again by the two faces
+    # it lies between (modeling/edge_ref.py); each lookup → result["edge_refs"]
+    from modeling import edge_ref, face_ref, shell_hole
 
     face_report: list[dict] = []
+    edge_report: list[dict] = []
     ns.update(face_ref.bind(ns, face_report))
+    ns.update(edge_ref.bind(ns, edge_report))
     ns.update(shell_hole.bind(ns))
     # Run the script. If an operation fails partway (e.g. a chamfer too big),
     # `part` still holds the model built up to that line — render THAT plus the
@@ -575,7 +579,16 @@ def _run(code: str, export: list | None = None,
                 poly.append([p.X, p.Y, p.Z])
         except Exception:
             poly = []
-        edges.append({"index": ei, "kind": kind, "faceIndices": fis, "polyline": poly})
+        # how a script line names it: edge_ref(<this>). A seam (a face meeting
+        # itself) or an edge on one face only has none
+        ref = None
+        two = list(dict.fromkeys(fis))
+        if len(two) == 2 and all(faces[j]["ref"] for j in two):
+            try:
+                ref = edge_ref.describe(edge, [faces[j]["ref"] for j in two])
+            except Exception:
+                ref = None
+        edges.append({"index": ei, "kind": kind, "faceIndices": fis, "polyline": poly, "ref": ref})
 
     # export only what's asked for (STEP/STL), so a plain render stays light
     exports: dict = {}
@@ -634,6 +647,8 @@ def _run(code: str, export: list | None = None,
         result["sketches"] = sketch_report
     if face_report:
         result["face_refs"] = face_report
+    if edge_report:
+        result["edge_refs"] = edge_report
     if warning:
         result["warning"] = warning   # an op failed; we rendered up to it
     if fix:

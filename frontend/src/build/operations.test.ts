@@ -11,7 +11,7 @@ const MODEL: OpModel = {
   holeSketches: 0, holeAt: 'at the centre of the top face', autoRound: false, exporting: false, importing: false,
   hasParams: true, showParams: true, ortho: false, measure: '60.0 × 40.0 mm',
 };
-const faces = (...kinds: string[]): OpSelection => ({ faces: kinds.map((kind) => ({ kind })) });
+const faces = (...kinds: string[]): OpSelection => ({ faces: kinds.map((kind) => ({ kind })), edges: [] });
 const NONE = faces();
 const FLOOR = faces('plane');
 const CURVED = faces('cylinder');

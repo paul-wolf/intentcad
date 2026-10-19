@@ -2,13 +2,17 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
 import {
-  api, buildApi, errorText, ApiError, type RunResponse, type UsageResponse, type DimInfo, type ModelInfo, type SizeFix,
+  api, buildApi, errorText, ApiError, type RunResponse, type RunEdge, type FaceRefReport, type UsageResponse, type DimInfo, type ModelInfo, type SizeFix,
   type FaceRefSpec, type HolePresets,
 } from '@/api/client';
 import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, persistSketches, getBackendId } from '@/api/autoSave';
 import { DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
 import type { ChatMessage } from '@/types/document';
-import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim, type PlacedHandle } from '@/build/webglViewer';
+import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim, type PlacedHandle, type ViewerPick } from '@/build/webglViewer';
+import {
+  FILTER_KEY, PICK_FILTERS, clickSelect, edgeLength, edgeLoop, faceEdges, measureEdges, nextFilter, selectEdges, tangentChain,
+  type PickFilter,
+} from '@/build/edgePick';
 import { handleOptions, add, scale, dot, len, sub, type HandleOption, type Vec3 } from '@/build/dragHandle';
 import { VIEW_KEYS, type StandardView } from '@/build/viewOrient';
 import { highlightPython, DARK_SYNTAX, LIGHT_SYNTAX } from '@/build/pyHighlight';
@@ -276,8 +280,15 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const [fix, setFix] = useState<SizeFix | null>(null);
   const [stats, setStats] = useState('');
   const [sel, setSel] = useState<number[]>([]);   // selected face indices
+  const [selE, setSelE] = useState<number[]>([]);  // selected edge indices
   const resRef = useRef<RunResponse | null>(null);
   const selRef = useRef<number[]>([]);
+  const selERef = useRef<number[]>([]);
+  // what a click picks (E steps through): faces + edges, faces, edges
+  const [pickFilter, setPickFilter] = useState<PickFilter>('both');
+  const pickFilterRef = useRef<PickFilter>('both');
+  pickFilterRef.current = pickFilter;
+  const cyclePickFilter = () => setPickFilter(nextFilter(pickFilterRef.current));
   // a part to cut / join into: any script that assigns `part`, except the
   // unbuilt starter (New body replaces that)
   const hasPartRef = useRef(false);
@@ -295,26 +306,49 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const buildAbort = useRef<AbortController | null>(null);   // cancel an in-flight build
   const cancelBuild = () => { buildAbort.current?.abort(); };
 
-  // click a face → toggle it in the selection, keeping the last two (to
-  // measure between them); Shift-click toggles it keeping all the others (to
-  // pick the faces an operation works on). With two faces selected, highlight
-  // the edge(s) between them (an edge = two faces meeting). While an
-  // operation's dialog is open, a click goes to the dialog instead.
-  const opPickRef = useRef<((f: FaceRange | null) => void) | null>(null);
-  const onPick = (f: FaceRange | null, mods?: { shift: boolean }) => {
-    if (opPickRef.current) { opPickRef.current(f); return; }
-    let s = selRef.current;
-    if (!f) s = mods?.shift ? s : [];
-    else if (s.includes(f.index)) s = s.filter((i) => i !== f.index);
-    else s = mods?.shift ? [...s, f.index] : [...s, f.index].slice(-2);
-    applySelection(s);
+  // the selection holds faces and edges: a click on one replaces it,
+  // Shift-click adds or drops it, a click on empty space (or Esc) clears it.
+  // An edge within a few px of the cursor wins over the face under it (the
+  // filter, E, can limit it to one or the other). With two faces selected,
+  // highlight the edge(s) between them (an edge = two faces meeting). While
+  // an operation's dialog is open, a click goes to the dialog instead.
+  const opPickRef = useRef<((p: ViewerPick, mods: { shift: boolean; alt: boolean }) => void) | null>(null);
+  // a loop or chain double-clicked while a dialog that takes edges is open
+  const opEdgesRef = useRef<((edges: number[]) => void) | null>(null);
+  const onPick = (p: ViewerPick, mods: { shift: boolean; alt: boolean }) => {
+    if (opPickRef.current) { opPickRef.current(p, mods); return; }
+    const s = clickSelect({ faces: selRef.current, edges: selERef.current },
+                          p && ('edge' in p ? { edge: p.edge } : { face: p.face.index }), mods.shift);
+    applySelection(s.faces, s.edges);
   };
-  const applySelection = (s: number[]) => {
+  // double-click an edge: the loop round the face it borders (the one under
+  // the cursor); Alt: the chain of edges running smoothly on from it
+  const onEdgeDoubleClick = (hit: { edge: number; face: number | null }, mods: { shift: boolean; alt: boolean }) => {
+    const res = resRef.current;
+    if (!res) return;
+    const list = mods.alt ? tangentChain(res.edges, hit.edge)
+      : hit.face != null ? edgeLoop(res.edges, hit.edge, hit.face) : [hit.edge];
+    if (opEdgesRef.current) { opEdgesRef.current(list); return; }
+    if (opPickRef.current) return;
+    const s = selectEdges({ faces: selRef.current, edges: selERef.current }, list, mods.shift);
+    applySelection(s.faces, s.edges);
+  };
+  // "Edges of this face": the selected face's boundary, every loop of it
+  const selectFaceEdges = () => {
+    const res = resRef.current;
+    const f = selRef.current[0];
+    if (!res || f == null) return;
+    applySelection([], faceEdges(res.edges, f));
+  };
+  const applySelection = (s: number[], es: number[] = []) => {
     const res = resRef.current;
     selRef.current = s;
+    selERef.current = es;
     setSel(s);
+    setSelE(es);
     if (s.length) ensureSens();   // selecting geometry → we want the param links
     viewerRef.current?.selectFaces(s);
+    viewerRef.current?.selectEdges(es);
     const segs: number[] = [];
     if (res && s.length === 2) {
       for (const e of res.edges) {
@@ -334,6 +368,10 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     }
     viewerRef.current?.highlightEdges(segs);
   };
+  const applySelectionRef = useRef(applySelection);
+  applySelectionRef.current = applySelection;
+  const cyclePickFilterRef = useRef(cyclePickFilter);
+  cyclePickFilterRef.current = cyclePickFilter;
   const toggleSkipped = () => {
     showSkippedRef.current = !showSkippedRef.current;
     setShowSkipped(showSkippedRef.current);
@@ -429,6 +467,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       setWarn(res.warning ?? '');
       setFix(res.fix?.param ? res.fix : null);
       viewerRef.current.update(res.mesh, res.faces);
+      viewerRef.current.setEdges(res.edges);
       prevBindRef.current = resRef.current?.sketches ?? null;
       resRef.current = res;
       if (sketchOnFace) faceSketchRef.current.pushLines();   // each on its face, where the build put it
@@ -520,7 +559,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       if (canvasRef.current && !viewerRef.current) {
         try {
           viewerRef.current = createViewer(canvasRef.current, {
-            onFacePick: onPick, onAxes, onDims, onHandle, onHandleDrop,
+            onPick, onEdgeDoubleClick, onAxes, onDims, onHandle, onHandleDrop,
             ...(sketchOnFace ? {
               onSketchHover: (h: { name: string; x: number; y: number } | null) => setSketchTip(h),
               onSketchOpen: (id: string) => { setSketchTip(null); faceSketchRef.current.open(id); },
@@ -907,8 +946,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // while the Shell dialog is open, clicking a face opens or closes it, and
   // the faces it opens show as selected; in the Hole dialog it says where the
   // holes go
-  opPickRef.current = holeOp ? (f) => {
-    const face = f && resRef.current?.faces.find((x) => x.index === f.index);
+  opPickRef.current = holeOp ? (p) => {
+    const face = p && 'face' in p ? resRef.current?.faces.find((x) => x.index === p.face.index) : undefined;
     if (!face || face.kind !== 'plane') {
       if (face) { setNotice('Holes go on a flat face: pick a flat one'); window.setTimeout(() => setNotice(''), 5000); }
       return;
@@ -917,8 +956,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     if (!picked) return;
     if (picked.face) setHoleFace(picked.face);
     setHoleOp((o) => o && ({ ...o, v: { ...o.v, at: picked.at } }));
-  } : shellOp ? (f) => {
-    const face = f && resRef.current?.faces.find((x) => x.index === f.index);
+  } : shellOp ? (p) => {
+    const face = p && 'face' in p ? resRef.current?.faces.find((x) => x.index === p.face.index) : undefined;
     const r = face ? refOf(face) : null;
     if (!r) return;
     setShellOp((o) => o && ({ ...o, v: { ...o.v, remove: o.v.remove.some((x) => sameRef(x, r))
@@ -942,6 +981,9 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     viewerRef.current?.selectFaces(idx);
   }, [holeKey]);   // eslint-disable-line react-hooks/exhaustive-deps
   const opOpen = !!shellOp || !!holeOp;
+  // Shell and Hole work on faces: while one is open a click picks faces only
+  const viewFilter: PickFilter = shellOp || holeOp ? 'faces' : pickFilter;
+  useEffect(() => { viewerRef.current?.setPickFilter(viewFilter); }, [viewFilter]);
   // the dialogs sit at the top left of the view: draw the part beside them
   const opWidth = holeOp ? 300 : shellOp ? 270 : 0;
   useEffect(() => {
@@ -1100,11 +1142,16 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       const ops = opsRef.current;
       const op = opForKey(e.key);
       if (e.key === 'Escape') {
-        // Operations: Esc goes back to the layout before (a dialog closes first)
-        if (layoutRef.current !== 'ops' || !ops || ops.modal) return;
-        if (ops.model.dialogOpen) closeOpRef.current();
-        else leaveOps();
-      } else if (e.key === 'l' || e.key === 'L') cycleLayout(e.shiftKey ? -1 : 1);
+        if (faceSketchRef.current.menuOpen) return;
+        // a dialog closes first, then the selection clears; then (Operations)
+        // back to the layout before
+        if (ops?.modal) return;
+        if (ops?.model.dialogOpen) closeOpRef.current();
+        else if (selRef.current.length || selERef.current.length) applySelectionRef.current([], []);
+        else if (layoutRef.current === 'ops') leaveOps();
+        else return;
+      } else if (e.key.toUpperCase() === FILTER_KEY && !e.shiftKey) cyclePickFilterRef.current();
+      else if (e.key === 'l' || e.key === 'L') cycleLayout(e.shiftKey ? -1 : 1);
       else if (e.key.toUpperCase() === OPS_KEY) toggleOpsLayout();
       else if (op && ops && (op.group !== 'Sketch' || sketchOnFace)) {
         // as the keys always did: K with nothing selected opens the plane
@@ -1137,12 +1184,27 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // describe the current selection so the assistant can target it in build123d
   const selectionContext = (): string => {
     const res = resRef.current;
-    if (!res || sel.length === 0) return '';
+    if (!res || (sel.length === 0 && selE.length === 0)) return '';
     const v = (a: [number, number, number]) => `(${a.map((n) => Math.round(n * 10) / 10).join(', ')})`;
     const desc = (i: number) => {
       const f = res.faces.find((x) => x.index === i)!;
       return `${f.kind} face (center ${v(f.center)}, normal ${v(f.normal)})`;
     };
+    if (selE.length) {
+      // each edge in words, and its edge_ref() spec so a line can name it the
+      // way the Fillet / Chamfer buttons do
+      const es = selE.map((i) => res.edges.find((e) => e.index === i)).filter((e): e is RunEdge => !!e);
+      const words = es.map((e) => {
+        const r = e.ref;
+        const size = r?.radius ? `radius ${Math.round(r.radius * 100) / 100} mm` : `length ${Math.round(edgeLength(e) * 100) / 100} mm`;
+        const between = r?.faces.map((f) => f.hint).filter(Boolean).join(' and ');
+        return `the ${r?.hint ?? `${e.kind} edge`} (${e.kind}, ${size}${between ? `, between the ${between}` : ''})`;
+      });
+      const refs = es.filter((e) => e.ref).map((e) => JSON.stringify(e.ref));
+      const faces = sel.length ? `; and ${sel.map((i) => `the ${desc(i)}`).join('; ')}` : '';
+      return `${es.length === 1 ? 'this edge' : `these ${es.length} edges`}: ${words.join('; ')}${faces}.\n`
+        + `In the script: edges_ref([${refs.join(', ')}])`;
+    }
     if (sel.length === 1) return `the ${desc(sel[0]!)}`;
     if (sel.length > 2) return `these ${sel.length} faces: ${sel.map((i) => `the ${desc(i)}`).join('; ')}`;
     const shared = res.edges.filter((e) => e.faceIndices.length === 2 && e.faceIndices.includes(sel[0]!) && e.faceIndices.includes(sel[1]!));
@@ -1226,7 +1288,13 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     window.clearTimeout(viewHintTimer.current);
     viewHintTimer.current = window.setTimeout(() => setViewHint(''), 2500);
   };
-  const measureText = !measure ? null : measure.single
+  const edgeMeasure = (() => {
+    const res = resRef.current;
+    if (!res || !selE.length) return null;
+    return measureEdges(selE.map((i) => res.edges.find((e) => e.index === i)).filter((e): e is RunEdge => !!e));
+  })();
+  const measureText = edgeMeasure ? `${edgeMeasure.main}${edgeMeasure.sub ? ` (${edgeMeasure.sub})` : ''}`
+    : !measure ? null : measure.single
     ? (measure.dia != null ? `⌀ ${measure.dia.toFixed(2)} mm` : `${measure.w!.toFixed(1)} × ${measure.h!.toFixed(1)} mm`)
     : `${measure.dist.toFixed(2)} mm (X ${measure.dx.toFixed(1)}, Y ${measure.dy.toFixed(1)}, Z ${measure.dz.toFixed(1)})`;
   const holeAtText = (() => {
@@ -1236,6 +1304,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   })();
   const opSel: OpSelection = {
     faces: sel.map((i) => ({ kind: resRef.current?.faces.find((f) => f.index === i)?.kind ?? '' })),
+    edges: selE.map((i) => ({ kind: resRef.current?.edges.find((e) => e.index === i)?.kind ?? '' })),
   };
   const opModel: OpModel = {
     status, hasCode: !!code.trim(), dialogOpen: opOpen, sketching: faceSketch.active, canSketch: sketchOnFace,
@@ -1639,14 +1708,23 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                 presets={holePresets} places={holePlaces} comp={holeComp}
                 onApply={() => void applyHoles()} onCancel={closeOp} />
             )}
-            {/* measure readout: center-to-center distance for a 2-face selection */}
-            {measure && !opOpen && (
+            {/* measure readout: center-to-center distance for a 2-face selection;
+                an edge's length or radius, two edges' distance or angle */}
+            {(measure || edgeMeasure || sel.length === 1) && !opOpen && (
               <div style={{ position: 'absolute', left: 12, top: 12, padding: '8px 11px',
                             background: 'rgba(20,22,26,0.82)', border: '1px solid rgba(255,255,255,0.12)',
                             borderRadius: '6px', color: '#eef1f5', pointerEvents: 'none',
                             fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
                             fontVariantNumeric: 'tabular-nums' }}>
-                {measure.single ? (
+                {edgeMeasure ? (
+                  <>
+                    <div style={{ fontSize: '15px', fontWeight: 600 }}>
+                      {edgeMeasure.main.replace(/ mm$/, '')}
+                      {edgeMeasure.main.endsWith(' mm') && <span style={{ fontSize: '11px', opacity: 0.6 }}> mm</span>}
+                    </div>
+                    {edgeMeasure.sub && <div style={{ fontSize: '11px', opacity: 0.7, marginTop: '2px' }}>{edgeMeasure.sub}</div>}
+                  </>
+                ) : !measure ? null : measure.single ? (
                   measure.dia != null ? (
                     <>
                       <div style={{ fontSize: '15px', fontWeight: 600 }}>
@@ -1679,6 +1757,16 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                       </div>
                     )}
                   </>
+                )}
+                {sel.length === 1 && !selE.length && (
+                  <button onClick={selectFaceEdges} onMouseDown={(e) => e.preventDefault()}
+                    title="Select this face's boundary edges (every loop of it), e.g. to fillet them"
+                    style={{ pointerEvents: 'auto', marginTop: measure ? '7px' : 0, display: 'block', fontSize: '11px',
+                             padding: '2px 8px', borderRadius: '4px', cursor: 'pointer', color: '#eef1f5',
+                             background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.2)',
+                             fontFamily: 'inherit' }}>
+                    Edges of this face
+                  </button>
                 )}
               </div>
             )}
@@ -1757,6 +1845,18 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                       title={ortho ? 'Orthographic: click for perspective (O)' : 'Perspective: click for orthographic (O)'}>
                 {ortho ? 'Ortho' : 'Persp'}
               </button>
+              {/* what a click picks (E steps through) */}
+              <span role="radiogroup" aria-label="What a click picks"
+                    style={{ display: 'inline-flex', marginLeft: '6px', border: `1px solid ${palette.border}`, borderRadius: '4px', overflow: 'hidden' }}>
+                {PICK_FILTERS.map(([k, label, tip]) => (
+                  <button key={k} role="radio" aria-checked={pickFilter === k} onClick={() => setPickFilter(k)}
+                          title={`${tip} (${FILTER_KEY} to switch)`}
+                          style={{ ...viewBtn, border: 'none', borderRadius: 0,
+                                   ...(pickFilter === k ? { color: palette.accent, background: 'rgba(0,0,0,0.45)' } : {}) }}>
+                    {label}
+                  </button>
+                ))}
+              </span>
               {viewHint && <span style={{ color: palette.text, marginLeft: '6px', pointerEvents: 'none' }}>{viewHint}</span>}
             </div>
             {/* dimension overlay (hold Opt/Alt): each param drawn on its geometry */}
@@ -1897,15 +1997,18 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
           {status === 'done' && (() => {
             // face_ref() lookups that went wrong: the face is gone (the build's
             // warning says which line), or two faces match it equally well
-            const bad = (resRef.current?.face_refs ?? []).filter((r) => r.status !== 'found');
+            // (edge_ref() the same, for edges)
+            const what = (k: 'face' | 'edge') => (r: FaceRefReport) => ({ ...r, k });
+            const bad = [...(resRef.current?.face_refs ?? []).map(what('face')),
+                         ...(resRef.current?.edge_refs ?? []).map(what('edge'))].filter((r) => r.status !== 'found');
             if (!bad.length) return null;
             return <span style={{ marginRight: '10px', display: 'inline-flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
               {bad.map((r, i) => (
                 <span key={i} style={{ color: palette.warning ?? '#c78a1a' }}
                   title={r.status === 'ambiguous'
-                    ? 'Another face looks almost the same; the nearest was used. Reopen the step (Edit in the code view) to check'
-                    : 'Reopen the step (Edit in the code view) and pick the face again'}>
-                  ⚠ {r.status === 'ambiguous' ? `the ${r.hint}: two faces match, used the nearest` : `the ${r.hint} wasn't found`}
+                    ? `Another ${r.k} looks almost the same (or its faces changed); the nearest was used. Reopen the step (Edit in the code view) to check`
+                    : `Reopen the step (Edit in the code view) and pick the ${r.k} again`}>
+                  ⚠ {r.status === 'ambiguous' ? `the ${r.hint}: not certain, used the nearest ${r.k}` : `the ${r.hint} wasn't found`}
                 </span>
               ))}
               <span>·</span>
@@ -1961,8 +2064,19 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
           {status === 'done' && !warn && (() => {
             const res = resRef.current;
             const v = (a: [number, number, number]) => `(${a.map((n) => Math.round(n * 10) / 10).join(', ')})`;
-            if (!res || sel.length === 0)
-              return `${stats} · drag to orbit · scroll to zoom · click a face (click two for the edge between them; Shift-click for more)`;
+            if (!res || (sel.length === 0 && selE.length === 0))
+              return `${stats} · drag to orbit · scroll to zoom · click a face or an edge (Shift-click for more; double-click an edge for its loop)`;
+            if (selE.length) {
+              const es = selE.map((i) => res.edges.find((e) => e.index === i)).filter((e): e is RunEdge => !!e);
+              const named = es.map((e) => e.ref?.hint ?? `${e.kind} edge`);
+              return <span style={{ color: palette.text }}>
+                {es.length === 1 ? <b>{named[0]}</b> : <><b>{es.length} edges</b> · {[...new Set(named)].slice(0, 4).join(', ')}{new Set(named).size > 4 ? ', …' : ''}</>}
+                {sel.length > 0 && <> · {sel.length} face{sel.length === 1 ? '' : 's'}</>}
+                <span style={{ color: palette.textSecondary }}>
+                  {' · Shift-click to add or drop one · double-click for a loop (Alt: the smooth chain) · Esc clears'}
+                </span>
+              </span>;
+            }
             const faces = sel.map((i) => res.faces.find((f) => f.index === i)!).filter(Boolean);
             const protect = res.auto_round && (
               <button onClick={() => runById('protect')} disabled={asking}

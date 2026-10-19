@@ -95,6 +95,8 @@ export interface FaceSketchApi {
   /** Sketching (including the enter / exit animations). */
   active: boolean;
   activeRef: RefObject<boolean>;
+  /** The which-sketch menu is up (its Esc closes it). */
+  menuOpen: boolean;
   /** Sketch on this planar face: reopen its sketch, or start one. */
   enter(face: FaceRange): void;
   /** Sketch on a base plane through the origin: reopen its sketch, or start one. */
@@ -506,6 +508,8 @@ export function useFaceSketch(
   return {
     active: !!session,
     activeRef,
+    /** the which-sketch menu is up (its Esc closes it) */
+    menuOpen: !!menu,
     enter,
     enterPlane,
     open,
