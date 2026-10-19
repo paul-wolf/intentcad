@@ -32,18 +32,19 @@ import {
 import { brokenRefWarning, dimensionedToEdges } from '@/build/sketchRefs';
 import { partParams } from '@/build/scriptParams';
 import { usesNames } from '@/utils/resolveSketch';
+import {
+  LAYOUTS, OPERATIONS, OPS_KEY, isLayout, loadRecent, opById, opForKey, pushRecent,
+  saveRecent, stepLayout, toggleOps, type Layout, type OpContext, type OpModel, type OpSelection, type Operation,
+} from '@/build/operations';
+import { OperationsPanel, Kbd } from './OperationsPanel';
+import { OpIcon, OPS_GRID_ICON } from './OpIcons';
 
 // the view buttons, in key order (1–6, then 0)
 const VIEW_BUTTONS = (['1', '2', '3', '4', '5', '6', '0'] as const)
   .map((k) => [k, VIEW_KEYS[k]!] as [string, StandardView]);
 
-// the window layouts, in the order L (or Ctrl/⌘+\) steps through them
-type Layout = 'code' | 'chat' | 'model';
-const LAYOUTS: [Layout, string, string][] = [
-  ['code', 'Code', 'Script on the left, chat along the bottom'],
-  ['chat', 'Chat', 'Chat on the left in place of the script'],
-  ['model', '3D', 'The 3D view alone, as large as the window allows'],
-];
+// the window layouts (Code, Chat, 3D, Operations) and the switcher's keys
+const LAYOUT_KEYS = `L or Ctrl/⌘+\\ next, Shift+L back, ${OPS_KEY} Operations and back`;
 
 interface Props {
   onClose: () => void;
@@ -646,16 +647,26 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   // what the window shows beside the 3D view: the script, the chat, or nothing
   // (the 3D view maximised); the parameters are shown or hidden separately
+  // (or the Operations grid); the keys reach it through refs, and the
+  // layout before is kept for U and Esc to go back to
   const [layout, setLayoutState] = useState<Layout>(() => {
-    try { const l = localStorage.getItem('intentcad-part-layout'); return LAYOUTS.some(([k]) => k === l) ? l as Layout : 'code'; }
+    try { const l = localStorage.getItem('intentcad-part-layout'); return isLayout(l) ? l : 'code'; }
     catch { return 'code'; }
   });
-  const setLayout = (l: Layout) => { setLayoutState(l); try { localStorage.setItem('intentcad-part-layout', l); } catch { /* ignore */ } };
-  const cycleLayout = () => setLayoutState((cur) => {
-    const next = LAYOUTS[(LAYOUTS.findIndex(([k]) => k === cur) + 1) % LAYOUTS.length]![0];
-    try { localStorage.setItem('intentcad-part-layout', next); } catch { /* ignore */ }
-    return next;
-  });
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+  const prevLayout = useRef<Layout>(layout === 'ops' ? 'code' : layout);
+  const setLayout = (l: Layout) => {
+    const cur = layoutRef.current;
+    if (l === cur) return;
+    prevLayout.current = cur;
+    layoutRef.current = l;
+    setLayoutState(l);
+    try { localStorage.setItem('intentcad-part-layout', l); } catch { /* ignore */ }
+  };
+  const cycleLayout = (dir: 1 | -1 = 1) => setLayout(stepLayout(layoutRef.current, dir));
+  const toggleOpsLayout = () => setLayout(toggleOps(layoutRef.current, prevLayout.current));
+  const leaveOps = () => { if (layoutRef.current === 'ops') setLayout(toggleOps('ops', prevLayout.current)); };
   const [showParams, setShowParamsState] = useState(() => {
     try { return localStorage.getItem('intentcad-part-params') !== 'hide'; } catch { return true; }
   });
@@ -804,6 +815,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     viewerRef.current?.hoverFace(null);
     applySelection([]);
   };
+  const closeOpRef = useRef(closeOp);
+  closeOpRef.current = closeOp;
   const applyShell = async () => {
     const s = shellOp;
     if (!s || !(s.v.thickness > 0)) return;
@@ -1013,7 +1026,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const [showHelp, setShowHelp] = useState(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== '?' || (e.target instanceof HTMLElement && e.target !== document.body)) return;
+      if (e.key !== '?' || (e.target instanceof HTMLElement && e.target !== document.body
+                            && !e.target.closest('[data-ops-panel]'))) return;
       if (faceSketchRef.current.activeRef.current) return;   // the sketcher's own help
       setShowHelp((v) => !v);
     };
@@ -1061,14 +1075,20 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     window.clearTimeout(viewHintTimer.current);
     viewHintTimer.current = window.setTimeout(() => setViewHint(''), 2500);
   };
+  // the operations' keys (K, N, O, P, 1–6, 0) run the registry's entries,
+  // as the tiles and the top bar do; the current context and state reach the
+  // handler (set up once) through this ref
+  const opsRef = useRef<{ ctx: OpContext; model: OpModel; sel: OpSelection; run: (op: Operation) => void;
+                          modal: boolean } | null>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (faceSketchRef.current.activeRef.current) return;   // the sketcher owns the keys
-      if ((e.metaKey || e.ctrlKey) && e.key === '\\') {   // works while typing, too
-        cycleLayout(); e.preventDefault(); e.stopPropagation(); return;
+      if ((e.metaKey || e.ctrlKey) && (e.key === '\\' || e.key === '|')) {   // works while typing, too
+        cycleLayout(e.shiftKey ? -1 : 1); e.preventDefault(); e.stopPropagation(); return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.target instanceof HTMLElement && e.target !== document.body) return;
+      // not while typing in a field; a tile of the Operations grid keeps the keys
+      if (e.target instanceof HTMLElement && e.target !== document.body && !e.target.closest('[data-ops-panel]')) return;
       const v = viewerRef.current;
       if (!v) return;
       if (planeMenuRef.current) {   // the plane chooser: T / F / R, Esc closes
@@ -1077,14 +1097,21 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         else if (e.key === 'Escape') setPlaneMenu(false);
         if (pick || e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); return; }
       }
-      const view = VIEW_KEYS[e.key];
-      if (view) v.setView(view);
-      else if (sketchOnFace && (e.key === 'k' || e.key === 'K')) sketchOnSelection();
-      else if (e.key === 'n' || e.key === 'N') lookAtSelection();
-      else if (e.key === 'o' || e.key === 'O') setOrtho(v.toggleOrtho());
-      else if (e.key === 'l' || e.key === 'L') cycleLayout();
-      else if (e.key === 'p' || e.key === 'P') toggleParams();
-      else return;
+      const ops = opsRef.current;
+      const op = opForKey(e.key);
+      if (e.key === 'Escape') {
+        // Operations: Esc goes back to the layout before (a dialog closes first)
+        if (layoutRef.current !== 'ops' || !ops || ops.modal) return;
+        if (ops.model.dialogOpen) closeOpRef.current();
+        else leaveOps();
+      } else if (e.key === 'l' || e.key === 'L') cycleLayout(e.shiftKey ? -1 : 1);
+      else if (e.key.toUpperCase() === OPS_KEY) toggleOpsLayout();
+      else if (op && ops && (op.group !== 'Sketch' || sketchOnFace)) {
+        // as the keys always did: K with nothing selected opens the plane
+        // menu, N says what it needs — so the key runs it either way
+        if (op.needs(ops.sel, ops.model).ok) ops.run(op);
+        else op.run(ops.ctx);
+      } else return;
       e.preventDefault();
       e.stopPropagation();
     };
@@ -1122,25 +1149,6 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     const edge = shared[0] ? `the ${shared[0].kind} edge between ` : 'the geometry between ';
     return `${edge}the ${desc(sel[0]!)} and the ${desc(sel[1]!)}`;
   };
-
-  // The instruction the "Fix with AI" button sends: the build error itself
-  // travels as `build_error` context, so this only needs to state the goal.
-  const FIX_INSTRUCTION = 'Fix the build error, keeping the design intent.';
-  // The "Protect" action on a face selection: the selection travels as context.
-  const PROTECT_INSTRUCTION = "Add the selected face(s) to auto_round's keep list with a robust selector, change nothing else.";
-  // The "Lighten" button: the organic-shapes design pattern from the system
-  // prompt, so it can be reached without knowing what to ask for.
-  const LIGHTEN_INSTRUCTION = 'Make this part lighter and more organic: aim to remove 30-40% of its mass. '
-    + 'Keep every hole, boss and mating face exact. '
-    + 'Lighten its flat plates with truss_windows() anchored at the mounts, sized to hit that target '
-    + '(only the selected face, if one is selected), '
-    + 'or, if it is an open bracket, rebuild it as a frame() of tapered, gently bowed members between the mount points. '
-    + 'Then auto_round() last.';
-  // The "Round" button: auto_round on its own.
-  const ROUND_INSTRUCTION = 'Round every edge of this part with auto_round() as the last line, with the convex and '
-    + 'concave radii as P["round_r"] and P["blend_r"] sized to suit the part. Keep holes and mating faces exact '
-    + '(and the selected face, if one is selected). If the script already calls auto_round, leave it in place and '
-    + 'only fix what stops it rounding.';
 
   const sendChat = async (text?: string) => {
     const instruction = (text ?? ask).trim();
@@ -1210,6 +1218,92 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     padding: '5px 14px', border: 'none', borderRadius: '4px', fontSize: '13px', cursor: 'pointer',
   };
 
+  const hasParams = Object.keys(paramVals).length > 0;
+  // ---- the operations (build/operations.ts): the Operations grid, the top
+  // bar's pinned buttons and the keys all run these, with this context ----
+  const hint = (text: string) => {
+    setViewHint(text);
+    window.clearTimeout(viewHintTimer.current);
+    viewHintTimer.current = window.setTimeout(() => setViewHint(''), 2500);
+  };
+  const measureText = !measure ? null : measure.single
+    ? (measure.dia != null ? `⌀ ${measure.dia.toFixed(2)} mm` : `${measure.w!.toFixed(1)} × ${measure.h!.toFixed(1)} mm`)
+    : `${measure.dist.toFixed(2)} mm (X ${measure.dx.toFixed(1)}, Y ${measure.dy.toFixed(1)}, Z ${measure.dz.toFixed(1)})`;
+  const holeAtText = (() => {
+    if (!selPlane) return null;
+    const n = holeAt(selPlane);
+    return n && 'sketch' in n.at ? `at the points of "${n.at.sketch}"` : `at the centre of the ${faceLabel(selPlane.normal)}`;
+  })();
+  const opSel: OpSelection = {
+    faces: sel.map((i) => ({ kind: resRef.current?.faces.find((f) => f.index === i)?.kind ?? '' })),
+  };
+  const opModel: OpModel = {
+    status, hasCode: !!code.trim(), dialogOpen: opOpen, sketching: faceSketch.active, canSketch: sketchOnFace,
+    asking, holeSketches: holeSketches.length, holeAt: holeAtText, autoRound: !!resRef.current?.auto_round,
+    exporting: !!exporting, importing, hasParams, showParams, ortho, measure: measureText,
+  };
+  const opCtx: OpContext = {
+    sketchOnSelection, sketchOnPlane,
+    shell: startShell,
+    hole: () => void startHole(),
+    ask: (instruction) => void sendChat(instruction),
+    build: () => (status === 'building' ? cancelBuild() : rebuild()),
+    importStep: () => stepInput.current?.click(),
+    exportAs: (format) => void doExport(format),
+    versions: () => setShowVersions(true),
+    process: openProduction,
+    toggleParams,
+    setView: (view) => viewerRef.current?.setView(view),
+    lookAtSelection,
+    toggleOrtho: () => { const v = viewerRef.current; if (v) setOrtho(v.toggleOrtho()); },
+    copyMeasure: () => {
+      const text = measureText;
+      if (!text) return;
+      try {
+        void navigator.clipboard.writeText(text).then(() => hint(`Copied ${text}`), () => hint(text));
+      } catch { hint(text); }
+    },
+  };
+  // the last few operations used, for the grid's Recent row
+  const [recent, setRecent] = useState<string[]>(loadRecent);
+  const recentRef = useRef(recent);
+  const runOp = (op: Operation) => {
+    const next = pushRecent(recentRef.current, op.id);
+    if (next !== recentRef.current) { recentRef.current = next; setRecent(next); saveRecent(next); }
+    op.run(opCtx);
+  };
+  opsRef.current = { ctx: opCtx, model: opModel, sel: opSel, run: runOp,
+                     modal: showHelp || showVersions || showProduction };
+  // "or ask: …" on the help card: into the chat box, not sent
+  const chatInputRef = useRef<HTMLInputElement | null>(null);
+  const putInChat = (text: string) => {
+    setAsk(text);
+    setLayout('chat');
+    window.setTimeout(() => chatInputRef.current?.focus(), 0);
+  };
+  const runById = (id: string) => { const op = opById(id); if (op) runOp(op); };
+  // a top-bar button for a pinned operation: the same entry, the same
+  // reason when it can't run
+  const pinnedButton = (op: Operation) => {
+    const n = op.needs(opSel, opModel);
+    const name = op.label?.(opModel) ?? op.name;
+    const isBuild = op.id === 'build';
+    const cancel = isBuild && status === 'building';
+    const tone = cancel ? { background: 'none', color: palette.danger ?? '#f87171', border: `1px solid ${palette.danger ?? '#f87171'}` }
+      : isBuild ? { background: palette.primaryBtn, color: '#fff' }
+      : { background: 'none', color: palette.textSecondary, border: `1px solid ${palette.border}` };
+    return (
+      <button key={op.id} onClick={() => { if (n.ok) runOp(op); }} aria-disabled={!n.ok}
+        onMouseDown={(e) => e.preventDefault()}
+        title={`${op.help}${op.shortcut ? ` (${op.shortcut})` : ''}${n.ok ? '' : ` — ${n.reason}`} · or ask: "${op.example}"`}
+        style={{ ...btn, ...tone, display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 11px',
+                 whiteSpace: 'nowrap', flexShrink: 0, opacity: n.ok ? 1 : 0.5, cursor: n.ok ? 'pointer' : 'default' }}>
+        {!isBuild && <OpIcon name={op.icon} size={16} />}
+        {name}
+      </button>
+    );
+  };
+
   // "Set r = 1.42 and rebuild": the engine measured the largest size that fits
   // and it's a param — apply it, no AI round-trip.
   const fixButton = (f: SizeFix) => (
@@ -1222,7 +1316,6 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
 
   // the pieces the layouts arrange (see LAYOUTS): the parameters stand on
   // their own, at the top of the left column or floating over the 3D view
-  const hasParams = Object.keys(paramVals).length > 0;
   const paramsPane = (style: CSSProperties) => (
     <div style={{ padding: '8px 12px', display: 'flex', flexWrap: 'wrap', gap: '8px 14px',
                   overflowY: 'auto', alignContent: 'flex-start', ...style }}>
@@ -1370,6 +1463,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const chatInput = (
   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px' }}>
   <input
+    ref={chatInputRef}
     value={ask}
     onChange={(e) => setAsk(e.target.value)}
     onKeyDown={(e) => { if (e.key === 'Enter') void sendChat(); }}
@@ -1459,115 +1553,33 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
           <div role="group" aria-label="Layout" onMouseDown={(e) => e.preventDefault()}
             style={{ display: 'flex', flexShrink: 0, border: `1px solid ${palette.border}`, borderRadius: '4px', overflow: 'hidden' }}>
             {LAYOUTS.map(([k, label, title], i) => (
-              <button key={k} onClick={() => setLayout(k)} aria-pressed={layout === k}
-                title={`${title} (L or Ctrl/⌘+\\ steps through the layouts)`}
-                style={{ ...btn, padding: '5px 10px', borderRadius: 0, whiteSpace: 'nowrap',
+              <button key={k} onClick={() => setLayout(k)} aria-pressed={layout === k} aria-label={label}
+                title={`${k === 'ops' ? `${label}: ` : ''}${title} (${LAYOUT_KEYS})`}
+                style={{ ...btn, padding: k === 'ops' ? '5px 8px' : '5px 10px', borderRadius: 0, whiteSpace: 'nowrap',
+                         display: 'flex', alignItems: 'center',
                          borderLeft: i ? `1px solid ${palette.border}` : 'none',
                          background: layout === k ? palette.buttonBg : 'none',
                          color: layout === k ? palette.accent : palette.textSecondary,
                          fontWeight: layout === k ? 600 : 400 }}>
-                {label}
+                {k === 'ops' ? <OpIcon size={16}>{OPS_GRID_ICON}</OpIcon> : label}
               </button>
             ))}
           </div>
-          {hasParams && (
-            <button onClick={toggleParams} onMouseDown={(e) => e.preventDefault()} aria-pressed={showParams}
-              title={showParams ? 'Hide the parameters (P)' : 'Show the parameters (P)'}
-              style={{ ...btn, flexShrink: 0, background: 'none', color: showParams ? palette.accent : palette.textSecondary,
-                       border: `1px solid ${showParams ? palette.accent : palette.border}` }}>
-              Params
-            </button>
-          )}
-          <button onClick={openProduction} title="Target production process — the AI designs to this (clearances, fits, wall thickness)"
-            style={{ ...btn, background: 'none', color: palette.textSecondary,
-                     border: `1px solid ${palette.border}` }}>
-            Process
-          </button>
+          {/* the pinned operations; the rest are in the Operations layout */}
           <input ref={stepInput} type="file" accept={STEP_ACCEPT} style={{ display: 'none' }}
             onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void importStep(f); }} />
-          <button onClick={() => stepInput.current?.click()} disabled={importing || status === 'building'}
-            title="Start this part from a STEP file (.step/.stp): replaces the script with one that imports it"
-            style={{ ...btn, background: 'none', color: palette.textSecondary,
-                     border: `1px solid ${palette.border}`, opacity: importing ? 0.5 : 1 }}>
-            {importing ? 'Importing…' : 'Import STEP'}
+          {OPERATIONS.filter((op) => op.pinned && (op.group !== 'Sketch' || sketchOnFace)).map(pinnedButton)}
+          <button onClick={toggleOpsLayout} onMouseDown={(e) => e.preventDefault()} aria-pressed={layout === 'ops'}
+            title={layout === 'ops' ? `Back to the layout before (${OPS_KEY} or Esc)`
+              : `Every operation, enabled by what is selected (${OPS_KEY})`}
+            style={{ ...btn, display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 11px', flexShrink: 0,
+                     whiteSpace: 'nowrap', background: layout === 'ops' ? palette.buttonBg : 'none',
+                     color: layout === 'ops' ? palette.accent : palette.textSecondary,
+                     border: `1px solid ${layout === 'ops' ? palette.accent : palette.border}` }}>
+            <OpIcon size={16}>{OPS_GRID_ICON}</OpIcon>
+            Operations
+            <Kbd keys={OPS_KEY} />
           </button>
-          <button onClick={() => setShowVersions(true)} title="Browse and restore saved versions"
-            style={{ ...btn, background: 'none', color: palette.textSecondary,
-                     border: `1px solid ${palette.border}` }}>
-            Versions
-          </button>
-          {(() => {
-            const can = sel.length > 0 && status === 'done' && !opOpen && !faceSketch.active;
-            return (
-              <button onClick={startShell} disabled={!can}
-                title={(sel.length
-                  ? `Hollow the part out, leaving the ${sel.length} selected face${sel.length > 1 ? 's' : ''} open`
-                  : 'Select the face(s) to leave open (Shift-click for more), then Shell')
-                  + ' · or ask: "shell it, 2 mm walls, open top"'}
-                style={{ ...btn, background: 'none', color: palette.textSecondary,
-                         border: `1px solid ${palette.border}`, opacity: can ? 1 : 0.5,
-                         cursor: can ? 'pointer' : 'default' }}>
-                Shell
-              </button>
-            );
-          })()}
-          {(() => {
-            const can = (!!selPlane || holeSketches.length > 0) && status === 'done' && !opOpen && !faceSketch.active;
-            const n = selPlane ? holeAt(selPlane) : null;
-            return (
-              <button onClick={() => void startHole()} disabled={!can}
-                title={(selPlane
-                  ? (n && 'sketch' in n.at ? `Screw holes at the points of "${n.at.sketch}"` : `A screw hole at the centre of the ${faceLabel(selPlane.normal)}`)
-                  : holeSketches.length
-                    ? `Screw holes at a sketch's points or circle centres (or select a flat face first)`
-                    : 'Select a flat face (holes at the points of a sketch on it, or at its centre), then Hole')
-                  + ' · or ask: "four M3 insert standoffs 6 high at the sketch points"'}
-                style={{ ...btn, background: 'none', color: palette.textSecondary,
-                         border: `1px solid ${palette.border}`, opacity: can ? 1 : 0.5,
-                         cursor: can ? 'pointer' : 'default' }}>
-                Hole
-              </button>
-            );
-          })()}
-          {([['Lighten', LIGHTEN_INSTRUCTION, 'AI: cut 30–40% of the mass with windows or spokes, then round (? for more)'],
-             ['Round', ROUND_INSTRUCTION, 'AI: round every edge, keeping holes and mating faces exact (? for more)']] as const)
-            .map(([label, instruction, title]) => (
-              <button key={label} onClick={() => void sendChat(instruction)}
-                disabled={asking || status === 'building' || !code.trim()} title={title}
-                style={{ ...btn, background: 'none', color: palette.textSecondary,
-                         border: `1px solid ${palette.border}`, opacity: asking || status === 'building' ? 0.5 : 1 }}>
-                {label}
-              </button>
-            ))}
-          {status === 'building' ? (
-            <button onClick={cancelBuild} title="Cancel this build"
-              style={{ ...btn, background: 'none', color: palette.danger ?? '#f87171',
-                       border: `1px solid ${palette.danger ?? '#f87171'}` }}>
-              Cancel build
-            </button>
-          ) : (
-            <button onClick={rebuild}
-              style={{ ...btn, background: palette.primaryBtn, color: '#fff' }}>
-              Build
-            </button>
-          )}
-          {(['stl', 'step', 'stl-parts', 'dxf', 'dxf-views'] as const).map((f) => {
-            const enabled = status === 'done' && !exporting;
-            const label = f === 'stl-parts' ? 'Parts' : f === 'dxf-views' ? '3-View' : f.toUpperCase();
-            const title = f === 'stl-parts' ? 'Download one STL per body, zipped (for printing an assembly)'
-              : f === 'dxf' ? 'Flat top-down outline as DXF, for 2D CAM / CNC routing'
-              : f === 'dxf-views' ? 'Top, front and side outlines as three DXF files, zipped'
-              : undefined;
-            return (
-              <button key={f} onClick={() => doExport(f)} disabled={!enabled}
-                title={title}
-                style={{ ...btn, background: 'none', color: palette.textSecondary,
-                         border: `1px solid ${palette.border}`, opacity: enabled ? 1 : 0.5,
-                         cursor: enabled ? 'pointer' : 'default' }}>
-                {exporting === f ? '…' : label}
-              </button>
-            );
-          })}
           <button onClick={() => setShowHelp(true)} title="What everything here does (?)" aria-label="Help"
             style={{ ...btn, padding: '5px 10px', background: 'none', color: palette.textSecondary,
                      border: `1px solid ${palette.border}`, borderRadius: '50%' }}>?</button>
@@ -1592,6 +1604,10 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                 )}
                 <div style={{ borderTop: `1px solid ${palette.border}` }}>{chatInput}</div>
               </>
+            )}
+            {layout === 'ops' && (
+              <OperationsPanel sel={opSel} model={opModel} recent={recent} onRun={runOp} onExample={putInChat}
+                onBack={() => { if (opOpen) closeOp(); else leaveOps(); }} />
             )}
           </div>
           <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
@@ -1805,7 +1821,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                   {fix && fixButton(fix)}
-                  <button onClick={() => void sendChat(FIX_INSTRUCTION)} disabled={asking}
+                  <button onClick={() => runById('fix')} disabled={asking}
                     title="Send the script and this error to the AI; it repairs the failing line and rebuilds"
                     style={{ ...btn, background: palette.primaryBtn, color: '#fff',
                              opacity: asking ? 0.5 : 1, cursor: asking ? 'default' : 'pointer' }}>
@@ -1949,7 +1965,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
               return `${stats} · drag to orbit · scroll to zoom · click a face (click two for the edge between them; Shift-click for more)`;
             const faces = sel.map((i) => res.faces.find((f) => f.index === i)!).filter(Boolean);
             const protect = res.auto_round && (
-              <button onClick={() => void sendChat(PROTECT_INSTRUCTION)} disabled={asking}
+              <button onClick={() => runById('protect')} disabled={asking}
                 title="Ask the AI to add the selected face(s) to auto_round's keep list, so they stay flat and sharp-edged"
                 style={{ ...btn, padding: '1px 7px', fontSize: '11px', marginLeft: '8px' }}>
                 Protect

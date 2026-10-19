@@ -71,9 +71,16 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
       ['Normal', 'Look straight at the selected face (key N).'],
       ['Persp / Ortho', 'Perspective or orthographic — no perspective, for checking alignment (key O).'],
       ['Click X / Y / Z', 'In the axes at bottom left: view from that axis. Click again for the opposite side.'],
-      ['Code · Chat · 3D', 'At the top: what sits beside the 3D view. Code shows the script with the chat along the '
-        + 'bottom; Chat puts the conversation where the script was; 3D gives the whole window to the part. '
-        + 'Key L (or Ctrl/⌘+\\, even while typing) steps through them.'],
+      ['Code · Chat · 3D · Operations', 'At the top: what sits beside the 3D view. Code shows the script with the '
+        + 'chat along the bottom; Chat puts the conversation where the script was; 3D gives the whole window to the '
+        + 'part; Operations (the grid icon) shows every operation. Key L (or Ctrl/⌘+\\, even while typing) steps '
+        + 'through them, Shift+L (Ctrl/⌘+Shift+\\) steps back; U goes to Operations and back to where you were.'],
+      ['Operations', 'Every operation as a tile, by group, with the last four used at the top. A tile that can\'t '
+        + 'run with what is selected stays dimmed and says what it needs; tiles that a new selection makes '
+        + 'available light up for a moment. Hover or focus a tile for what it does, its key, and an example to ask '
+        + 'the AI instead — clicking the example puts it in the chat box (it isn\'t sent). Arrow keys move between '
+        + 'tiles, Enter runs one, Esc goes back. The top bar keeps the most used ones (Sketch on face, Hole, '
+        + 'Shell, Round, Build); the Operations button (U) opens the rest.'],
       ['Params', 'Shows or hides the parameters (key P, or × on the pane). They sit above the script or chat, '
         + 'and float at the top right of the 3D view when it is maximised.'],
     ],
