@@ -165,11 +165,13 @@ def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
     return code + gap + line + "\n", param
 
 
-# --- Shell and Hole: one script line each, written by the editor's dialogs and
+# --- Shell, Hole, Fillet and Chamfer: one script line each, written by the editor's dialogs and
 # read back (op_at) to reopen the dialog on it. Editing rewrites that line in
 # place and sets the values of the P keys it uses; nothing else changes.
 
-OPS = ("shell", "holes")
+OPS = ("shell", "holes", "fillet", "chamfer")
+# the P key base of each edge operation's size, and its argument
+EDGE_OPS = {"fillet": ("fillet_r", "radius"), "chamfer": ("chamfer_d", "length")}
 
 
 def _lit(v) -> str:
@@ -230,7 +232,7 @@ def _p_key(node) -> str | None:
 
 
 def _op_stmt(tree: ast.Module, line: int):
-    """The top-level `part = shell(...)`/`holes(...)` statement on script
+    """The top-level `part = shell(...)`/`holes(...)`/`fillet(...)`/`chamfer(...)` statement on script
     line `line` (1-based, any line it spans): (statement, call, op) or None."""
     for node in tree.body:
         if not (node.lineno <= line <= (node.end_lineno or node.lineno)):
@@ -243,7 +245,7 @@ def _op_stmt(tree: ast.Module, line: int):
 
 
 def op_lines(code: str) -> list[dict]:
-    """Every Shell/Hole line of the script: [{"op", "line", "end_line"}]."""
+    """Every Shell/Hole/Fillet/Chamfer line of the script: [{"op", "line", "end_line"}]."""
     try:
         tree = ast.parse(code)
     except SyntaxError:
@@ -279,6 +281,20 @@ def _face_refs(node) -> list[dict]:
     return out
 
 
+def _edge_refs(node) -> list[dict]:
+    """fillet()/chamfer()'s edges: edges_ref([...]) (or edge_ref({...}))."""
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.args:
+        if node.func.id == "edges_ref":
+            refs = ast.literal_eval(node.args[0])
+            if isinstance(refs, (list, tuple)) and all(isinstance(r, dict) for r in refs):
+                return list(refs)
+        elif node.func.id == "edge_ref":
+            ref = ast.literal_eval(node.args[0])
+            if isinstance(ref, dict):
+                return [ref]
+    raise ParamError(f"can't read the edges {ast.unparse(node)[:60]!r}: edit this line in the code")
+
+
 # holes() arguments that override a preset size (hole_presets), and the base
 # of the P key each gets
 HOLE_SIZES = {"d": "hole_d", "cbore_d": "cbore_d", "cbore_depth": "cbore_depth", "csk_d": "csk_d"}
@@ -311,13 +327,23 @@ def op_at(code: str, line: int) -> dict:
     tree = ast.parse(code)
     hit = _op_stmt(tree, line)
     if hit is None:
-        raise ParamError(f"line {line} is not a shell() or holes() line")
+        raise ParamError(f"line {line} is not a shell(), holes(), fillet() or chamfer() line")
     stmt, call, op = hit
     pv = _p_values(code)
     kw = {k.arg: k.value for k in call.keywords if k.arg}
     args: dict = {}
     params: dict = {}
-    if op == "shell":
+    if op in EDGE_OPS:
+        _, arg = EDGE_OPS[op]
+        edges = call.args[1] if len(call.args) > 1 else kw.get("edges")
+        if edges is None:
+            raise ParamError(f"line {line}: {op}() without edges: edit this line in the code")
+        args["edges"] = _edge_refs(edges)
+        size = call.args[2] if len(call.args) > 2 else kw.get(arg)
+        if size is None:
+            raise ParamError(f"line {line}: {op}() without a {arg}: edit this line in the code")
+        args["size"], params["size"] = _value(size, pv)
+    elif op == "shell":
         args["remove"] = _face_refs(kw["remove"]) if "remove" in kw else []
         args["thickness"], params["thickness"] = _value(kw["thickness"], pv) if "thickness" in kw else (2.0, None)
         args["inside"] = _value(kw["inside"], pv)[0] if "inside" in kw else True
@@ -381,6 +407,32 @@ def add_shell(code: str, remove: list[dict], thickness: float = 2.0, inside: boo
     text = f'part = shell(part, remove=[{refs}], thickness=P["{key}"], inside={bool(inside)})'
     code = _write_op(code, text, line, "shell")
     code, key = _number(code, thickness, key, "wall", names)
+    return code, key
+
+
+def add_edge_op(code: str, op: str, edges: list[dict], size: float,
+                line: int | None = None) -> tuple[str, str]:
+    """Append `part = fillet(part, edges_ref([...]), radius=P[...])` (or
+    chamfer(..., length=P[...])) — or, with `line`, rewrite that line. The
+    edges are edge refs (edge_ref.describe), one per edge: a loop is stored
+    as its edges. The size lives in P (a new key, or the line's own).
+    Returns (code, key)."""
+    if op not in EDGE_OPS:
+        raise ParamError(f"unknown edge operation {op!r}")
+    base, arg = EDGE_OPS[op]
+    if not _assigns_part(ast.parse(code)):
+        raise ParamError(f"there is no part to {op} yet")
+    if float(size) <= 0:
+        raise ParamError(f"the {op} {arg} must be more than 0")
+    if not edges:
+        raise ParamError(f"select the edges to {op}")
+    key = op_at(code, line)["params"].get("size") if line is not None else None
+    names = param_names(code)
+    key = key if key in names else _name(names, base)
+    refs = ", ".join(_lit(r) for r in edges)
+    text = f'part = {op}(part, edges_ref([{refs}]), {arg}=P["{key}"])'
+    code = _write_op(code, text, line, op)
+    code, key = _number(code, size, key, base, names)
     return code, key
 
 

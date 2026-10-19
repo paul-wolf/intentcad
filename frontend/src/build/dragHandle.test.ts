@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { DimInfo } from '@/api/client';
 import {
+  dragShift,
   handleOptions, dragAmount, snapToStep, snapToPlane, faceMotion, len, sub,
   type HandleFace, type Vec3,
 } from './dragHandle';
@@ -51,6 +52,19 @@ describe('dragAmount', () => {
 
   it('refuses a shift that points at the camera', () => {
     expect(dragAmount([50, 0], [0, 0])).toBeNull();
+  });
+});
+
+describe('dragShift', () => {
+  it("drags a fillet's face at the radius's rate, not its own small shift", () => {
+    // a 45° fillet's face moves ~0.41 per mm of radius, along -n
+    const s = dragShift([0.29, 0, -0.29], 1);
+    expect(Math.hypot(...s)).toBeCloseTo(1, 6);
+    expect(s[0] / s[2]).toBeCloseTo(-1, 6);     // same direction
+  });
+  it('leaves faces that move at least as much as they grow, and plain faces, alone', () => {
+    expect(dragShift([0, 0, 0.5], 0.5)).toEqual([0, 0, 0.5]);   // a hole wall per mm of diameter
+    expect(dragShift([0, 0, 1], 0)).toEqual([0, 0, 1]);
   });
 });
 

@@ -102,12 +102,25 @@ def sensitivity(code: str, document_id: str | None = None,
     def affected(name: str, val: float) -> tuple[str, dict]:
         empty = {"faces": [], "value": val, "shifts": {}, "radial": {},
                  "anchor": None, "dir": None, "kind": "callout"}
-        delta = max(abs(val) * 0.15, 1.0)
-        try:
-            perturbed = set_params(code, {name: val + delta})
-            pert = run_script(perturbed, assets=assets, sketches=sketches)
-        except (EngineError, ParamError, SyntaxError):
-            return name, empty  # perturbation didn't build — can't attribute
+        # nudge it up; if that doesn't build cleanly (a fillet radius already
+        # near the most that fits), down, then by less — a positive size stays
+        # positive
+        step = max(abs(val) * 0.15, 1.0)
+        pert = None
+        for delta in (step, -step, step / 4, -step / 4):
+            if val > 0 and val + delta <= 0:
+                continue
+            try:
+                perturbed = set_params(code, {name: val + delta})
+                r = run_script(perturbed, assets=assets, sketches=sketches)
+            except (EngineError, ParamError, SyntaxError):
+                continue
+            if r.get("warning") and not base.get("warning"):
+                continue    # it failed partway: the faces it shows aren't the param's doing
+            pert = r
+            break
+        if pert is None:
+            return name, empty  # no perturbation built — can't attribute
         pert_faces = pert.get("faces", [])
         pert_sigs = {_sig(f) for f in pert_faces}
         moved = [f for f in base_faces if _sig(f) not in pert_sigs]

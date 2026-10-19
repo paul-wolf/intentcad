@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  EDGE_PX, NOTHING, choosePick, clickSelect, edgeLoop, edgesNear, faceEdges, measureEdges, nextFilter, selectEdges,
-  tangentChain, type EdgeInfo, type ScreenEdge, type Vec3,
+  EDGE_PX, NOTHING, choosePick, clickSelect, edgeHandle, edgeLoop, edgeOfRef, edgesNear, faceEdges, measureEdges,
+  nextFilter, selectEdges, tangentChain, type EdgeInfo, type EdgeRefLike, type ScreenEdge, type Vec3,
 } from './edgePick';
 import { FILTER_KEY } from './edgePick';
 import { OPERATIONS, RESERVED_KEYS } from './operations';
@@ -147,5 +147,35 @@ describe('the edge readout', () => {
 
   it('more: the total length', () => {
     expect(measureEdges(PLATE.slice(0, 4))).toEqual({ main: '200.00 mm', sub: '4 edges, total length' });
+  });
+});
+
+describe('the edges a fillet / chamfer line names', () => {
+  const top = { normal: [0, 0, 1] as Vec3 }, front = { normal: [0, -1, 0] as Vec3 };
+  const topFront: EdgeRefLike = { kind: 'line', midpoint: [0, -20, 5], length: 60, faces: [top, front], hint: 'top-front edge' };
+  const edges = [
+    { index: 0, ref: { ...topFront } },
+    { index: 1, ref: { ...topFront, midpoint: [0, 20, 5] as Vec3, hint: 'top-back edge' } },
+    { index: 2, ref: null },
+  ];
+
+  it('finds the edge of the shown part, or says it isn’t there', () => {
+    expect(edgeOfRef(edges, topFront)).toBe(0);
+    expect(edgeOfRef(edges, { ...topFront, midpoint: [0, 20, 5] })).toBe(1);
+    // filleted already: the part shows the fillet's faces, not this edge
+    expect(edgeOfRef(edges, { ...topFront, midpoint: [0, -19, 4] })).toBeNull();
+    expect(edgeOfRef(edges, { ...topFront, kind: 'circle' })).toBeNull();
+  });
+
+  it('the handle sits on the midpoint and drags into the part, between the two faces', () => {
+    const h = edgeHandle(topFront);
+    expect(h.at).toEqual([0, -20, 5]);
+    expect(h.dir[0]).toBeCloseTo(0);
+    expect(h.dir[1]).toBeCloseTo(Math.SQRT1_2);
+    expect(h.dir[2]).toBeCloseTo(-Math.SQRT1_2);
+    // a hole's rim: away from the flat face (the cylinder's "normal" is its axis)
+    const rim = edgeHandle({ kind: 'circle', midpoint: [13, 0, 5], length: 18.85,
+                             faces: [top, { normal: [0, 0, 1], kind: 'cylinder' }] });
+    expect(rim.dir).toEqual([0, 0, -1]);
   });
 });

@@ -63,6 +63,9 @@ class FindTests(SimpleTestCase):
             self.assertEqual(r["edge_refs"][0]["status"], "found", (t, hd))
             self.assertAlmostEqual(p["len"], 3.14159265 * hd, places=4)
             self.assertAlmostEqual(p["mz"], t)          # the top rim, not the bottom one
+            # and the build says what it found, for the editor to show
+            self.assertAlmostEqual(r["edge_refs"][0]["radius"], hd / 2, places=4)
+            self.assertAlmostEqual(r["edge_refs"][0]["length"], 3.14159265 * hd, places=4)
 
     def test_an_edge_whose_face_is_gone_is_not_found(self):
         boss = BOX.format(h=25, w=90, d=60) + 'part += Pos(0, 0, 30) * Box(10, 10, 10)\n'

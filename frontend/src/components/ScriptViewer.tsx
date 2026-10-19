@@ -3,15 +3,15 @@ import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
 import {
   api, buildApi, errorText, ApiError, type RunResponse, type RunEdge, type FaceRefReport, type UsageResponse, type DimInfo, type ModelInfo, type SizeFix,
-  type FaceRefSpec, type HolePresets,
+  type FaceRefSpec, type HolePresets, type EdgeOpKind, type EdgeRefSpec,
 } from '@/api/client';
 import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, persistSketches, getBackendId } from '@/api/autoSave';
 import { DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
 import type { ChatMessage } from '@/types/document';
 import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim, type PlacedHandle, type ViewerPick } from '@/build/webglViewer';
 import {
-  FILTER_KEY, PICK_FILTERS, clickSelect, edgeLength, edgeLoop, faceEdges, measureEdges, nextFilter, selectEdges, tangentChain,
-  type PickFilter,
+  FILTER_KEY, PICK_FILTERS, clickSelect, edgeHandle, edgeLength, edgeLoop, edgeOfRef, faceEdges, measureEdges, nextFilter,
+  sameEdgeRef, selectEdges, tangentChain, type PickFilter,
 } from '@/build/edgePick';
 import { handleOptions, add, scale, dot, len, sub, type HandleOption, type Vec3 } from '@/build/dragHandle';
 import { VIEW_KEYS, type StandardView } from '@/build/viewOrient';
@@ -23,8 +23,8 @@ import { PartVersionsPanel } from './PartVersionsPanel';
 import { PartHelpModal } from './PartHelpModal';
 import { useFaceSketch, type ExtrudeOptions } from './FaceSketchMode';
 import {
-  ShellDialog, HoleDialog, useOpPreview, refOf, faceOfRef, sameRef, OP_LINE, holesPayload, holeValuesOf, newHoleValues,
-  placeKey, type ShellValues, type HoleValues, type HolePlace,
+  ShellDialog, HoleDialog, EdgeOpDialog, useOpPreview, refOf, faceOfRef, sameRef, OP_LINE, holesPayload, holeValuesOf,
+  newHoleValues, placeKey, toggleEdge, addEdges, type ShellValues, type HoleValues, type HolePlace, type EdgeOpValues,
 } from './OpDialogs';
 import {
   BASE_PLANES, faceLabel, findFaceSketch, referencedProfiles, referencedSketchNames, sketchBindNotes, sketchHolePoints,
@@ -66,6 +66,8 @@ const humanBytes = (b: number): string =>
   b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
 
 const NO_CHAT: ChatMessage[] = [];
+/** What the code view's Edit button calls a line's dialog. */
+const OP_NAMES = { shell: 'Shell', holes: 'Hole', fillet: 'Fillet', chamfer: 'Chamfer' } as const;
 // the drag preview can't show P moving a face sketch: said once a session
 let sketchDragNoted = false;
 
@@ -210,6 +212,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                      label: SVGTextElement | null; sub: SVGTextElement | null };
   const hEls = useRef<HandleEls>({ line: null, knob: null, label: null, sub: null });
   const handleRef = useRef<HandleOption | null>(null);
+  // the handle is a Fillet / Chamfer dialog's (on its first edge), not a face's
+  const edgeHandleOnRef = useRef(false);
+  // that handle's value when its drag began, while it's dragged
+  const edgeDragRef = useRef<number | null>(null);
+  const setEdgeSizeRef = useRef<(v: number) => void>(() => {});
   const handleHintRef = useRef('');   // "Tab ⇄ 1/2" when several params move the face
   // the live preview moves faces by the engine's sensitivity map, worked out
   // with the face sketches' shapes fixed: a sketch dimension using this param
@@ -235,7 +242,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     const show = !!(p && h && p.visible);
     for (const el of [line, knob, label, subEl]) el?.setAttribute('opacity', show ? '1' : '0');
     if (!show || !p || !h) return;
-    if (p.dragging && !sketchDragNoted) noteSketchDrag(h.name);
+    const edge = edgeHandleOnRef.current;
+    if (p.dragging && !sketchDragNoted && !edge) noteSketchDrag(h.name);
     line?.setAttribute('x1', `${p.x}`); line?.setAttribute('y1', `${p.y}`);
     line?.setAttribute('x2', `${p.ax}`); line?.setAttribute('y2', `${p.ay}`);
     knob?.setAttribute('cx', `${p.x}`); knob?.setAttribute('cy', `${p.y}`);
@@ -254,7 +262,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       const snapped = p.snapFace !== null;
       subEl.setAttribute('fill', snapped ? '#2dd4bf' : '#cfd6df');
       subEl.textContent = snapped ? `snap → face #${p.snapFace}`
-        : p.dragging ? 'Shift: 0.1 steps · Esc cancels' : handleHintRef.current;
+        : p.dragging ? (edge ? '0.1 mm steps · Esc cancels' : 'Shift: 0.1 steps · Esc cancels')
+        : edge ? 'drag to change' : handleHintRef.current;
     }
   };
 
@@ -559,7 +568,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       if (canvasRef.current && !viewerRef.current) {
         try {
           viewerRef.current = createViewer(canvasRef.current, {
-            onPick, onEdgeDoubleClick, onAxes, onDims, onHandle, onHandleDrop,
+            onPick, onEdgeDoubleClick, onAxes, onDims, onHandle, onHandleDrop, onHandleMove,
             ...(sketchOnFace ? {
               onSketchHover: (h: { name: string; x: number; y: number } | null) => setSketchTip(h),
               onSketchOpen: (id: string) => { setSketchTip(null); faceSketchRef.current.open(id); },
@@ -851,7 +860,9 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const closeOp = () => {
     setShellOp(null);
     setHoleOp(null);
+    setEdgeOp(null);
     viewerRef.current?.hoverFace(null);
+    viewerRef.current?.hoverEdge(null);
     applySelection([]);
   };
   const closeOpRef = useRef(closeOp);
@@ -943,10 +954,62 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   };
   const holeComp = Number(resRef.current?.params?.hole_comp ?? 0) || 0;
 
+  // Fillet / Chamfer: a dialog writing `part = fillet(part, edges_ref([...]),
+  // radius=P["fillet_r"])` (chamfer: length=P["chamfer_d"]) on the selected
+  // edges, previewed the same way. `adds`: the edges selected when it was
+  // reopened, offered to add to the line; `now`: where the line's edges are on
+  // the part as built (its refs keep the length and middle they had when picked).
+  type EdgeNow = { ref: EdgeRefSpec; length: number; midpoint: [number, number, number]; radius?: number };
+  const [edgeOp, setEdgeOp] = useState<{ op: EdgeOpKind; line: number | null; v: EdgeOpValues; adds: EdgeRefSpec[];
+                                         now: EdgeNow[] } | null>(null);
+  const edgeKey = edgeOp ? JSON.stringify({ op: edgeOp.op, line: edgeOp.line, v: edgeOp.v }) : '';
+  const edgeOpLine = (o: { op: EdgeOpKind; line: number | null; v: EdgeOpValues }) =>
+    buildApi.addEdgeOp({ code: codeRef.current, op: o.op, edges: o.v.edges, size: o.v.size, line: o.line });
+  const edgePreview = useOpPreview(
+    viewerRef,
+    edgeOp && edgeOp.v.size > 0 && edgeOp.v.edges.length ? () => edgeOpLine(edgeOp).then((r) => r.code) : null,
+    edgeKey,
+    (src, signal) => buildApi.run(src, signal, getBackendId() ?? '', buildInputs(src).sketches),
+  );
+  const selectedEdgeRefs = () => {
+    const res = resRef.current;
+    return selERef.current.map((i) => res?.edges.find((e) => e.index === i)?.ref)
+      .filter((r): r is EdgeRefSpec => !!r);
+  };
+  const startEdgeOp = (op: EdgeOpKind) => {
+    const edges = selectedEdgeRefs();
+    if (!edges.length) return;
+    setEdgeOp({ op, line: null, v: { edges, size: op === 'fillet' ? 1 : 0.5 }, adds: [], now: [] });
+  };
+  const applyEdgeOp = async () => {
+    const o = edgeOp;
+    if (!o || !(o.v.size > 0) || !o.v.edges.length) return;
+    const name = o.op === 'fillet' ? 'Fillet' : 'Chamfer';
+    try {
+      const src = edgePreview.built(edgeKey) ?? (await edgeOpLine(o)).code;
+      closeOp();
+      setCode(src);
+      const out = await build(src, o.line ? `Edit ${o.op}` : name);
+      if (out.kind === 'ok') saveDraft(src);
+    } catch (err) {
+      setNotice(`${name}: ${errorText(err)}`);
+    }
+  };
+  const opEdgeIndex = (r: EdgeRefSpec) => edgeOfRef(resRef.current?.edges ?? [], r);
+  const edgeAsNow = (r: EdgeRefSpec): EdgeRefSpec => {
+    const n = edgeOp?.now.find((x) => sameEdgeRef(x.ref, r));
+    return n ? { ...r, length: n.length, midpoint: n.midpoint, ...(n.radius != null ? { radius: n.radius } : {}) } : r;
+  };
+  setEdgeSizeRef.current = (size: number) => setEdgeOp((o) => o && ({ ...o, v: { ...o.v, size } }));
+
   // while the Shell dialog is open, clicking a face opens or closes it, and
   // the faces it opens show as selected; in the Hole dialog it says where the
   // holes go
-  opPickRef.current = holeOp ? (p) => {
+  opPickRef.current = edgeOp ? (p) => {
+    const r = p && 'edge' in p ? resRef.current?.edges.find((e) => e.index === p.edge)?.ref : null;
+    if (!r) return;
+    setEdgeOp((o) => o && ({ ...o, v: { ...o.v, edges: toggleEdge(o.v.edges, r) } }));
+  } : holeOp ? (p) => {
     const face = p && 'face' in p ? resRef.current?.faces.find((x) => x.index === p.face.index) : undefined;
     if (!face || face.kind !== 'plane') {
       if (face) { setNotice('Holes go on a flat face: pick a flat one'); window.setTimeout(() => setNotice(''), 5000); }
@@ -962,6 +1025,12 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     if (!r) return;
     setShellOp((o) => o && ({ ...o, v: { ...o.v, remove: o.v.remove.some((x) => sameRef(x, r))
       ? o.v.remove.filter((x) => !sameRef(x, r)) : [...o.v.remove, r] } }));
+  } : null;
+  // a double-clicked loop or chain goes into the Fillet / Chamfer list
+  opEdgesRef.current = edgeOp ? (list) => {
+    const res = resRef.current;
+    const refs = list.map((i) => res?.edges.find((e) => e.index === i)?.ref).filter((r): r is EdgeRefSpec => !!r);
+    setEdgeOp((o) => o && ({ ...o, v: { ...o.v, edges: addEdges(o.v.edges, refs) } }));
   } : null;
   const opFaceIndex = (r: FaceRefSpec) => faceOfRef(resRef.current?.faces ?? [], r)?.index ?? null;
   useEffect(() => {
@@ -980,12 +1049,24 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     setSel(idx);
     viewerRef.current?.selectFaces(idx);
   }, [holeKey]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const opOpen = !!shellOp || !!holeOp;
-  // Shell and Hole work on faces: while one is open a click picks faces only
-  const viewFilter: PickFilter = shellOp || holeOp ? 'faces' : pickFilter;
+  // the edges a Fillet / Chamfer line names show as selected (those on the part as shown)
+  useEffect(() => {
+    if (!edgeOp) return;
+    const idx = edgeOp.v.edges.map(opEdgeIndex).filter((i): i is number => i != null);
+    selRef.current = [];
+    selERef.current = idx;
+    setSel([]);
+    setSelE(idx);
+    viewerRef.current?.selectFaces([]);
+    viewerRef.current?.selectEdges(idx);
+  }, [edgeKey]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const opOpen = !!shellOp || !!holeOp || !!edgeOp;
+  // Shell and Hole work on faces: while one is open a click picks faces only;
+  // Fillet and Chamfer, edges only
+  const viewFilter: PickFilter = shellOp || holeOp ? 'faces' : edgeOp ? 'edges' : pickFilter;
   useEffect(() => { viewerRef.current?.setPickFilter(viewFilter); }, [viewFilter]);
   // the dialogs sit at the top left of the view: draw the part beside them
-  const opWidth = holeOp ? 300 : shellOp ? 270 : 0;
+  const opWidth = holeOp ? 300 : shellOp || edgeOp ? 270 : 0;
   useEffect(() => {
     viewerRef.current?.setInset(opWidth ? opWidth + 24 : 0);
   }, [opWidth]);
@@ -1006,6 +1087,19 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
           setHoleFace({ ref: r, normal: (shown?.normal ?? r.normal) as [number, number, number] });
         } else setHoleFace(null);
         setHoleOp({ line: op.line, v });
+      } else if (op.op === 'fillet' || op.op === 'chamfer') {
+        const a = op.args as { edges?: EdgeRefSpec[]; size?: number };
+        const edges = a.edges ?? [];
+        const adds = selectedEdgeRefs();
+        // the build's lookups from this line, in the order of its edges
+        const found = (resRef.current?.edge_refs ?? [])
+          .filter((x) => x.line != null && x.line >= op.line && x.line <= op.end_line);
+        const now = edges.flatMap((ref, i): EdgeNow[] => {
+          const f = found[i];
+          return f?.length != null && f.midpoint
+            ? [{ ref, length: f.length, midpoint: f.midpoint, radius: f.radius ?? undefined }] : [];
+        });
+        setEdgeOp({ op: op.op, line: op.line, v: { edges, size: Number(a.size ?? 1) }, adds, now });
       }
     } catch (err) {
       setNotice(`Can't edit line ${line}: ${errorText(err)}`);
@@ -1017,7 +1111,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const caretOp = (() => {
     const l = code.split('\n')[caretLine - 1];
     const m = l ? OP_LINE.exec(l) : null;
-    return m ? (m[1] as 'shell' | 'holes') : null;
+    return m ? (m[1] as 'shell' | 'holes' | EdgeOpKind) : null;
   })();
   const trackCaret = () => {
     const ta = taRef.current;
@@ -1039,18 +1133,35 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const [handlePick, setHandlePick] = useState({ key: '', i: 0 });
   const nHandles = handleOpts.length;
   const hi = nHandles ? ((((handlePick.key === handleKey ? handlePick.i : 0) % nHandles) + nHandles) % nHandles) : 0;
-  const handle = nHandles ? handleOpts[hi]! : null;
+  const faceHandle = nHandles ? handleOpts[hi]! : null;
+  // with Fillet / Chamfer open: a handle on its first edge drags the size
+  // (0.1 mm steps), live — the ghost follows ~300 ms behind
+  const edgeH = edgeOp?.v.edges[0] ? edgeHandle(edgeAsNow(edgeOp.v.edges[0])) : null;
+  const edgeHKey = edgeH ? JSON.stringify(edgeH) : '';
+  const edgeSize = edgeOp?.v.size ?? 0;
+  const handle: HandleOption | null = edgeOp
+    ? (edgeH && edgeSize > 0 ? { name: edgeOp.op === 'fillet' ? 'radius' : 'distance',
+                                  value: edgeDragRef.current ?? edgeSize, shift: edgeH.dir, dr: 0, moves: [] } : null)
+    : faceHandle;
   handleRef.current = handle;
+  edgeHandleOnRef.current = !!edgeOp;
   handleHintRef.current = nHandles > 1 ? `Tab ⇄ ${hi + 1}/${nHandles}` : '';
   const handleKeyRef = useRef(handleKey);
   handleKeyRef.current = handleKey;
   const nHandlesRef = useRef(0);
   nHandlesRef.current = nHandles;
   useEffect(() => {
-    viewerRef.current?.setHandle(handle && selFace
-      ? { face: selFace.index, shift: handle.shift, dr: handle.dr, value: handle.value, moves: handle.moves }
+    if (edgeOp) {
+      if (edgeDragRef.current != null) return;   // its own drag changed the size: leave it be
+      viewerRef.current?.setHandle(edgeH && edgeSize > 0
+        ? { face: -1, at: edgeH.at, shift: edgeH.dir, dr: 0, value: edgeSize, moves: [], step: 0.1, min: 0.1 }
+        : null);
+      return;
+    }
+    viewerRef.current?.setHandle(faceHandle && selFace
+      ? { face: selFace.index, shift: faceHandle.shift, dr: faceHandle.dr, value: faceHandle.value, moves: faceHandle.moves }
       : null);
-  }, [handle, selFace]);
+  }, [faceHandle, selFace, !!edgeOp, edgeHKey, edgeSize]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Tab' || nHandlesRef.current < 2 || faceSketchRef.current.activeRef.current) return;
@@ -1168,7 +1279,18 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
 
   // after a drop, build() reselects the face found where the drag put it
   const reselectRef = useRef<{ param: string; value: number; center: Vec3; normal: Vec3; tol: number } | null>(null);
+  const onHandleMove = (value: number, done: boolean) => {
+    if (!edgeHandleOnRef.current) return;
+    if (edgeDragRef.current == null && !done) edgeDragRef.current = handleRef.current?.value ?? value;
+    if (done) edgeDragRef.current = null;
+    setEdgeSizeRef.current(value);
+  };
   const onHandleDrop = (value: number) => {
+    if (edgeHandleOnRef.current) {
+      edgeDragRef.current = null;
+      setEdgeSizeRef.current(value);
+      return;
+    }
     const h = handleRef.current;
     const f = resRef.current?.faces.find((x) => x.index === selRef.current[0]);
     if (!h || !f || selRef.current.length !== 1) { viewerRef.current?.clearDragPreview(); return; }
@@ -1315,6 +1437,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     sketchOnSelection, sketchOnPlane,
     shell: startShell,
     hole: () => void startHole(),
+    fillet: () => startEdgeOp('fillet'),
+    chamfer: () => startEdgeOp('chamfer'),
     ask: (instruction) => void sendChat(instruction),
     build: () => (status === 'building' ? cancelBuild() : rebuild()),
     importStep: () => stepInput.current?.click(),
@@ -1488,10 +1612,10 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         </div>
         {caretOp && !opOpen && (
           <button onClick={() => void editOp(caretLine)} onMouseDown={(e) => e.preventDefault()}
-            title={`Open the ${caretOp === 'shell' ? 'Shell' : 'Hole'} dialog with this line's values; OK rewrites just this line (or double-click the line)`}
+            title={`Open the ${OP_NAMES[caretOp]} dialog with this line's values; OK rewrites just this line (or double-click the line)`}
             style={{ ...btn, position: 'absolute', top: 8, right: 12, padding: '3px 10px', fontSize: '12px',
                      background: palette.primaryBtn, color: '#fff' }}>
-            Edit {caretOp === 'shell' ? 'shell' : 'holes'} (line {caretLine})
+            Edit {caretOp} (line {caretLine})
           </button>
         )}
       </div>
@@ -1701,6 +1825,13 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                 onChange={(v) => setShellOp((o) => o && { ...o, v })}
                 faceIndex={opFaceIndex} onHoverFace={(i) => viewerRef.current?.hoverFace(i)}
                 onApply={() => void applyShell()} onCancel={closeOp} />
+            )}
+            {edgeOp && (
+              <EdgeOpDialog op={edgeOp.op} value={edgeOp.v} editing={edgeOp.line != null} preview={edgePreview.preview}
+                onChange={(v) => setEdgeOp((o) => o && { ...o, v })}
+                edgeIndex={opEdgeIndex} onHoverEdge={(i) => viewerRef.current?.hoverEdge(i)}
+                selection={edgeOp.adds} shownAs={edgeAsNow}
+                onApply={() => void applyEdgeOp()} onCancel={closeOp} />
             )}
             {holeOp && holePresets && (
               <HoleDialog value={holeOp.v} editing={holeOp.line != null} preview={holePreview.preview}

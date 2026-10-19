@@ -34,9 +34,16 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
         + 'hole_comp (in Parameters, 0 to start) is added to every hole diameter, to correct for your printer. '
         + 'The result shows as a blue ghost while you change things; it adds one script line. '
         + 'Or ask: "four M3 insert standoffs 6 high at the sketch points".'],
-      ['Edit a step', 'In the code view, put the cursor on a shell(…) or holes(…) line and click "Edit shell" / '
-        + '"Edit holes" at the top right (or double-click the line): its dialog opens with the line\'s values, '
-        + 'and OK rewrites only that line.'],
+      ['Fillet / Chamfer', 'Rounds (Fillet) or bevels (Chamfer) the selected edges. Select edges — '
+        + 'double-click one for the whole loop round the face under the cursor, Shift-click for more — then '
+        + 'Fillet or Chamfer. In the dialog: the radius or distance (type it, or drag the blue handle on the '
+        + 'first edge, in 0.1 mm steps), and the edges — hover a row to light it, × to leave it out, click an '
+        + 'edge of the part to add or drop it. The result shows as a blue ghost; it adds one script line with '
+        + 'the size a parameter (fillet_r, chamfer_d) and the edges by edge_ref, so they stay put when the part '
+        + 'changes. Too large says the largest that works. Or ask: "fillet the top rim 1 mm".'],
+      ['Edit a step', 'In the code view, put the cursor on a shell(…), holes(…), fillet(…) or chamfer(…) line '
+        + 'and click "Edit …" at the top right (or double-click the line): its dialog opens with the line\'s '
+        + 'values, and OK rewrites only that line.'],
       ['Fix with AI', 'Shown when a build fails: sends the error to the AI, which repairs the script and rebuilds.'],
     ],
   },
@@ -86,7 +93,7 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
         + 'available light up for a moment. Hover or focus a tile for what it does, its key, and an example to ask '
         + 'the AI instead — clicking the example puts it in the chat box (it isn\'t sent). Arrow keys move between '
         + 'tiles, Enter runs one, Esc goes back. The top bar keeps the most used ones (Sketch on face, Hole, '
-        + 'Shell, Round, Build); the Operations button (U) opens the rest.'],
+        + 'Shell, Fillet, Round, Build); the Operations button (U) opens the rest.'],
       ['Params', 'Shows or hides the parameters (key P, or × on the pane). They sit above the script or chat, '
         + 'and float at the top right of the 3D view when it is maximised.'],
     ],

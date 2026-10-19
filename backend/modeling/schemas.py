@@ -292,6 +292,10 @@ class FaceRefReport(Schema):
     hint: str                       # what the face is called: "top face"
     status: str                     # 'found' | 'ambiguous' | 'not_found'
     moved_by: float = 0.0           # mm along its normal from where it was
+    length: float | None = None     # edge_ref: the length of the edge found (mm)
+    midpoint: list[float] | None = None  # edge_ref: and where its middle is
+    radius: float | None = None     # edge_ref: and its radius (circle, arc)
+    line: int | None = None         # edge_ref: the script line that looked it up
 
 
 class RunResponse(Schema):
@@ -352,8 +356,8 @@ class OpAtRequest(Schema):
 
 
 class OpAtResponse(Schema):
-    """A Shell/Hole line read back for its dialog (paramedit.op_at)."""
-    op: str                         # 'shell' | 'holes'
+    """A Shell/Hole/Fillet/Chamfer line read back for its dialog (paramedit.op_at)."""
+    op: str                         # 'shell' | 'holes' | 'fillet' | 'chamfer'
     line: int
     end_line: int
     args: dict                      # its values, P keys resolved
@@ -378,6 +382,14 @@ class AddHolesRequest(Schema):
     standoff: dict | None = None    # {"h", "d", "fillet"}: on a boss
     sizes: dict[str, float] = {}    # preset sizes changed in the dialog: d, cbore_d, cbore_depth, csk_d
     line: int | None = None         # rewrite the holes() line there instead of appending
+
+
+class AddEdgeOpRequest(Schema):
+    code: str
+    op: str                         # 'fillet' | 'chamfer'
+    edges: list[dict]               # edge refs (RunEdge.ref), one per edge
+    size: float                     # the fillet radius / chamfer length
+    line: int | None = None         # rewrite the fillet()/chamfer() line there instead of appending
 
 
 class AddOpResponse(Schema):

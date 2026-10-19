@@ -7,7 +7,7 @@
  * independent shading, render-on-demand.
  */
 
-import { add, scale, faceMotion, dragAmount, snapToStep, snapToPlane, type Vec3 } from './dragHandle';
+import { add, scale, faceMotion, dragAmount, dragShift, snapToStep, snapToPlane, type Vec3 } from './dragHandle';
 import {
   lookFrom, axisView, orbit, slerp, quatToMat4, easeInOutCubic, VIEW_DIRS,
   type Quat, type StandardView,
@@ -211,13 +211,22 @@ export interface PlacedDim {
 }
 
 /** A drag handle on one face: dragging moves the face along `shift` (its world
- * motion per unit of the param — see backend sensitivity `shifts`). */
+ * motion per unit of the param — see backend sensitivity `shifts`). Or, with
+ * `at`, a handle at a point (a fillet's edge), drawn its value out from it
+ * along `shift`: the drag moves no face, it reports the value as it goes
+ * (onHandleMove) — the dialog's ghost shows it. */
 export interface DragHandle {
   face: number;
   shift: Vec3;
   dr: number;         // radius change per unit, for a cylinder face (else 0)
   value: number;      // the param's current value
   moves: number[];    // faces the param changes — not snap targets
+  /** the handle's anchor, instead of the face's centre */
+  at?: Vec3;
+  /** the grid the drag snaps to (default 0.5, Shift 0.1) */
+  step?: number;
+  /** the smallest value the drag goes to */
+  min?: number;
 }
 
 /** The handle projected into the current view, for the HTML overlay. */
@@ -328,6 +337,9 @@ export interface ViewerOpts {
   /** A handle drag was released at a new param value. The preview stays up
    *  until the next update() / setHandle() / clearDragPreview(). */
   onHandleDrop?: (value: number) => void;
+  /** The value of a point handle's drag (DragHandle.at) as it moves; its
+   *  start value again, `done`, if the drag is cancelled (a drop: onHandleDrop). */
+  onHandleMove?: (value: number, done: boolean) => void;
   /** The pointer is over a drawn sketch (null: left it); CSS px in the canvas. */
   onSketchHover?: (hit: { id: string; name: string; x: number; y: number } | null) => void;
   /** A drawn sketch was double-clicked. */
@@ -665,10 +677,14 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   }
 
   // the handle in screen space: anchor (moved by the drag) → arrow tip
+  const handleBase = (): Vec3 | null =>
+    handle ? handle.at ?? faceByIndex.get(handle.face)?.center ?? null : null;
   function placeHandle(toCss: (p: Vec3) => [number, number, boolean]): PlacedHandle | null {
-    const f = handle && faceByIndex.get(handle.face);
-    if (!handle || !f) return null;
-    const p = add(f.center, scale(handle.shift, drag ? drag.t : 0));
+    const base = handleBase();
+    if (!handle || !base) return null;
+    // a point handle sits its value out from its point (it moves no face to carry it)
+    const off = handle.at ? (drag ? drag.value : handle.value) : (drag ? drag.t : 0);
+    const p = add(base, scale(handle.shift, off));
     const [x, y, v1] = toCss(p);
     const [ax, ay, v2] = toCss(add(p, scale(handle.shift, handleArm() / Math.hypot(...handle.shift))));
     return {
@@ -730,7 +746,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
 
     // while a handle drag is previewed, its face is drawn moved (below), so
     // leave it out of the solid
-    const df = drag && handle && !thumbMode ? faceByIndex.get(handle.face) ?? null : null;
+    const df = drag && handle && !handle.at && !thumbMode ? faceByIndex.get(handle.face) ?? null : null;
     const showCand = cand && !thumbMode && !sketch;
     if (showCand) {
       gl!.bindBuffer(gl!.ARRAY_BUFFER, candPosBuf);
@@ -1057,24 +1073,30 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   // the shift's screen direction, snapped to a 0.5 grid (Shift: 0.1) — or onto
   // another face's plane when one is within a few px
   function dragTo(e: PointerEvent) {
-    const f = handle && faceByIndex.get(handle.face);
-    if (!drag || !handle || !f) return;
+    const base = handleBase();
+    if (!drag || !handle || !base) return;
+    const f = handle.at ? undefined : faceByIndex.get(handle.face);
     const toCss = cssProjector();
-    const [x0, y0] = toCss(f.center);
-    const [x1, y1] = toCss(add(f.center, handle.shift));
+    const [x0, y0] = toCss(base);
+    const [x1, y1] = toCss(add(base, dragShift(handle.shift, handle.dr)));
     const sx = x1 - x0, sy = y1 - y0;
     const mx = e.clientX - drag.x0, my = e.clientY - drag.y0;
     const t = dragAmount([mx, my], [sx, sy]);
     if (t === null) return;
     let value = handle.value, snap: number | null = null;
     if (Math.hypot(mx, my) >= 3) {   // dead zone: a press alone doesn't jump to the grid
-      value = snapToStep(handle.value + t, e.shiftKey ? 0.1 : 0.5);
-      const hit = snapToPlane(f, handle.shift, t, Math.hypot(sx, sy), faces, handle.moves);
+      value = snapToStep(handle.value + t, handle.step ?? (e.shiftKey ? 0.1 : 0.5));
+      // a radius stays a radius: no smaller than one step
+      const min = handle.min ?? (handle.dr && handle.value > 0 ? (handle.step ?? (e.shiftKey ? 0.1 : 0.5)) : null);
+      if (min != null) value = Math.max(min, value);
+      const hit = f && snapToPlane(f, handle.shift, t, Math.hypot(sx, sy), faces, handle.moves);
       if (hit) { value = snapToStep(handle.value + hit.t, 0.001); snap = hit.face; }
     }
+    const was = drag.value;
     drag.value = value;
     drag.t = value - handle.value;
     drag.snap = snap;
+    if (handle.at && value !== was) opts.onHandleMove?.(value, false);
     scheduleRender();
   }
 
@@ -1082,7 +1104,13 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     window.removeEventListener('keydown', onKey);
     canvas.style.cursor = baseCursor;
     if (!drag || !handle) return;
-    if (cancel || drag.value === handle.value) drag = null;
+    if (handle.at) {
+      // a point handle: nothing to keep up until a rebuild; it stays at the new value
+      const v = drag.value;
+      drag = null;
+      if (cancel || v === handle.value) opts.onHandleMove?.(handle.value, true);
+      else { handle = { ...handle, value: v }; opts.onHandleDrop?.(v); }
+    } else if (cancel || drag.value === handle.value) drag = null;
     else { drag.pending = true; opts.onHandleDrop?.(drag.value); }
     scheduleRender();
   }
@@ -1095,11 +1123,11 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     lastX = e.clientX; lastY = e.clientY;
     downX = e.clientX; downY = e.clientY; moved = 0;
     canvas.setPointerCapture(e.pointerId);
-    const f = handle && faceByIndex.get(handle.face);
-    if (e.button === 0 && handle && f && !drag?.pending && overHandle(e)) {
+    const f = handle && !handle.at ? faceByIndex.get(handle.face) : undefined;
+    if (e.button === 0 && handle && (f || handle.at) && !drag?.pending && overHandle(e)) {
       mode = 'handle';
       drag = { x0: e.clientX, y0: e.clientY, t: 0, value: handle.value, snap: null,
-               motion: faceMotion(f, meshPositions, handle.shift, handle.dr), pending: false };
+               motion: f ? faceMotion(f, meshPositions, handle.shift, handle.dr) : new Float32Array(0), pending: false };
       canvas.style.cursor = 'grabbing';
       window.addEventListener('keydown', onKey);
       scheduleRender();

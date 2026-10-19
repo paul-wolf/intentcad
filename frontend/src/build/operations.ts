@@ -19,7 +19,7 @@ export type OpGroup = 'Sketch' | 'Create' | 'Modify' | 'Pattern' | 'Inspect' | '
 export const OP_GROUPS: OpGroup[] = ['Sketch', 'Create', 'Modify', 'Pattern', 'Inspect', 'View', 'File'];
 
 export type OpIcon =
-  | 'sketch-face' | 'plane-top' | 'plane-front' | 'plane-right' | 'extrude' | 'hole' | 'shell' | 'round'
+  | 'sketch-face' | 'plane-top' | 'plane-front' | 'plane-right' | 'extrude' | 'hole' | 'shell' | 'fillet' | 'chamfer' | 'round'
   | 'lighten' | 'protect' | 'fix' | 'measure' | 'normal' | 'ortho' | 'params' | 'build' | 'import'
   | 'export' | 'stl' | 'parts' | 'dxf' | 'views3' | 'versions' | 'process'
   | `view-${StandardView}`;
@@ -35,7 +35,7 @@ export interface OpModel {
   status: 'idle' | 'building' | 'done' | 'error';
   /** the script isn't empty */
   hasCode: boolean;
-  /** a Shell or Hole dialog is open */
+  /** a Shell, Hole, Fillet or Chamfer dialog is open */
   dialogOpen: boolean;
   /** the face sketcher is open */
   sketching: boolean;
@@ -67,6 +67,9 @@ export interface OpContext {
   sketchOnPlane(which: BasePlane): void;
   shell(): void;
   hole(): void;
+  /** the Fillet / Chamfer dialog, on the selected edges */
+  fillet(): void;
+  chamfer(): void;
   /** send an instruction to the AI (as the Ask box does) */
   ask(instruction: string): void;
   /** build — or, while a build runs, cancel it */
@@ -153,6 +156,8 @@ const aiFree = (m: OpModel): [boolean, string][] => [
   [m.asking, 'The AI is working on a change'],
   [m.status === 'building', 'Wait for the build'],
 ];
+
+const EDGES_REASON = 'Select edges (double-click for a whole loop)';
 
 const SKETCH_PLANES: [BasePlane, string, string][] = [
   ['top', 'Top', 'T'], ['front', 'Front', 'F'], ['right', 'Right', 'R'],
@@ -249,6 +254,29 @@ export const OPERATIONS: Operation[] = [
     run: (ctx) => ctx.shell(),
   },
   {
+    id: 'fillet', name: 'Fillet', group: 'Modify', icon: 'fillet', pinned: true,
+    help: 'Round the selected edges to a radius',
+    longHelp: 'Rounds the selected edges to a radius (double-click an edge for its whole loop, Shift-click for '
+      + 'more). In the dialog: the radius — type it or drag the handle on the first edge — and the edges: click '
+      + 'one in the view to add or drop it. A blue ghost previews the result; it adds one script line, which '
+      + 'double-clicking reopens.',
+    example: 'fillet the top rim 1 mm',
+    needs: (sel, m) => first(...notWhile(m), ...built(m), [sel.edges.length === 0, EDGES_REASON]),
+    detail: (sel) => `${plural(sel.edges.length, 'edge')} rounded`,
+    run: (ctx) => ctx.fillet(),
+  },
+  {
+    id: 'chamfer', name: 'Chamfer', group: 'Modify', icon: 'chamfer',
+    help: 'Bevel the selected edges, a distance back along each face',
+    longHelp: 'Bevels the selected edges at 45°, cutting a distance back along each face — on the bottom edges, '
+      + 'the relief for a 3D print\'s elephant\'s foot. The dialog works as Fillet\'s: the distance (or drag the '
+      + 'handle), the edges, a blue ghost preview, one script line.',
+    example: 'chamfer the bottom edges 0.6 mm',
+    needs: (sel, m) => first(...notWhile(m), ...built(m), [sel.edges.length === 0, EDGES_REASON]),
+    detail: (sel) => `${plural(sel.edges.length, 'edge')} bevelled`,
+    run: (ctx) => ctx.chamfer(),
+  },
+  {
     id: 'round', name: 'Round', group: 'Modify', icon: 'round', pinned: true,
     help: 'AI: round every edge, keeping holes and mating faces exact',
     longHelp: 'Asks the AI to round every edge of the part (outside corners and inside blends) with auto_round, '
@@ -291,14 +319,15 @@ export const OPERATIONS: Operation[] = [
   // Inspect
   {
     id: 'measure', name: 'Measure', group: 'Inspect', icon: 'measure',
-    help: 'The selected face\'s size or diameter, or the distance between two faces',
+    help: 'The selected face\'s or edge\'s size, or the distance between two',
     longHelp: 'Select a face for its size (a hole: its diameter), or two faces for the distance between their '
-      + 'centres, with X, Y and Z. The reading shows at the top left of the 3D view while they are selected; '
-      + 'this copies it.',
+      + 'centres, with X, Y and Z. An edge: its length, or a circle\'s diameter; two edges: the distance or the '
+      + 'angle between them. The reading shows at the top left of the 3D view while they are selected; this '
+      + 'copies it.',
     example: 'how far apart are these two holes?',
-    needs: (sel, m) => first([sel.faces.length === 0, 'Select one or two faces'],
+    needs: (sel, m) => first([sel.faces.length + sel.edges.length === 0, 'Select faces or edges'],
                              [sel.faces.length > 2, 'Select one or two faces'],
-                             [!m.measure, 'Nothing to measure on this face']),
+                             [!m.measure, 'Nothing to measure here']),
     detail: (_sel, m) => m.measure,
     run: (ctx) => ctx.copyMeasure(),
   },

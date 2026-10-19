@@ -85,6 +85,19 @@ class SensitivityTests(SimpleTestCase):
         for i in fillets:
             self.assertAlmostEqual(radial[i], 1.0, places=2)
 
+    def test_a_fillet_radius_near_the_most_that_fits_still_gets_a_handle(self):
+        # 1.5 on a 2 mm plate: one more mm doesn't fit, so the probe goes down
+        code = ('P = dict(fillet_r=1.5)\n'
+                'part = Box(30, 20, 2)\n'
+                'part = fillet(part, part.edges().group_by(Axis.Z)[-1], radius=P["fillet_r"])')
+        faces = run_script(code)["faces"]
+        rounds = [f["index"] for f in faces if f["kind"] == "cylinder"]
+        self.assertEqual(len(rounds), 4)
+        info = sensitivity(code)["fillet_r"]
+        for i in rounds:
+            self.assertIn(i, info["shifts"])
+            self.assertAlmostEqual(info["radial"][i], 1.0, places=2)
+
     def test_shifts_only_name_faces_the_param_controls(self):
         code = 'P = dict(w=20, thick=5)\npart = Box(P["w"], P["w"], P["thick"])'
         for info in sensitivity(code).values():

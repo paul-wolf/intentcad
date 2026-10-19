@@ -250,3 +250,37 @@ export function measureEdges(es: EdgeInfo[]): { main: string; sub?: string } | n
   const total = es.reduce((s, e) => s + edgeLength(e), 0);
   return { main: `${f2(total)} mm`, sub: `${es.length} edges, total length` };
 }
+
+// ---- the edges a fillet / chamfer line names ----
+
+/** What an edge reference holds that the editor matches on (EdgeRefSpec). */
+export interface EdgeRefLike {
+  kind: string; midpoint: Vec3; length: number;
+  faces?: { normal: Vec3; kind?: string }[];
+  hint?: string;
+}
+
+/** The same edge, as the build described it (its midpoint, length and kind). */
+export function sameEdgeRef(a: EdgeRefLike, b: EdgeRefLike): boolean {
+  const tol = 1e-3 * Math.max(1, a.length);
+  return a.kind === b.kind && Math.abs(a.length - b.length) <= tol && norm(sub(a.midpoint, b.midpoint)) <= tol;
+}
+
+/** The edge of the shown part a reference names, if it's there as it was
+ *  (after the fillet it names it isn't: the fillet replaced it). */
+export function edgeOfRef(edges: { index: number; ref?: EdgeRefLike | null }[], r: EdgeRefLike): number | null {
+  return edges.find((e) => e.ref && sameEdgeRef(e.ref, r))?.index ?? null;
+}
+
+/** Where a fillet / chamfer handle sits on an edge and the way it drags: from
+ *  the edge's midpoint into the part, between its two faces (away from both
+ *  outward normals; with a curved face, away from the flat one's). Worked out
+ *  from the reference alone, so it works on a reopened line too. */
+export function edgeHandle(r: EdgeRefLike): { at: Vec3; dir: Vec3 } {
+  const flat = (r.faces ?? []).filter((f) => !f.kind).map((f) => f.normal);
+  const ns = flat.length ? flat : (r.faces ?? []).map((f) => f.normal);
+  let d: Vec3 = [0, 0, 0];
+  for (const n of ns) d = [d[0] - n[0], d[1] - n[1], d[2] - n[2]];
+  if (norm(d) < 1e-6) d = ns[0] ? [-ns[0][0], -ns[0][1], -ns[0][2]] : [0, 0, -1];
+  return { at: r.midpoint, dir: unit(d) };
+}

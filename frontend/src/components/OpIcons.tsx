@@ -37,6 +37,8 @@ const ICONS: Record<OpIconName, ReactNode> = {
   extrude: <><path d="M3 19l4-4h14l-4 4z" /><path d="M12 15V4M8.5 7.5L12 4l3.5 3.5" /></>,
   hole: <><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="3.5" /></>,
   shell: <><path d="M3 6v14h18V6" /><path d="M7 6v10h10V6" /></>,
+  fillet: <><path d="M4 20h16V11a7 7 0 0 0-7-7H4z" opacity={0.5} /><path d="M13 4a7 7 0 0 1 7 7" strokeWidth={2.4} /></>,
+  chamfer: <><path d="M4 20h16V10l-6-6H4z" opacity={0.5} /><path d="M14 4l6 6" strokeWidth={2.4} /></>,
   round: <><path d="M4 21v-9a8 8 0 0 1 8-8h9" /><path d="M4 4h3M4 4v3" opacity={0.5} /></>,
   lighten: <><path d="M3 5h18v14H3z" /><path d="M3 19l6-14 6 14 6-14" /></>,
   protect: <><path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6z" /><path d="M9 12h6" /></>,

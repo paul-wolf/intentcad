@@ -1,20 +1,22 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { useThemeStore } from '@/theme';
 import {
-  ApiError, errorText, type FaceRefSpec, type HoleKind, type HolePreset, type HolePresets, type HoleSizeKey,
+  ApiError, errorText, type EdgeOpKind, type EdgeRefSpec, type FaceRefSpec, type HoleKind, type HolePreset, type HolePresets, type HoleSizeKey,
   type HolesPayload, type RunFace, type RunResponse, type SizeFix,
 } from '@/api/client';
 import type { Viewer } from '@/build/webglViewer';
 import { faceLabel } from '@/build/faceSketch';
+import { sameEdgeRef } from '@/build/edgePick';
 
-// The part editor's explicit operations (Shell, Hole): a dialog that writes
+// The part editor's explicit operations (Shell, Hole, Fillet, Chamfer): a dialog that writes
 // one script line, with the result previewed as a ghost while it's open.
 
 /** The colour the candidate result is drawn in. */
 export const PREVIEW_COLOR: [number, number, number] = [0.36, 0.72, 0.86];
 
-/** A script line the dialogs write or reopen: `part = shell(...)` / `part = holes(...)`. */
-export const OP_LINE = /^\s*part\s*=\s*(shell|holes)\s*\(/;
+/** A script line the dialogs write or reopen: `part = shell(...)`, `part = holes(...)`,
+ *  `part = fillet(part, edges_ref(...), ...)`, `part = chamfer(part, ...)`. */
+export const OP_LINE = /^\s*part\s*=\s*(shell|holes|fillet|chamfer)\s*\(/;
 
 export interface PreviewState {
   state: 'idle' | 'running' | 'ok' | 'warning' | 'error';
@@ -534,6 +536,115 @@ export function HoleDialog({ value, onChange, editing, preview, presets, places,
       </div>
       <div style={{ color: palette.textSecondary, fontSize: '11px', lineHeight: 1.4 }}>
         Sizes: {SOURCES[value.kind]}. Click a face to put the holes on its sketch, or at its centre.
+      </div>
+    </OpFrame>
+  );
+}
+
+// ---------------------------------------------------------------- Fillet, Chamfer
+
+export interface EdgeOpValues {
+  edges: EdgeRefSpec[];
+  /** fillet: the radius; chamfer: the distance back along each face */
+  size: number;
+}
+
+/** Add or remove an edge: a click on it while the dialog is open. */
+export function toggleEdge(edges: EdgeRefSpec[], r: EdgeRefSpec): EdgeRefSpec[] {
+  return edges.some((e) => sameEdgeRef(e, r)) ? edges.filter((e) => !sameEdgeRef(e, r)) : [...edges, r];
+}
+
+/** Add edges that aren't in the list yet (a double-clicked loop, the selection). */
+export function addEdges(edges: EdgeRefSpec[], more: EdgeRefSpec[]): EdgeRefSpec[] {
+  const out = [...edges];
+  for (const r of more) if (!out.some((e) => sameEdgeRef(e, r))) out.push(r);
+  return out;
+}
+
+const EDGE_WORDS: Record<EdgeOpKind, { title: string; size: string; verb: string }> = {
+  fillet: { title: 'Fillet', size: 'Radius', verb: 'Round' },
+  chamfer: { title: 'Chamfer', size: 'Distance', verb: 'Bevel' },
+};
+
+export function EdgeOpDialog({ op, value, onChange, editing, preview, edgeIndex, onHoverEdge, selection, shownAs = (r) => r,
+                               onApply, onCancel }: {
+  op: EdgeOpKind;
+  value: EdgeOpValues; onChange: (v: EdgeOpValues) => void;
+  /** reopened from its script line */
+  editing: boolean;
+  preview: PreviewState;
+  /** the edge of the shown part a row names (to light it), if it's there */
+  edgeIndex: (r: EdgeRefSpec) => number | null;
+  onHoverEdge: (index: number | null) => void;
+  /** edges selected when the dialog opened, to add to the line */
+  selection: EdgeRefSpec[];
+  /** an edge as the part has it now (its length, middle and radius), when that
+   *  differs from when it was picked */
+  shownAs?: (r: EdgeRefSpec) => EdgeRefSpec;
+  onApply: () => void; onCancel: () => void;
+}) {
+  const { palette, row, num, note } = useStyles();
+  const w = EDGE_WORDS[op];
+  const set = (p: Partial<EdgeOpValues>) => onChange({ ...value, ...p });
+  const s = Number.isFinite(value.size) ? value.size : 0;
+  const ok = s > 0 && value.edges.length > 0 && preview.state !== 'running';
+  const total = value.edges.reduce((a, e) => a + shownAs(e).length, 0);
+  const toAdd = selection.filter((r) => !value.edges.some((e) => sameEdgeRef(e, r)));
+  const n = value.edges.length;
+  return (
+    <OpFrame title={editing ? `Edit ${op}` : w.title} preview={preview} ok={ok} onCancel={onCancel}
+             onApply={onApply} applyLabel={editing ? 'Update' : w.title}
+             onFix={(f) => set({ size: (f.value ?? f.suggest)! })}>
+      <label style={row}>
+        <span style={{ width: 64 }}>{w.size}</span>
+        <input type="number" min={0} step={0.1} value={value.size} autoFocus
+               onChange={(e) => set({ size: parseFloat(e.target.value) })} style={num} />
+        <span style={{ color: palette.textSecondary }}>mm</span>
+      </label>
+      <div style={note}>
+        {n === 0
+          ? <>No edges yet: click edges of the part (double-click for a whole loop).</>
+          : op === 'fillet'
+            ? <>{w.verb}s {n === 1 ? 'the edge' : `${n} edges`} ({total.toFixed(1)} mm in all) to a <b>{s} mm</b> radius.</>
+            : <>{w.verb}s {n === 1 ? 'the edge' : `${n} edges`} ({total.toFixed(1)} mm in all), cutting <b>{s} mm</b> back along each face.</>}
+        {n > 0 && <span style={{ color: palette.textSecondary }}> Drag the handle on the first edge to change it.</span>}
+      </div>
+      <div>
+        <div style={{ color: palette.textSecondary, marginBottom: '4px' }}>Edges {n ? `(${n})` : ''}</div>
+        {value.edges.map((r, i) => {
+          const idx = edgeIndex(r);
+          const now = shownAs(r);
+          return (
+            <div key={`${r.kind}|${r.midpoint.join()}`}
+                 onMouseEnter={() => onHoverEdge(idx)} onMouseLeave={() => onHoverEdge(null)}
+                 title={idx == null ? `Not on the part as shown (the ${op} replaced it): it is found again when the line runs` : 'Lit in the view'}
+                 style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '2px 4px', borderRadius: '3px',
+                          color: palette.text, cursor: 'default' }}
+                 onMouseOver={(e) => { e.currentTarget.style.background = palette.buttonBg; }}
+                 onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+              <span style={{ flex: 1 }}>
+                {r.hint ?? `${r.kind} edge`}
+                <span style={{ color: palette.textSecondary }}>
+                  {' · '}{now.radius != null ? `R ${now.radius.toFixed(2)}` : `${now.length.toFixed(1)} mm`}
+                </span>
+              </span>
+              <button aria-label={`Leave the ${r.hint ?? 'edge'} sharp`} title={`Leave this edge out of the ${op}`}
+                      onClick={() => { onHoverEdge(null); set({ edges: value.edges.filter((_, j) => j !== i) }); }}
+                      style={{ background: 'none', border: 'none', color: palette.textSecondary, cursor: 'pointer',
+                               fontSize: '14px', lineHeight: 1, padding: '0 2px' }}>&times;</button>
+            </div>
+          );
+        })}
+        {toAdd.length > 0 && (
+          <button onClick={() => set({ edges: addEdges(value.edges, toAdd) })}
+                  style={{ marginTop: '4px', fontSize: '12px', padding: '2px 8px', cursor: 'pointer', borderRadius: '4px',
+                           background: palette.buttonBg, color: palette.text, border: `1px solid ${palette.border}` }}>
+            Add the {toAdd.length === 1 ? 'selected edge' : `${toAdd.length} selected edges`}
+          </button>
+        )}
+        <div style={{ color: palette.textSecondary, marginTop: '4px', fontSize: '11px' }}>
+          Click an edge to add or remove it; double-click for its whole loop.
+        </div>
       </div>
     </OpFrame>
   );

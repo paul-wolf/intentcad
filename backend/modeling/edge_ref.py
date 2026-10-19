@@ -24,6 +24,7 @@ nearby — kind, direction or radius, midpoint — and says "ambiguous".
 from __future__ import annotations
 
 import math
+import sys
 
 from build123d import Edge, ShapeList, Vector
 
@@ -216,11 +217,32 @@ def find(part, ref: dict) -> dict:
     return {"status": "ambiguous", "edge": alike[0][2], "moved_by": alike[0][1]}
 
 
+def _as_found(edge: Edge | None) -> dict:
+    """What the editor shows of an edge found: its length, middle and radius now."""
+    if edge is None:
+        return {"length": None, "midpoint": None, "radius": None}
+    circ = _circle(edge) if _kind(edge) == "circle" else None
+    return {"length": round(float(edge.length), 6), "midpoint": _r(midpoint(edge)),
+            "radius": round(circ[1], 4) if circ else None}
+
+
+def _script_line() -> int | None:
+    """The line of the script (1-based, as the editor numbers it) that is
+    running: the engine runs it as "<script>" behind a one-line prefix."""
+    f = sys._getframe(1)
+    while f is not None:
+        if f.f_code.co_filename == "<script>":
+            return f.f_lineno - 1
+        f = f.f_back
+    return None
+
+
 def bind(ns: dict, report: list | None = None) -> dict:
     """The script-namespace edge_ref() and edges_ref(): resolve against the
     script's `part` as it is when the line runs (or `on=`). Each lookup is
-    recorded in `report` as {"hint", "status", "moved_by"}; an edge that isn't
-    there any more raises, naming it."""
+    recorded in `report` as {"hint", "status", "moved_by", "length",
+    "midpoint" and "radius" (of the edge found), "line" (the script line)}; an edge that isn't there any
+    more raises, naming it."""
     def edge_ref(ref: dict, on=None) -> Edge:
         """The edge of the part that `ref` describes (see modeling/edge_ref.py)."""
         part = on if on is not None else ns.get("part")
@@ -233,7 +255,8 @@ def bind(ns: dict, report: list | None = None) -> dict:
             raise EdgeRefError(f"edge_ref: can't read the reference to the {name} ({exc})") from exc
         if report is not None:
             report.append({"hint": name, "status": m["status"],
-                           "moved_by": round(float(m["moved_by"]), 6) if m["moved_by"] is not None else 0.0})
+                           "moved_by": round(float(m["moved_by"]), 6) if m["moved_by"] is not None else 0.0,
+                           **_as_found(m["edge"]), "line": _script_line()})
         if m["edge"] is None:
             raise EdgeRefError(f"the {name} this line refers to is no longer on the part "
                                "(the part changed too much for it to be found again): "

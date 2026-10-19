@@ -432,20 +432,24 @@ def _run(code: str, export: list | None = None,
     # shell() / holes() — the editor's Shell and Hole operations
     # edge_ref({...}) / edges_ref([...]) — an edge found again by the two faces
     # it lies between (modeling/edge_ref.py); each lookup → result["edge_refs"]
-    from modeling import edge_ref, face_ref, shell_hole
+    # fillet() / chamfer() — the editor's Fillet and Chamfer (modeling/edge_ops.py),
+    # put back after the script's `from build123d import *`, which would
+    # replace them with build123d's own (they still take build123d's form)
+    from modeling import edge_ops, edge_ref, face_ref, shell_hole
 
     face_report: list[dict] = []
     edge_report: list[dict] = []
     ns.update(face_ref.bind(ns, face_report))
     ns.update(edge_ref.bind(ns, edge_report))
     ns.update(shell_hole.bind(ns))
+    ns["__editor_ops__"] = edge_ops.bind()
     # Run the script. If an operation fails partway (e.g. a chamfer too big),
     # `part` still holds the model built up to that line — render THAT plus the
     # error as a warning, instead of blanking the whole model.
     warning = None
     fix = None
     try:
-        exec(compile(f"from build123d import *\n{code}", "<script>", "exec"), ns)  # noqa: S102 - sandboxed subprocess
+        exec(compile(f"from build123d import *; globals().update(__editor_ops__)\n{code}", "<script>", "exec"), ns)  # noqa: S102 - sandboxed subprocess
     except Exception as exc:
         warning = _describe_error(exc, code)
         fix = _fix_for(exc, ns)

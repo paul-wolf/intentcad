@@ -49,6 +49,15 @@ export function handleOptions(face: HandleFace, sens: Record<string, DimInfo>): 
   return out.map(({ par: _par, ...o }) => o);
 }
 
+/** The world motion a drag follows per unit of the param. A face the param
+ * resizes (a fillet or hole: `dr` per unit) may barely move — a fillet's face
+ * sits only ~0.4 mm further in per mm of radius — so the drag goes at the
+ * radius's rate instead, along the same direction: a mm of drag a mm of radius. */
+export function dragShift(shift: Vec3, dr: number): Vec3 {
+  const l = len(shift);
+  return dr && l > 1e-9 && Math.abs(dr) > l ? scale(shift, Math.abs(dr) / l) : shift;
+}
+
 /** Param change for a mouse drag: the mouse delta projected onto the screen
  * image of the shift. `s` is the screen motion (px) per unit of the param.
  * Null when the shift points (nearly) at the camera — no usable direction. */

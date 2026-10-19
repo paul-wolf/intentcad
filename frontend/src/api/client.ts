@@ -341,6 +341,12 @@ export const buildApi = {
     Promise<{ code: string; param: string | null }> {
     return request('/build/add_holes', { method: 'POST', body: JSON.stringify(payload) });
   },
+  /** Append a fillet() / chamfer() line on these edges, or rewrite the one on `line`
+   *  (its size is a P key: fillet_r, chamfer_d, fillet2_r...). */
+  addEdgeOp(payload: { code: string; op: EdgeOpKind; edges: EdgeRefSpec[]; size: number; line?: number | null }):
+    Promise<{ code: string; param: string | null }> {
+    return request('/build/add_edge_op', { method: 'POST', body: JSON.stringify(payload) });
+  },
   /** Every hole size the Hole dialog offers (backend modeling/hole_presets.py). */
   holePresets(): Promise<HolePresets> {
     return request('/build/hole_presets');
@@ -409,15 +415,22 @@ export interface FaceRefSpec {
 }
 
 /** A face_ref() lookup in a build. */
-export interface FaceRefReport { hint: string; status: 'found' | 'ambiguous' | 'not_found'; moved_by: number }
+export interface FaceRefReport {
+  hint: string; status: 'found' | 'ambiguous' | 'not_found'; moved_by: number;
+  /** edge_ref: the edge found — its length, middle and radius now — and the script line that looked it up */
+  length?: number | null; midpoint?: [number, number, number] | null; radius?: number | null; line?: number | null;
+}
 
-/** A Shell/Hole line read back (backend paramedit.op_at). */
+/** A Shell/Hole/Fillet/Chamfer line read back (backend paramedit.op_at). Fillet and
+ *  chamfer: args {edges: EdgeRefSpec[], size}, params {size: key}. */
 export interface OpAt {
-  op: 'shell' | 'holes'; line: number; end_line: number;
+  op: 'shell' | 'holes' | EdgeOpKind; line: number; end_line: number;
   args: Record<string, unknown>;
   /** argument -> the P key holding it */
   params: Record<string, string>;
 }
+
+export type EdgeOpKind = 'fillet' | 'chamfer';
 
 export type HoleKind = 'clearance' | 'tapped' | 'insert' | 'counterbore' | 'countersink';
 /** The preset sizes holes() can override, in mm. */

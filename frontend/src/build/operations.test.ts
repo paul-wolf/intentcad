@@ -70,17 +70,19 @@ describe('the operation registry', () => {
   });
 
   it('pins the top bar’s operations', () => {
-    expect(OPERATIONS.filter((o) => o.pinned).map((o) => o.id)).toEqual(['sketch-face', 'hole', 'shell', 'round', 'build']);
+    expect(OPERATIONS.filter((o) => o.pinned).map((o) => o.id)).toEqual(['sketch-face', 'hole', 'shell', 'fillet', 'round', 'build']);
   });
 
   it('runs through the editor’s own actions', () => {
     const ctx = Object.fromEntries(
-      ['sketchOnSelection', 'sketchOnPlane', 'shell', 'hole', 'ask', 'build', 'importStep', 'exportAs', 'versions',
+      ['sketchOnSelection', 'sketchOnPlane', 'shell', 'hole', 'fillet', 'chamfer', 'ask', 'build', 'importStep', 'exportAs', 'versions',
        'process', 'toggleParams', 'setView', 'lookAtSelection', 'toggleOrtho', 'copyMeasure'].map((k) => [k, vi.fn()]),
     ) as unknown as Record<keyof OpContext, ReturnType<typeof vi.fn>>;
     for (const op of OPERATIONS) op.run(ctx as unknown as OpContext);
     expect(ctx.shell).toHaveBeenCalledTimes(1);
     expect(ctx.hole).toHaveBeenCalledTimes(1);
+    expect(ctx.fillet).toHaveBeenCalledTimes(1);
+    expect(ctx.chamfer).toHaveBeenCalledTimes(1);
     expect(ctx.sketchOnPlane.mock.calls.map((c) => c[0])).toEqual(['top', 'front', 'right']);
     expect(ctx.exportAs.mock.calls.map((c) => c[0])).toEqual(['stl', 'step', 'stl-parts', 'dxf', 'dxf-views']);
     expect(ctx.setView).toHaveBeenCalledTimes(7);
@@ -94,7 +96,9 @@ describe('what each operation needs', () => {
     expect(reason('extrude', NONE)).toBe('Select a flat face');
     expect(reason('hole', NONE)).toBe('Select a flat face');
     expect(reason('shell', NONE)).toBe('Select the faces to remove');
-    expect(reason('measure', NONE)).toBe('Select one or two faces');
+    expect(reason('measure', NONE)).toBe('Select faces or edges');
+    expect(reason('fillet', NONE)).toBe('Select edges (double-click for a whole loop)');
+    expect(reason('chamfer', FLOOR)).toBe('Select edges (double-click for a whole loop)');
     expect(reason('normal', NONE)).toBe('Select a face');
     expect(reason('protect', NONE, { ...MODEL, autoRound: true })).toBe('Select the faces to keep sharp');
     // what doesn't depend on the selection
@@ -134,6 +138,16 @@ describe('what each operation needs', () => {
     expect(ok('shell', SEVERAL).ok).toBe(true);
     expect(opById('shell')!.detail!(SEVERAL, MODEL)).toBe('4 faces left open');
     expect(ok('normal', SEVERAL).ok).toBe(true);
+  });
+
+  it('with edges', () => {
+    const loop: OpSelection = { faces: [], edges: [{ kind: 'line' }, { kind: 'line' }, { kind: 'circle' }] };
+    for (const id of ['fillet', 'chamfer']) expect(ok(id, loop).ok, id).toBe(true);
+    expect(opById('fillet')!.detail!(loop, MODEL)).toBe('3 edges rounded');
+    expect(opById('chamfer')!.detail!({ faces: [], edges: [{ kind: 'line' }] }, MODEL)).toBe('1 edge bevelled');
+    expect(ok('measure', loop, { ...MODEL, measure: '200.00 mm (3 edges, total length)' }).ok).toBe(true);
+    expect(reason('fillet', loop, { ...MODEL, dialogOpen: true })).toBe('Close the open dialog first');
+    expect(reason('chamfer', loop, { ...MODEL, status: 'building' })).toBe('Wait for the build');
   });
 
   it('says what the state of the model is in the way', () => {
