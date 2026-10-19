@@ -123,12 +123,14 @@ export function SketchWorkspace({
       }
       if (keys === 'viewport') return;
 
-      if (ctrl && e.key === 'z' && !e.shiftKey) {
+      // with Cmd held, a Mac reports Shift+Z as 'z'
+      const z = e.key.toLowerCase() === 'z';
+      if (ctrl && z && !e.shiftKey) {
         e.preventDefault();
         useDocumentStore.getState().undo();
         return;
       }
-      if (ctrl && (e.key === 'Z' || e.key === 'y')) {
+      if (ctrl && ((z && e.shiftKey) || e.key === 'y')) {
         e.preventDefault();
         useDocumentStore.getState().redo();
         return;

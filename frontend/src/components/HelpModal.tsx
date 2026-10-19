@@ -52,7 +52,8 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
     title: 'General',
     items: [
       ['Ctrl + Z', 'Undo'],
-      ['Ctrl + Shift + Z', 'Redo'],
+      ['Ctrl + Shift + Z', 'Redo (also Ctrl + Y)'],
+      ['History panel', 'Click a step to go back to just after it; Start: before any'],
       ['Home', 'Center on origin'],
       ['Shift + F', 'Fit all entities'],
       ['Alt (hold)', 'Show all dimensions / free draw (no snap)'],

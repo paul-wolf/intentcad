@@ -10,40 +10,28 @@ function relativeTime(ts: number): string {
   return `${Math.floor(diff / 3600000)}h ago`;
 }
 
+/** The steps so far, oldest first. Clicking one shows the sketch just after
+ *  it (Start: before any); the steps below the highlighted one are undone and
+ *  can be clicked to redo them. */
 export function HistoryPanel() {
   const undoStack = useDocumentStore((s) => s.undoStack);
   const redoStack = useDocumentStore((s) => s.redoStack);
-  const jumpToHistory = useDocumentStore((s) => s.jumpToHistory);
-  const redo = useDocumentStore((s) => s.redo);
+  const goToHistory = useDocumentStore((s) => s.goToHistory);
   const palette = useThemeStore((s) => s.palette);
   const listRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to keep current state visible
+  // row 0 is Start, row k the state after step k
+  const rows = [
+    { label: 'Start', timestamp: undefined as number | undefined },
+    ...undoStack.map((e) => ({ label: e.label, timestamp: e.timestamp as number | undefined })),
+    ...[...redoStack].reverse().map((e) => ({ label: e.label, timestamp: e.timestamp as number | undefined })),
+  ];
+  const current = undoStack.length;
+
+  // keep the current step in view
   useEffect(() => {
-    const el = listRef.current;
-    if (el) {
-      // Current state is at index = undoStack.length, scroll it into view
-      const rows = el.children;
-      const currentIdx = undoStack.length;
-      if (rows[currentIdx]) {
-        (rows[currentIdx] as HTMLElement).scrollIntoView({ block: 'nearest' });
-      }
-    }
-  }, [undoStack, redoStack]);
-
-  const handleClickUndo = (index: number) => {
-    jumpToHistory(index);
-  };
-
-  const handleClickRedo = (redoIndex: number) => {
-    // Redo entries are stored in reverse order (last = most recent undo).
-    // To jump to a redo entry at position redoIndex (0=first shown after current),
-    // we need to redo (redoStack.length - 1 - redoIndex) times.
-    const timesToRedo = redoIndex + 1;
-    for (let i = 0; i < timesToRedo; i++) {
-      redo();
-    }
-  };
+    (listRef.current?.children[current] as HTMLElement | undefined)?.scrollIntoView({ block: 'nearest' });
+  }, [current, undoStack, redoStack]);
 
   return (
     <div
@@ -77,7 +65,8 @@ export function HistoryPanel() {
         >
           History
         </span>
-        <span style={{ color: palette.textMuted, fontSize: '10px' }}>
+        <span style={{ color: palette.textMuted, fontSize: '10px' }}
+              title={redoStack.length > 0 ? `${undoStack.length} steps, ${redoStack.length} undone` : `${undoStack.length} steps`}>
           {undoStack.length}
           {redoStack.length > 0 ? `/${redoStack.length}` : ''}
         </span>
@@ -94,81 +83,41 @@ export function HistoryPanel() {
           fontFamily: 'monospace',
         }}
       >
-        {/* Undo entries: oldest first */}
-        {undoStack.map((entry, i) => (
-          <div
-            key={`u-${i}`}
-            style={{
-              cursor: 'pointer',
-              padding: '3px 10px',
-              color: palette.text,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '1px',
-            }}
-            onClick={() => handleClickUndo(i)}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = palette.activeItemBg; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-          >
-            <span
+        {rows.map((row, i) => {
+          const isCurrent = i === current;
+          const undone = i > current;
+          return (
+            <div
+              key={i}
+              title={isCurrent ? 'Where you are now'
+                : i === 0 ? 'Back to before the first step'
+                : undone ? `Redo up to and including ${row.label}` : `Back to just after ${row.label}`}
               style={{
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
+                cursor: isCurrent ? 'default' : 'pointer',
+                padding: '3px 10px 3px 8px',
+                borderLeft: `2px solid ${isCurrent ? palette.accent : 'transparent'}`,
+                color: isCurrent ? palette.accent : undone ? palette.textMuted : palette.text,
+                fontWeight: isCurrent ? 600 : undefined,
+                opacity: undone ? 0.5 : 1,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '1px',
               }}
+              onClick={isCurrent ? undefined : () => goToHistory(i)}
+              onMouseEnter={(e) => { if (!isCurrent) (e.currentTarget as HTMLElement).style.background = palette.activeItemBg; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
             >
-              {entry.label}
-            </span>
-            <span style={{ color: palette.textMuted, fontSize: '9px' }}>
-              {relativeTime(entry.timestamp)}
-            </span>
-          </div>
-        ))}
-
-        {/* Current state marker */}
-        <div
-          style={{
-            padding: '3px 10px',
-            color: palette.accent,
-            fontWeight: 600,
-            borderLeft: `2px solid ${palette.accent}`,
-            marginLeft: '0',
-          }}
-        >
-          Current
-        </div>
-
-        {/* Redo entries: shown after current, dimmed, in reverse order (next redo first) */}
-        {[...redoStack].reverse().map((entry, i) => (
-          <div
-            key={`r-${i}`}
-            style={{
-              cursor: 'pointer',
-              padding: '3px 10px',
-              color: palette.textMuted,
-              opacity: 0.5,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '1px',
-            }}
-            onClick={() => handleClickRedo(i)}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = palette.activeItemBg; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-          >
-            <span
-              style={{
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {entry.label}
-            </span>
-            <span style={{ fontSize: '9px' }}>
-              {relativeTime(entry.timestamp)}
-            </span>
-          </div>
-        ))}
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {row.label}
+              </span>
+              {row.timestamp !== undefined && (
+                <span style={{ color: palette.textMuted, fontSize: '9px', fontWeight: 400 }}>
+                  {relativeTime(row.timestamp)}
+                </span>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

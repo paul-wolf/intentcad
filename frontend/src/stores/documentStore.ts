@@ -16,6 +16,9 @@ import { evaluateExpression } from '@/utils/expression';
 
 const UNDO_STACK_LIMIT = 100;
 
+/** One step of the history. On the undo stack `doc` is the document from
+ *  before the step; on the redo stack, from after it. `label` names the step
+ *  either way. */
 export interface HistoryEntry {
   label: string;
   doc: Document;
@@ -48,7 +51,8 @@ interface DocumentStore {
   beginTransaction(label: string): void;
   undo(): void;
   redo(): void;
-  jumpToHistory(index: number): void;
+  /** Go to the state after the first `position` steps (0: before any). */
+  goToHistory(position: number): void;
   restoreHistory(persisted: { undo: HistoryEntry[]; redo: HistoryEntry[] }): void;
 
   // Sketch actions
@@ -152,6 +156,33 @@ function updateActiveSketch(
 // Track document reference at last beginTransaction to detect no-op transactions
 let _lastTransactionDocRef: Document | null = null;
 
+// Undo / redo one step, keeping its label and time; the entry moved, or null.
+function stepBack(): HistoryEntry | null {
+  const { undoStack, redoStack, document } = useDocumentStore.getState();
+  const entry = undoStack[undoStack.length - 1];
+  if (!entry) return null;
+  useDocumentStore.setState({
+    document: entry.doc,
+    undoStack: undoStack.slice(0, -1),
+    redoStack: [...redoStack, { ...entry, doc: structuredClone(document) }],
+  });
+  _lastTransactionDocRef = null;
+  return entry;
+}
+
+function stepForward(): HistoryEntry | null {
+  const { undoStack, redoStack, document } = useDocumentStore.getState();
+  const entry = redoStack[redoStack.length - 1];
+  if (!entry) return null;
+  useDocumentStore.setState({
+    document: entry.doc,
+    undoStack: [...undoStack, { ...entry, doc: structuredClone(document) }],
+    redoStack: redoStack.slice(0, -1),
+  });
+  _lastTransactionDocRef = null;
+  return entry;
+}
+
 export const useDocumentStore = create<DocumentStore>((set, get) => ({
   document: createEmptyDocument('Untitled'),
   undoStack: [],
@@ -231,54 +262,32 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   },
 
   undo() {
-    const { undoStack, redoStack, document } = get();
-    if (undoStack.length === 0) return;
-    const entry = undoStack[undoStack.length - 1]!;
-    set({
-      document: entry.doc,
-      undoStack: undoStack.slice(0, -1),
-      redoStack: [...redoStack, { label: 'Current', doc: structuredClone(document), timestamp: Date.now() }],
-    });
-    _lastTransactionDocRef = null;
-    addLog('info', `Undo: ${entry.label}`);
+    const entry = stepBack();
+    if (entry) addLog('info', `Undo: ${entry.label}`);
   },
 
   redo() {
-    const { undoStack, redoStack, document } = get();
-    if (redoStack.length === 0) return;
-    const entry = redoStack[redoStack.length - 1]!;
-    set({
-      document: entry.doc,
-      undoStack: [...undoStack, { label: 'Current', doc: structuredClone(document), timestamp: Date.now() }],
-      redoStack: redoStack.slice(0, -1),
-    });
-    _lastTransactionDocRef = null;
-    addLog('info', `Redo: ${entry.label}`);
+    const entry = stepForward();
+    if (entry) addLog('info', `Redo: ${entry.label}`);
   },
 
-  jumpToHistory(index: number) {
-    const { undoStack, redoStack, document } = get();
-    if (index < 0 || index >= undoStack.length) return;
-    const entry = undoStack[index]!;
-    // Everything above the target becomes redo entries; push current state onto redo too
-    const newRedo = [
-      ...redoStack,
-      { label: 'Current', doc: structuredClone(document), timestamp: Date.now() },
-      ...undoStack.slice(index + 1).reverse(),
-    ];
-    set({
-      document: entry.doc,
-      undoStack: undoStack.slice(0, index),
-      redoStack: newRedo,
-    });
-    _lastTransactionDocRef = null;
-    addLog('info', `Jump to: ${entry.label}`);
+  goToHistory(position: number) {
+    const { undoStack, redoStack } = get();
+    const target = Math.max(0, Math.min(position, undoStack.length + redoStack.length));
+    if (target === undoStack.length) return;
+    while (get().undoStack.length > target) stepBack();
+    while (get().undoStack.length < target) stepForward();
+    const last = get().undoStack[target - 1];
+    addLog('info', last ? `Back to: after ${last.label}` : 'Back to: start');
   },
 
   restoreHistory(persisted: { undo: HistoryEntry[]; redo: HistoryEntry[] }) {
+    // older saves named an undone-and-redone step 'Current'
+    const named = (es: HistoryEntry[] | undefined) =>
+      (es ?? []).map((e) => (e.label === 'Current' ? { ...e, label: 'Earlier step' } : e));
     set({
-      undoStack: persisted.undo ?? [],
-      redoStack: persisted.redo ?? [],
+      undoStack: named(persisted.undo),
+      redoStack: named(persisted.redo),
     });
   },
 
