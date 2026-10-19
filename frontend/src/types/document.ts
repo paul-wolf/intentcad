@@ -227,6 +227,13 @@ export interface BisectConstraint {
 
 export type Constraint = FixedConstraint | EqualConstraint | CoincidentConstraint | HorizontalConstraint | VerticalConstraint | MidpointConstraint | ParallelConstraint | PerpendicularConstraint | TangentConstraint | BisectConstraint;
 
+/** A grid or circular copy, kept so it can be reopened and changed:
+ *  what was copied, the copies it made, and how. */
+export type CopyPatternParams =
+  | { kind: 'grid'; countX: number; countY: number; spacingX: number; spacingY: number }
+  | { kind: 'circular'; center: Point; count: number };
+export type CopyPattern = { id: string; sourceIds: string[]; copyIds: string[] } & CopyPatternParams;
+
 export interface Sketch {
   id: string;
   name: string;
@@ -239,6 +246,8 @@ export interface Sketch {
   profile?: import('@/build/faceSketch').SketchProfile;
   entities: Entity[];
   constraints: Constraint[];
+  /** Grid and circular copies made in this sketch (see CopyPattern). */
+  patterns?: CopyPattern[];
 }
 
 export interface DocumentMetadata {

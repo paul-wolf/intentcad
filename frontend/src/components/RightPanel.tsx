@@ -4,6 +4,7 @@ import { useThemeStore } from '@/theme';
 import { PropertiesPanel } from './PropertiesPanel';
 import { SketchPanel } from './SketchPanel';
 import { ParametersPanel } from './ParametersPanel';
+import { PatternPanel } from './PatternPanel';
 
 export function RightPanel() {
   const selectedEntityIds = useEditorStore((s) => s.selectedEntityIds);
@@ -29,6 +30,7 @@ export function RightPanel() {
     >
       <SketchPanel />
       <ParametersPanel />
+      <PatternPanel />
       {singleEntity && <PropertiesPanel entity={singleEntity} />}
     </div>
   );

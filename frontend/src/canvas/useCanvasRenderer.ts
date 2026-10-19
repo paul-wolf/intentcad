@@ -81,6 +81,7 @@ export function useCanvasRenderer(opts: UseCanvasRendererOpts) {
           camMode: useCamStore.getState().camPanelOpen,
           copyPreview: useEditorStore.getState().copyPreview,
           copyPreviewCenter: useEditorStore.getState().copyPreviewCenter,
+          copyPreviewHides: useEditorStore.getState().copyPreviewHides,
           ...opts.getRenderOptions?.(),
         };
         try {

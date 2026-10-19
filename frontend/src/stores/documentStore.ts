@@ -1,7 +1,6 @@
 import { create } from 'zustand';
-import { gridCopies } from '@/utils/gridCopy';
-import { circularCopies } from '@/utils/circularCopy';
-import type { Document, DocumentMetadata, Entity, OriginAlignMode, Point, Sketch, Constraint, HorizontalConstraint, VerticalConstraint } from '@/types/document';
+import { patternCopies, prunePatterns } from '@/utils/copyPattern';
+import type { CopyPatternParams, Document, DocumentMetadata, Entity, OriginAlignMode, Point, Sketch, Constraint, HorizontalConstraint, VerticalConstraint } from '@/types/document';
 import { createEmptyDocument, createEmptySketch } from '@/utils/document';
 import { createMirroredEntity, propagateDerived } from '@/utils/propagate';
 import { rotatePoint, lineLineIntersection } from '@/utils/geometry';
@@ -80,11 +79,9 @@ interface DocumentStore {
   // Mirror
   mirrorEntities(entityIds: string[], lineA: Point, lineB: Point): string[];
 
-  // Circular copy
-  circularCopyEntities(entityIds: string[], center: Point, count: number): string[];
-
-  // Grid copy
-  gridCopyEntities(entityIds: string[], countX: number, countY: number, spacingX: number, spacingY: number): string[];
+  // Grid or circular copy: makes the copies and keeps the pattern; given a
+  // patternId, replaces that pattern's copies instead. Returns the new ids.
+  copyPattern(sourceIds: string[], params: CopyPatternParams, patternId?: string | null): string[];
 
   // Center sketch at origin
   centerToOrigin(): void;
@@ -393,6 +390,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
                   return true;
                 }),
                 constraints: sk.constraints.filter((c) => !constraintReferencesAny(c, idSet)),
+                patterns: prunePatterns(sk.patterns, idSet),
               }
             : sk,
         ),
@@ -828,43 +826,36 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     return newEntities.map((e) => e.id);
   },
 
-  circularCopyEntities(entityIds, center, count) {
+  copyPattern(sourceIds, params, patternId = null) {
+    const active = () => get().document.sketches.find((sk) => sk.id === get().document.activeSketchId);
+    const before = active();
+    if (!before) return [];
+    const old = patternId ? before.patterns?.find((p) => p.id === patternId) : undefined;
+    if (old) {
+      const alive = new Set(before.entities.map((e) => e.id));
+      const stale = old.copyIds.filter((id) => alive.has(id));
+      if (stale.length) get().removeEntities(stale);
+    }
     const { document } = get();
-    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
-    if (!sketch) return [];
-    const newEntities = circularCopies(sketch.entities, entityIds, center, count);
-    if (newEntities.length === 0) return [];
+    const sketch = active()!;
+    const newEntities = patternCopies(sketch.entities, sourceIds, params);
+    const id = old?.id ?? generateId('pat');
+    const others = (sketch.patterns ?? []).filter((p) => p.id !== id);
+    const patterns = newEntities.length
+      ? [...others, { id, sourceIds, copyIds: newEntities.map((e) => e.id), ...params }]
+      : others;
     set({
       document: {
         ...document,
         sketches: document.sketches.map((sk) =>
           sk.id === document.activeSketchId
-            ? { ...sk, entities: [...sk.entities, ...newEntities] }
+            ? { ...sk, entities: [...sk.entities, ...newEntities], patterns }
             : sk,
         ),
       },
     });
-    addLog('info', `Circular copy: ${newEntities.length} copies`);
-    return newEntities.map((e) => e.id);
-  },
-
-  gridCopyEntities(entityIds, countX, countY, spacingX, spacingY) {
-    const { document } = get();
-    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
-    if (!sketch) return [];
-    const newEntities = gridCopies(sketch.entities, entityIds, countX, countY, spacingX, spacingY);
-    if (newEntities.length === 0) return [];
-    set({
-      document: {
-        ...document,
-        sketches: document.sketches.map((sk) =>
-          sk.id === document.activeSketchId
-            ? { ...sk, entities: [...sk.entities, ...newEntities] }
-            : sk,
-        ),
-      },
-    });
-    addLog('info', `Grid copy: ${countX}x${countY}`);
+    const what = params.kind === 'grid' ? `Grid copy: ${params.countX}x${params.countY}` : `Circular copy: ${newEntities.length} copies`;
+    addLog('info', old ? `${what} (changed)` : what);
     return newEntities.map((e) => e.id);
   },
 

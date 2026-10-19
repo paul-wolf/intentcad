@@ -36,10 +36,14 @@ interface EditorStore {
   /** Where the pointer would put the centre, while picking it */
   circularCopyHover: Point | null;
   gridCopyEntityIds: string[] | null;
+  /** The pattern a copy dialog is changing (null: making a new one). */
+  copyPatternId: string | null;
   /** Shapes a copy dialog would add, drawn as a preview while it is open. */
   copyPreview: Entity[] | null;
   /** The centre a circular copy preview turns about, marked in the sketch. */
   copyPreviewCenter: Point | null;
+  /** Copies left out of the drawing while a dialog previews their replacements. */
+  copyPreviewHides: Set<string> | null;
   pendingDxfImport: PendingDxfImport | null;
   viewportScale: number;
   viewportCommand: 'center-origin' | 'fit-entities' | null;
@@ -58,12 +62,12 @@ interface EditorStore {
   setEditingDimensionId(id: string | null): void;
   setMirrorEntityIds(ids: string[] | null): void;
   setMirrorPickingLine(picking: boolean): void;
-  setCircularCopyEntityIds(ids: string[] | null): void;
+  setCircularCopyEntityIds(ids: string[] | null, patternId?: string | null): void;
   setCircularCopyPickingCenter(picking: boolean): void;
   setCircularCopyCenter(center: Point | null): void;
   setCircularCopyHover(p: Point | null): void;
-  setGridCopyEntityIds(ids: string[] | null): void;
-  setCopyPreview(entities: Entity[] | null, center?: Point | null): void;
+  setGridCopyEntityIds(ids: string[] | null, patternId?: string | null): void;
+  setCopyPreview(entities: Entity[] | null, center?: Point | null, hides?: Set<string> | null): void;
   setPendingDxfImport(pending: PendingDxfImport | null): void;
   setViewportScale(scale: number): void;
   setViewportCommand(cmd: 'center-origin' | 'fit-entities' | null): void;
@@ -110,8 +114,10 @@ export const useEditorStore = create<EditorStore>((set) => ({
   circularCopyCenter: null,
   circularCopyHover: null,
   gridCopyEntityIds: null,
+  copyPatternId: null,
   copyPreview: null,
   copyPreviewCenter: null,
+  copyPreviewHides: null,
   pendingDxfImport: null,
   viewportScale: 1,
   viewportCommand: null,
@@ -193,10 +199,11 @@ export const useEditorStore = create<EditorStore>((set) => ({
     set({ mirrorPickingLine: picking });
   },
 
-  setCircularCopyEntityIds(ids) {
+  setCircularCopyEntityIds(ids, patternId = null) {
     set({
       circularCopyEntityIds: ids, circularCopyPickingCenter: false, circularCopyCenter: null, circularCopyHover: null,
-      ...(ids ? {} : { copyPreview: null, copyPreviewCenter: null }),
+      copyPatternId: ids ? patternId : null,
+      ...(ids ? {} : { copyPreview: null, copyPreviewCenter: null, copyPreviewHides: null }),
     });
   },
 
@@ -212,12 +219,15 @@ export const useEditorStore = create<EditorStore>((set) => ({
     set({ circularCopyHover: p });
   },
 
-  setGridCopyEntityIds(ids) {
-    set({ gridCopyEntityIds: ids, ...(ids ? {} : { copyPreview: null, copyPreviewCenter: null }) });
+  setGridCopyEntityIds(ids, patternId = null) {
+    set({
+      gridCopyEntityIds: ids, copyPatternId: ids ? patternId : null,
+      ...(ids ? {} : { copyPreview: null, copyPreviewCenter: null, copyPreviewHides: null }),
+    });
   },
 
-  setCopyPreview(entities, center = null) {
-    set({ copyPreview: entities, copyPreviewCenter: center });
+  setCopyPreview(entities, center = null, hides = null) {
+    set({ copyPreview: entities, copyPreviewCenter: center, copyPreviewHides: hides });
   },
 
   setPendingDxfImport(pending) {

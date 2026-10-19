@@ -24,6 +24,7 @@ import { snapPosition, type SnapResult } from '@/snap/snap';
 import { getStyles } from '@/rendering/styles';
 import { SNAP_INDICATOR_RADIUS } from '@/config';
 import { traceContour } from '@/utils/contourTrace';
+import { openCopyDialog } from './openCopyDialog';
 
 /** Filter entities for CAM mode: remove construction, dimension, and standalone points */
 function filterEntitiesForCam(entities: Entity[]): Entity[] {
@@ -660,16 +661,10 @@ export function createSelectTool(): Tool {
         resetDrag();
       }
       if (e.key === 'a' || e.key === 'A') {
-        const ids = useEditorStore.getState().selectedEntityIds;
-        if (ids.size > 0) {
-          useEditorStore.getState().setCircularCopyEntityIds([...ids]);
-        }
+        openCopyDialog('circular');
       }
       if (e.key === 'g' || e.key === 'G') {
-        const ids = useEditorStore.getState().selectedEntityIds;
-        if (ids.size > 0) {
-          useEditorStore.getState().setGridCopyEntityIds([...ids]);
-        }
+        openCopyDialog('grid');
       }
       if (e.key === 'm' || e.key === 'M') {
         const ids = useEditorStore.getState().selectedEntityIds;

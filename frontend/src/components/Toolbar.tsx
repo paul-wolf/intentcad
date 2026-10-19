@@ -17,6 +17,7 @@ import { getSegmentCount } from '@/utils/lineSegments';
 import { requestSave, getProjectId, getProjectName, setBackendId, setProjectContext } from '@/api/autoSave';
 import { createEmptyDocument, generateNumberedName } from '@/utils/document';
 import { addLog } from '@/stores/logStore';
+import { openCopyDialog } from '@/tools/openCopyDialog';
 import { api } from '@/api/cachedClient';
 import type { ToolType } from '@/types/editor';
 import type { ThemePalette } from '@/theme';
@@ -590,24 +591,14 @@ export function Toolbar({ embedded = false }: ToolbarProps = {}) {
           <ToolIcon><polygon points="5,3 1,8 5,13" /><line x1="8" y1="1" x2="8" y2="15" /><polygon points="11,3 15,8 11,13" /></ToolIcon>
         </button>
         <button
-          onClick={() => {
-            const ids = useEditorStore.getState().selectedEntityIds;
-            if (ids.size === 0) return;
-            if (activeTool !== 'select') setActiveTool('select');
-            useEditorStore.getState().setCircularCopyEntityIds([...ids]);
-          }}
+          onClick={() => openCopyDialog('circular')}
           style={btn(palette)}
           title="Circular copy selected entities (A)"
         >
           <ToolIcon><circle cx="8" cy="8" r="6" strokeDasharray="3 2" /><circle cx="8" cy="2" r="1.5" fill="currentColor" stroke="none" /><circle cx="13.2" cy="11" r="1.5" fill="currentColor" stroke="none" /><circle cx="2.8" cy="11" r="1.5" fill="currentColor" stroke="none" /></ToolIcon>
         </button>
         <button
-          onClick={() => {
-            const ids = useEditorStore.getState().selectedEntityIds;
-            if (ids.size === 0) return;
-            if (activeTool !== 'select') setActiveTool('select');
-            useEditorStore.getState().setGridCopyEntityIds([...ids]);
-          }}
+          onClick={() => openCopyDialog('grid')}
           style={btn(palette)}
           title="Grid copy selected entities (G)"
         >

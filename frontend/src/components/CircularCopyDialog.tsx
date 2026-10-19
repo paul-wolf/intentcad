@@ -4,6 +4,7 @@ import { useDocumentStore } from '@/stores/documentStore';
 import { useThemeStore } from '@/theme';
 import { requestSave } from '@/api/autoSave';
 import { circularCopies } from '@/utils/circularCopy';
+import type { CopyPattern } from '@/types/document';
 
 const fmt = (n: number) => String(Number(n.toFixed(3)));
 
@@ -12,6 +13,10 @@ export function CircularCopyDialog() {
   const circularCopyPickingCenter = useEditorStore((s) => s.circularCopyPickingCenter);
   const circularCopyCenter = useEditorStore((s) => s.circularCopyCenter);
   const circularCopyHover = useEditorStore((s) => s.circularCopyHover);
+  const copyPatternId = useEditorStore((s) => s.copyPatternId);
+  // the circular copy being changed, when opened from "Edit circular copy…"
+  const editing = useDocumentStore((s) => s.document.sketches.find((sk) => sk.id === s.document.activeSketchId)
+    ?.patterns?.find((p): p is Extract<CopyPattern, { kind: 'circular' }> => p.id === copyPatternId && p.kind === 'circular'));
   const palette = useThemeStore((s) => s.palette);
 
   // the fields as typed (so "-" or "" can be on the way to a value)
@@ -19,6 +24,15 @@ export function CircularCopyDialog() {
   const [xText, setXText] = useState('');
   const [yText, setYText] = useState('');
   const count = Math.max(2, parseInt(countText) || 2);
+
+  // editing: start from the pattern as it was made
+  useEffect(() => {
+    if (!circularCopyEntityIds || !editing) return;
+    setCountText(String(editing.count));
+    setXText(fmt(editing.center.x));
+    setYText(fmt(editing.center.y));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [circularCopyEntityIds, editing?.id]);
 
   // a centre picked in the sketch fills the fields
   useEffect(() => {
@@ -43,10 +57,12 @@ export function CircularCopyDialog() {
     let n = 0;
     return circularCopies(entities, circularCopyEntityIds, { x: cx, y: cy }, count, () => `circular-preview-${n++}`);
   }, [circularCopyEntityIds, entities, cx, cy, count]);
+  // the copies being replaced are left out while their replacements show
+  const hides = useMemo(() => (editing ? new Set(editing.copyIds) : null), [editing]);
   useEffect(() => {
-    useEditorStore.getState().setCopyPreview(preview, cx === undefined || cy === undefined ? null : { x: cx, y: cy });
+    useEditorStore.getState().setCopyPreview(preview, cx === undefined || cy === undefined ? null : { x: cx, y: cy }, hides);
     return () => useEditorStore.getState().setCopyPreview(null);
-  }, [preview, cx, cy]);
+  }, [preview, cx, cy, hides]);
 
   if (!circularCopyEntityIds) return null;
   const shapes = circularCopyEntityIds.filter((id) => entities?.some((e) => e.id === id && e.type !== 'dimension')).length;
@@ -61,11 +77,11 @@ export function CircularCopyDialog() {
 
   const apply = () => {
     if (!typedCenter || circularCopyPickingCenter) return;
-    useDocumentStore.getState().beginTransaction('Circular copy');
-    const newIds = useDocumentStore.getState().circularCopyEntities(
+    useDocumentStore.getState().beginTransaction(editing ? 'Edit circular copy' : 'Circular copy');
+    const newIds = useDocumentStore.getState().copyPattern(
       circularCopyEntityIds,
-      typedCenter,
-      count,
+      { kind: 'circular', center: typedCenter, count },
+      editing?.id,
     );
     useEditorStore.getState().setCircularCopyEntityIds(null);
     if (newIds.length > 0) {
@@ -125,8 +141,19 @@ export function CircularCopyDialog() {
       }}
     >
       <div style={{ color: palette.text, fontSize: '14px', fontWeight: 600, marginBottom: '4px' }}>
-        Circular Copy
+        {editing ? 'Edit Circular Copy' : 'Circular Copy'}
       </div>
+
+      {editing && (
+        <button
+          style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '11px',
+                   color: palette.textSecondary, textDecoration: 'underline' }}
+          title="Leave the existing copies alone and add another set"
+          onClick={() => useEditorStore.getState().setCircularCopyEntityIds(circularCopyEntityIds)}
+        >
+          Make a new one instead
+        </button>
+      )}
 
       <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
         <label style={labelStyle}>Centre X</label>
@@ -169,7 +196,8 @@ export function CircularCopyDialog() {
       </div>
 
       <div style={{ color: palette.textSecondary, fontSize: '12px', textAlign: 'center', lineHeight: 1.4 }}>
-        {count} round the centre, every {fmt(360 / count)}° · {(count - 1) * shapes} new
+        {count} round the centre, every {fmt(360 / count)}° · {(count - 1) * shapes}{' '}
+        {editing ? `copies (was ${editing.copyIds.length})` : 'new'}
         {shapes > 1 ? ` (${shapes} shapes)` : ''}
         <br />
         <span style={{ color: palette.accent }}>
@@ -182,7 +210,7 @@ export function CircularCopyDialog() {
         disabled={!canApply}
         onClick={apply}
       >
-        Apply
+        {editing ? 'Update' : 'Apply'}
       </button>
       <button
         style={{ ...btnStyle, color: palette.textSecondary, fontSize: '12px' }}

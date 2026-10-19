@@ -44,6 +44,8 @@ export interface RenderContext {
   copyPreview?: Entity[] | null;
   /** The centre a circular copy preview turns about. */
   copyPreviewCenter?: Point | null;
+  /** Shapes left out while a copy dialog previews their replacements. */
+  copyPreviewHides?: Set<string> | null;
 }
 
 /** Step 1: Clear background */
@@ -277,6 +279,7 @@ function renderActiveSketch(ctx: RenderContext) {
   const { relatedIds } = ctx.camMode ? { relatedIds: new Set<string>() } : getConstraintPartners(selectedEntityIds, activeSketch.constraints);
 
   for (const entity of activeSketch.entities) {
+    if (ctx.copyPreviewHides?.has(entity.id)) continue;   // being replaced (see renderCopyPreview)
     // In CAM mode, skip construction entities and dimensions
     if (ctx.camMode) {
       if (entity.type === 'dimension') continue;
