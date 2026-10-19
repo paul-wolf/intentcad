@@ -4,7 +4,8 @@ The frontend stores each face sketch's closed loops (its "profile") with the
 sketch, in sketch coordinates on the sketch's plane:
 
     {"plane": {"origin": [x,y,z], "normal": [x,y,z], "xAxis": [x,y,z]},
-     "loops": [[segment, ...], ...]}
+     "loops": [[segment, ...], ...],
+     "points": [[x,y], ...]}          (its point entities: where sketch_points() puts holes)
 
     segment = {"t": "line",   "p": [[x,y], [x,y]]}
             | {"t": "arc",    "p": [[x,y], mid, [x,y]]}      (three-point arc)
@@ -108,6 +109,30 @@ def profile_faces(profile: dict, name: str = "sketch") -> list[Face]:
     return faces
 
 
+class Points(list):
+    """sketch_points(): Vectors on a sketch's plane, with that plane's
+    `normal` (out of the face the sketch was drawn on)."""
+
+    def __init__(self, points, normal: Vector, name: str = ""):
+        super().__init__(points)
+        self.normal = normal
+        self.name = name
+
+
+def profile_points(profile: dict, name: str = "sketch") -> Points:
+    """The profile's points and the centres of its circles, in 3D on its
+    plane, each place once."""
+    pl = _plane(profile.get("plane") or {})
+    flat = [tuple(p) for p in profile.get("points") or []]
+    flat += [tuple(seg["c"]) for loop in profile.get("loops") or [] for seg in loop if seg.get("t") == "circle"]
+    out: list[Vector] = []
+    for x, y in flat:
+        v = pl.from_local_coords((float(x), -float(y)))
+        if all((v - o).length > 1e-6 for o in out):
+            out.append(v)
+    return Points(out, pl.z_dir, name)
+
+
 def _vec(v) -> Vector:
     return Vector(float(v[0]), float(v[1]), float(v[2]))
 
@@ -170,4 +195,16 @@ def bind(profiles: dict, ns: dict | None = None, report: dict | None = None) -> 
             profile = {**profile, "plane": where["plane"]}
         faces = profile_faces(profile, name)
         return faces[0] if len(faces) == 1 else Compound(faces)
-    return {"sketch": sketch}
+
+    def sketch_points(name: str) -> Points:
+        """The face sketch `name`'s points and circle centres, on its plane
+        as rebound onto `part` (a list of Vectors; .normal points out of the
+        face it was drawn on)."""
+        if name not in profiles:
+            raise SketchError(f"no sketch named {name!r} in this part")
+        profile = profiles[name]
+        where = rebind(profile, (ns or {}).get("part"))
+        if report is not None:
+            report[name] = where
+        return profile_points({**profile, "plane": where["plane"] or profile.get("plane")}, name)
+    return {"sketch": sketch, "sketch_points": sketch_points}

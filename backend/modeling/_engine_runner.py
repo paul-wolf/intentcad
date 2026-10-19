@@ -434,7 +434,7 @@ def _run(code: str, export: list | None = None,
 
     face_report: list[dict] = []
     ns.update(face_ref.bind(ns, face_report))
-    ns.update(shell_hole.bind())
+    ns.update(shell_hole.bind(ns))
     # Run the script. If an operation fails partway (e.g. a chamfer too big),
     # `part` still holds the model built up to that line — render THAT plus the
     # error as a warning, instead of blanking the whole model.

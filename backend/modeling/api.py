@@ -10,11 +10,13 @@ from projects.access import require_auth
 from .assistant import AssistantError, edit_script
 from .models import AiEdit
 from .engine import EngineError, run_script
+from . import hole_presets
 from .llm_models import list_models
-from .paramedit import ParamError, add_extrude, add_shell, op_at, set_params
+from .paramedit import ParamError, add_extrude, add_holes, add_shell, op_at, set_params
 from .schemas import (
     AddExtrudeRequest,
     AddExtrudeResponse,
+    AddHolesRequest,
     AddOpResponse,
     AddShellRequest,
     OpAtRequest,
@@ -145,6 +147,30 @@ def add_shell_endpoint(request, payload: AddShellRequest):
     except (ParamError, SyntaxError) as exc:
         return JsonResponse({"message": str(exc)}, status=422)
     return AddOpResponse(code=code, param=param)
+
+
+@router.post("/add_holes", response=AddOpResponse)
+def add_holes_endpoint(request, payload: AddHolesRequest):
+    """Append a holes() line (or rewrite the one on `line`), its depth and
+    changed sizes P keys, and return the updated script."""
+    err = require_auth(request)
+    if err:
+        return err
+    try:
+        code, param = add_holes(payload.code, payload.at, payload.kind, payload.size, payload.depth,
+                                payload.fit, payload.standoff, payload.sizes, payload.line)
+    except (ParamError, SyntaxError, KeyError, TypeError, ValueError) as exc:
+        return JsonResponse({"message": str(exc)}, status=422)
+    return AddOpResponse(code=code, param=param)
+
+
+@router.get("/hole_presets")
+def hole_presets_endpoint(request):
+    """Every hole size the Hole dialog offers (modeling/hole_presets.py)."""
+    err = require_auth(request)
+    if err:
+        return err
+    return hole_presets.table()
 
 
 @router.post("/op_at", response=OpAtResponse)

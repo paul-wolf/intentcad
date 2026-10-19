@@ -184,6 +184,28 @@ def _system(production: str = "") -> str:
         "them. Keep every face_ref({...}) exactly as written, and keep each "
         "shell()/holes() call on one line (the dialogs reopen them); write your own "
         "with selectors instead.\n\n"
+        "HOLES (no import): part = holes(part, at=…, kind=…, size=…, depth=…) drills "
+        "screw holes along the face's normal into the part. at= sketch_points(\"<name>\") "
+        "(the points and circle centres of a face sketch, on its face as it is now; "
+        "a list of Vectors with .normal), a flat face (its centre: a selector or "
+        "face_ref), or [(point, outward normal), …]. kind= \"clearance\" (fit=\"close\" "
+        "or \"normal\"), \"tapped\" (tap drill / self-tapping), \"insert\" (heat-set, "
+        "CNC Kitchen sizes), \"counterbore\" (socket head cap screw), \"countersink\" "
+        "(90° countersunk screw); size= \"M2\", \"M2.5\", \"M3\", \"M4\" or \"M5\". "
+        "depth= a number from the face, or \"through\" (clearance, counterbore and "
+        "countersink default to through; give tapped and insert holes a depth in P, "
+        "e.g. P[\"insert_depth\"]). standoff=dict(h=P[\"standoff_h\"], d=P[\"standoff_d\"], "
+        "fillet=1) first grows a boss h high and d across at each place, its foot "
+        "rounded, and drills the hole into its top. Every size comes from the preset "
+        "table (modeling/hole_presets.py, below): never invent hole diameters, "
+        "counterbores or insert sizes — pass the kind and size and let holes() size "
+        "it. Only to override one on purpose, pass d=, cbore_d=, cbore_depth= or "
+        "csk_d= from P. P[\"hole_comp\"] (default 0) is added to every hole diameter "
+        "for printers whose holes come out small; leave it to the user. E.g. \"four "
+        "M3 insert standoffs 6 high on the PCB sketch\" is part = holes(part, "
+        "at=sketch_points(\"PCB\"), kind=\"insert\", size=\"M3\", depth=P[\"insert_depth\"], "
+        "standoff=dict(h=P[\"standoff_h\"], d=P[\"standoff_d\"], fillet=1)).\n"
+        + _hole_table() + "\n\n"
         "ROUNDING THE WHOLE PART: auto_round(part, convex=…, concave=…, keep=[…]) "
         "is available (no import) and rounds every eligible edge — convex edges "
         "to `convex`, concave edges to `concave` — capping each radius to the "
@@ -277,8 +299,27 @@ ASK_TOOL = {
 
 
 
+def _hole_table() -> str:
+    """The hole presets, one line per kind, for the system prompt."""
+    from modeling import hole_presets as hp
+
+    def row(kind: str, fit: str = "normal") -> str:
+        vals = []
+        for size in hp.SIZES:
+            v = hp.preset(kind, size, fit)
+            extra = {"counterbore": f"/{v.get('cbore_d')}x{v.get('cbore_depth')}",
+                     "countersink": f"/{v.get('csk_d')}"}.get(kind, "")
+            deep = f" {v['depth']} deep" if v.get("depth") else ""
+            vals.append(f"{size} {v['d']}{extra}{deep}")
+        name = f"{kind} ({fit})" if kind == "clearance" else kind
+        return f"  {name}: " + ", ".join(vals)
+
+    return "HOLE PRESETS (mm; counterbore d/bore x bore depth, countersink d/head):\n" + "\n".join(
+        [row("clearance", "close"), row("clearance"), *(row(k) for k in hp.KINDS[1:])])
+
+
 def _face_sketches(document_id: str | None) -> list[str]:
-    """One line per face sketch of the document that has closed shapes."""
+    """One line per face sketch of the document that has closed shapes or points."""
     if not document_id:
         return []
     from django.core.exceptions import ValidationError
@@ -291,14 +332,16 @@ def _face_sketches(document_id: str | None) -> list[str]:
     out = []
     for s in data.get("sketches") or []:
         prof = s.get("profile") if isinstance(s, dict) else None
-        if not prof or not prof.get("loops"):
+        if not prof or not (prof.get("loops") or prof.get("points")):
             continue
         pl = prof.get("plane") or {}
         n = [round(v, 3) for v in pl.get("normal", [])]
         o = [round(v, 2) for v in pl.get("origin", [])]
         face = prof.get("face") or {}
         on = f"drawn on the {face['hint']}, " if face.get("hint") else ""
-        out.append(f"- {json.dumps(s.get('name'))}: {len(prof['loops'])} closed shape(s), {on}on the plane "
+        pts = len(prof.get("points") or []) + sum(1 for lp in prof.get("loops") or [] for g in lp if g.get("t") == "circle")
+        what = f"{len(prof.get('loops') or [])} closed shape(s)" + (f", {pts} point(s)/circle centre(s)" if pts else "")
+        out.append(f"- {json.dumps(s.get('name'))}: {what}, {on}on the plane "
                    f"through {o} with normal {n} (as drawn; it follows its face)")
     return out
 
@@ -398,7 +441,7 @@ def edit_script(
 
     def prompt(extra: str = "") -> str:
         sel = f"SELECTION: {context}\n\n" if context.strip() else ""
-        sk = ("FACE SKETCHES (usable as sketch(\"<name>\")):\n" + "\n".join(drawn) + "\n\n") if drawn else ""
+        sk = ("FACE SKETCHES (usable as sketch(\"<name>\") / sketch_points(\"<name>\")):\n" + "\n".join(drawn) + "\n\n") if drawn else ""
         berr = (f"BUILD ERROR (the current script fails with this):\n{build_error.strip()}\n\n"
                 if build_error.strip() else "")
         convo = ""

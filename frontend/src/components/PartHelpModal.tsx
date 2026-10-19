@@ -25,8 +25,18 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
         + 'close it, click a face of the part to add it. The result shows as a blue ghost while you change '
         + 'things. It adds one script line, the thickness a parameter (wall). Too thick says the largest that '
         + 'works. Or ask: "shell it, 2 mm walls, open top".'],
-      ['Edit a step', 'In the code view, put the cursor on a shell(…) line and click "Edit shell" at the top right '
-        + '(or double-click the line): its dialog opens with the line\'s values, and OK rewrites only that line.'],
+      ['Hole', 'Screw holes going straight into the part. Where: the points and circle centres of a sketch '
+        + '(select the face it is drawn on, or pick it in "At"), or the centre of a selected flat face. Kind: '
+        + 'Clearance (close or normal fit), Tapped (self-tapping into plastic), Heat-set insert, Counterbore or '
+        + 'Countersink; sizes M2–M5. Standoff puts each hole in a round boss of a height and outer diameter, '
+        + 'with a fillet at its foot. Depth is a number or Through. The sizes come from one table (sources '
+        + 'shown in the dialog); each shows "preset" and can be changed — a changed one becomes a parameter. '
+        + 'hole_comp (in Parameters, 0 to start) is added to every hole diameter, to correct for your printer. '
+        + 'The result shows as a blue ghost while you change things; it adds one script line. '
+        + 'Or ask: "four M3 insert standoffs 6 high at the sketch points".'],
+      ['Edit a step', 'In the code view, put the cursor on a shell(…) or holes(…) line and click "Edit shell" / '
+        + '"Edit holes" at the top right (or double-click the line): its dialog opens with the line\'s values, '
+        + 'and OK rewrites only that line.'],
       ['Fix with AI', 'Shown when a build fails: sends the error to the AI, which repairs the script and rebuilds.'],
     ],
   },

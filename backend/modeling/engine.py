@@ -187,9 +187,10 @@ def load_assets(code: str, document_id: str | None) -> dict[str, bytes]:
     return {sha: bytes(data) for sha, data in rows.items()}
 
 
-# A face sketch is referenced by name: sketch("Sketch on top face"). Its closed
-# loops (the profile the frontend stores with the sketch) travel with the build.
-SKETCH_REF = re.compile(r"""\bsketch\(\s*(["'])(.+?)\1\s*\)""")
+# A face sketch is referenced by name: sketch("Sketch on top face") or
+# sketch_points("..."). Its closed loops and points (the profile the frontend
+# stores with the sketch) travel with the build.
+SKETCH_REF = re.compile(r"""\bsketch(?:_points)?\(\s*(["'])(.+?)\1\s*\)""")
 
 
 def sketch_refs(code: str) -> set[str]:

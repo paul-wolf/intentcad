@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 
 
 class ParamError(ValueError):
@@ -168,7 +169,7 @@ def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
 # read back (op_at) to reopen the dialog on it. Editing rewrites that line in
 # place and sets the values of the P keys it uses; nothing else changes.
 
-OPS = ("shell",)
+OPS = ("shell", "holes")
 
 
 def _lit(v) -> str:
@@ -278,10 +279,35 @@ def _face_refs(node) -> list[dict]:
     return out
 
 
+# holes() arguments that override a preset size (hole_presets), and the base
+# of the P key each gets
+HOLE_SIZES = {"d": "hole_d", "cbore_d": "cbore_d", "cbore_depth": "cbore_depth", "csk_d": "csk_d"}
+
+
+def _at(node) -> dict:
+    """holes(at=...): {"sketch": name} or {"face": ref}."""
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.args
+            and node.func.id == "sketch_points" and isinstance(node.args[0], ast.Constant)):
+        return {"sketch": node.args[0].value}
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "face_ref":
+        return {"face": _face_refs(node)[0]}
+    raise ParamError(f"can't read where the holes go ({ast.unparse(node)!r}): edit this line in the code")
+
+
+def _dict_items(node) -> list[tuple[str, ast.AST]]:
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "dict":
+        return [(k.arg, k.value) for k in node.keywords if k.arg]
+    if isinstance(node, ast.Dict):
+        return [(k.value, v) for k, v in zip(node.keys, node.values)
+                if isinstance(k, ast.Constant) and isinstance(k.value, str)]
+    raise ParamError(f"can't read {ast.unparse(node)!r}: edit this line in the code")
+
+
 def op_at(code: str, line: int) -> dict:
     """The Shell/Hole operation on script line `line`, for its dialog:
     {"op", "line", "end_line", "args", "params"} where args holds the values
-    (P keys resolved) and params which P key holds each."""
+    (P keys resolved) and params which P key holds each ("standoff.h" for
+    a standoff's)."""
     tree = ast.parse(code)
     hit = _op_stmt(tree, line)
     if hit is None:
@@ -295,6 +321,22 @@ def op_at(code: str, line: int) -> dict:
         args["remove"] = _face_refs(kw["remove"]) if "remove" in kw else []
         args["thickness"], params["thickness"] = _value(kw["thickness"], pv) if "thickness" in kw else (2.0, None)
         args["inside"] = _value(kw["inside"], pv)[0] if "inside" in kw else True
+    else:
+        args["at"] = _at(kw["at"]) if "at" in kw else None
+        for k, default in (("kind", "clearance"), ("size", "M3"), ("fit", "normal")):
+            args[k] = _value(kw[k], pv)[0] if k in kw else default
+        args["depth"], params["depth"] = _value(kw["depth"], pv) if "depth" in kw else ("through", None)
+        if args["depth"] == "through":
+            args["depth"] = None
+        args["sizes"] = {}
+        for k in HOLE_SIZES:
+            if k in kw:
+                args["sizes"][k], params[k] = _value(kw[k], pv)
+        args["standoff"] = None
+        if "standoff" in kw and not (isinstance(kw["standoff"], ast.Constant) and kw["standoff"].value is None):
+            args["standoff"] = {}
+            for k, node in _dict_items(kw["standoff"]):
+                args["standoff"][k], params[f"standoff.{k}"] = _value(node, pv)
     return {"op": op, "line": stmt.lineno, "end_line": stmt.end_lineno or stmt.lineno,
             "args": args, "params": {k: v for k, v in params.items() if v}}
 
@@ -340,3 +382,104 @@ def add_shell(code: str, remove: list[dict], thickness: float = 2.0, inside: boo
     code = _write_op(code, text, line, "shell")
     code, key = _number(code, thickness, key, "wall", names)
     return code, key
+
+
+def drop_param(code: str, key: str) -> str:
+    """`code` without P's `key`, unless something still uses it (or its entry
+    spans lines: then it is left)."""
+    tree = ast.parse(code)
+    if any(_p_key(n) == key for n in ast.walk(tree)):
+        return code
+    target = _params_assignment(tree)
+    if isinstance(target, ast.Call):
+        items = [(kw.arg, kw, kw.value) for kw in target.keywords if kw.arg]
+    elif isinstance(target, ast.Dict):
+        items = [(k.value, k, v) for k, v in zip(target.keys, target.values)
+                 if isinstance(k, ast.Constant) and isinstance(k.value, str)]
+    else:
+        return code
+    i = next((i for i, it in enumerate(items) if it[0] == key), None)
+    if i is None:
+        return code
+    _, start, end = items[i]
+    if start.lineno != end.end_lineno:
+        return code
+    lines = code.split("\n")
+    row = lines[start.lineno - 1]
+    if i > 0 and items[i - 1][2].end_lineno == start.lineno:      # ", key=v" after the one before
+        a, b = items[i - 1][2].end_col_offset, end.end_col_offset
+    elif i + 1 < len(items) and items[i + 1][1].lineno == start.lineno:   # "key=v, " before the next
+        a, b = start.col_offset, items[i + 1][1].col_offset
+    elif row[:start.col_offset].strip() == "" :                      # on a line of its own
+        del lines[start.lineno - 1]
+        return "\n".join(lines)
+    else:
+        a, b = start.col_offset, end.end_col_offset
+    lines[start.lineno - 1] = row[:a] + row[b:]
+    return "\n".join(lines)
+
+
+def add_holes(code: str, at: dict, kind: str = "clearance", size: str = "M3",
+              depth: float | None = None, fit: str = "normal", standoff: dict | None = None,
+              sizes: dict | None = None, line: int | None = None) -> tuple[str, str | None]:
+    """Append `part = holes(part, at=..., kind=..., size=..., depth=..., ...)`
+    — or, with `line`, rewrite the holes() line there. `at` is {"sketch":
+    name} or {"face": ref}; depth None is through. A blind depth, the
+    standoff's h and d and each preset size the dialog changed (`sizes`: d,
+    cbore_d, cbore_depth, csk_d) live in P: the line's own keys, or new ones.
+    P gets hole_comp=0 if it has no hole_comp yet. Returns (code, the depth's
+    key or None)."""
+    from modeling import hole_presets
+
+    if not _assigns_part(ast.parse(code)):
+        raise ParamError("there is no part to put holes in yet")
+    try:
+        hole_presets.preset(kind, size, fit)
+    except ValueError as exc:
+        raise ParamError(str(exc)) from None
+    if depth is not None and float(depth) <= 0:
+        raise ParamError("the hole depth must be more than 0 (or through)")
+    sizes = {k: float(v) for k, v in (sizes or {}).items() if v is not None}
+    if set(sizes) - HOLE_SIZES.keys():
+        raise ParamError(f"unknown hole size {sorted(set(sizes) - HOLE_SIZES.keys())[0]!r}")
+    if standoff is not None and (float(standoff.get("h", 0)) <= 0 or float(standoff.get("d", 0)) <= 0):
+        raise ParamError("a standoff needs a height and a diameter more than 0")
+    old = op_at(code, line)["params"] if line is not None else {}
+    names = param_names(code)
+
+    # the P key of each number: the line's own if its name still fits, else a new one
+    want: dict[str, tuple[float, str]] = {}
+    if depth is not None:
+        want["depth"] = (float(depth), f"{kind if kind in ('insert', 'tapped') else 'hole'}_depth")
+    for k, v in sizes.items():
+        want[k] = (v, HOLE_SIZES[k])
+    if standoff is not None:
+        want["standoff.h"] = (float(standoff["h"]), "standoff_h")
+        want["standoff.d"] = (float(standoff["d"]), "standoff_d")
+    keys: dict[str, str] = {}
+    for slot, (_, base) in want.items():
+        k = old.get(slot)
+        stem, _, suffix = base.partition("_")
+        same = k in names and re.fullmatch(rf"{stem}\d*_{suffix}", k)   # insert_depth stays insert_depth
+        keys[slot] = k if same else _name(names | set(keys.values()), base)
+
+    where = (f"sketch_points({json.dumps(at['sketch'])})" if "sketch" in at
+             else f"face_ref({_lit(at['face'])})")
+    parts = [f"at={where}", f"kind={json.dumps(kind)}", f"size={json.dumps(size)}"]
+    if kind == "clearance":
+        parts.append(f"fit={json.dumps(fit)}")
+    parts.append(f'depth=P["{keys["depth"]}"]' if "depth" in keys else 'depth="through"')
+    parts += [f'{k}=P["{keys[k]}"]' for k in HOLE_SIZES if k in keys]
+    if standoff is not None:
+        fil = _lit(float(standoff.get("fillet", hole_presets.STANDOFF_FILLET)))
+        parts.append(f'standoff=dict(h=P["{keys["standoff.h"]}"], d=P["{keys["standoff.d"]}"], fillet={fil})')
+    text = f"part = holes(part, {', '.join(parts)})"
+    code = _write_op(code, text, line, "holes")
+    for slot, (v, _) in want.items():
+        k = keys[slot]
+        code = set_params(code, {k: v}) if k in names else add_param(code, k, v)
+    if "hole_comp" not in param_names(code):
+        code = add_param(code, "hole_comp", 0.0)
+    for k in set(old.values()) - set(keys.values()):
+        code = drop_param(code, k)
+    return code, keys.get("depth")

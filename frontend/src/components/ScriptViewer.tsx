@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
-import { api, buildApi, errorText, ApiError, type RunResponse, type UsageResponse, type DimInfo, type ModelInfo, type SizeFix, type FaceRefSpec } from '@/api/client';
+import {
+  api, buildApi, errorText, ApiError, type RunResponse, type UsageResponse, type DimInfo, type ModelInfo, type SizeFix,
+  type FaceRefSpec, type HolePresets,
+} from '@/api/client';
 import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, persistSketches, getBackendId } from '@/api/autoSave';
 import { DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
 import type { ChatMessage } from '@/types/document';
@@ -15,8 +18,14 @@ import { importScript, importLabel, STEP_ACCEPT } from '@/build/importStep';
 import { PartVersionsPanel } from './PartVersionsPanel';
 import { PartHelpModal } from './PartHelpModal';
 import { useFaceSketch, type ExtrudeOptions } from './FaceSketchMode';
-import { ShellDialog, useOpPreview, refOf, faceOfRef, sameRef, OP_LINE, type ShellValues } from './OpDialogs';
-import { BASE_PLANES, referencedProfiles, referencedSketchNames, sketchBindNotes, type BasePlane, type SketchBindings } from '@/build/faceSketch';
+import {
+  ShellDialog, HoleDialog, useOpPreview, refOf, faceOfRef, sameRef, OP_LINE, holesPayload, holeValuesOf, newHoleValues,
+  placeKey, type ShellValues, type HoleValues, type HolePlace,
+} from './OpDialogs';
+import {
+  BASE_PLANES, faceLabel, findFaceSketch, referencedProfiles, referencedSketchNames, sketchBindNotes, sketchHolePoints,
+  type BasePlane, type SketchBindings,
+} from '@/build/faceSketch';
 import { resolvePartSketches, sketchParamWarning } from '@/build/sketchParams';
 import { partParams } from '@/build/scriptParams';
 import { usesNames } from '@/utils/resolveSketch';
@@ -749,6 +758,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   };
   const closeOp = () => {
     setShellOp(null);
+    setHoleOp(null);
     viewerRef.current?.hoverFace(null);
     applySelection([]);
   };
@@ -765,9 +775,94 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       setNotice(`Shell: ${errorText(err)}`);
     }
   };
-  // while the dialog is open, clicking a face opens or closes it, and the
-  // faces it opens show as selected
-  opPickRef.current = shellOp ? (f) => {
+  // Hole: a dialog writing `part = holes(part, at=sketch_points("..."), ...)`
+  // (or at=face_ref(...): a face's centre), previewed the same way.
+  const [holeOp, setHoleOp] = useState<{ line: number | null; v: HoleValues } | null>(null);
+  const [holePresets, setHolePresets] = useState<HolePresets | null>(null);
+  // the face picked for "its centre" (it stays a choice while the dialog is open)
+  const [holeFace, setHoleFace] = useState<{ ref: FaceRefSpec; normal: [number, number, number] } | null>(null);
+  const holeKey = holeOp ? JSON.stringify(holeOp) : '';
+  const holeLine = (h: { line: number | null; v: HoleValues }, p: HolePresets) =>
+    buildApi.addHoles({ code: codeRef.current, ...holesPayload(h.v, p), line: h.line });
+  const holePreview = useOpPreview(
+    viewerRef,
+    holeOp && holePresets ? () => holeLine(holeOp, holePresets).then((r) => r.code) : null,
+    holeKey,
+    (src, signal) => buildApi.run(src, signal, getBackendId() ?? '', buildInputs(src).sketches),
+  );
+  const loadHolePresets = async () => {
+    if (holePresets) return holePresets;
+    const p = await buildApi.holePresets();
+    setHolePresets(p);
+    return p;
+  };
+  const docSketches = useDocumentStore((s) => s.document.sketches);
+  const holeSketches = docSketches.filter((sk) => sk.plane && sketchHolePoints(sk).length > 0);
+  const holePlaces: HolePlace[] = [
+    ...holeSketches.map((sk) => {
+      const n = sketchHolePoints(sk).length;
+      const where = sk.face?.hint ? ` on the ${sk.face.hint}` : '';
+      return {
+        key: placeKey({ sketch: sk.name }), at: { sketch: sk.name }, count: n,
+        label: `"${sk.name}"${where} · ${n} point${n > 1 ? 's' : ''}`,
+        normal: (resRef.current?.sketches?.[sk.name]?.plane?.normal ?? sk.plane!.normal) as [number, number, number],
+      };
+    }),
+    ...(holeFace ? [{ key: placeKey({ face: holeFace.ref }), at: { face: holeFace.ref }, count: 1,
+                      label: `Centre of the ${holeFace.ref.hint ?? 'face'}`, normal: holeFace.normal }] : []),
+  ];
+  // where holes on face `f` go: the sketch with points drawn on it, else its centre
+  const holeAt = (f: NonNullable<RunResponse['faces']>[number]) => {
+    const sk = findFaceSketch(holeSketches, f, resRef.current?.sketches);
+    if (sk) return { at: { sketch: sk.name }, face: null };
+    const ref = refOf(f);
+    return ref ? { at: { face: ref }, face: { ref, normal: f.normal as [number, number, number] } } : null;
+  };
+  const selPlane = (() => {
+    const f = sel.length === 1 ? resRef.current?.faces.find((x) => x.index === sel[0]) : null;
+    return f && f.kind === 'plane' ? f : null;
+  })();
+  const startHole = async () => {
+    try {
+      const p = await loadHolePresets();
+      const picked = selPlane ? holeAt(selPlane) : null;
+      const at = picked?.at ?? (holeSketches[0] ? { sketch: holeSketches[0].name } : null);
+      if (!at) return;
+      setHoleFace(picked?.face ?? null);
+      setHoleOp({ line: null, v: newHoleValues(at, p) });
+    } catch (err) {
+      setNotice(`Hole: ${errorText(err)}`);
+    }
+  };
+  const applyHoles = async () => {
+    const h = holeOp;
+    if (!h || !holePresets) return;
+    try {
+      const src = holePreview.built(holeKey) ?? (await holeLine(h, holePresets)).code;
+      closeOp();
+      setCode(src);
+      const out = await build(src, h.line ? 'Edit holes' : 'Holes');
+      if (out.kind === 'ok') saveDraft(src);
+    } catch (err) {
+      setNotice(`Hole: ${errorText(err)}`);
+    }
+  };
+  const holeComp = Number(resRef.current?.params?.hole_comp ?? 0) || 0;
+
+  // while the Shell dialog is open, clicking a face opens or closes it, and
+  // the faces it opens show as selected; in the Hole dialog it says where the
+  // holes go
+  opPickRef.current = holeOp ? (f) => {
+    const face = f && resRef.current?.faces.find((x) => x.index === f.index);
+    if (!face || face.kind !== 'plane') {
+      if (face) { setNotice('Holes go on a flat face: pick a flat one'); window.setTimeout(() => setNotice(''), 5000); }
+      return;
+    }
+    const picked = holeAt(face);
+    if (!picked) return;
+    if (picked.face) setHoleFace(picked.face);
+    setHoleOp((o) => o && ({ ...o, v: { ...o.v, at: picked.at } }));
+  } : shellOp ? (f) => {
     const face = f && resRef.current?.faces.find((x) => x.index === f.index);
     const r = face ? refOf(face) : null;
     if (!r) return;
@@ -782,6 +877,21 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     setSel(idx);
     viewerRef.current?.selectFaces(idx);
   }, [shellKey]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // the face the holes are centred on shows as selected
+  useEffect(() => {
+    if (!holeOp) return;
+    const i = 'face' in holeOp.v.at ? opFaceIndex(holeOp.v.at.face) : null;
+    const idx = i != null ? [i] : [];
+    selRef.current = idx;
+    setSel(idx);
+    viewerRef.current?.selectFaces(idx);
+  }, [holeKey]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const opOpen = !!shellOp || !!holeOp;
+  // the dialogs sit at the top left of the view: draw the part beside them
+  const opWidth = holeOp ? 300 : shellOp ? 270 : 0;
+  useEffect(() => {
+    viewerRef.current?.setInset(opWidth ? opWidth + 24 : 0);
+  }, [opWidth]);
 
   // Reopen a Shell/Hole line: the dialog with the line's values.
   const editOp = async (line: number) => {
@@ -790,6 +900,15 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       if (op.op === 'shell') {
         const a = op.args as { remove?: FaceRefSpec[]; thickness?: number; inside?: boolean };
         setShellOp({ line: op.line, v: { remove: a.remove ?? [], thickness: Number(a.thickness ?? 2), inside: a.inside !== false } });
+      } else if (op.op === 'holes') {
+        const p = await loadHolePresets();
+        const v = holeValuesOf(op.args, p);
+        if ('face' in v.at) {
+          const r = v.at.face;
+          const shown = faceOfRef(resRef.current?.faces ?? [], r);
+          setHoleFace({ ref: r, normal: (shown?.normal ?? r.normal) as [number, number, number] });
+        } else setHoleFace(null);
+        setHoleOp({ line: op.line, v });
       }
     } catch (err) {
       setNotice(`Can't edit line ${line}: ${errorText(err)}`);
@@ -817,7 +936,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // param that moves it (sensitivity `shifts`) — the one moving it most along
   // its normal first; Tab cycles when several do. Releasing goes through
   // applyParam (set_params → rebuild → version), never the AI.
-  const selFace = sel.length === 1 && !shellOp ? resRef.current?.faces.find((f) => f.index === sel[0]) ?? null : null;
+  const selFace = sel.length === 1 && !opOpen ? resRef.current?.faces.find((f) => f.index === sel[0]) ?? null : null;
   const handleOpts = useMemo(() => (selFace ? handleOptions(selFace, sens) : []), [selFace, sens]);
   const handleKey = `${sel.join()}|${handleOpts.map((h) => h.name).join()}`;
   const [handlePick, setHandlePick] = useState({ key: '', i: 0 });
@@ -1163,7 +1282,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                    borderRight: `1px solid ${palette.border}`, userSelect: 'none', pointerEvents: 'none' }}>
           {Array.from({ length: lineCount }, (_, i) => i + 1).join('\n')}
         </div>
-        {caretOp && !shellOp && (
+        {caretOp && !opOpen && (
           <button onClick={() => void editOp(caretLine)} onMouseDown={(e) => e.preventDefault()}
             title={`Open the ${caretOp === 'shell' ? 'Shell' : 'Hole'} dialog with this line's values; OK rewrites just this line (or double-click the line)`}
             style={{ ...btn, position: 'absolute', top: 8, right: 12, padding: '3px 10px', fontSize: '12px',
@@ -1336,7 +1455,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
             Versions
           </button>
           {(() => {
-            const can = sel.length > 0 && status === 'done' && !shellOp && !faceSketch.active;
+            const can = sel.length > 0 && status === 'done' && !opOpen && !faceSketch.active;
             return (
               <button onClick={startShell} disabled={!can}
                 title={(sel.length
@@ -1347,6 +1466,24 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                          border: `1px solid ${palette.border}`, opacity: can ? 1 : 0.5,
                          cursor: can ? 'pointer' : 'default' }}>
                 Shell
+              </button>
+            );
+          })()}
+          {(() => {
+            const can = (!!selPlane || holeSketches.length > 0) && status === 'done' && !opOpen && !faceSketch.active;
+            const n = selPlane ? holeAt(selPlane) : null;
+            return (
+              <button onClick={() => void startHole()} disabled={!can}
+                title={(selPlane
+                  ? (n && 'sketch' in n.at ? `Screw holes at the points of "${n.at.sketch}"` : `A screw hole at the centre of the ${faceLabel(selPlane.normal)}`)
+                  : holeSketches.length
+                    ? `Screw holes at a sketch's points or circle centres (or select a flat face first)`
+                    : 'Select a flat face (holes at the points of a sketch on it, or at its centre), then Hole')
+                  + ' · or ask: "four M3 insert standoffs 6 high at the sketch points"'}
+                style={{ ...btn, background: 'none', color: palette.textSecondary,
+                         border: `1px solid ${palette.border}`, opacity: can ? 1 : 0.5,
+                         cursor: can ? 'pointer' : 'default' }}>
+                Hole
               </button>
             );
           })()}
@@ -1438,8 +1575,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                 faceIndex={opFaceIndex} onHoverFace={(i) => viewerRef.current?.hoverFace(i)}
                 onApply={() => void applyShell()} onCancel={closeOp} />
             )}
+            {holeOp && holePresets && (
+              <HoleDialog value={holeOp.v} editing={holeOp.line != null} preview={holePreview.preview}
+                onChange={(v) => setHoleOp((o) => o && { ...o, v })}
+                presets={holePresets} places={holePlaces} comp={holeComp}
+                onApply={() => void applyHoles()} onCancel={closeOp} />
+            )}
             {/* measure readout: center-to-center distance for a 2-face selection */}
-            {measure && !shellOp && (
+            {measure && !opOpen && (
               <div style={{ position: 'absolute', left: 12, top: 12, padding: '8px 11px',
                             background: 'rgba(20,22,26,0.82)', border: '1px solid rgba(255,255,255,0.12)',
                             borderRadius: '6px', color: '#eef1f5', pointerEvents: 'none',

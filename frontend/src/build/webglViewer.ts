@@ -286,6 +286,9 @@ export interface Viewer {
   /** Light one face of the part brightly, through anything in front (a
    *  dialog row being hovered); null for none. */
   hoverFace(index: number | null): void;
+  /** A dialog covers `px` CSS px along the left of the view: draw the part
+   *  centred in the rest (0 for the whole view). */
+  setInset(px: number): void;
   dispose(): void;
 }
 
@@ -417,6 +420,9 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   // NDC lens shift: keeps the picture still while the canvas moves at the
   // start of a sketch-mode transition, then eases to 0
   let lens: [number, number] = [0, 0];
+  // CSS px along the left of the canvas covered by a dialog: the picture is
+  // drawn centred (and a little smaller) in the rest
+  let inset = 0;
   const TAN_HALF = Math.tan(FOVY / 2);
 
   // sketch mode: the plane being sketched on, the view to return to, and the
@@ -501,6 +507,14 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       ? ortho(halfH * (w / h), halfH, -distance * 100, distance * 100)
       : perspective(FOVY, w / h, distance * 0.01, distance * 100);
     if (lens[0] || lens[1]) proj = multiply(translation(lens[0], lens[1], 0), proj);
+    if (inset > 0) {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const f = Math.min((inset * dpr) / w, 0.6);    // the covered share of the width
+      const k = Math.max(1 - f, 0.55);
+      const s = identity();
+      s[0] = k; s[5] = k;
+      proj = multiply(translation(f, 0, 0), multiply(s, proj));
+    }
     const view = translation(0, 0, -distance);
     const rot = quatToMat4(q);
     const model = multiply(rot, translation(-center[0], -center[1], -center[2]));
@@ -1048,6 +1062,11 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     hoverFace(index: number | null) {
       if (index === hovered) return;
       hovered = index;
+      scheduleRender();
+    },
+    setInset(px: number) {
+      if (px === inset) return;
+      inset = Math.max(0, px);
       scheduleRender();
     },
     setDims(d: DimAnchor[]) { dims = d; scheduleRender(); },

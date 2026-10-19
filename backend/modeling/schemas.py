@@ -361,6 +361,18 @@ class AddShellRequest(Schema):
     line: int | None = None         # rewrite the shell() line there instead of appending
 
 
+class AddHolesRequest(Schema):
+    code: str
+    at: dict                        # {"sketch": name} (its points) or {"face": face ref + "hint"} (its centre)
+    kind: str = "clearance"         # clearance | tapped | insert | counterbore | countersink
+    size: str = "M3"                # M2 .. M5
+    fit: str = "normal"             # clearance only: close | normal
+    depth: float | None = None      # None: through
+    standoff: dict | None = None    # {"h", "d", "fillet"}: on a boss
+    sizes: dict[str, float] = {}    # preset sizes changed in the dialog: d, cbore_d, cbore_depth, csk_d
+    line: int | None = None         # rewrite the holes() line there instead of appending
+
+
 class AddOpResponse(Schema):
     code: str
     param: str | None = None        # the P key holding the main size

@@ -425,9 +425,15 @@ export type ProfileSegment =
   | { t: 'circle'; c: XY; r: number }
   | { t: 'bezier'; p: [XY, XY, XY, XY] };
 
-/** A face sketch's closed shapes on its plane — what sketch("name") builds
- *  from — and the face it was drawn on, so the build can follow that face. */
-export interface SketchProfile { plane: NonNullable<Sketch['plane']>; loops: ProfileSegment[][]; face?: FaceRef }
+/** A face sketch's closed shapes and points on its plane — what sketch("name")
+ *  and sketch_points("name") build from — and the face it was drawn on, so the
+ *  build can follow that face. */
+export interface SketchProfile {
+  plane: NonNullable<Sketch['plane']>;
+  loops: ProfileSegment[][];
+  points?: XY[];        // its point entities: with the circle centres, where sketch_points() puts holes
+  face?: FaceRef;
+}
 
 const xy = (p: Point): XY => [Math.round(p.x * 1e6) / 1e6, Math.round(p.y * 1e6) / 1e6];
 const JOIN_TOL = 1e-4;
@@ -519,13 +525,30 @@ export function sketchLoops(sketch: Sketch): { loops: ProfileSegment[][]; open: 
 /** The profile stored with a face sketch (null for a sketch with no plane). */
 export function sketchProfile(sketch: Sketch): SketchProfile | null {
   if (!sketch.plane) return null;
-  return { plane: sketch.plane, loops: sketchLoops(sketch).loops, ...(sketch.face ? { face: sketch.face } : {}) };
+  const points = sketch.entities.flatMap((e) => (e.type === 'point' ? [xy(e.position)] : []));
+  return {
+    plane: sketch.plane, loops: sketchLoops(sketch).loops,
+    ...(points.length ? { points } : {}),
+    ...(sketch.face ? { face: sketch.face } : {}),
+  };
+}
+
+/** Where sketch_points("name") puts holes: the sketch's points and the
+ *  centres of its (non-construction) circles, each place once. */
+export function sketchHolePoints(sketch: Sketch): Point[] {
+  const out: Point[] = [];
+  for (const e of sketch.entities) {
+    const p = e.type === 'point' ? e.position
+      : e.type === 'circle' && !e.construction && e.radius > 0 ? e.center : null;
+    if (p && !out.some((o) => Math.hypot(o.x - p.x, o.y - p.y) < 1e-6)) out.push(p);
+  }
+  return out;
 }
 
 // matches the engine's SKETCH_REF (modeling/engine.py)
-const SKETCH_REF = /\bsketch\(\s*(["'])(.+?)\1\s*\)/g;
+const SKETCH_REF = /\bsketch(?:_points)?\(\s*(["'])(.+?)\1\s*\)/g;
 
-/** The names of the sketches `code` uses (sketch("name")), each once. */
+/** The names of the sketches `code` uses (sketch("name"), sketch_points("name")), each once. */
 export function referencedSketchNames(code: string): string[] {
   return [...new Set([...code.matchAll(SKETCH_REF)].map((m) => m[2]!))];
 }

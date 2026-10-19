@@ -336,6 +336,15 @@ export const buildApi = {
     Promise<{ code: string; param: string | null }> {
     return request('/build/add_shell', { method: 'POST', body: JSON.stringify(payload) });
   },
+  /** Append a holes() line, or rewrite the one on `line` (its depth and changed sizes P keys). */
+  addHoles(payload: HolesPayload & { code: string; line?: number | null }):
+    Promise<{ code: string; param: string | null }> {
+    return request('/build/add_holes', { method: 'POST', body: JSON.stringify(payload) });
+  },
+  /** Every hole size the Hole dialog offers (backend modeling/hole_presets.py). */
+  holePresets(): Promise<HolePresets> {
+    return request('/build/hole_presets');
+  },
   /** The shell()/holes() line spanning `line`, read back for its dialog. */
   opAt(code: string, line: number): Promise<OpAt> {
     return request('/build/op_at', { method: 'POST', body: JSON.stringify({ code, line }) });
@@ -408,6 +417,36 @@ export interface OpAt {
   args: Record<string, unknown>;
   /** argument -> the P key holding it */
   params: Record<string, string>;
+}
+
+export type HoleKind = 'clearance' | 'tapped' | 'insert' | 'counterbore' | 'countersink';
+/** The preset sizes holes() can override, in mm. */
+export type HoleSizeKey = 'd' | 'cbore_d' | 'cbore_depth' | 'csk_d';
+
+/** A holes() line's values (backend paramedit.add_holes / op_at). */
+export interface HolesPayload {
+  at: { sketch: string } | { face: FaceRefSpec };
+  kind: HoleKind;
+  size: string;
+  fit: 'close' | 'normal';
+  depth: number | null;                                   // null: through
+  standoff: { h: number; d: number; fillet: number } | null;
+  sizes: Partial<Record<HoleSizeKey, number>>;            // only the presets changed
+}
+
+/** One hole preset (a row of backend hole_presets): diameters and depths in mm. */
+export interface HolePreset {
+  d: number; depth: number | null; standoff_d: number;
+  cbore_d?: number; cbore_depth?: number; csk_d?: number; angle?: number;
+  wall?: number; insert_d?: number; insert_l?: number;
+}
+
+export interface HolePresets {
+  sizes: string[];
+  kinds: HoleKind[];
+  /** kind (and "clearance_close") -> size -> values */
+  presets: Record<string, Record<string, HolePreset>>;
+  standoff: { fillet: number; height: number };
 }
 
 export interface RunEdge {
