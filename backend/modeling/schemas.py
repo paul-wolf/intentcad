@@ -214,6 +214,7 @@ class RunFace(Schema):
     size: list[float] = []        # bounding-box extents [dx, dy, dz] of the face
     axis: list[float] | None = None        # a cylinder's axis direction, else null
     axis_point: list[float] | None = None  # the point on that axis level with the face
+    ref: dict | None = None       # face_ref({...}): how a script line names this face
 
 
 class RunEdge(Schema):
@@ -280,6 +281,13 @@ class SketchBinding(Schema):
     plane: SketchPlaneOut           # the plane it was built on
 
 
+class FaceRefReport(Schema):
+    """A face_ref() lookup in this build (modeling/face_ref.py)."""
+    hint: str                       # what the face is called: "top face"
+    status: str                     # 'found' | 'ambiguous' | 'not_found'
+    moved_by: float = 0.0           # mm along its normal from where it was
+
+
 class RunResponse(Schema):
     mesh: MeshOut
     faces: list[RunFace] = []
@@ -291,6 +299,7 @@ class RunResponse(Schema):
     auto_round: AutoRoundReport | None = None   # the script called auto_round
     organic: OrganicReport | None = None        # ... spoke/frame/window/truss_windows
     sketches: dict[str, SketchBinding] = {}     # name -> where each face sketch went
+    face_refs: list[FaceRefReport] = []         # each face_ref() lookup, in order
 
 
 class ExportRequest(Schema):
@@ -328,6 +337,33 @@ class AddExtrudeRequest(Schema):
 class AddExtrudeResponse(Schema):
     code: str
     param: str | None = None        # the new P key holding the depth
+
+
+class OpAtRequest(Schema):
+    code: str
+    line: int                       # any script line the operation spans (1-based)
+
+
+class OpAtResponse(Schema):
+    """A Shell/Hole line read back for its dialog (paramedit.op_at)."""
+    op: str                         # 'shell' | 'holes'
+    line: int
+    end_line: int
+    args: dict                      # its values, P keys resolved
+    params: dict[str, str] = {}     # argument -> the P key holding it
+
+
+class AddShellRequest(Schema):
+    code: str
+    remove: list[dict] = []         # face refs (RunFace.ref + "hint") of the faces left open
+    thickness: float = 2.0
+    inside: bool = True             # walls grow in (outside kept) / out (inside kept)
+    line: int | None = None         # rewrite the shell() line there instead of appending
+
+
+class AddOpResponse(Schema):
+    code: str
+    param: str | None = None        # the P key holding the main size
 
 
 class SensitivityRequest(Schema):

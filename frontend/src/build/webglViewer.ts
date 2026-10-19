@@ -279,6 +279,13 @@ export interface Viewer {
    *  tilts the view off the plane, framed on the part and the preview; null
    *  turns back to the sketch. */
   setExtrudePreview(p: { edges: number[]; arrows: number[]; color: Vec3 } | null): void;
+  /** Show what an operation would make (Shell, Hole: a candidate build) in
+   *  place of the part, tinted `color`; the selected faces of the part show
+   *  through it. null shows the part again. */
+  setPreviewMesh(p: { mesh: ViewerMesh; color: Vec3 } | null): void;
+  /** Light one face of the part brightly, through anything in front (a
+   *  dialog row being hovered); null for none. */
+  hoverFace(index: number | null): void;
   dispose(): void;
 }
 
@@ -288,7 +295,8 @@ export interface AxisDir { name: string; x: number; y: number; z: number; color:
 
 export interface ViewerOpts {
   color?: [number, number, number];
-  onFacePick?: (face: FaceRange | null) => void;
+  /** A click picked a face (null: empty space); `shift` adds to a selection. */
+  onFacePick?: (face: FaceRange | null, mods: { shift: boolean }) => void;
   /** Called each frame with the view-space directions of the X/Y/Z axes. */
   onAxes?: (dirs: AxisDir[]) => void;
   /** Called each frame with the projected dimension overlay (see setDims). */
@@ -333,6 +341,12 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   const posBuf = gl.createBuffer()!;
   const normBuf = gl.createBuffer()!;
   const previewBuf = gl.createBuffer()!;   // the dragged face's offset triangles
+  // an operation's candidate result (setPreviewMesh), drawn in place of the part
+  const candPosBuf = gl.createBuffer()!;
+  const candNormBuf = gl.createBuffer()!;
+  let cand: { count: number; color: Vec3 } | null = null;
+  let hovered: number | null = null;
+  const HOVER: [number, number, number] = [1.0, 0.85, 0.3];
 
   // second program: bright lines for highlighting edges (drawn over the mesh)
   const lineProg = gl.createProgram()!;
@@ -611,7 +625,38 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     // while a handle drag is previewed, its face is drawn moved (below), so
     // leave it out of the solid
     const df = drag && handle && !thumbMode ? faceByIndex.get(handle.face) ?? null : null;
-    if (vertexCount) {
+    const showCand = cand && !thumbMode && !sketch;
+    if (showCand) {
+      gl!.bindBuffer(gl!.ARRAY_BUFFER, candPosBuf);
+      gl!.vertexAttribPointer(aPos, 3, gl!.FLOAT, false, 0, 0);
+      gl!.bindBuffer(gl!.ARRAY_BUFFER, candNormBuf);
+      gl!.vertexAttribPointer(aNormal, 3, gl!.FLOAT, false, 0, 0);
+      gl!.uniform3fv(uColor, cand!.color);
+      if (cand!.count) gl!.drawArrays(gl!.TRIANGLES, 0, cand!.count);
+      gl!.uniform3fv(uColor, color);
+      // the part's selected / hovered faces show through it (x-ray)
+      const lit = [...selected.map((i) => [i, SELECT] as const), ...(hovered !== null ? [[hovered, HOVER] as const] : [])];
+      if (lit.length) {
+        gl!.bindBuffer(gl!.ARRAY_BUFFER, posBuf);
+        gl!.vertexAttribPointer(aPos, 3, gl!.FLOAT, false, 0, 0);
+        gl!.bindBuffer(gl!.ARRAY_BUFFER, normBuf);
+        gl!.vertexAttribPointer(aNormal, 3, gl!.FLOAT, false, 0, 0);
+        gl!.disable(gl!.DEPTH_TEST);
+        gl!.enable(gl!.BLEND);
+        gl!.blendFuncSeparate(gl!.SRC_ALPHA, gl!.ONE_MINUS_SRC_ALPHA, gl!.ZERO, gl!.ONE);  // keep canvas alpha
+        for (const [i, col] of lit) {
+          const f = faceByIndex.get(i);
+          if (!f) continue;
+          gl!.uniform3fv(uColor, col);
+          gl!.uniform1f(uAlpha, i === hovered ? 0.75 : 0.45);
+          gl!.drawArrays(gl!.TRIANGLES, f.start, f.count);
+        }
+        gl!.uniform1f(uAlpha, 1);
+        gl!.disable(gl!.BLEND);
+        gl!.enable(gl!.DEPTH_TEST);
+        gl!.uniform3fv(uColor, color);
+      }
+    } else if (vertexCount) {
       if (df) {
         gl!.drawArrays(gl!.TRIANGLES, 0, df.start);
         gl!.drawArrays(gl!.TRIANGLES, df.start + df.count, vertexCount - df.start - df.count);
@@ -632,12 +677,17 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
 
     // selected faces: re-draw their triangles in a tint (depthFunc LEQUAL lets
     // the identical geometry pass)
-    if (selected.length && !sk) {
+    if (selected.length && !sk && !showCand) {
       gl!.uniform3fv(uColor, SELECT);
       for (const idx of selected) {
         const f = faceByIndex.get(idx);
         if (f && f !== df) gl!.drawArrays(gl!.TRIANGLES, f.start, f.count);
       }
+    }
+    if (hovered !== null && !sk && !showCand) {
+      const f = faceByIndex.get(hovered);
+      gl!.uniform3fv(uColor, HOVER);
+      if (f) gl!.drawArrays(gl!.TRIANGLES, f.start, f.count);
     }
 
     if (df && drag) {
@@ -933,7 +983,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     }
     if (was === 'orbit' && moved < 4 && opts.onFacePick) {  // a click, not a drag → pick a face
       const rect = canvas.getBoundingClientRect();
-      opts.onFacePick(pick(downX - rect.left, downY - rect.top));  // caller sets selection
+      opts.onFacePick(pick(downX - rect.left, downY - rect.top), { shift: e.shiftKey });  // caller sets selection
     }
   }
   function onWheel(e: WheelEvent) {
@@ -974,6 +1024,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       faces = facesArg ?? [];
       faceByIndex = new Map(faces.map((f) => [f.index, f]));
       selected = [];
+      hovered = null;
       handle = null;
       if (drag) endHandleDrag(true);
       scheduleRender();
@@ -985,6 +1036,20 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       scheduleRender();
     },
     selectFaces(indices: number[]) { selected = indices; scheduleRender(); },
+    setPreviewMesh(p) {
+      if (!p) { cand = null; scheduleRender(); return; }
+      gl!.bindBuffer(gl!.ARRAY_BUFFER, candPosBuf);
+      gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array(p.mesh.positions), gl!.STATIC_DRAW);
+      gl!.bindBuffer(gl!.ARRAY_BUFFER, candNormBuf);
+      gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array(p.mesh.normals), gl!.STATIC_DRAW);
+      cand = { count: p.mesh.positions.length / 3, color: p.color };
+      scheduleRender();
+    },
+    hoverFace(index: number | null) {
+      if (index === hovered) return;
+      hovered = index;
+      scheduleRender();
+    },
     setDims(d: DimAnchor[]) { dims = d; scheduleRender(); },
     setHandle(h: DragHandle | null) {
       if (drag) endHandleDrag(true);

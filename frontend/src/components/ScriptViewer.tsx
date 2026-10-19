@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
-import { api, buildApi, errorText, ApiError, type RunResponse, type UsageResponse, type DimInfo, type ModelInfo, type SizeFix } from '@/api/client';
+import { api, buildApi, errorText, ApiError, type RunResponse, type UsageResponse, type DimInfo, type ModelInfo, type SizeFix, type FaceRefSpec } from '@/api/client';
 import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, persistSketches, getBackendId } from '@/api/autoSave';
 import { DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
 import type { ChatMessage } from '@/types/document';
@@ -15,6 +15,7 @@ import { importScript, importLabel, STEP_ACCEPT } from '@/build/importStep';
 import { PartVersionsPanel } from './PartVersionsPanel';
 import { PartHelpModal } from './PartHelpModal';
 import { useFaceSketch, type ExtrudeOptions } from './FaceSketchMode';
+import { ShellDialog, useOpPreview, refOf, faceOfRef, sameRef, OP_LINE, type ShellValues } from './OpDialogs';
 import { BASE_PLANES, referencedProfiles, referencedSketchNames, sketchBindNotes, type BasePlane, type SketchBindings } from '@/build/faceSketch';
 import { resolvePartSketches, sketchParamWarning } from '@/build/sketchParams';
 import { partParams } from '@/build/scriptParams';
@@ -249,7 +250,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // param to set), from the last build error or warning
   const [fix, setFix] = useState<SizeFix | null>(null);
   const [stats, setStats] = useState('');
-  const [sel, setSel] = useState<number[]>([]);   // selected face indices (≤ 2)
+  const [sel, setSel] = useState<number[]>([]);   // selected face indices
   const resRef = useRef<RunResponse | null>(null);
   const selRef = useRef<number[]>([]);
   // a part to cut / join into: any script that assigns `part`, except the
@@ -269,13 +270,18 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const buildAbort = useRef<AbortController | null>(null);   // cancel an in-flight build
   const cancelBuild = () => { buildAbort.current?.abort(); };
 
-  // click a face → toggle it in the selection (keep at most 2). With two faces
-  // selected, highlight the edge(s) between them (an edge = two faces meeting).
-  const onPick = (f: FaceRange | null) => {
+  // click a face → toggle it in the selection, keeping the last two (to
+  // measure between them); Shift-click toggles it keeping all the others (to
+  // pick the faces an operation works on). With two faces selected, highlight
+  // the edge(s) between them (an edge = two faces meeting). While an
+  // operation's dialog is open, a click goes to the dialog instead.
+  const opPickRef = useRef<((f: FaceRange | null) => void) | null>(null);
+  const onPick = (f: FaceRange | null, mods?: { shift: boolean }) => {
+    if (opPickRef.current) { opPickRef.current(f); return; }
     let s = selRef.current;
-    if (!f) s = [];
+    if (!f) s = mods?.shift ? s : [];
     else if (s.includes(f.index)) s = s.filter((i) => i !== f.index);
-    else s = [...s, f.index].slice(-2);
+    else s = mods?.shift ? [...s, f.index] : [...s, f.index].slice(-2);
     applySelection(s);
   };
   const applySelection = (s: number[]) => {
@@ -325,6 +331,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       if (s && s[0]! > 1e-6) return { single: true as const, dia: null as number | null, w: s[0]!, h: s[1]! };
       return null;
     }
+    if (sel.length !== 2) return null;
     const a = faceOf(sel[0]!), b = faceOf(sel[1]!);
     if (!a || !b) return null;
     const dx = b.center[0] - a.center[0], dy = b.center[1] - a.center[1], dz = b.center[2] - a.center[2];
@@ -720,6 +727,87 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const sketchDoneRef = useRef(sketchDone);
   sketchDoneRef.current = sketchDone;
 
+  // Shell: a dialog writing `part = shell(part, remove=[face_ref(...)], ...)`,
+  // its result previewed as a ghost. `line` is the script line it was
+  // reopened from (OK rewrites just that line), null for a new one.
+  const [shellOp, setShellOp] = useState<{ line: number | null; v: ShellValues } | null>(null);
+  const shellKey = shellOp ? JSON.stringify(shellOp) : '';
+  const shellLine = (s: { line: number | null; v: ShellValues }) =>
+    buildApi.addShell({ code: codeRef.current, remove: s.v.remove, thickness: s.v.thickness, inside: s.v.inside, line: s.line });
+  const shellPreview = useOpPreview(
+    viewerRef,
+    shellOp && shellOp.v.thickness > 0 ? () => shellLine(shellOp).then((r) => r.code) : null,
+    shellKey,
+    (src, signal) => buildApi.run(src, signal, getBackendId() ?? '', buildInputs(src).sketches),
+  );
+  const startShell = () => {
+    const res = resRef.current;
+    if (!res) return;
+    const remove = selRef.current.map((i) => res.faces.find((f) => f.index === i))
+      .map((f) => (f ? refOf(f) : null)).filter((r): r is FaceRefSpec => !!r);
+    setShellOp({ line: null, v: { remove, thickness: 2, inside: true } });
+  };
+  const closeOp = () => {
+    setShellOp(null);
+    viewerRef.current?.hoverFace(null);
+    applySelection([]);
+  };
+  const applyShell = async () => {
+    const s = shellOp;
+    if (!s || !(s.v.thickness > 0)) return;
+    try {
+      const src = shellPreview.built(shellKey) ?? (await shellLine(s)).code;
+      closeOp();
+      setCode(src);
+      const out = await build(src, s.line ? 'Edit shell' : 'Shell');
+      if (out.kind === 'ok') saveDraft(src);
+    } catch (err) {
+      setNotice(`Shell: ${errorText(err)}`);
+    }
+  };
+  // while the dialog is open, clicking a face opens or closes it, and the
+  // faces it opens show as selected
+  opPickRef.current = shellOp ? (f) => {
+    const face = f && resRef.current?.faces.find((x) => x.index === f.index);
+    const r = face ? refOf(face) : null;
+    if (!r) return;
+    setShellOp((o) => o && ({ ...o, v: { ...o.v, remove: o.v.remove.some((x) => sameRef(x, r))
+      ? o.v.remove.filter((x) => !sameRef(x, r)) : [...o.v.remove, r] } }));
+  } : null;
+  const opFaceIndex = (r: FaceRefSpec) => faceOfRef(resRef.current?.faces ?? [], r)?.index ?? null;
+  useEffect(() => {
+    if (!shellOp) return;
+    const idx = shellOp.v.remove.map(opFaceIndex).filter((i): i is number => i != null);
+    selRef.current = idx;
+    setSel(idx);
+    viewerRef.current?.selectFaces(idx);
+  }, [shellKey]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reopen a Shell/Hole line: the dialog with the line's values.
+  const editOp = async (line: number) => {
+    try {
+      const op = await buildApi.opAt(codeRef.current, line);
+      if (op.op === 'shell') {
+        const a = op.args as { remove?: FaceRefSpec[]; thickness?: number; inside?: boolean };
+        setShellOp({ line: op.line, v: { remove: a.remove ?? [], thickness: Number(a.thickness ?? 2), inside: a.inside !== false } });
+      }
+    } catch (err) {
+      setNotice(`Can't edit line ${line}: ${errorText(err)}`);
+      window.setTimeout(() => setNotice(''), 8000);
+    }
+  };
+  // the script line the caret is on, when it's an operation the dialogs reopen
+  const [caretLine, setCaretLine] = useState(0);
+  const caretOp = (() => {
+    const l = code.split('\n')[caretLine - 1];
+    const m = l ? OP_LINE.exec(l) : null;
+    return m ? (m[1] as 'shell' | 'holes') : null;
+  })();
+  const trackCaret = () => {
+    const ta = taRef.current;
+    if (ta) setCaretLine(ta.value.slice(0, ta.selectionStart).split('\n').length);
+  };
+
   // the viewer keeps its mount-time callbacks, so a drop reaches the current
   // applyParam (which closes over the current code) through a ref
   const applyParamRef = useRef(applyParam);
@@ -729,7 +817,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // param that moves it (sensitivity `shifts`) — the one moving it most along
   // its normal first; Tab cycles when several do. Releasing goes through
   // applyParam (set_params → rebuild → version), never the AI.
-  const selFace = sel.length === 1 ? resRef.current?.faces.find((f) => f.index === sel[0]) ?? null : null;
+  const selFace = sel.length === 1 && !shellOp ? resRef.current?.faces.find((f) => f.index === sel[0]) ?? null : null;
   const handleOpts = useMemo(() => (selFace ? handleOptions(selFace, sens) : []), [selFace, sens]);
   const handleKey = `${sel.join()}|${handleOpts.map((h) => h.name).join()}`;
   const [handlePick, setHandlePick] = useState({ key: '', i: 0 });
@@ -868,6 +956,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       return `${f.kind} face (center ${v(f.center)}, normal ${v(f.normal)})`;
     };
     if (sel.length === 1) return `the ${desc(sel[0]!)}`;
+    if (sel.length > 2) return `these ${sel.length} faces: ${sel.map((i) => `the ${desc(i)}`).join('; ')}`;
     const shared = res.edges.filter((e) => e.faceIndices.length === 2 && e.faceIndices.includes(sel[0]!) && e.faceIndices.includes(sel[1]!));
     const edge = shared[0] ? `the ${shared[0].kind} edge between ` : 'the geometry between ';
     return `${edge}the ${desc(sel[0]!)} and the ${desc(sel[1]!)}`;
@@ -1052,6 +1141,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
           value={code}
           onChange={(e) => setCode(e.target.value)}
           onScroll={syncScroll}
+          onSelect={trackCaret}
+          // double-click a Shell/Hole line: its dialog
+          onDoubleClick={() => {
+            const ta = taRef.current;
+            if (!ta) return;
+            const line = ta.value.slice(0, ta.selectionStart).split('\n').length;
+            if (OP_LINE.test(ta.value.split('\n')[line - 1] ?? '')) void editOp(line);
+          }}
           onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); rebuild(); } }}
           spellCheck={false} autoCapitalize="off" autoCorrect="off" wrap="off"
           style={{ ...editorStyle, position: 'absolute', inset: 0, resize: 'none',
@@ -1066,6 +1163,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                    borderRight: `1px solid ${palette.border}`, userSelect: 'none', pointerEvents: 'none' }}>
           {Array.from({ length: lineCount }, (_, i) => i + 1).join('\n')}
         </div>
+        {caretOp && !shellOp && (
+          <button onClick={() => void editOp(caretLine)} onMouseDown={(e) => e.preventDefault()}
+            title={`Open the ${caretOp === 'shell' ? 'Shell' : 'Hole'} dialog with this line's values; OK rewrites just this line (or double-click the line)`}
+            style={{ ...btn, position: 'absolute', top: 8, right: 12, padding: '3px 10px', fontSize: '12px',
+                     background: palette.primaryBtn, color: '#fff' }}>
+            Edit {caretOp === 'shell' ? 'shell' : 'holes'} (line {caretLine})
+          </button>
+        )}
       </div>
     );
   })();
@@ -1230,6 +1335,21 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                      border: `1px solid ${palette.border}` }}>
             Versions
           </button>
+          {(() => {
+            const can = sel.length > 0 && status === 'done' && !shellOp && !faceSketch.active;
+            return (
+              <button onClick={startShell} disabled={!can}
+                title={(sel.length
+                  ? `Hollow the part out, leaving the ${sel.length} selected face${sel.length > 1 ? 's' : ''} open`
+                  : 'Select the face(s) to leave open (Shift-click for more), then Shell')
+                  + ' · or ask: "shell it, 2 mm walls, open top"'}
+                style={{ ...btn, background: 'none', color: palette.textSecondary,
+                         border: `1px solid ${palette.border}`, opacity: can ? 1 : 0.5,
+                         cursor: can ? 'pointer' : 'default' }}>
+                Shell
+              </button>
+            );
+          })()}
           {([['Lighten', LIGHTEN_INSTRUCTION, 'AI: cut 30–40% of the mass with windows or spokes, then round (? for more)'],
              ['Round', ROUND_INSTRUCTION, 'AI: round every edge, keeping holes and mating faces exact (? for more)']] as const)
             .map(([label, instruction, title]) => (
@@ -1312,8 +1432,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                 {sketchTip.name} <span style={{ opacity: 0.6 }}>· double-click to edit</span>
               </div>
             )}
+            {shellOp && (
+              <ShellDialog value={shellOp.v} editing={shellOp.line != null} preview={shellPreview.preview}
+                onChange={(v) => setShellOp((o) => o && { ...o, v })}
+                faceIndex={opFaceIndex} onHoverFace={(i) => viewerRef.current?.hoverFace(i)}
+                onApply={() => void applyShell()} onCancel={closeOp} />
+            )}
             {/* measure readout: center-to-center distance for a 2-face selection */}
-            {measure && (
+            {measure && !shellOp && (
               <div style={{ position: 'absolute', left: 12, top: 12, padding: '8px 11px',
                             background: 'rgba(20,22,26,0.82)', border: '1px solid rgba(255,255,255,0.12)',
                             borderRadius: '6px', color: '#eef1f5', pointerEvents: 'none',
@@ -1543,6 +1669,23 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
               <span>·</span>
             </span>;
           })()}
+          {status === 'done' && (() => {
+            // face_ref() lookups that went wrong: the face is gone (the build's
+            // warning says which line), or two faces match it equally well
+            const bad = (resRef.current?.face_refs ?? []).filter((r) => r.status !== 'found');
+            if (!bad.length) return null;
+            return <span style={{ marginRight: '10px', display: 'inline-flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+              {bad.map((r, i) => (
+                <span key={i} style={{ color: palette.warning ?? '#c78a1a' }}
+                  title={r.status === 'ambiguous'
+                    ? 'Another face looks almost the same; the nearest was used. Reopen the step (Edit in the code view) to check'
+                    : 'Reopen the step (Edit in the code view) and pick the face again'}>
+                  ⚠ {r.status === 'ambiguous' ? `the ${r.hint}: two faces match, used the nearest` : `the ${r.hint} wasn't found`}
+                </span>
+              ))}
+              <span>·</span>
+            </span>;
+          })()}
           {sketchWarns.length > 0 && status !== 'building' && (
             <span style={{ marginRight: '10px', display: 'inline-flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
               {sketchWarns.map((w) => <span key={w} style={{ color: palette.warning ?? '#c78a1a' }}>⚠ {w}</span>)}
@@ -1594,7 +1737,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
             const res = resRef.current;
             const v = (a: [number, number, number]) => `(${a.map((n) => Math.round(n * 10) / 10).join(', ')})`;
             if (!res || sel.length === 0)
-              return `${stats} · drag to orbit · scroll to zoom · click a face (click two for the edge between them)`;
+              return `${stats} · drag to orbit · scroll to zoom · click a face (click two for the edge between them; Shift-click for more)`;
             const faces = sel.map((i) => res.faces.find((f) => f.index === i)!).filter(Boolean);
             const protect = res.auto_round && (
               <button onClick={() => void sendChat(PROTECT_INSTRUCTION)} disabled={asking}
@@ -1618,6 +1761,13 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                           ? ' · no parameter moves this face'
                           : ' · finding the parameters that move it…'}
                 </span>
+                {protect}
+              </span>;
+            }
+            if (sel.length > 2) {
+              return <span style={{ color: palette.text }}>
+                {sel.length} faces · {faces.map((f) => `#${f.index} ${f.kind}`).join(', ')}
+                <span style={{ color: palette.textSecondary }}> · Shift-click to add or drop one</span>
                 {protect}
               </span>;
             }

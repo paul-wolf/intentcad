@@ -162,3 +162,181 @@ def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
     code = code.strip() if blank else code.rstrip("\n")
     gap = "\n\n" if op == "new" else "\n"
     return code + gap + line + "\n", param
+
+
+# --- Shell and Hole: one script line each, written by the editor's dialogs and
+# read back (op_at) to reopen the dialog on it. Editing rewrites that line in
+# place and sets the values of the P keys it uses; nothing else changes.
+
+OPS = ("shell",)
+
+
+def _lit(v) -> str:
+    """`v` as a short Python literal: 25 rather than 25.0, dicts with "keys"."""
+    if isinstance(v, bool) or v is None:
+        return repr(v)
+    if isinstance(v, float):
+        return repr(int(v)) if v.is_integer() else repr(round(v, 6))
+    if isinstance(v, int):
+        return repr(v)
+    if isinstance(v, str):
+        return json.dumps(v)
+    if isinstance(v, dict):
+        return "{" + ", ".join(f"{json.dumps(str(k))}: {_lit(x)}" for k, x in v.items()) + "}"
+    if isinstance(v, (list, tuple)):
+        return "[" + ", ".join(_lit(x) for x in v) + "]"
+    raise ParamError(f"can't write {v!r} into the script")
+
+
+def _name(names: set[str], base: str) -> str:
+    """`base` if the P dict doesn't have it yet, else base with a number:
+    wall, shell2_wall, shell3_wall..."""
+    if base not in names:
+        return base
+    stem, _, suffix = base.partition("_")
+    n = 2
+    while f"{stem}{n}_{suffix}" in names:
+        n += 1
+    return f"{stem}{n}_{suffix}" if suffix else f"{stem}{n}"
+
+
+def _p_values(code: str) -> dict:
+    """The P dict's literal values (an expression's is left out)."""
+    target = _params_assignment(ast.parse(code))
+    if isinstance(target, ast.Call):
+        items = [(kw.arg, kw.value) for kw in target.keywords if kw.arg]
+    elif isinstance(target, ast.Dict):
+        items = [(k.value, v) for k, v in zip(target.keys, target.values)
+                 if isinstance(k, ast.Constant) and isinstance(k.value, str)]
+    else:
+        return {}
+    out = {}
+    for k, v in items:
+        try:
+            out[k] = ast.literal_eval(v)
+        except ValueError:
+            pass
+    return out
+
+
+def _p_key(node) -> str | None:
+    """The key of a P["key"] (or params["key"]) expression, else None."""
+    if (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
+            and node.value.id in ("P", "params") and isinstance(node.slice, ast.Constant)
+            and isinstance(node.slice.value, str)):
+        return node.slice.value
+    return None
+
+
+def _op_stmt(tree: ast.Module, line: int):
+    """The top-level `part = shell(...)`/`holes(...)` statement on script
+    line `line` (1-based, any line it spans): (statement, call, op) or None."""
+    for node in tree.body:
+        if not (node.lineno <= line <= (node.end_lineno or node.lineno)):
+            continue
+        if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name) and node.value.func.id in OPS):
+            return node, node.value, node.value.func.id
+        return None
+    return None
+
+
+def op_lines(code: str) -> list[dict]:
+    """Every Shell/Hole line of the script: [{"op", "line", "end_line"}]."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
+    out = []
+    for node in tree.body:
+        hit = _op_stmt(tree, node.lineno)
+        if hit:
+            out.append({"op": hit[2], "line": node.lineno, "end_line": node.end_lineno or node.lineno})
+    return out
+
+
+def _value(node, pv: dict):
+    """(value, P key) of an argument: P["k"] → (P's value, "k"), a literal →
+    (it, None)."""
+    key = _p_key(node)
+    if key is not None:
+        return pv.get(key), key
+    try:
+        return ast.literal_eval(node), None
+    except ValueError:
+        raise ParamError(f"can't read {ast.unparse(node)!r}: edit this line in the code") from None
+
+
+def _face_refs(node) -> list[dict]:
+    items = node.elts if isinstance(node, (ast.List, ast.Tuple)) else [node]
+    out = []
+    for it in items:
+        if not (isinstance(it, ast.Call) and isinstance(it.func, ast.Name)
+                and it.func.id == "face_ref" and it.args):
+            raise ParamError(f"can't read the face {ast.unparse(it)!r}: edit this line in the code")
+        out.append(ast.literal_eval(it.args[0]))
+    return out
+
+
+def op_at(code: str, line: int) -> dict:
+    """The Shell/Hole operation on script line `line`, for its dialog:
+    {"op", "line", "end_line", "args", "params"} where args holds the values
+    (P keys resolved) and params which P key holds each."""
+    tree = ast.parse(code)
+    hit = _op_stmt(tree, line)
+    if hit is None:
+        raise ParamError(f"line {line} is not a shell() or holes() line")
+    stmt, call, op = hit
+    pv = _p_values(code)
+    kw = {k.arg: k.value for k in call.keywords if k.arg}
+    args: dict = {}
+    params: dict = {}
+    if op == "shell":
+        args["remove"] = _face_refs(kw["remove"]) if "remove" in kw else []
+        args["thickness"], params["thickness"] = _value(kw["thickness"], pv) if "thickness" in kw else (2.0, None)
+        args["inside"] = _value(kw["inside"], pv)[0] if "inside" in kw else True
+    return {"op": op, "line": stmt.lineno, "end_line": stmt.end_lineno or stmt.lineno,
+            "args": args, "params": {k: v for k, v in params.items() if v}}
+
+
+def _write_op(code: str, text: str, line: int | None, op: str) -> str:
+    """Append the statement `text`, or put it in place of the `op` statement
+    on `line`."""
+    if line is None:
+        return code.rstrip("\n") + "\n" + text + "\n"
+    hit = _op_stmt(ast.parse(code), line)
+    if hit is None or hit[2] != op:
+        raise ParamError(f"line {line} is not a {op}() line any more")
+    stmt = hit[0]
+    lines = code.split("\n")
+    lines[stmt.lineno - 1:stmt.end_lineno] = [lines[stmt.lineno - 1][:stmt.col_offset] + text]
+    return "\n".join(lines)
+
+
+def _number(code: str, value: float, key: str | None, base: str, names: set[str]) -> tuple[str, str]:
+    """Hold `value` in P: in `key` (the line's own, set to it) or a new key
+    named after `base`. Returns (code, key)."""
+    if key and key in names:
+        return set_params(code, {key: float(value)}), key
+    key = _name(names, base)
+    names.add(key)
+    return add_param(code, key, float(value)), key
+
+
+def add_shell(code: str, remove: list[dict], thickness: float = 2.0, inside: bool = True,
+              line: int | None = None) -> tuple[str, str]:
+    """Append `part = shell(part, remove=[face_ref(...)], thickness=P[...],
+    inside=...)` — or, with `line`, rewrite the shell() line there. The
+    thickness lives in P (a new key, or the line's own). Returns (code, key)."""
+    if not _assigns_part(ast.parse(code)):
+        raise ParamError("there is no part to shell yet")
+    if float(thickness) <= 0:
+        raise ParamError("the wall thickness must be more than 0")
+    key = op_at(code, line)["params"].get("thickness") if line is not None else None
+    names = param_names(code)
+    key = key if key in names else _name(names, "wall")
+    refs = ", ".join(f"face_ref({_lit(r)})" for r in remove)
+    text = f'part = shell(part, remove=[{refs}], thickness=P["{key}"], inside={bool(inside)})'
+    code = _write_op(code, text, line, "shell")
+    code, key = _number(code, thickness, key, "wall", names)
+    return code, key

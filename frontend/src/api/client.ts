@@ -65,7 +65,7 @@ async function request<T>(
  *  size that failed, the largest that works, and — when that size is a script
  *  param — which param to set to what. */
 export interface SizeFix {
-  kind: 'fillet' | 'chamfer';
+  kind: 'fillet' | 'chamfer' | 'shell';
   size: number;
   max: number | null;
   suggest: number | null;
@@ -331,6 +331,15 @@ export const buildApi = {
     Promise<{ code: string; param: string | null }> {
     return request('/build/add_extrude', { method: 'POST', body: JSON.stringify(payload) });
   },
+  /** Append a shell() line, or rewrite the one on `line` (its thickness a P key). */
+  addShell(payload: { code: string; remove: FaceRefSpec[]; thickness: number; inside: boolean; line?: number | null }):
+    Promise<{ code: string; param: string | null }> {
+    return request('/build/add_shell', { method: 'POST', body: JSON.stringify(payload) });
+  },
+  /** The shell()/holes() line spanning `line`, read back for its dialog. */
+  opAt(code: string, line: number): Promise<OpAt> {
+    return request('/build/op_at', { method: 'POST', body: JSON.stringify({ code, line }) });
+  },
   sensitivity(code: string, documentId = '', sketches: Record<string, unknown> = {}): Promise<{ params: Record<string, DimInfo> }> {
     return request('/build/sensitivity', { method: 'POST', body: JSON.stringify({ code, document_id: documentId, sketches }) });
   },
@@ -380,6 +389,25 @@ export interface RunFace {
   kind: string; area: number; center: [number, number, number]; normal: [number, number, number];
   radius?: number | null;   // radius of a cylindrical face (hole/boss), else null
   size?: [number, number, number];   // bounding-box extents of the face
+  /** How a script line names this face: face_ref(<ref>) (backend modeling/face_ref.py). */
+  ref?: FaceRefSpec | null;
+}
+
+/** A face as a script line names it, found again when the part changes. */
+export interface FaceRefSpec {
+  center: [number, number, number]; normal: [number, number, number]; area: number;
+  box?: [number, number, number, number]; kind?: string; hint?: string;
+}
+
+/** A face_ref() lookup in a build. */
+export interface FaceRefReport { hint: string; status: 'found' | 'ambiguous' | 'not_found'; moved_by: number }
+
+/** A Shell/Hole line read back (backend paramedit.op_at). */
+export interface OpAt {
+  op: 'shell' | 'holes'; line: number; end_line: number;
+  args: Record<string, unknown>;
+  /** argument -> the P key holding it */
+  params: Record<string, string>;
 }
 
 export interface RunEdge {
@@ -400,6 +428,8 @@ export interface RunResponse {
   organic?: OrganicReport | null;
   /** Where each face sketch it extrudes went: each follows its face along the normal. */
   sketches?: import('@/build/faceSketch').SketchBindings;
+  /** Each face_ref() lookup (shell's removed faces...), in order. */
+  face_refs?: FaceRefReport[];
 }
 
 /** Mirrors backend modeling.schemas.AutoRoundReport. */

@@ -19,13 +19,22 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
         + 'Select a face first to lighten just that face.'],
       ['Round', 'The AI rounds every edge of the part (outside corners and inside blends), keeping holes, '
         + 'the bed face and mating faces exact. The two radii land in Parameters.'],
+      ['Shell', 'Hollows the part out to walls of a thickness, leaving the selected faces open. Select the '
+        + 'face(s) to open (Shift-click for more), then Shell. In the dialog: the thickness, Inside (the outside '
+        + 'stays the same) or Outside (the part grows), and the open faces — hover a row to light its face, × to '
+        + 'close it, click a face of the part to add it. The result shows as a blue ghost while you change '
+        + 'things. It adds one script line, the thickness a parameter (wall). Too thick says the largest that '
+        + 'works. Or ask: "shell it, 2 mm walls, open top".'],
+      ['Edit a step', 'In the code view, put the cursor on a shell(…) line and click "Edit shell" at the top right '
+        + '(or double-click the line): its dialog opens with the line\'s values, and OK rewrites only that line.'],
       ['Fix with AI', 'Shown when a build fails: sends the error to the AI, which repairs the script and rebuilds.'],
     ],
   },
   {
     title: 'Select and tweak',
     items: [
-      ['Click a face', 'Shows what it is in the footer. Click a second face to pick the edge between them.'],
+      ['Click a face', 'Shows what it is in the footer. Click a second face to pick the edge between them. '
+        + 'Shift-click adds (or drops) a face, for picking several (e.g. the faces Shell leaves open).'],
       ['Drag the arrow', 'A selected face that a parameter moves gets a blue arrow: drag it to change that '
         + 'parameter (Tab cycles if several do).'],
       ['Parameters', 'The named sizes at the top. Edit a value and the part rebuilds; hover one to see which faces it moves.'],

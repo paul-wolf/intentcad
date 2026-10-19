@@ -99,7 +99,7 @@ _HINTS = [
 
 
 class SizeError(ValueError):
-    """A fillet/chamfer size that doesn't fit, enriched with the size that does.
+    """A fillet/chamfer/shell size that doesn't fit, enriched with the size that does.
 
     `fix` is {"kind", "size", "max", "suggest"}: the size that failed, the largest
     that works (None if it couldn't be measured) and a rounded-down value to use.
@@ -136,17 +136,18 @@ def _largest_ok(attempt, size: float, iters: int = 9) -> float | None:
 
 def _size_error(exc: BaseException, kind: str, what: str, size: float,
                 mx: float | None, extra: str = "") -> SizeError:
-    noun = "length" if kind == "chamfer" else "radius"
+    noun = {"chamfer": "length", "shell": "thickness"}.get(kind, "radius")
+    fewer = "" if kind == "shell" else f", or {kind} fewer of them"
     sug = _suggest(mx)
     if mx is None:
         remedy = (f"The largest {noun} that fits couldn't be measured; try roughly "
-                  f"half, or {kind} fewer of them.")
+                  f"half{fewer}.")
     elif sug == 0.0:
         remedy = (f"No {kind} fits there (largest {noun} that works ≈ {mx:.3g}): "
                   f"remove it from {what}, or change the geometry.")
     else:
         remedy = (f"The largest {noun} that works is about {mx:.3g}: use {noun} "
-                  f"{sug:g} (or less), or {kind} fewer of them.")
+                  f"{sug:g} (or less){fewer}.")
     msg = (f"{exc}\n{kind.capitalize()} {noun} {size:g} is too large for {what}"
            f"{extra}. {remedy}")
     return SizeError(msg, {"kind": kind, "size": float(size), "max": mx, "suggest": sug})
@@ -426,6 +427,14 @@ def _run(code: str, export: list | None = None,
 
     sketch_report: dict = {}
     ns.update(sketch_profile.bind(sketches or {}, ns, sketch_report))
+    # face_ref({...}) — a face found again on the `part` built so far by what
+    # it looks like (modeling/face_ref.py); each lookup → result["face_refs"].
+    # shell() / holes() — the editor's Shell and Hole operations
+    from modeling import face_ref, shell_hole
+
+    face_report: list[dict] = []
+    ns.update(face_ref.bind(ns, face_report))
+    ns.update(shell_hole.bind())
     # Run the script. If an operation fails partway (e.g. a chamfer too big),
     # `part` still holds the model built up to that line — render THAT plus the
     # error as a warning, instead of blanking the whole model.
@@ -485,6 +494,14 @@ def _run(code: str, export: list | None = None,
             pass
         return {}
 
+    def face_ref_of(face, fverts) -> dict | None:
+        """How a script line names this face so it is found again when the
+        part changes: face_ref(<this>) (modeling/face_ref.py)."""
+        try:
+            return face_ref.describe(face, fverts)
+        except Exception:
+            return None
+
     vstart = 0
     for fi, face in enumerate(face_list):
         fverts, ftris = face.tessellate(0.2)
@@ -519,6 +536,7 @@ def _run(code: str, export: list | None = None,
             "radius": None,
             "size": size,
             **cyl_info(face, c),
+            "ref": face_ref_of(face, fverts),
         })
         vstart += count
 
@@ -614,6 +632,8 @@ def _run(code: str, export: list | None = None,
         result["organic"] = organic.merge(organic_events)
     if sketch_report:
         result["sketches"] = sketch_report
+    if face_report:
+        result["face_refs"] = face_report
     if warning:
         result["warning"] = warning   # an op failed; we rendered up to it
     if fix:

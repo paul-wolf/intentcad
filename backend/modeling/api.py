@@ -11,10 +11,14 @@ from .assistant import AssistantError, edit_script
 from .models import AiEdit
 from .engine import EngineError, run_script
 from .llm_models import list_models
-from .paramedit import ParamError, add_extrude, set_params
+from .paramedit import ParamError, add_extrude, add_shell, op_at, set_params
 from .schemas import (
     AddExtrudeRequest,
     AddExtrudeResponse,
+    AddOpResponse,
+    AddShellRequest,
+    OpAtRequest,
+    OpAtResponse,
     EditRequest,
     EditResponse,
     ExportRequest,
@@ -126,6 +130,33 @@ def add_extrude_endpoint(request, payload: AddExtrudeRequest):
     except (ParamError, SyntaxError) as exc:
         return JsonResponse({"message": str(exc)}, status=422)
     return AddExtrudeResponse(code=code, param=param)
+
+
+@router.post("/add_shell", response=AddOpResponse)
+def add_shell_endpoint(request, payload: AddShellRequest):
+    """Append a shell() line (or rewrite the one on `line`), its thickness a
+    P key, and return the updated script."""
+    err = require_auth(request)
+    if err:
+        return err
+    try:
+        code, param = add_shell(payload.code, payload.remove, payload.thickness,
+                                payload.inside, payload.line)
+    except (ParamError, SyntaxError) as exc:
+        return JsonResponse({"message": str(exc)}, status=422)
+    return AddOpResponse(code=code, param=param)
+
+
+@router.post("/op_at", response=OpAtResponse)
+def op_at_endpoint(request, payload: OpAtRequest):
+    """The shell()/holes() line at `line`, read back for its dialog."""
+    err = require_auth(request)
+    if err:
+        return err
+    try:
+        return OpAtResponse(**op_at(payload.code, payload.line))
+    except (ParamError, SyntaxError, KeyError) as exc:
+        return JsonResponse({"message": str(exc)}, status=422)
 
 
 @router.post("/sensitivity", response=SensitivityResponse)
