@@ -189,7 +189,8 @@ class RunRequest(Schema):
     """Execute a build123d script (the model is the script)."""
     code: str
     document_id: str = ""   # whose uploaded files ASSETS["<sha256>"] resolves to
-    sketches: dict[str, dict] = {}   # name -> profile, for sketch("name"); else the document's
+    # name -> profile ({plane, loops, face?}), for sketch("name"); else the document's
+    sketches: dict[str, dict] = {}
 
 
 class RunMetrics(Schema):
@@ -265,6 +266,20 @@ class OrganicReport(Schema):
     warnings: list[OrganicWarning] = []
 
 
+class SketchPlaneOut(Schema):
+    origin: list[float]
+    normal: list[float]
+    xAxis: list[float]
+
+
+class SketchBinding(Schema):
+    """Where a face sketch went in this build: it follows the face it was drawn
+    on along that face's normal (modeling/sketch_profile.rebind)."""
+    status: str                     # 'same' | 'moved' | 'ambiguous' | 'not_found'
+    moved_by: float = 0.0           # mm along the sketch's normal
+    plane: SketchPlaneOut           # the plane it was built on
+
+
 class RunResponse(Schema):
     mesh: MeshOut
     faces: list[RunFace] = []
@@ -275,6 +290,7 @@ class RunResponse(Schema):
     fix: dict | None = None         # for a fillet/chamfer that doesn't fit: the size that does
     auto_round: AutoRoundReport | None = None   # the script called auto_round
     organic: OrganicReport | None = None        # ... spoke/frame/window/truss_windows
+    sketches: dict[str, SketchBinding] = {}     # name -> where each face sketch went
 
 
 class ExportRequest(Schema):

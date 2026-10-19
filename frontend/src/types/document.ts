@@ -240,8 +240,8 @@ export interface Sketch {
   visible: boolean;
   suppressed?: boolean;
   plane?: import('@/types/geometry').Plane;
-  /** Drawn on a part's face: that face (centre, normal, area) for re-binding. */
-  face?: { center: [number, number, number]; normal: [number, number, number]; area: number };
+  /** Drawn on a part's face: that face, so the build can find it again (see faceSketch.ts FaceRef). */
+  face?: import('@/build/faceSketch').FaceRef;
   /** Its closed shapes, saved with it for the script's sketch("name") (see faceSketch.ts). */
   profile?: import('@/build/faceSketch').SketchProfile;
   entities: Entity[];

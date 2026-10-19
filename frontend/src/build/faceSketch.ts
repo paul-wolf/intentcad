@@ -15,23 +15,84 @@ import { bezierPoint } from '@/utils/bezierGeometry';
 import { dot, len, scale, sub, type Vec3 } from './dragHandle';
 import { planeBasis, planeForFace, sketchToWorld, worldToSketch, type PlaneBasis } from './sketchPlane';
 
-/** The face a sketch was drawn on, kept for re-binding after a rebuild. */
-export interface FaceRef { center: Vec3; normal: Vec3; area: number }
+/** The face a sketch was drawn on, kept so the build can find it again when
+ *  the part changes (modeling/sketch_profile.rebind). Sketches drawn before
+ *  the outline box, perimeter, edge count and hint were kept have only
+ *  center, normal and area. */
+export interface FaceRef {
+  center: Vec3; normal: Vec3; area: number;
+  /** The face outline's bounding box in the sketch plane, [umin, vmin, umax, vmax]
+   *  (u along xAxis, v = normal × xAxis: sketch (x, y) is (u, v) = (x, −y)). */
+  box?: [number, number, number, number];
+  perimeter?: number;
+  edges?: number;
+  /** "top face", "right face"… */
+  hint?: string;
+}
 
 export interface FaceInfo { index: number; center: Vec3; normal: Vec3; area: number }
 
-/** The sketch drawn on this face: same plane, nearest centre. */
-export function findFaceSketch(sketches: Sketch[], face: FaceInfo): Sketch | null {
+/** Where the last build put a face sketch: it follows its face along the
+ *  face's normal (mirrors modeling.schemas.SketchBinding). */
+export interface SketchBinding {
+  status: 'same' | 'moved' | 'ambiguous' | 'not_found';
+  /** mm along the sketch's normal */
+  moved_by: number;
+  plane: NonNullable<Sketch['plane']>;
+}
+export type SketchBindings = Record<string, SketchBinding>;
+
+/** The plane a sketch is on in the last build: where its face went, else as drawn.
+ *  (The stored plane is never changed — the build works it out each time.) */
+export function boundPlane(s: Sketch, bound?: SketchBindings | null): Sketch['plane'] {
+  return (s.plane && bound?.[s.name]?.plane) || s.plane;
+}
+
+/** "top face", "front face"… from the outward normal. */
+export function faceLabel(n: readonly number[]): string {
+  const names: [number, number, string][] = [
+    [2, 1, 'top'], [2, -1, 'bottom'], [1, -1, 'front'], [1, 1, 'back'], [0, 1, 'right'], [0, -1, 'left'],
+  ];
+  for (const [axis, sign, name] of names) if (n[axis]! * sign > 0.999) return `${name} face`;
+  return 'angled face';
+}
+
+/** The sketch drawn on this face: same plane (where the last build put it,
+ *  `bound`), nearest centre. */
+export function findFaceSketch(sketches: Sketch[], face: FaceInfo, bound?: SketchBindings | null): Sketch | null {
   let best: Sketch | null = null, bestD = Infinity;
   for (const s of sketches) {
-    if (!s.plane || !s.face) continue;
-    const b = planeBasis(s.plane);
+    const plane = boundPlane(s, bound);
+    if (!plane || !s.face) continue;
+    const b = planeBasis(plane);
     if (dot(b.normal, face.normal) < 0.999) continue;
     if (Math.abs(dot(sub(face.center, b.origin), b.normal)) > 0.01) continue;
-    const d = len(sub(s.face.center, face.center));
+    // across the plane only: the face may have moved along its normal since
+    const off = sub(s.face.center, face.center);
+    const d = len(sub(off, scale(b.normal, dot(off, b.normal))));
     if (d < bestD) { bestD = d; best = s; }
   }
   return best;
+}
+
+/** What the last build did with the face sketches, for the status line: how
+ *  many followed their face, and a warning for each that lost it or matched
+ *  more than one. */
+export function sketchBindNotes(bound: SketchBindings | null | undefined, sketches: Sketch[]): { moved: number; warnings: string[] } {
+  let moved = 0;
+  const warnings: string[] = [];
+  for (const [name, b] of Object.entries(bound ?? {})) {
+    const s = sketches.find((k) => k.name === name);
+    if (!s?.face) continue;   // a base-plane sketch has no face to follow
+    const hint = s.face.hint ?? faceLabel(s.face.normal);
+    if (b.status === 'moved') moved++;
+    else if (b.status === 'not_found') warnings.push(`Sketch '${name}' lost its face (${hint}); drawn where it was`);
+    else if (b.status === 'ambiguous') {
+      if (Math.abs(b.moved_by) > 1e-6) moved++;
+      warnings.push(`Sketch '${name}' matched more than one face (${hint}); used the closest`);
+    }
+  }
+  return { moved, warnings };
 }
 
 const round = (v: Vec3): Vec3 => v.map((x) => Math.round(x * 1e6) / 1e6) as Vec3;
@@ -43,9 +104,18 @@ export function newFaceSketch(name: string, face: FaceInfo, edges: RunEdge[]): S
   const b = planeBasis(plane);
   const entities: Entity[] = [];
   const constraints: Constraint[] = [];
+  // the outline, for finding the face again after the part changes
+  let umin = Infinity, vmin = Infinity, umax = -Infinity, vmax = -Infinity, perimeter = 0, count = 0;
   for (const e of edges) {
     if (!e.faceIndices.includes(face.index) || e.polyline.length < 2) continue;
     const pts = e.polyline.map((p) => worldToSketch(b, p));
+    count++;
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i]!;
+      umin = Math.min(umin, p.x); umax = Math.max(umax, p.x);
+      vmin = Math.min(vmin, -p.y); vmax = Math.max(vmax, -p.y);
+      if (i) perimeter += Math.hypot(p.x - pts[i - 1]!.x, p.y - pts[i - 1]!.y);
+    }
     const first = pts[0]!, last = pts[pts.length - 1]!;
     const closed = Math.hypot(first.x - last.x, first.y - last.y) < 1e-6;
     // reference (datum) + construction: drawn as a marker, snappable, never exported
@@ -70,7 +140,12 @@ export function newFaceSketch(name: string, face: FaceInfo, edges: RunEdge[]): S
   return {
     id: generateId('sk'), name, visible: true, entities, constraints,
     plane: { origin: round(plane.origin), normal: round(plane.normal), xAxis: round(plane.xAxis) },
-    face: { center: face.center, normal: face.normal, area: face.area },
+    face: {
+      center: face.center, normal: face.normal, area: face.area,
+      ...(count ? { box: [umin, vmin, umax, vmax].map((x) => Math.round(x * 1e6) / 1e6) as FaceRef['box'],
+                    perimeter: Math.round(perimeter * 1e6) / 1e6, edges: count } : {}),
+      hint: faceLabel(face.normal),
+    },
   };
 }
 
@@ -202,10 +277,11 @@ export function entityPolylines(e: Entity, withConstruction = false): Point[][] 
   }
 }
 
-/** A face sketch as 3D segment pairs on its plane, for the viewer. */
-export function sketchSegments(sketch: Sketch): number[] {
-  if (!sketch.plane) return [];
-  const b: PlaneBasis = planeBasis(sketch.plane);
+/** A face sketch as 3D segment pairs on its plane (or `plane`: where the
+ *  last build put it), for the viewer. */
+export function sketchSegments(sketch: Sketch, plane: Sketch['plane'] = sketch.plane): number[] {
+  if (!plane) return [];
+  const b: PlaneBasis = planeBasis(plane);
   const out: number[] = [];
   for (const e of sketch.entities) {
     for (const line of entityPolylines(e)) {
@@ -226,8 +302,9 @@ export type ProfileSegment =
   | { t: 'circle'; c: XY; r: number }
   | { t: 'bezier'; p: [XY, XY, XY, XY] };
 
-/** A face sketch's closed shapes on its plane — what sketch("name") builds from. */
-export interface SketchProfile { plane: NonNullable<Sketch['plane']>; loops: ProfileSegment[][] }
+/** A face sketch's closed shapes on its plane — what sketch("name") builds
+ *  from — and the face it was drawn on, so the build can follow that face. */
+export interface SketchProfile { plane: NonNullable<Sketch['plane']>; loops: ProfileSegment[][]; face?: FaceRef }
 
 const xy = (p: Point): XY => [Math.round(p.x * 1e6) / 1e6, Math.round(p.y * 1e6) / 1e6];
 const JOIN_TOL = 1e-4;
@@ -319,7 +396,7 @@ export function sketchLoops(sketch: Sketch): { loops: ProfileSegment[][]; open: 
 /** The profile stored with a face sketch (null for a sketch with no plane). */
 export function sketchProfile(sketch: Sketch): SketchProfile | null {
   if (!sketch.plane) return null;
-  return { plane: sketch.plane, loops: sketchLoops(sketch).loops };
+  return { plane: sketch.plane, loops: sketchLoops(sketch).loops, ...(sketch.face ? { face: sketch.face } : {}) };
 }
 
 // matches the engine's SKETCH_REF (modeling/engine.py)
@@ -435,10 +512,12 @@ function loopOutline(loop: ProfileSegment[]): { pts: Point[]; corners: Point[] }
 /** A preview of an extrude, as 3D segment pairs: the shapes at each end of
  *  `span` (and on the plane, when the span crosses it), side edges at their
  *  corners, and arrows from the shapes' middle showing which way it goes. */
-export function extrudeGhost(sketch: Sketch, span: [number, number]): { edges: number[]; arrows: number[] } {
+export function extrudeGhost(
+  sketch: Sketch, span: [number, number], plane: Sketch['plane'] = sketch.plane,
+): { edges: number[]; arrows: number[] } {
   const edges: number[] = [], arrows: number[] = [];
-  if (!sketch.plane) return { edges, arrows };
-  const b = planeBasis(sketch.plane);
+  if (!plane) return { edges, arrows };
+  const b = planeBasis(plane);
   const at = (p: Point, off: number): Vec3 => {
     const w = sketchToWorld(b, p);
     return [w[0] + b.normal[0] * off, w[1] + b.normal[1] * off, w[2] + b.normal[2] * off];

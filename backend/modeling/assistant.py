@@ -162,7 +162,12 @@ def _system(production: str = "") -> str:
         "of faces on that face's plane, normal pointing out of the part. "
         "part -= extrude(sketch(\"<name>\"), amount=-P[\"cut_depth\"]) cuts it in; "
         "part += extrude(sketch(\"<name>\"), amount=P[\"height\"]) grows it out. Use "
-        "the exact name; never invent one. A sketch on a base plane (\"Sketch on "
+        "the exact name; never invent one. A face sketch follows its face along the "
+        "face's normal when params change (a hole on the top stays on the top when the "
+        "plate gets thicker; a cutout on a side wall moves out with the wall), so never "
+        "hand-adjust where a sketch sits or offset its extrude for a thickness, height "
+        "or width change; only its in-plane position is fixed. Call sketch() after "
+        "the face it was drawn on exists in `part`. A sketch on a base plane (\"Sketch on "
         "Top plane\", Front, Right) lies on that plane through the origin; with no part "
         "yet, part = extrude(sketch(\"<name>\"), amount=P[\"height\"]) makes the part.\n\n"
         "ROUNDING THE WHOLE PART: auto_round(part, convex=…, concave=…, keep=[…]) "
@@ -277,8 +282,10 @@ def _face_sketches(document_id: str | None) -> list[str]:
         pl = prof.get("plane") or {}
         n = [round(v, 3) for v in pl.get("normal", [])]
         o = [round(v, 2) for v in pl.get("origin", [])]
-        out.append(f"- {json.dumps(s.get('name'))}: {len(prof['loops'])} closed shape(s) on the plane "
-                   f"through {o} with normal {n}")
+        face = prof.get("face") or {}
+        on = f"drawn on the {face['hint']}, " if face.get("hint") else ""
+        out.append(f"- {json.dumps(s.get('name'))}: {len(prof['loops'])} closed shape(s), {on}on the plane "
+                   f"through {o} with normal {n} (as drawn; it follows its face)")
     return out
 
 def _anthropic_call(system: str, user: str, tools: list[dict], model: str) -> dict:

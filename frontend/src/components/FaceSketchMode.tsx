@@ -14,11 +14,11 @@ import { useEditorStore } from '@/stores/editorStore';
 import { getBackendId, persistSketches } from '@/api/autoSave';
 import type { RunResponse } from '@/api/client';
 import type { FaceRange, Viewer } from '@/build/webglViewer';
-import { dot, len, sub } from '@/build/dragHandle';
+import { dot, len, scale, sub } from '@/build/dragHandle';
 import { planeBasis, sketchCamera, fitViewport, type PlaneBasis, type Rect } from '@/build/sketchPlane';
 import {
-  BASE_PLANES, extrudeDirectionText, extrudeGhost, extrudeSpan, findFaceSketch, newFaceSketch, newPlaneSketch,
-  sketchBasePlane, sketchBounds, sketchLoops, sketchSegments, type BasePlane,
+  BASE_PLANES, boundPlane, extrudeDirectionText, extrudeGhost, extrudeSpan, faceLabel, findFaceSketch, newFaceSketch,
+  newPlaneSketch, sketchBasePlane, sketchBounds, sketchLoops, sketchSegments, type BasePlane, type SketchBindings,
 } from '@/build/faceSketch';
 import type { Sketch } from '@/types/document';
 
@@ -48,15 +48,6 @@ interface Session {
   phase: 'enter' | 'on' | 'exit';
 }
 
-/** "top face", "front face"… from the outward normal. */
-export function faceLabel(n: readonly number[]): string {
-  const names: [number, number, string][] = [
-    [2, 1, 'top'], [2, -1, 'bottom'], [1, -1, 'front'], [1, 1, 'back'], [0, 1, 'right'], [0, -1, 'left'],
-  ];
-  for (const [axis, sign, name] of names) if (n[axis]! * sign > 0.999) return `${name} face`;
-  return 'angled face';
-}
-
 function hexRgb(c: string): [number, number, number] {
   const m = /^#([0-9a-f]{6})$/i.exec(c.trim());
   if (!m) return [0.06, 0.09, 0.16];
@@ -68,15 +59,18 @@ const sameRect = (a: Rect, b: Rect) =>
   Math.abs(a.left - b.left) < 0.5 && Math.abs(a.top - b.top) < 0.5
   && Math.abs(a.width - b.width) < 0.5 && Math.abs(a.height - b.height) < 0.5;
 
-// the 3D face a stored sketch was drawn on, in the current build
-function matchFace(sk: Sketch, faces: FaceRange[]): FaceRange | null {
-  if (!sk.plane || !sk.face) return null;
-  const b = planeBasis(sk.plane);
+// the 3D face a stored sketch was drawn on, in the current build (on the
+// plane the build put the sketch on: it follows its face)
+function matchFace(sk: Sketch, faces: FaceRange[], bound?: SketchBindings): FaceRange | null {
+  const plane = boundPlane(sk, bound);
+  if (!plane || !sk.face) return null;
+  const b = planeBasis(plane);
   let best: FaceRange | null = null, bestD = Infinity;
   for (const f of faces) {
     if (f.kind !== 'plane' || dot(f.normal, b.normal) < 0.999) continue;
     if (Math.abs(dot(sub(f.center, b.origin), b.normal)) > 0.01) continue;
-    const d = len(sub(f.center, sk.face.center));
+    const off = sub(f.center, sk.face.center);
+    const d = len(sub(off, scale(b.normal, dot(off, b.normal))));
     if (d < bestD) { bestD = d; best = f; }
   }
   return best;
@@ -158,14 +152,16 @@ export function useFaceSketch(
     setGlRect(null); setShown(false); setStrokes(false); setExtruding(false);
     pendingExtrude.current = null;
     const base = sketchBasePlane(sk);
+    // drawn on a face: on that face where the last build found it
+    const plane = boundPlane(sk, resRef.current?.sketches) ?? sk.plane;
     setSession({ sketchId: sk.id, label: base ? BASE_PLANES[base].name : faceLabel(sk.plane.normal), face,
-                 plane: planeBasis(sk.plane), datum: !sk.face, prevActive, phase: 'enter' });
-  }, []);
+                 plane: planeBasis(plane), datum: !sk.face, prevActive, phase: 'enter' });
+  }, [resRef]);
 
   const enter = useCallback((f: FaceRange) => {
     if (sessionRef.current || f.kind !== 'plane') return;
     const doc = useDocumentStore.getState().document;
-    let sk = findFaceSketch(doc.sketches, f);
+    let sk = findFaceSketch(doc.sketches, f, resRef.current?.sketches);
     if (!sk) {
       const base = `Sketch on ${faceLabel(f.normal)}`;
       let name = base;
@@ -195,7 +191,7 @@ export function useFaceSketch(
   const open = useCallback((id: string) => {
     const sk = useDocumentStore.getState().document.sketches.find((s) => s.id === id);
     if (!sk) return;
-    start(sk, matchFace(sk, resRef.current?.faces ?? [])?.index ?? -1);
+    start(sk, matchFace(sk, resRef.current?.faces ?? [], resRef.current?.sketches)?.index ?? -1);
   }, [resRef, start]);
 
   const exit = useCallback(() => {
@@ -313,15 +309,17 @@ export function useFaceSketch(
     return () => window.removeEventListener('keydown', onKey, true);
   }, [session?.sketchId, exit]);
 
-  // the stored face sketches, drawn on the part
+  // the stored face sketches, drawn on the part — where the last build put
+  // them (each follows its face); ScriptViewer pushes again after a build
   const sketches = useDocumentStore((s) => s.document.sketches);
   const pushLines = useCallback(() => {
+    const bound = resRef.current?.sketches;
     viewerRef.current?.setSketchLines(
       useDocumentStore.getState().document.sketches
         .filter((s) => s.plane && s.visible !== false)
-        .map((s) => ({ id: s.id, name: s.name, segments: sketchSegments(s) })),
+        .map((s) => ({ id: s.id, name: s.name, segments: sketchSegments(s, boundPlane(s, bound)) })),
     );
-  }, [viewerRef]);
+  }, [viewerRef, resRef]);
   useEffect(() => { pushLines(); }, [sketches, pushLines]);
 
   const current = session ? sketches.find((x) => x.id === session.sketchId) : undefined;
@@ -365,7 +363,7 @@ export function useFaceSketch(
         for (const z of [m.bbox_min[2], m.bbox_max[2]]) ds.push(dot(sub([x, y, z], s.plane.origin), s.plane.normal));
       extent = [Math.min(...ds), Math.max(...ds)];
     }
-    const g = extrudeGhost(current, extrudeSpan(o, extent));
+    const g = extrudeGhost(current, extrudeSpan(o, extent), { origin: s.plane.origin, normal: s.plane.normal, xAxis: s.plane.xDir });
     setStrokes(false);   // the flat drawing doesn't line up once the view turns
     previewing.current = true;
     v.setExtrudePreview({ ...g, color: GHOST[ex.op] });

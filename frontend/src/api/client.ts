@@ -305,8 +305,9 @@ export const buildApi = {
   run(code: string, signal?: AbortSignal, documentId = '', sketches: Record<string, unknown> = {}): Promise<RunResponse> {
     return request('/build/run', { method: 'POST', body: JSON.stringify({ code, document_id: documentId, sketches }), signal });
   },
-  export(code: string, format: 'stl' | 'step' | 'stl-parts' | 'dxf' | 'dxf-views', documentId = ''): Promise<{ format: string; data: string }> {
-    return request('/build/export', { method: 'POST', body: JSON.stringify({ code, format, document_id: documentId }) });
+  export(code: string, format: 'stl' | 'step' | 'stl-parts' | 'dxf' | 'dxf-views', documentId = '',
+         sketches: Record<string, unknown> = {}): Promise<{ format: string; data: string }> {
+    return request('/build/export', { method: 'POST', body: JSON.stringify({ code, format, document_id: documentId, sketches }) });
   },
   edit(payload: { code: string; instruction: string; context?: string; document_id?: string;
                   history?: { role: string; text: string }[]; model?: string; production?: string;
@@ -397,6 +398,8 @@ export interface RunResponse {
   auto_round?: AutoRoundReport | null;
   /** Present when the script called spoke/frame/window/truss_windows. */
   organic?: OrganicReport | null;
+  /** Where each face sketch it extrudes went: each follows its face along the normal. */
+  sketches?: import('@/build/faceSketch').SketchBindings;
 }
 
 /** Mirrors backend modeling.schemas.AutoRoundReport. */

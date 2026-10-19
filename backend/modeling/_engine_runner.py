@@ -419,10 +419,13 @@ def _run(code: str, export: list | None = None,
 
     ns.update(organic.bind(organic_events.append, min_wall))
     # sketch("name") — a face sketch's closed shapes as faces on its plane
-    # (modeling/sketch_profile.py); the engine sends the profiles referenced
+    # (modeling/sketch_profile.py); the engine sends the profiles referenced.
+    # Each follows its face on the `part` built so far; where each went is
+    # returned as result["sketches"]
     from modeling import sketch_profile
 
-    ns.update(sketch_profile.bind(sketches or {}))
+    sketch_report: dict = {}
+    ns.update(sketch_profile.bind(sketches or {}, ns, sketch_report))
     # Run the script. If an operation fails partway (e.g. a chamfer too big),
     # `part` still holds the model built up to that line — render THAT plus the
     # error as a warning, instead of blanking the whole model.
@@ -609,6 +612,8 @@ def _run(code: str, export: list | None = None,
         result["auto_round"] = _merge_rounds(rounds)
     if organic_events:
         result["organic"] = organic.merge(organic_events)
+    if sketch_report:
+        result["sketches"] = sketch_report
     if warning:
         result["warning"] = warning   # an op failed; we rendered up to it
     if fix:

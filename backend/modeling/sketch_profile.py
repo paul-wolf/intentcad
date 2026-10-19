@@ -18,11 +18,24 @@ Loops nest by containment: a loop inside an even number of others is an
 outline, one inside an odd number is a hole in its innermost container. Every
 face is oriented so its normal is the plane normal — extrude(f, amount=d)
 grows d out of the face, a negative amount goes into the part.
+
+A sketch drawn on a part face also carries the face it was drawn on:
+
+    "face": {"center": [x,y,z], "normal": [x,y,z], "area": a,
+             "box": [umin, vmin, umax, vmax],   (its outline, in plane (u, v))
+             "perimeter": p, "edges": n, "hint": "top face"}
+
+(older sketches have only center, normal and area). When sketch() is called
+the face is looked for again in the `part` built so far, and the sketch moves
+along its normal onto it — a hole on the top face stays on the top face when
+the plate gets thicker (see rebind()).
 """
 
 from __future__ import annotations
 
-from build123d import Compound, Edge, Face, Plane, Vector, Wire
+import math
+
+from build123d import Compound, Edge, Face, GeomType, Plane, Vector, Wire
 
 
 class SketchError(ValueError):
@@ -95,13 +108,123 @@ def profile_faces(profile: dict, name: str = "sketch") -> list[Face]:
     return faces
 
 
-def bind(profiles: dict) -> dict:
+# a candidate face is on the sketch's plane direction when its normal is this close
+SAME_NORMAL = 0.999
+# the runner-up scoring within this fraction of the best makes the match ambiguous
+AMBIGUOUS = 0.10
+# distance along the normal counts this much against a face (per face size):
+# faces do move that way when the part changes, but a parallel face far off
+# (a case's opposite wall, inside face) should lose to the one that moved less
+ALONG = 0.5
+
+
+def _vec(v) -> Vector:
+    return Vector(float(v[0]), float(v[1]), float(v[2]))
+
+
+def _box(face: Face, pl: Plane) -> tuple[float, float, float, float]:
+    """The face's outline as a box in the plane's (u, v)."""
+    us, vs = [], []
+    for e in face.edges():
+        n = 2 if e.geom_type == GeomType.LINE else 17
+        for k in range(n):
+            p = pl.to_local_coords(e @ (k / (n - 1)))
+            us.append(p.X)
+            vs.append(p.Y)
+    return min(us), min(vs), max(us), max(vs)
+
+
+def _overlap(a, b) -> float:
+    """Intersection over union of two (umin, vmin, umax, vmax) boxes."""
+    iw = min(a[2], b[2]) - max(a[0], b[0])
+    ih = min(a[3], b[3]) - max(a[1], b[1])
+    if iw <= 0 or ih <= 0:
+        return 0.0
+    inter = iw * ih
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _plane_spec(spec: dict, origin: Vector | None = None) -> dict:
+    out = {"origin": list(spec["origin"]), "normal": list(spec["normal"]), "xAxis": list(spec["xAxis"])}
+    if origin is not None:
+        out["origin"] = [round(origin.X, 9), round(origin.Y, 9), round(origin.Z, 9)]
+    return out
+
+
+def rebind(profile: dict, part) -> dict:
+    """Where the sketch goes on `part` (the part built so far):
+    {status, moved_by, plane}.
+
+    The face it was drawn on is looked for among part's planar faces facing
+    the same way, scored on how far its centre is across the plane (scaled by
+    the face's size), how different its area is, how little its outline box
+    overlaps the stored one and, at half weight, how far it is along the
+    normal — that is what changes when the part gets thicker, but of two
+    otherwise alike faces the nearer one is the same face. The best wins and
+    the plane moves along its normal onto it, keeping its in-plane origin and
+    x axis (so the sketch's coordinates still mean the same place).
+
+    status: "same" (not moved), "moved", "ambiguous" (another face scored
+    within 10% — the best is used), "not_found" (the stored plane is used)."""
+    spec = profile.get("plane") or {}
+    face = profile.get("face")
+    keep = {"status": "same", "moved_by": 0.0, "plane": _plane_spec(spec) if spec else spec}
+    if not spec or not isinstance(face, dict) or part is None or not hasattr(part, "faces"):
+        return keep
+    try:
+        pl = _plane(spec)
+        n = pl.z_dir
+        c0 = _vec(face["center"])
+        area0 = float(face["area"])
+        box0 = face.get("box")
+        size = math.sqrt(area0) if area0 > 0 else 1.0
+        scored = []
+        for f in part.faces():
+            if f.geom_type != GeomType.PLANE:
+                continue
+            c = f.center()
+            if f.normal_at(c).dot(n) < SAME_NORMAL or f.area <= 0:
+                continue
+            d = c - c0
+            along = d.dot(n)
+            across = (d - n * along).length
+            ov = _overlap(box0, _box(f, pl)) if box0 else None
+            score = ((across + ALONG * abs(along)) / size + abs(math.log(f.area / area0))
+                     + (1 - ov if ov is not None else 0))
+            scored.append((score, across, ov, c))
+    except Exception:  # noqa: BLE001 - a part we can't read: leave the sketch where it was
+        return keep
+    if not scored:
+        return {**keep, "status": "not_found"}
+    scored.sort(key=lambda t: t[0])
+    score, across, ov, c = scored[0]
+    if not ov and across > size:
+        return {**keep, "status": "not_found"}
+    offset = (c - pl.origin).dot(n)
+    moved = round(offset, 6)
+    status = "moved" if abs(moved) > 1e-6 else "same"
+    if len(scored) > 1 and scored[1][0] <= score * (1 + AMBIGUOUS) + 1e-9:
+        status = "ambiguous"
+    return {"status": status, "moved_by": moved if status != "same" else 0.0,
+            "plane": _plane_spec(spec, pl.origin + n * offset)}
+
+
+def bind(profiles: dict, ns: dict | None = None, report: dict | None = None) -> dict:
     """The script-namespace sketch(): looks names up in `profiles`
-    ({name: profile}, sent by the engine with the build)."""
+    ({name: profile}, sent by the engine with the build). A face sketch is
+    rebound onto the script's `part` as it is when sketch() is called (`ns`
+    is the script namespace); where each went is recorded in `report`."""
     def sketch(name: str):
         """The face sketch `name` as a Face (or a Compound of faces) on its plane."""
         if name not in profiles:
             raise SketchError(f"no sketch named {name!r} in this part")
-        faces = profile_faces(profiles[name], name)
+        profile = profiles[name]
+        where = rebind(profile, (ns or {}).get("part"))
+        if report is not None:
+            report[name] = where
+        if where["plane"]:
+            profile = {**profile, "plane": where["plane"]}
+        faces = profile_faces(profile, name)
         return faces[0] if len(faces) == 1 else Compound(faces)
     return {"sketch": sketch}

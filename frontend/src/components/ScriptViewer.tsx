@@ -15,7 +15,7 @@ import { importScript, importLabel, STEP_ACCEPT } from '@/build/importStep';
 import { PartVersionsPanel } from './PartVersionsPanel';
 import { PartHelpModal } from './PartHelpModal';
 import { useFaceSketch, type ExtrudeOptions } from './FaceSketchMode';
-import { BASE_PLANES, referencedProfiles, type BasePlane } from '@/build/faceSketch';
+import { BASE_PLANES, referencedProfiles, sketchBindNotes, type BasePlane } from '@/build/faceSketch';
 
 // the view buttons, in key order (1–6, then 0)
 const VIEW_BUTTONS = (['1', '2', '3', '4', '5', '6', '0'] as const)
@@ -332,6 +332,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       setFix(res.fix?.param ? res.fix : null);
       viewerRef.current.update(res.mesh, res.faces);
       resRef.current = res;
+      if (sketchOnFace) faceSketchRef.current.pushLines();   // each on its face, where the build put it
       setParamVals(res.params);
       paramBase.current = res.params;
       if (!cached) putCachedBuild(key, res);
@@ -893,7 +894,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     if (status !== 'done' || exporting) return;
     setExporting(format);
     try {
-      const r = await buildApi.export(code, format, getBackendId() ?? '');
+      const r = await buildApi.export(code, format, getBackendId() ?? '', buildInputs(code).sketches);
       if (format === 'stl-parts' || format === 'dxf-views') {
         // r.data is a base64 zip (STL per body, or top/front/side DXFs)
         const bytes = Uint8Array.from(atob(r.data), (c) => c.charCodeAt(0));
@@ -1490,6 +1491,17 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
               {fix && fixButton(fix)}
             </span>
           )}
+          {status === 'done' && resRef.current?.sketches && (() => {
+            const { moved, warnings } = sketchBindNotes(resRef.current.sketches, useDocumentStore.getState().document.sketches);
+            if (!moved && !warnings.length) return null;
+            return <span style={{ marginRight: '10px', display: 'inline-flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+              {moved > 0 && <span title="A face sketch moves along its face's normal when the part changes">
+                {moved} sketch{moved === 1 ? '' : 'es'} followed {moved === 1 ? 'its face' : 'their faces'}
+              </span>}
+              {warnings.map((w) => <span key={w} style={{ color: palette.warning ?? '#c78a1a' }}>⚠ {w}</span>)}
+              <span>·</span>
+            </span>;
+          })()}
           {status === 'done' && resRef.current?.auto_round && (() => {
             const r = resRef.current.auto_round;
             return <span style={{ marginRight: '10px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
