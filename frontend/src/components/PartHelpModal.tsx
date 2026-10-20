@@ -81,7 +81,14 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
     items: [
       ['Drag · scroll', 'Drag to orbit (the part turns about its vertical Z axis), scroll to zoom.'],
       ['Front … Iso', 'The buttons along the bottom of the 3D view. Keys 1–6 and 0 do the same, in that order.'],
-      ['Normal', 'Look straight at the selected face (key N).'],
+      ['Normal', 'Look straight at the selected face (key N); with the section on, straight at the cut.'],
+      ['Section', 'Key Z (or Section, under Inspect): cuts the view open at a plane to check walls, insert '
+        + 'depths and board fit; the script is not changed. With a flat face selected it starts just inside that '
+        + 'face, else through the middle, square to the view. The panel at the top turns it to X, Y or Z, aligns '
+        + 'it to the selected face, flips which side is cut away and takes a typed offset; drag the arrow to move '
+        + 'it (0.5 mm steps, Shift 0.1, Esc cancels; it snaps onto parallel faces). Hover the cut for the wall '
+        + 'thickness there, or click two points on its outline for their distance — curved walls are measured '
+        + 'on the mesh, so they are marked approximate (≈). It is remembered per part, and is off while sketching.'],
       ['Persp / Ortho', 'Perspective or orthographic — no perspective, for checking alignment (key O).'],
       ['Click X / Y / Z', 'In the axes at bottom left: view from that axis. Click again for the opposite side.'],
       ['Code · Chat · Context · 3D · Operations', 'At the top: what sits beside the 3D view. Code shows the script with the '
