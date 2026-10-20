@@ -21,6 +21,8 @@ describe('steps', () => {
     expect(stepLabel(STEPS[2]!)).toBe("Cut 'USB cutout' 5 mm");
     expect(stepIcon(op(1, 1, { op: 'holes' }))).toBe('hole');
     expect(stepIcon(op(1, 1, { op: 'truss_windows' }))).toBe('lighten');
+    expect(stepIcon(op(1, 1, { op: 'offset_plane', plane: 'Lid' }))).toBe('plane-offset');
+    expect(stepIcon(op(1, 1, { op: 'edge_plane', plane: 'Cam tilt' }))).toBe('plane-edge');
   });
 
   it('finds the step of a line, and whether it reopens', () => {
@@ -63,6 +65,17 @@ describe('steps', () => {
     expect(p.get(6)).toEqual(["The side face wasn't found: reopen the step and pick the face again"]);
     expect(p.get(9)).toEqual(['rib 1.2 mm thin']);
     expect(stepProblems(STEPS, null, '').size).toBe(0);
+  });
+
+  it('flags a plane whose face or edge is not certain', () => {
+    const steps = [...STEPS, op(10, 10, { op: 'offset_plane', plane: 'Lid', summary: "Plane 'Lid' · 5 mm from the top face" })];
+    const res = { planes: {
+      Lid: { kind: 'offset', status: 'ambiguous', line: 10, origin: [0, 0, 15], normal: [0, 0, 1], xAxis: [1, 0, 0] },
+      Mid: { kind: 'offset', status: 'moved', line: 10, origin: [0, 0, 5], normal: [0, 0, 1], xAxis: [1, 0, 0] },
+    } } as unknown as RunResponse;
+    expect(stepProblems(steps, res, '').get(10)).toEqual(["Plane 'Lid': its face or edge is not certain, the nearest was used"]);
+    // a sketch on a plane is a datum sketch: extruded along its normal
+    expect(stepInputs([{ name: 'Sketch on Lid', basePlane: true, points: 0 }]).datum).toEqual(['Sketch on Lid']);
   });
 
   it('collects the sketches the backend needs to know', () => {

@@ -2,8 +2,8 @@
 
 from django.test import SimpleTestCase
 
-from modeling.paramedit import (OFF, ParamError, add_extrude, add_param, delete_step, edit_args, op_at, op_lines,
-                                param_names, set_params, steps, suppress)
+from modeling.paramedit import (OFF, ParamError, add_extrude, add_param, add_plane, delete_step, edit_args, op_at,
+                                op_lines, param_names, plane_names, rename_plane, set_params, steps, suppress)
 
 
 class ParamEditTests(SimpleTestCase):
@@ -369,3 +369,99 @@ class StepsTests(SimpleTestCase):
         gone = delete_step(out, _line_of(out, OFF))         # the switched-off one goes too, and its key
         self.assertNotIn("cut1_depth", gone)
         self.assertNotIn(OFF, gone)
+
+
+RIGHT = {"center": [30, 0, 10], "normal": [1, 0, 0], "area": 800.0, "hint": "right face"}
+TOP_EDGE = {"faces": [{"center": [0, 0, 20], "normal": [0, 0, 1], "area": 2400.0, "hint": "top face"},
+                      {"center": [0, -20, 10], "normal": [0, -1, 0], "area": 1200.0, "hint": "front face"}],
+            "kind": "line", "midpoint": [0, -20, 20], "length": 60.0, "hint": "top-front edge"}
+BOXP = 'P = dict(width=60, h=20, cam_tilt=30)\npart = Pos(0, 0, P["h"] / 2) * Box(P["width"], 40, P["h"])\n'
+
+
+class PlaneLineTests(SimpleTestCase):
+    def test_offset_plane_round_trip_with_an_expression(self):
+        code, renamed = add_plane(BOXP, "offset_plane", "Mid", base={"face": RIGHT}, distance="-width / 2")
+        self.assertIsNone(renamed)
+        self.assertIn('PLANES["Mid"] = offset_plane(face_ref({"center": [30, 0, 10], "normal": [1, 0, 0], '
+                      '"area": 800, "hint": "right face"}), distance=-P["width"] / 2)', code)
+        at = op_at(code, 3)
+        self.assertEqual(at["op"], "offset_plane")
+        self.assertEqual(at["args"], {"name": "Mid", "base": {"face": RIGHT}, "distance": -30.0})
+        self.assertEqual(at["exprs"], {"distance": "-width / 2"})
+        # written again from what it read: the same line
+        again, _ = add_plane(code, "offset_plane", "Mid", base=at["args"]["base"], distance=at["exprs"]["distance"],
+                             line=3)
+        self.assertEqual(again, code)
+
+    def test_base_plane_offsets_and_numbers(self):
+        code, _ = add_plane(BOXP, "offset_plane", "Top 30", base="XY", distance=30)
+        self.assertIn('PLANES["Top 30"] = offset_plane("XY", distance=30)', code)
+        self.assertEqual(op_at(code, 3)["args"], {"name": "Top 30", "base": "XY", "distance": 30.0})
+        code, _ = add_plane(code, "offset_plane", "Lid", base="xz", distance=-2.5)
+        self.assertIn('PLANES["Lid"] = offset_plane("XZ", distance=-2.5)', code)
+        self.assertEqual(op_at(code, 4)["args"]["distance"], -2.5)
+        self.assertEqual(op_at(code, 4)["exprs"], {})
+        self.assertEqual(plane_names(code), ["Top 30", "Lid"])
+        # P["k"] on its own reads as the expression "k"
+        code = BOXP + 'PLANES["G"] = offset_plane("XY", distance=P["h"])\n'
+        self.assertEqual((op_at(code, 3)["args"]["distance"], op_at(code, 3)["exprs"]), (20.0, {"distance": "h"}))
+
+    def test_edge_plane_round_trip(self):
+        code, _ = add_plane(BOXP, "edge_plane", "Cam tilt", edge=TOP_EDGE, angle="cam_tilt",
+                            from_face=TOP_EDGE["faces"][0])
+        self.assertIn('PLANES["Cam tilt"] = edge_plane(edge_ref({', code)
+        self.assertIn('angle=P["cam_tilt"], from_face=face_ref({"center": [0, 0, 20]', code)
+        at = op_at(code, 3)
+        self.assertEqual(at["args"], {"name": "Cam tilt", "edge": TOP_EDGE, "angle": 30.0,
+                                      "from_face": TOP_EDGE["faces"][0]})
+        self.assertEqual(at["exprs"], {"angle": "cam_tilt"})
+        again, _ = add_plane(code, "edge_plane", "Cam tilt", edge=at["args"]["edge"], angle="cam_tilt",
+                             from_face=at["args"]["from_face"], line=3)
+        self.assertEqual(again, code)
+        code, _ = add_plane(BOXP, "edge_plane", "E", edge=TOP_EDGE, angle=-15)
+        self.assertIn("angle=-15)", code)
+        self.assertIsNone(op_at(code, 3)["args"]["from_face"])
+
+    def test_bad_names_and_expressions_are_refused(self):
+        code, _ = add_plane(BOXP, "offset_plane", "Lid", base="XY", distance=5)
+        with self.assertRaisesRegex(ParamError, "a plane named 'Lid' already"):
+            add_plane(code, "offset_plane", "Lid", base="XY", distance=6)
+        with self.assertRaisesRegex(ParamError, "give the plane a name"):
+            add_plane(code, "offset_plane", " ", base="XY", distance=6)
+        with self.assertRaisesRegex(ParamError, "uses 'depth', which is not a parameter"):
+            add_plane(code, "offset_plane", "X", base="XY", distance="depth + 1")
+        with self.assertRaisesRegex(ParamError, "may only use numbers, parameters"):
+            add_plane(code, "offset_plane", "X", base="XY", distance="__import__('os')")
+        with self.assertRaisesRegex(ParamError, "pick a flat face, or the XY, XZ or YZ plane"):
+            add_plane(code, "offset_plane", "X", base=None, distance=1)
+
+    def test_renaming_rewrites_its_key_and_every_use(self):
+        code, _ = add_plane(BOXP, "offset_plane", "Lid", base="XY", distance=5)
+        code += "part += PLANES['Lid'] * Box(1, 1, 1)\n" + OFF + 'part += PLANES["Lid"] * Box(2, 2, 2)\n'
+        out = rename_plane(code, "Lid", "Cover")
+        self.assertNotIn("Lid", out)
+        self.assertEqual(out.count('PLANES["Cover"]'), 3)
+        with self.assertRaisesRegex(ParamError, "no plane named 'Nope'"):
+            rename_plane(code, "Nope", "X")
+        # reopened with a new name: renamed everywhere, and the old name returned
+        out, renamed = add_plane(code, "offset_plane", "Cover", base="XY", distance=7, line=3)
+        self.assertEqual(renamed, "Lid")
+        self.assertEqual(out.count('PLANES["Cover"]'), 3)
+        self.assertIn("distance=7", out)
+
+    def test_steps_summaries(self):
+        code, _ = add_plane(BOXP, "offset_plane", "Mid", base={"face": RIGHT}, distance="-width / 2")
+        code, _ = add_plane(code, "offset_plane", "Top 30", base="XY", distance=30)
+        code, _ = add_plane(code, "edge_plane", "Cam", edge=TOP_EDGE, angle="cam_tilt", from_face=TOP_EDGE["faces"][0])
+        st = steps(code)[1:]
+        self.assertEqual([s["summary"] for s in st], ["Plane 'Mid' · -30 mm from right face",
+                                                      "Plane 'Top 30' · 30 mm from XY plane",
+                                                      "Plane 'Cam' · 30° on top-front edge"])
+        self.assertEqual([(s["op"], s["plane"], s["reopenable"]) for s in st],
+                         [("offset_plane", "Mid", True), ("offset_plane", "Top 30", True), ("edge_plane", "Cam", True)])
+        self.assertEqual(st[0]["faces"], [RIGHT])
+        self.assertEqual(st[2]["edges"], [TOP_EDGE])
+        # switched off, it still shows as the plane
+        off = steps(suppress(code, 3))[1]
+        self.assertEqual((off["op"], off["off"], off["plane"]), ("offset_plane", True, "Mid"))
+        self.assertEqual(plane_names(delete_step(code, 3)), ["Top 30", "Cam"])

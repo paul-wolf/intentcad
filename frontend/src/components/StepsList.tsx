@@ -23,9 +23,12 @@ interface Props {
   onDelete(s: Step): void;
   /** a change is being written: the buttons wait */
   busy?: boolean;
+  /** said in the delete confirm: what else goes wrong if this step goes
+   *  (a construction plane: the sketches on it) */
+  deleteNote?(s: Step): string | null;
 }
 
-export function StepsList({ steps, problems, selected, onSelect, onEdit, onToggle, onDelete, busy }: Props) {
+export function StepsList({ steps, problems, selected, onSelect, onEdit, onToggle, onDelete, busy, deleteNote }: Props) {
   const palette = useThemeStore((s) => s.palette);
   const [confirm, setConfirm] = useState<number | null>(null);
   const [hover, setHover] = useState<number | null>(null);
@@ -79,6 +82,10 @@ export function StepsList({ steps, problems, selected, onSelect, onEdit, onToggl
               {asking ? (
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: palette.text }}
                       onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
+                  {(() => {
+                    const note = deleteNote?.(s);
+                    return note ? <span style={{ color: palette.warning ?? '#c78a1a' }}>{note}.</span> : null;
+                  })()}
                   Delete?
                   <button disabled={busy} onClick={() => { setConfirm(null); onDelete(s); }}
                           style={{ ...small, color: palette.danger, fontWeight: 600 }}>Delete</button>

@@ -445,6 +445,11 @@ def _run(code: str, export: list | None = None,
     ns.update(face_ref.bind(ns, face_report))
     ns.update(edge_ref.bind(ns, edge_report))
     ns.update(shell_hole.bind(ns))
+    # PLANES["name"] = offset_plane(...) / edge_plane(...) — construction
+    # planes that follow the part (modeling/planes.py); each → result["planes"]
+    from modeling import planes
+
+    ns.update(planes.bind(ns))
     ns["__editor_ops__"] = edge_ops.bind()
     # Run the script. If an operation fails partway (e.g. a chamfer too big),
     # `part` still holds the model built up to that line — render THAT plus the
@@ -658,6 +663,9 @@ def _run(code: str, export: list | None = None,
         result["face_refs"] = face_report
     if edge_report:
         result["edge_refs"] = edge_report
+    plane_report = planes.report(ns.get("PLANES"))
+    if plane_report:
+        result["planes"] = plane_report
     if warning:
         result["warning"] = warning   # an op failed; we rendered up to it
     if fix:

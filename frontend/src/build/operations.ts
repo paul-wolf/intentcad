@@ -12,22 +12,25 @@ import type { StandardView } from './viewOrient';
 import type { BasePlane } from './faceSketch';
 import { FILTER_KEY } from './edgePick';
 
-export type OpGroup = 'Sketch' | 'Create' | 'Modify' | 'Pattern' | 'Inspect' | 'View' | 'File';
+export type OpGroup = 'Sketch' | 'Create' | 'Construct' | 'Modify' | 'Pattern' | 'Inspect' | 'View' | 'File';
 /** The order the groups are shown in (an empty one isn't shown: the part
  *  editor has no pattern operations yet — grid and circular copy are the 2D
  *  sketcher's). */
-export const OP_GROUPS: OpGroup[] = ['Sketch', 'Create', 'Modify', 'Pattern', 'Inspect', 'View', 'File'];
+export const OP_GROUPS: OpGroup[] = ['Sketch', 'Create', 'Construct', 'Modify', 'Pattern', 'Inspect', 'View', 'File'];
 
 export type OpIcon =
   | 'sketch-face' | 'plane-top' | 'plane-front' | 'plane-right' | 'extrude' | 'hole' | 'shell' | 'fillet' | 'chamfer' | 'round'
+  | 'plane-offset' | 'plane-edge'
   | 'lighten' | 'protect' | 'fix' | 'measure' | 'section' | 'normal' | 'ortho' | 'params' | 'build' | 'import'
   | 'export' | 'stl' | 'parts' | 'dxf' | 'views3' | 'versions' | 'process' | 'context'
   | `view-${StandardView}`;
 
-/** What's selected: the faces and the edges, in the order they were picked. */
+/** What's selected: the faces, the edges and the construction planes, in
+ *  the order they were picked. */
 export interface OpSelection {
   faces: { kind: string }[];
   edges: { kind: string }[];
+  planes?: { name: string }[];
 }
 
 /** The state of the model the operations depend on. */
@@ -67,6 +70,10 @@ export interface OpContext {
   /** K: sketch on the selected flat face (nothing selected: the plane menu) */
   sketchOnSelection(): void;
   sketchOnPlane(which: BasePlane): void;
+  /** the Offset plane dialog: from the selected flat face, or a base plane */
+  offsetPlane(): void;
+  /** the Plane on edge dialog, on the selected straight edge */
+  edgePlane(): void;
   shell(): void;
   hole(): void;
   /** the Fillet / Chamfer dialog, on the selected edges */
@@ -157,6 +164,9 @@ const oneFlatFace = (sel: OpSelection): [boolean, string][] => [
   [sel.faces.length > 1, 'Select just one flat face'],
   [sel.faces[0]?.kind !== 'plane', 'Select a flat face, not a curved one'],
 ];
+const planeCount = (sel: OpSelection) => sel.planes?.length ?? 0;
+/** one construction plane selected, and nothing else */
+const onePlane = (sel: OpSelection) => planeCount(sel) === 1 && sel.faces.length === 0 && sel.edges.length === 0;
 const aiFree = (m: OpModel): [boolean, string][] => [
   [!m.hasCode, 'Start a part first'],
   [m.asking, 'The AI is working on a change'],
@@ -196,13 +206,15 @@ export const OPERATIONS: Operation[] = [
   // Sketch
   {
     id: 'sketch-face', name: 'Sketch on face', group: 'Sketch', icon: 'sketch-face', shortcut: 'K', pinned: true,
-    help: 'Open the 2D sketcher on the selected flat face',
+    help: 'Open the 2D sketcher on the selected flat face or construction plane',
     longHelp: 'Opens the full 2D sketcher on the selected flat face, with the face\'s edges drawn as references '
       + 'to dimension to. Esc or Done returns to 3D; the sketch stays drawn on the part and follows its face when '
-      + 'the part changes. A face that has sketches already offers them, or a new one.',
+      + 'the part changes. A face that has sketches already offers them, or a new one. With a construction plane '
+      + 'selected, the sketch goes on the plane and follows it.',
     example: 'cut a 20 × 10 mm slot in the middle of this face',
+    detail: (sel) => (onePlane(sel) ? `on plane '${sel.planes![0]!.name}'` : null),
     needs: (sel, m) => first([!m.canSketch, 'Sketching is in the part editor on its own page'], ...notWhile(m),
-                             ...oneFlatFace(sel)),
+                             ...(onePlane(sel) ? [] : oneFlatFace(sel))),
     run: (ctx) => ctx.sketchOnSelection(),
   },
   ...SKETCH_PLANES.map(([which, name, key]): Operation => ({
@@ -246,6 +258,35 @@ export const OPERATIONS: Operation[] = [
     detail: (sel, m) => (sel.faces.length === 1 && sel.faces[0]!.kind === 'plane' ? m.holeAt
       : m.holeSketches > 0 ? 'at a sketch\'s points' : null),
     run: (ctx) => ctx.hole(),
+  },
+  // Construct
+  {
+    id: 'offset-plane', name: 'Offset plane', group: 'Construct', icon: 'plane-offset',
+    help: 'A named plane parallel to a flat face or a base plane, at a distance',
+    longHelp: 'Adds a construction plane parallel to the selected flat face (or, with nothing selected, to the '
+      + 'XY, XZ or YZ plane) at a distance, which can be a parameter expression such as -width / 2 for a '
+      + 'midplane. It follows the face when the part changes; sketch on it with K, align the section to it. '
+      + 'Drag its arrow to set the distance; it adds one script line.',
+    example: 'a midplane halfway through the width',
+    needs: (sel, m) => first(...notWhile(m), ...built(m),
+                             [sel.edges.length > 0 || planeCount(sel) > 0, 'Select one flat face, or nothing'],
+                             ...(sel.faces.length ? oneFlatFace(sel) : [])),
+    detail: (sel) => (sel.faces.length ? 'from the selected face' : 'from a base plane'),
+    run: (ctx) => ctx.offsetPlane(),
+  },
+  {
+    id: 'plane-edge', name: 'Plane on edge', group: 'Construct', icon: 'plane-edge',
+    help: 'A named plane through a straight edge, at an angle to one of its faces',
+    longHelp: 'Adds a construction plane through the selected straight edge. At 0° it lies in one of the edge\'s '
+      + 'two faces (toggle which in the dialog); the angle turns it about the edge, positive away from the '
+      + 'material. Sketch on it and extrude for angled cuts and bosses. Drag the ring to set the angle; it adds '
+      + 'one script line.',
+    example: 'a plane on this top edge tilted 30° for a camera window',
+    needs: (sel, m) => first(...notWhile(m), ...built(m),
+                             [sel.edges.length !== 1 || sel.faces.length > 0 || planeCount(sel) > 0,
+                              'Select one straight edge'],
+                             [sel.edges[0]?.kind !== 'line', 'Select a straight edge, not a curved one']),
+    run: (ctx) => ctx.edgePlane(),
   },
   // Modify
   {
@@ -352,13 +393,13 @@ export const OPERATIONS: Operation[] = [
   // View
   {
     id: 'normal', name: 'Look at face', group: 'View', icon: 'normal', shortcut: 'N',
-    help: 'Look straight at the selected face, or at the section',
+    help: 'Look straight at the selected face or plane, or at the section',
     longHelp: 'Turns the view to look straight at the selected face (the last one clicked), for checking a '
       + 'sketch or a hole pattern square on; with the section on, straight at the cut. The Normal button below '
       + 'the 3D view does the same.',
     example: 'what is on this face?',
     label: (m) => (m.section ? 'Look at the cut' : 'Look at face'),
-    needs: (sel, m) => first([sel.faces.length === 0 && !m.section, 'Select a face']),
+    needs: (sel, m) => first([sel.faces.length === 0 && planeCount(sel) === 0 && !m.section, 'Select a face']),
     run: (ctx) => ctx.lookAtSelection(),
   },
   ...VIEW_OPS.map(([view, name, key]): Operation => ({

@@ -285,6 +285,7 @@ class SketchBinding(Schema):
     # profile: lines {t, p: [a, b]}, circles {t, c, r}, arcs {t, c, r, p:
     # [start, mid, end]}, other curves {t: "poly", p}. None: no face matched
     outline: list[dict] | None = None
+    planeRef: str | None = None     # on a construction plane: its name (the plane came from PLANES)
 
 
 class FaceRefReport(Schema):
@@ -307,6 +308,16 @@ class KeptFaces(Schema):
     faces: list[dict] = []
 
 
+class PlaneReport(Schema):
+    """A construction plane as the build put it (modeling/planes.py)."""
+    kind: str = "script"            # offset | edge | script (a Plane the script made itself)
+    status: str = "same"            # same | moved | ambiguous (from its face_ref / edge_ref)
+    line: int | None = None
+    origin: list[float]
+    normal: list[float]
+    xAxis: list[float]
+
+
 class RunResponse(Schema):
     mesh: MeshOut
     faces: list[RunFace] = []
@@ -320,6 +331,7 @@ class RunResponse(Schema):
     sketches: dict[str, SketchBinding] = {}     # name -> where each face sketch went
     face_refs: list[FaceRefReport] = []         # each face_ref() lookup, in order
     edge_refs: list[FaceRefReport] = []         # each edge_ref() lookup (moved_by: mm), in order
+    planes: dict[str, PlaneReport] = {}         # name -> each construction plane in PLANES
     kept: list[KeptFaces] = []                  # the faces each auto_round keep item is
 
 
@@ -411,6 +423,7 @@ class Step(Schema):
     sketch: str | None = None       # what it works on, to show
     faces: list[dict] = []
     edges: list[dict] = []
+    plane: str | None = None        # a construction plane's name
 
 
 class StepsResponse(Schema):
@@ -453,6 +466,29 @@ class AddEdgeOpRequest(Schema):
     edges: list[dict]               # edge refs (RunEdge.ref), one per edge
     size: float                     # the fillet radius / chamfer length
     line: int | None = None         # rewrite the fillet()/chamfer() line there instead of appending
+
+
+class AddPlaneRequest(Schema):
+    code: str
+    op: str                         # 'offset_plane' | 'edge_plane'
+    name: str
+    base: dict | str | None = None  # offset_plane: {"face": face ref} or "XY" | "XZ" | "YZ"
+    distance: float | str = 0.0     # a number, or an expression of P names ("-width / 2")
+    edge: dict | None = None        # edge_plane: the straight edge's ref
+    angle: float | str = 0.0        # degrees, positive away from the material; or an expression
+    from_face: dict | None = None   # edge_plane: the face that is 0° (default the edge's first)
+    line: int | None = None         # rewrite the plane line there instead of appending
+
+
+class AddPlaneResponse(Schema):
+    code: str
+    renamed: str | None = None      # the plane's old name, when the line was renamed
+
+
+class RenamePlaneRequest(Schema):
+    code: str
+    old: str
+    new: str
 
 
 class AddOpResponse(Schema):

@@ -7,6 +7,11 @@ import {
 import type { Viewer } from '@/build/webglViewer';
 import { faceLabel } from '@/build/faceSketch';
 import { sameEdgeRef } from '@/build/edgePick';
+import {
+  amountText, amountValue, edgeSummary, offsetSummary, planeNameProblem, type BaseName, type EdgePlaneValues,
+  type OffsetPlaneValues,
+} from '@/build/constructionPlanes';
+import { ParamExprInput } from './ParamExprInput';
 
 // The part editor's explicit operations (Shell, Hole, Fillet, Chamfer; and reopened,
 // Extrude, Round, Lighten): a dialog that writes one script line, with the result
@@ -955,6 +960,131 @@ export function TrussDialog({ value, onChange, preview, onApply, onCancel }: {
         Cuts windows between ribs <b>{t('rib')}</b> wide that {a.pattern === 'triangulate' ? 'join the anchors in triangles' : 'fan out from the anchors'},
         keeping a <b>{t('rim')}</b> rim round the edge and holes and {t('keep_clear')} clear of protected faces; window corners
         rounded {t('corner_r')}.
+      </div>
+    </OpFrame>
+  );
+}
+
+// ---------------------------------------------------------------- construction planes
+
+/** The plane previews are drawn in the view as they are typed (no candidate
+ *  build): the frame says "preview" while the values make a plane. */
+const planePreview = (problem: string | null): PreviewState =>
+  problem ? { state: 'error', message: problem, fix: null } : { state: 'ok', message: '', fix: null };
+
+const BASE_WORDS: Record<BaseName, string> = { XY: 'XY plane', XZ: 'XZ plane', YZ: 'YZ plane' };
+
+/** Offset plane: a name, what it is offset from (the face picked, or a base
+ *  plane) and the distance (a number or an expression of P names). */
+export function OffsetPlaneDialog({ value, onChange, editing, params, used, own, onApply, onCancel }: {
+  value: OffsetPlaneValues; onChange: (v: OffsetPlaneValues) => void;
+  editing: boolean;
+  params: Record<string, number>;
+  /** the planes already defined (a new name must differ), and this one's own name */
+  used: string[]; own?: string;
+  onApply: () => void; onCancel: () => void;
+}) {
+  const { palette, seg, row, note } = useStyles();
+  const set = (p: Partial<OffsetPlaneValues>) => onChange({ ...value, ...p });
+  const d = amountValue(value.distance, params);
+  const nameBad = planeNameProblem(value.name, used, own);
+  const problem = nameBad ?? (d === null ? 'The distance must be a number or an expression of the parameters' : null)
+    ?? (value.base === 'face' && !value.face ? 'Click a flat face in the view, or pick a base plane' : null);
+  const baseText = value.base === 'face' ? (value.face?.hint ?? 'face') : BASE_WORDS[value.base];
+  const bases: (BaseName | 'face')[] = ['face', 'XY', 'XZ', 'YZ'];
+  return (
+    <OpFrame title={editing ? 'Edit offset plane' : 'Offset plane'} preview={planePreview(problem)} ok={!problem}
+             onCancel={onCancel} onApply={onApply} applyLabel={editing ? 'Update' : 'Add plane'} width={300}>
+      <label style={row}>
+        <span style={{ width: 56 }}>Name</span>
+        <input value={value.name} onChange={(e) => set({ name: e.target.value })} spellCheck={false}
+               style={{ flex: 1, fontSize: '12px', padding: '2px 4px', background: palette.inputBg, color: palette.text,
+                        border: `1px solid ${nameBad ? palette.danger : palette.border}`, borderRadius: '3px' }} />
+      </label>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <span style={{ color: palette.textSecondary }}>Offset from</span>
+        <div style={{ display: 'flex' }}>
+          {bases.map((b, i) => (
+            <button key={b} onClick={() => set({ base: b })}
+                    title={b === 'face' ? (value.face ? `The ${value.face.hint} (click another flat face to change it)`
+                      : 'Click a flat face in the view') : `The ${BASE_WORDS[b]} through the origin`}
+                    style={{ ...seg(value.base === b), borderRadius: i === 0 ? '4px 0 0 4px' : i === bases.length - 1 ? '0 4px 4px 0' : 0,
+                             borderLeft: i ? 'none' : undefined }}>
+              {b === 'face' ? 'Face' : b}
+            </button>
+          ))}
+        </div>
+        {value.base === 'face' && (
+          <span style={{ color: value.face ? palette.text : palette.textSecondary }}>
+            {value.face ? <>The <b>{value.face.hint}</b> · click another flat face to change it</> : 'Click a flat face in the view'}
+          </span>
+        )}
+      </div>
+      <div style={{ ...row, alignItems: 'flex-start' }}>
+        <span style={{ width: 56, paddingTop: 3 }}>Distance</span>
+        <ParamExprInput value={amountText(value.distance)} onChange={(t) => set({ distance: t })} params={params}
+                        unit="mm" autoFocus title="A number, or an expression of the parameters (e.g. -width / 2); negative goes into the part" />
+        <span style={{ color: palette.textSecondary, paddingTop: 3 }}>mm</span>
+      </div>
+      <div style={note}>
+        <b>{value.name.trim() || 'The plane'}</b>: {offsetSummary(baseText, d)}.
+        <div style={{ color: palette.textSecondary, marginTop: 2 }}>
+          Drag the arrow on the plane to change the distance (it snaps to parallel faces).
+        </div>
+      </div>
+    </OpFrame>
+  );
+}
+
+/** Plane on edge: a name, the angle (a number or an expression of P names)
+ *  and which of the edge's two faces is 0°. */
+export function EdgePlaneDialog({ value, onChange, editing, params, used, own, onHoverFace, onApply, onCancel }: {
+  value: EdgePlaneValues; onChange: (v: EdgePlaneValues) => void;
+  editing: boolean;
+  params: Record<string, number>;
+  used: string[]; own?: string;
+  onHoverFace: (index: number | null) => void;
+  onApply: () => void; onCancel: () => void;
+}) {
+  const { palette, seg, row, note } = useStyles();
+  const set = (p: Partial<EdgePlaneValues>) => onChange({ ...value, ...p });
+  const a = amountValue(value.angle, params);
+  const nameBad = planeNameProblem(value.name, used, own);
+  const problem = nameBad ?? (a === null ? 'The angle must be a number or an expression of the parameters' : null);
+  const face = value.faces[value.from];
+  return (
+    <OpFrame title={editing ? 'Edit plane on edge' : 'Plane on edge'} preview={planePreview(problem)} ok={!problem}
+             onCancel={onCancel} onApply={onApply} applyLabel={editing ? 'Update' : 'Add plane'} width={300}>
+      <label style={row}>
+        <span style={{ width: 56 }}>Name</span>
+        <input value={value.name} onChange={(e) => set({ name: e.target.value })} spellCheck={false}
+               style={{ flex: 1, fontSize: '12px', padding: '2px 4px', background: palette.inputBg, color: palette.text,
+                        border: `1px solid ${nameBad ? palette.danger : palette.border}`, borderRadius: '3px' }} />
+      </label>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <span style={{ color: palette.textSecondary }}>0° is in the</span>
+        <div style={{ display: 'flex' }} onMouseLeave={() => onHoverFace(face?.index ?? null)}>
+          {value.faces.map((f, i) => (
+            <button key={i} onClick={() => set({ from: i })} onMouseEnter={() => onHoverFace(f.index)}
+                    title={`At 0° the plane lies in the ${f.hint}`}
+                    style={{ ...seg(value.from === i), borderRadius: i === 0 ? '4px 0 0 4px' : '0 4px 4px 0',
+                             borderLeft: i ? 'none' : undefined, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {f.hint}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{ ...row, alignItems: 'flex-start' }}>
+        <span style={{ width: 56, paddingTop: 3 }}>Angle</span>
+        <ParamExprInput value={amountText(value.angle)} onChange={(t) => set({ angle: t })} params={params} unit="°"
+                        autoFocus title="Degrees about the edge: positive tilts out of the part, negative into it" />
+        <span style={{ color: palette.textSecondary, paddingTop: 3 }}>°</span>
+      </div>
+      <div style={note}>
+        <b>{value.name.trim() || 'The plane'}</b>: through the edge, {edgeSummary(face?.hint ?? 'face', a)}.
+        <div style={{ color: palette.textSecondary, marginTop: 2 }}>
+          Drag the round handle to turn it about the edge (1° steps, Shift 0.1°).
+        </div>
       </div>
     </OpFrame>
   );

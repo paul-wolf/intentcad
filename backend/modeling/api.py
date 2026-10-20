@@ -13,15 +13,18 @@ from documents.context import ContextFileError, ai_blocks
 from .engine import EngineError, run_script
 from . import hole_presets
 from .llm_models import list_models
-from .paramedit import (ParamError, add_edge_op, add_extrude, add_holes, add_shell, delete_step, edit_args, op_at,
-                        set_params, steps, suppress)
+from .paramedit import (ParamError, add_edge_op, add_extrude, add_holes, add_plane, add_shell, delete_step,
+                        edit_args, op_at, rename_plane, set_params, steps, suppress)
 from .schemas import (
     AddEdgeOpRequest,
     AddExtrudeRequest,
     AddExtrudeResponse,
     AddHolesRequest,
     AddOpResponse,
+    AddPlaneRequest,
+    AddPlaneResponse,
     AddShellRequest,
+    RenamePlaneRequest,
     CodeResponse,
     EditArgsRequest,
     EditArgsResponse,
@@ -96,6 +99,7 @@ def run_model(request, payload: RunRequest):
         sketches=r.get("sketches") or {},
         face_refs=r.get("face_refs") or [],
         edge_refs=r.get("edge_refs") or [],
+        planes=r.get("planes") or {},
         kept=r.get("kept") or [],
     )
 
@@ -189,6 +193,34 @@ def add_edge_op_endpoint(request, payload: AddEdgeOpRequest):
     except (ParamError, SyntaxError, KeyError, TypeError, ValueError) as exc:
         return JsonResponse({"message": str(exc)}, status=422)
     return AddOpResponse(code=code, param=param)
+
+
+@router.post("/add_plane", response=AddPlaneResponse)
+def add_plane_endpoint(request, payload: AddPlaneRequest):
+    """Append a construction plane line (or rewrite the one on `line`; a new
+    name renames every PLANES["old"]), and return the updated script."""
+    err = require_auth(request)
+    if err:
+        return err
+    try:
+        code, renamed = add_plane(payload.code, payload.op, payload.name, base=payload.base,
+                                  distance=payload.distance, edge=payload.edge, angle=payload.angle,
+                                  from_face=payload.from_face, line=payload.line)
+    except (ParamError, SyntaxError, KeyError, TypeError, ValueError) as exc:
+        return JsonResponse({"message": str(exc)}, status=422)
+    return AddPlaneResponse(code=code, renamed=renamed)
+
+
+@router.post("/rename_plane", response=CodeResponse)
+def rename_plane_endpoint(request, payload: RenamePlaneRequest):
+    """Rename a construction plane: every PLANES["old"] of the script."""
+    err = require_auth(request)
+    if err:
+        return err
+    try:
+        return CodeResponse(code=rename_plane(payload.code, payload.old, payload.new))
+    except (ParamError, SyntaxError) as exc:
+        return JsonResponse({"message": str(exc)}, status=422)
 
 
 @router.get("/hole_presets")

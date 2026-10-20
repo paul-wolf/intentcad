@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import type { Entity, Sketch } from '@/types/document';
 import {
-  extrudeDirectionText, extrudeGhost, extrudeSign, extrudeSpan, newPlaneSketch, sketchBasePlane, sketchLoops, sketchProfile,
-  type ExtrudeShape,
+  boundPlane, extrudeDirectionText, extrudeGhost, extrudeSign, extrudeSpan, newConstructionSketch, newPlaneSketch, partSide,
+  planeSketches, renamePlaneRefs, sketchBasePlane, sketchLoops, sketchProfile, type ExtrudeShape,
 } from './faceSketch';
 
 const sketch = (entities: Entity[], plane = true): Sketch => ({
@@ -99,6 +99,45 @@ describe('base plane sketches', () => {
   });
 });
 
+describe('sketches on construction planes', () => {
+  const lid = { origin: [0, 0, 15] as [number, number, number], normal: [0, 0, 1] as [number, number, number],
+                xAxis: [1, 0, 0] as [number, number, number] };
+
+  it('keep the plane’s name, and are neither face nor base plane sketches', () => {
+    const sk = newConstructionSketch('Sketch on Lid', 'Lid', lid);
+    expect(sk.planeRef).toBe('Lid');
+    expect(sk.face).toBeUndefined();
+    expect(sk.plane).toEqual(lid);
+    expect(sketchBasePlane(sk)).toBeNull();
+    expect(sketchProfile(sk)?.planeRef).toBe('Lid');
+    expect(sketchProfile(newPlaneSketch('T', 'top'))).not.toHaveProperty('planeRef');
+    expect(sk.entities).toMatchObject([{ type: 'point', position: { x: 0, y: 0 }, construction: true }]);
+  });
+
+  it('follow the plane where the build put it', () => {
+    const sk = newConstructionSketch('Sketch on Lid', 'Lid', lid);
+    const moved = { origin: [0, 0, 25] as [number, number, number], normal: [0, 0, 1] as [number, number, number],
+                    xAxis: [1, 0, 0] as [number, number, number] };
+    expect(boundPlane(sk, null, { Lid: moved })).toEqual(moved);
+    expect(boundPlane(sk, null, {})).toEqual(lid);   // not built yet: as drawn
+  });
+
+  it('are found and renamed with their plane', () => {
+    const a = newConstructionSketch('A', 'Lid', lid), b = newConstructionSketch('B', 'Mid', lid);
+    const c = newPlaneSketch('C', 'top');
+    expect(planeSketches([a, b, c], 'Lid').map((s) => s.name)).toEqual(['A']);
+    const r = renamePlaneRefs([a, b, c], 'Lid', 'Cover');
+    expect(r.map((s) => s.planeRef)).toEqual(['Cover', 'Mid', undefined]);
+    expect(r[1]).toBe(b);   // untouched sketches stay as they were
+  });
+
+  it('extrude like base plane sketches: along the normal, either way, or both', () => {
+    const datum: ExtrudeShape = { op: 'cut', depth: 5, through: false, flip: false, both: false, datum: true };
+    expect(extrudeSign(datum)).toBe(1);
+    expect(extrudeSpan({ ...datum, both: true }, null)).toEqual([-5, 5]);
+  });
+});
+
 describe('extrude preview', () => {
   const ex = (o: Partial<ExtrudeShape>): ExtrudeShape => ({ op: 'cut', depth: 5, through: false, flip: false, ...o });
 
@@ -128,6 +167,12 @@ describe('extrude preview', () => {
     expect(extrudeDirectionText(ex({ flip: true }), [0, 0, 1])).toBe('Out of the face — cuts nothing there · up (+Z)');
     expect(extrudeDirectionText(ex({ op: 'join', datum: true }), [0, -1, 0])).toBe('From the plane · toward the front (−Y)');
     expect(extrudeDirectionText(ex({ op: 'join', datum: true, both: true }), [0, -1, 0])).toBe('Both ways from the plane (±Y)');
+    // a tilted plane has no axis to name: toward or away from the part instead
+    const tilt: [number, number, number] = [0, -0.5, Math.sqrt(3) / 2];
+    expect(extrudeDirectionText(ex({ datum: true, depth: 20 }), tilt, -12)).toBe('From the plane · away from the part');
+    expect(extrudeDirectionText(ex({ datum: true, depth: 20, flip: true }), tilt, -12)).toBe('From the plane · toward the part');
+    expect(extrudeDirectionText(ex({ datum: true }), tilt)).toBe('From the plane');
+    expect(partSide([0, 0, 15], [0, 0, 1], [-30, -30, -15], [30, 30, 15])).toBeCloseTo(-15, 9);
   });
 
   it('draws the shape at both ends with side edges, and an arrow the way it goes', () => {

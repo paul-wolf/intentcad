@@ -30,6 +30,13 @@ A sketch drawn on a part face also carries the face it was drawn on:
 the face is looked for again in the `part` built so far, and the sketch moves
 along its normal onto it — a hole on the top face stays on the top face when
 the plate gets thicker (see rebind()).
+
+A sketch drawn on a construction plane carries the plane's name instead:
+
+    "planeRef": "Lid"
+
+and sketch() takes the plane from the script's PLANES (modeling/planes.py)
+when its line runs, so the sketch follows the plane (see on_plane()).
 """
 
 from __future__ import annotations
@@ -212,6 +219,33 @@ def rebind(profile: dict, part) -> dict:
             **({"outline": outline} if outline else {})}
 
 
+def on_plane(profile: dict, name: str, ns: dict | None) -> dict | None:
+    """Where a sketch on a construction plane goes: the plane named by its
+    planeRef, from the script's PLANES as it is when the line runs
+    ({status, moved_by, plane} as rebind()); None for any other sketch."""
+    ref = profile.get("planeRef")
+    if not ref:
+        return None
+    planes = (ns or {}).get("PLANES")
+    if not isinstance(planes, dict) or ref not in planes:
+        raise SketchError(f"sketch {name!r} is on the construction plane {ref!r}, which isn't defined "
+                          "before this line (a PLANES[...] line deleted, switched off or renamed?)")
+    pl = planes[ref]
+    spec = {"origin": list(pl.origin.to_tuple()), "normal": list(pl.z_dir.to_tuple()),
+            "xAxis": list(pl.x_dir.to_tuple())}
+    old = profile.get("plane") or {}
+    try:
+        moved = round((pl.origin - _vec(old["origin"])).length, 6)
+        turned = 1 - abs(pl.z_dir.dot(_vec(old["normal"]).normalized()))
+    except (KeyError, TypeError, ValueError):
+        moved, turned = 0.0, 0.0
+    status = "moved" if moved > 1e-6 or turned > 1e-9 else "same"
+    meta = getattr(pl, "_plane_ref", None) or {}
+    if meta.get("status") == "ambiguous":
+        status = "ambiguous"
+    return {"status": status, "moved_by": moved if status != "same" else 0.0, "plane": spec, "planeRef": ref}
+
+
 def bind(profiles: dict, ns: dict | None = None, report: dict | None = None) -> dict:
     """The script-namespace sketch(): looks names up in `profiles`
     ({name: profile}, sent by the engine with the build). A face sketch is
@@ -222,7 +256,7 @@ def bind(profiles: dict, ns: dict | None = None, report: dict | None = None) -> 
         if name not in profiles:
             raise SketchError(f"no sketch named {name!r} in this part")
         profile = profiles[name]
-        where = rebind(profile, (ns or {}).get("part"))
+        where = on_plane(profile, name, ns) or rebind(profile, (ns or {}).get("part"))
         if report is not None:
             report[name] = where
         if where["plane"]:
@@ -237,7 +271,7 @@ def bind(profiles: dict, ns: dict | None = None, report: dict | None = None) -> 
         if name not in profiles:
             raise SketchError(f"no sketch named {name!r} in this part")
         profile = profiles[name]
-        where = rebind(profile, (ns or {}).get("part"))
+        where = on_plane(profile, name, ns) or rebind(profile, (ns or {}).get("part"))
         if report is not None:
             report[name] = where
         return profile_points({**profile, "plane": where["plane"] or profile.get("plane")}, name)

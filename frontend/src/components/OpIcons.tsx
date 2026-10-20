@@ -34,6 +34,10 @@ const ICONS: Record<OpIconName, ReactNode> = {
   'plane-top': <><path d="M2 17l6-6h14l-6 6z" /><circle cx="12" cy="14" r="1" fill="currentColor" /></>,
   'plane-front': <><path d="M6 4h12v16H6z" /><circle cx="12" cy="12" r="1" fill="currentColor" /></>,
   'plane-right': <><path d="M8 3l8 5v13l-8-5z" /><circle cx="12" cy="12" r="1" fill="currentColor" /></>,
+  'plane-offset': <><path d="M2 20l5-5h15l-5 5z" opacity={0.5} /><path d="M2 10l5-5h15l-5 5z" strokeDasharray="2 1.5" />
+                    <path d="M12 17.5v-7M10 12.5l2-2 2 2" /></>,
+  'plane-edge': <><path d="M2 20h14l6-6H8z" opacity={0.5} /><path d="M2 20l6-6" strokeWidth={2.4} />
+                  <path d="M2 20l4-14h13l-11 8" strokeDasharray="2 1.5" /></>,
   extrude: <><path d="M3 19l4-4h14l-4 4z" /><path d="M12 15V4M8.5 7.5L12 4l3.5 3.5" /></>,
   hole: <><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="3.5" /></>,
   shell: <><path d="M3 6v14h18V6" /><path d="M7 6v10h10V6" /></>,

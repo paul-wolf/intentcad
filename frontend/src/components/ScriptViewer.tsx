@@ -4,12 +4,18 @@ import { useDocumentStore } from '@/stores/documentStore';
 import {
   api, buildApi, errorText, ApiError, type RunResponse, type RunEdge, type FaceRefReport, type UsageResponse, type DimInfo, type ModelInfo, type ModelsResponse, type SizeFix,
   type FaceRefSpec, type HolePresets, type EdgeOpKind, type EdgeRefSpec, type ExtrudeOp, type KeepItem, type Step,
+  type PlaneReport,
 } from '@/api/client';
 import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, persistSketches, getBackendId } from '@/api/autoSave';
 import { DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
 import type { ChatMessage } from '@/types/document';
 import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim, type PlacedHandle, type ViewerPick,
-         type SectionMeasure } from '@/build/webglViewer';
+         type SectionMeasure, type PlacedPlaneLabel, type DragHandle } from '@/build/webglViewer';
+import {
+  amountValue, edgePayload, edgePlaneShape, loadHiddenPlanes, newPlaneName, offsetBasePoint, offsetPayload,
+  offsetPlaneShape, renameHidden, reopenedFromFace, saveHiddenPlanes, shownPlanes, type BaseName, type EdgePlaneValues,
+  type OffsetPlaneValues, type PlaneShape,
+} from '@/build/constructionPlanes';
 import {
   atPosition, axisSection, cutNormal, flipSection, loadSection, saveSection, sectionAxis, sectionForView, sectionOnFace,
   sectionPosition, type Section,
@@ -30,14 +36,16 @@ import { PartHelpModal } from './PartHelpModal';
 import { useFaceSketch, type ExtrudeOptions } from './FaceSketchMode';
 import {
   ShellDialog, HoleDialog, EdgeOpDialog, ExtrudeDialog, RoundDialog, TrussDialog, useOpPreview, refOf, faceOfRef, sameRef,
-  holesPayload, holeValuesOf, newHoleValues, placeKey, toggleEdge, addEdges, argOpPayload, type ShellValues, type HoleValues,
+  holesPayload, holeValuesOf, newHoleValues, placeKey, toggleEdge, addEdges, argOpPayload, OffsetPlaneDialog, EdgePlaneDialog,
+  type ShellValues, type HoleValues,
   type HolePlace, type EdgeOpValues, type ExtrudeValues, type ArgOpValues,
 } from './OpDialogs';
 import { StepsList } from './StepsList';
 import { messageLine, reopenableAt, stepIcon, stepInputs, stepProblems, suppressedNote } from '@/build/steps';
 import {
-  BASE_PLANES, boundPlane, extrudeDirectionText, faceLabel, findFaceSketch, referencedProfiles, referencedSketchNames,
-  sketchBasePlane, sketchBindNotes, sketchHolePoints, sketchSegments, type BasePlane, type SketchBindings,
+  BASE_PLANES, boundPlane, extrudeDirectionText, faceLabel, findFaceSketch, partSide, referencedProfiles, referencedSketchNames,
+  planeSketches, renamePlaneRefs, sketchBasePlane, sketchBindNotes, sketchHolePoints, sketchSegments, type BasePlane,
+  type SketchBindings,
 } from '@/build/faceSketch';
 import {
   buildFollowingSketches, followPartSketches, resolvePartSketches, sketchParamWarning, sketchVars,
@@ -81,8 +89,12 @@ const NO_CHAT: ChatMessage[] = [];
 /** What the code view's Edit button calls a line's dialog. */
 const OP_NAMES = {
   shell: 'Shell', holes: 'Hole', fillet: 'Fillet', chamfer: 'Chamfer', extrude: 'Extrude', auto_round: 'Round',
-  truss_windows: 'Lighten',
+  truss_windows: 'Lighten', offset_plane: 'Offset plane', edge_plane: 'Plane on edge',
 } as const;
+/** An Offset plane or Plane on edge dialog: `line` the line it was reopened
+ *  from (null: a new plane), `own` the plane's name in the script then. */
+type PlaneOp = { line: number | null; own: string | null }
+  & ({ kind: 'offset'; v: OffsetPlaneValues } | { kind: 'edge'; v: EdgePlaneValues });
 /** A reopened extrude line: its values, the P key its depth is in, and
  *  whether it makes the part (New body, nothing else). */
 interface ExtrudeEdit { line: number; v: ExtrudeValues; param: string | null; firstBody: boolean }
@@ -236,6 +248,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const edgeDragRef = useRef<number | null>(null);
   const setEdgeSizeRef = useRef<(v: number) => void>(() => {});
   const handleHintRef = useRef('');   // "Tab ⇄ 1/2" when several params move the face
+  const dialogDragNoteRef = useRef('0.1 mm steps · Esc cancels');   // a dialog handle's, while dragged
+  const handleUnitRef = useRef('');   // after the handle's value: '°' for an angle
   // the live preview moves faces by the engine's sensitivity map, worked out
   // with the face sketches' shapes fixed: a sketch dimension using this param
   // only moves when the drop rebuilds
@@ -271,8 +285,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       label.setAttribute('x', lx); label.setAttribute('y', `${p.ay + 4}`);
       label.setAttribute('text-anchor', anchor);
       label.textContent = p.dragging && p.value !== h.value
-        ? `${h.name} ${dimFmt(h.value)} → ${dimFmt(p.value)}`
-        : `${h.name} ${dimFmt(p.value)}`;
+        ? `${h.name} ${dimFmt(h.value)}${handleUnitRef.current} → ${dimFmt(p.value)}${handleUnitRef.current}`
+        : `${h.name} ${dimFmt(p.value)}${handleUnitRef.current}`;
     }
     if (subEl) {
       subEl.setAttribute('x', lx); subEl.setAttribute('y', `${p.ay + 18}`);
@@ -280,7 +294,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       const snapped = p.snapFace !== null;
       subEl.setAttribute('fill', snapped ? '#2dd4bf' : '#cfd6df');
       subEl.textContent = snapped ? `snap → face #${p.snapFace}`
-        : p.dragging ? (edge ? '0.1 mm steps · Esc cancels' : 'Shift: 0.1 steps · Esc cancels')
+        : p.dragging ? (edge ? dialogDragNoteRef.current : 'Shift: 0.1 steps · Esc cancels')
         : edge ? 'drag to change' : handleHintRef.current;
     }
   };
@@ -377,6 +391,10 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const resRef = useRef<RunResponse | null>(null);
   const selRef = useRef<number[]>([]);
   const selERef = useRef<number[]>([]);
+  // selected construction planes (by name): a click on a plane's outline or
+  // label replaces the selection, Shift-click adds or drops it
+  const [selP, setSelP] = useState<string[]>([]);
+  const selPRef = useRef<string[]>([]);
   // what a click picks (E steps through): faces + edges, faces, edges
   const [pickFilter, setPickFilter] = useState<PickFilter>('both');
   const pickFilterRef = useRef<PickFilter>('both');
@@ -410,9 +428,16 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const opEdgesRef = useRef<((edges: number[]) => void) | null>(null);
   const onPick = (p: ViewerPick, mods: { shift: boolean; alt: boolean }) => {
     if (opPickRef.current) { opPickRef.current(p, mods); return; }
+    if (p && 'plane' in p) { pickPlane(p.plane, mods.shift); return; }
     const s = clickSelect({ faces: selRef.current, edges: selERef.current },
                           p && ('edge' in p ? { edge: p.edge } : { face: p.face.index }), mods.shift);
-    applySelection(s.faces, s.edges);
+    applySelection(s.faces, s.edges, mods.shift ? selPRef.current : []);
+  };
+  // a construction plane clicked (in the view, its label or the planes list)
+  const pickPlane = (name: string, shift: boolean) => {
+    if (!shift) { applySelection([], [], [name]); return; }
+    const ps = selPRef.current.includes(name) ? selPRef.current.filter((n) => n !== name) : [...selPRef.current, name];
+    applySelection(selRef.current, selERef.current, ps);
   };
   // double-click an edge: the loop round the face it borders (the one under
   // the cursor); Alt: the chain of edges running smoothly on from it
@@ -433,12 +458,15 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     if (!res || f == null) return;
     applySelection([], faceEdges(res.edges, f));
   };
-  const applySelection = (s: number[], es: number[] = []) => {
+  const applySelection = (s: number[], es: number[] = [], ps: string[] = []) => {
     const res = resRef.current;
     selRef.current = s;
     selERef.current = es;
+    selPRef.current = ps;
     setSel(s);
     setSelE(es);
+    setSelP(ps);
+    viewerRef.current?.selectPlanes(ps);
     if (s.length) ensureSens();   // selecting geometry → we want the param links
     viewerRef.current?.selectFaces(s);
     viewerRef.current?.selectEdges(es);
@@ -468,7 +496,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const toggleSkipped = () => {
     showSkippedRef.current = !showSkippedRef.current;
     setShowSkipped(showSkippedRef.current);
-    applySelection(selRef.current);
+    applySelection(selRef.current, selERef.current, selPRef.current);
   };
 
   // readout for the current selection: a hole's diameter (1 face) or the
@@ -563,6 +591,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       viewerRef.current.setEdges(res.edges);
       prevBindRef.current = resRef.current?.sketches ?? null;
       resRef.current = res;
+      setBuiltPlanes(res.planes ?? {});
       if (sketchOnFace) faceSketchRef.current.pushLines();   // each on its face, where the build put it
       setParamVals(res.params);
       paramBase.current = res.params;
@@ -585,7 +614,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
           if (d < best) { best = d; keep = [f.index]; }
         }
       }
-      applySelection(keep);
+      // a selected plane is kept by name, while it's still there
+      applySelection(keep, [], keep.length ? [] : selPRef.current.filter((n) => res.planes?.[n]));
       const m = res.metrics;
       const sz = [0, 1, 2].map((i) => Math.round((m.bbox_max[i]! - m.bbox_min[i]!) * 10) / 10);
       const tris = res.mesh.triangle_count;
@@ -653,7 +683,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         try {
           viewerRef.current = createViewer(canvasRef.current, {
             onPick, onEdgeDoubleClick, onAxes, onDims, onHandle, onHandleDrop, onHandleMove,
-            onSection, onSectionHandle, onSectionMeasure,
+            onSection, onSectionHandle, onSectionMeasure, onPlaneLabels,
             ...(sketchOnFace ? {
               onSketchHover: (h: { name: string; x: number; y: number } | null) => setSketchTip(h),
               onSketchOpen: (id: string) => { setSketchTip(null); faceSketchRef.current.open(id); },
@@ -1020,6 +1050,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     setEdgeOp(null);
     setExtrudeOp(null);
     setArgOp(null);
+    setPlaneOp(null);
     viewerRef.current?.hoverFace(null);
     viewerRef.current?.hoverEdge(null);
     applySelection([]);
@@ -1066,7 +1097,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // The steps list: the script's operations, as the backend reads them (the
   // sketches on a base plane, and each one's hole points, tell it how)
   const stepInKey = JSON.stringify(stepInputs(docSketches.map((sk) => ({
-    name: sk.name, basePlane: !!sketchBasePlane(sk), points: sketchHolePoints(sk).length,
+    name: sk.name, basePlane: !!sketchBasePlane(sk) || !!sk.planeRef, points: sketchHolePoints(sk).length,
   }))));
   const stepIn = useMemo(() => JSON.parse(stepInKey) as ReturnType<typeof stepInputs>, [stepInKey]);
   const [steps, setSteps] = useState<Step[]>([]);
@@ -1180,6 +1211,243 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   };
   setEdgeSizeRef.current = (size: number) => setEdgeOp((o) => o && ({ ...o, v: { ...o.v, size } }));
 
+  // ── Construction planes: the build's, which are shown (per part, kept in
+  // localStorage, never in the script), and the Offset plane / Plane on edge
+  // dialog, its preview drawn as a plane with a handle for the distance/angle
+  const [builtPlanes, setBuiltPlanes] = useState<Record<string, PlaneReport>>({});
+  const [hiddenPlanes, setHiddenState] = useState<string[]>(() => (docId ? loadHiddenPlanes(docId) : []));
+  useEffect(() => { setHiddenState(docId ? loadHiddenPlanes(docId) : []); }, [docId]);
+  const setHiddenPlanes = (names: string[]) => { setHiddenState(names); if (docId) saveHiddenPlanes(docId, names); };
+  const [planeOp, setPlaneOp] = useState<PlaneOp | null>(null);
+  const planeNames = [...new Set([...steps.flatMap((s) => (s.plane ? [s.plane] : [])), ...Object.keys(builtPlanes)])];
+  // the one plane selected (and nothing else): K sketches on it, N looks at it, Z cuts along it
+  const selectedPlane = () => {
+    const ps = selPRef.current;
+    const p = ps.length === 1 && !selRef.current.length && !selERef.current.length
+      ? resRef.current?.planes?.[ps[0]!] : undefined;
+    return p ? { name: ps[0]!, origin: p.origin as Vec3, normal: p.normal as Vec3, xAxis: p.xAxis as Vec3 } : null;
+  };
+  const planeNotice = (text: string) => { setNotice(text); window.setTimeout(() => setNotice(''), 6000); };
+  // an edge's two faces, as the Plane on edge dialog lists them
+  const edgeFacesOf = (ref: EdgeRefSpec): EdgePlaneValues['faces'] => {
+    const faces = resRef.current?.faces ?? [];
+    return ref.faces.map((fr, i) => {
+      const f = faceOfRef(faces, fr);
+      return { ref: fr, center: (f?.center ?? fr.center) as Vec3, normal: (f?.normal ?? fr.normal) as Vec3,
+               hint: fr.hint ?? faceLabel(f?.normal ?? fr.normal), index: f?.index ?? -1 - i };
+    });
+  };
+  const edgeEnds = (ref: EdgeRefSpec, poly?: [number, number, number][]): [Vec3, Vec3] | null => {
+    if (poly && poly.length >= 2) return [poly[0] as Vec3, poly[poly.length - 1] as Vec3];
+    if (!ref.direction) return null;
+    const h = scale(ref.direction as Vec3, ref.length / 2);
+    return [sub(ref.midpoint as Vec3, h), add(ref.midpoint as Vec3, h)];
+  };
+  const startOffsetPlane = () => {
+    const res = resRef.current;
+    if (!res) return;
+    const f = selRef.current.length === 1 ? res.faces.find((x) => x.index === selRef.current[0]) : undefined;
+    const ref = f && f.kind === 'plane' ? refOf(f) : null;
+    setPlaneOp({ line: null, own: null, kind: 'offset', v: {
+      name: newPlaneName(planeNames), base: ref ? 'face' : 'XY', distance: 10,
+      face: ref && f ? { ref, center: f.center as Vec3, normal: f.normal as Vec3, hint: ref.hint ?? faceLabel(f.normal) } : null,
+    } });
+  };
+  const startEdgePlane = () => {
+    const res = resRef.current;
+    const e = selERef.current.length === 1 ? res?.edges.find((x) => x.index === selERef.current[0]) : undefined;
+    if (!res || !e) return;
+    if (e.kind !== 'line' || !e.ref) { planeNotice('A plane on an edge goes through a straight edge: pick one'); return; }
+    const ends = edgeEnds(e.ref, e.polyline);
+    const faces = edgeFacesOf(e.ref);
+    if (!ends || !faces.length) { planeNotice('That edge has no face to measure the angle from'); return; }
+    setPlaneOp({ line: null, own: null, kind: 'edge', v: {
+      name: newPlaneName(planeNames), edge: e.ref, faces, from: 0, angle: 30, a: ends[0], b: ends[1],
+    } });
+  };
+  // a plane line reopened: its dialog's values (null: its edge isn't found)
+  const planeValuesOf = (op: 'offset_plane' | 'edge_plane', args: Record<string, unknown>,
+                         exprs: Record<string, string>):
+    ({ kind: 'offset'; v: OffsetPlaneValues } | { kind: 'edge'; v: EdgePlaneValues }) | null => {
+    const res = resRef.current;
+    const name = String(args.name ?? '');
+    if (op === 'offset_plane') {
+      const a = args as { base: BaseName | { face: FaceRefSpec }; distance: number };
+      const distance = exprs.distance ?? a.distance;
+      if (typeof a.base === 'string') return { kind: 'offset', v: { name, base: a.base, face: null, distance } };
+      const ref = a.base.face;
+      const f = res ? faceOfRef(res.faces, ref) : null;
+      // where the face is now: as found, else back from the plane the build made
+      const rep = res?.planes?.[name], d = amountValue(distance, paramVals);
+      const center = (f?.center ?? (rep && d !== null ? sub(rep.origin as Vec3, scale(rep.normal as Vec3, d)) : ref.center)) as Vec3;
+      const normal = (f?.normal ?? rep?.normal ?? ref.normal) as Vec3;
+      return { kind: 'offset', v: { name, base: 'face', distance, face: { ref, center, normal, hint: ref.hint ?? faceLabel(normal) } } };
+    }
+    const a = args as { edge: EdgeRefSpec; angle: number; from_face?: FaceRefSpec | null };
+    const ei = res ? edgeOfRef(res.edges, a.edge) : null;
+    const e = ei != null ? res?.edges.find((x) => x.index === ei) : undefined;
+    const ends = edgeEnds(a.edge, e?.polyline);
+    const { faces, from } = reopenedFromFace(edgeFacesOf(e?.ref ?? a.edge), a.from_face);
+    if (!ends || !faces.length) return null;
+    return { kind: 'edge', v: { name, edge: a.edge, faces, from, angle: exprs.angle ?? a.angle, a: ends[0], b: ends[1] } };
+  };
+  // the plane the dialog makes, as typed, and the handle on it
+  const planePreview = ((): (PlaneShape & { w?: Vec3; n?: Vec3; mid?: Vec3 }) | null => {
+    if (!planeOp) return null;
+    const name = planeOp.v.name.trim() || '(new plane)';
+    if (planeOp.kind === 'offset') {
+      const v = planeOp.v, d = amountValue(v.distance, paramVals);
+      const base = v.base === 'face' ? v.face : v.base;
+      return d === null || !base ? null : { name, ...offsetPlaneShape(base, d) };
+    }
+    const v = planeOp.v, a = amountValue(v.angle, paramVals), f = v.faces[v.from];
+    return a === null || !f ? null : { name, ...edgePlaneShape(v.a, v.b, f, a) };
+  })();
+  const planeH: DragHandle | null = (() => {
+    if (!planeOp || !planePreview) return null;
+    if (planeOp.kind === 'edge') {
+      const { mid, w, n } = planePreview;
+      const value = amountValue(planeOp.v.angle, paramVals);
+      return mid && w && n && value !== null ? { face: -1, at: mid, shift: n, turn: { w, n }, dr: 0, value, moves: [] } : null;
+    }
+    const m = resRef.current?.metrics;
+    const base = planeOp.v.base === 'face' ? planeOp.v.face : planeOp.v.base;
+    const value = amountValue(planeOp.v.distance, paramVals);
+    if (!m || !base || value === null) return null;
+    const center = scale(add(m.bbox_min as Vec3, m.bbox_max as Vec3), 0.5);
+    return { face: -1, at: offsetBasePoint(base, center), shift: planePreview.normal, dr: 0, value, moves: [], snapFaces: true };
+  })();
+  const planeHKey = planeH ? JSON.stringify(planeH) : '';
+  if (planeOp) {
+    setEdgeSizeRef.current = (value: number) => setPlaneOp((o) => o && (o.kind === 'offset'
+      ? { ...o, v: { ...o.v, distance: Math.round(value * 1000) / 1000 } }
+      : { ...o, v: { ...o.v, angle: Math.round(value * 1000) / 1000 } }));
+  }
+  const applyPlaneOp = async () => {
+    const o = planeOp;
+    if (!o) return;
+    const label = o.kind === 'offset' ? 'Offset plane' : 'Plane on edge';
+    if (amountValue(o.kind === 'offset' ? o.v.distance : o.v.angle, paramVals) === null) return;
+    try {
+      const payload = o.kind === 'offset' ? offsetPayload(o.v) : edgePayload(o.v);
+      const r = await buildApi.addPlane({ ...payload, code: codeRef.current, line: o.line });
+      closeOp();
+      if (r.renamed && r.renamed !== payload.name) {
+        // the sketches on it follow the new name, and so does its show/hide
+        const old = r.renamed;
+        useDocumentStore.setState((s) => ({
+          document: { ...s.document, sketches: renamePlaneRefs(s.document.sketches, old, payload.name) },
+        }));
+        persistSketches();
+        setHiddenPlanes(renameHidden(hiddenPlanes, old, payload.name));
+      }
+      setCode(r.code);
+      const out = await build(r.code, o.line != null ? 'Edit plane' : label);
+      if (out.kind === 'ok') saveDraft(r.code);
+    } catch (err) {
+      setNotice(`${label}: ${errorText(err)}`);
+    }
+  };
+  // the plane being edited is drawn as the preview, not as built
+  const shownPlaneList = shownPlanes(builtPlanes, planeOp?.own ? [...hiddenPlanes, planeOp.own] : hiddenPlanes, planePreview);
+  const shownPlanesKey = JSON.stringify(shownPlaneList);
+  useEffect(() => {
+    viewerRef.current?.setPlanes(shownPlaneList);
+  }, [shownPlanesKey]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // with a plane dialog open, the face it goes from (and the edge) show as selected
+  const planeSelKey = planeOp ? JSON.stringify(planeOp.kind === 'offset'
+    ? [planeOp.v.base, planeOp.v.face?.ref.center] : [planeOp.v.from, planeOp.v.edge.midpoint]) : '';
+  useEffect(() => {
+    const v = viewerRef.current, res = resRef.current;
+    if (!planeOp || !v || !res) return;
+    if (planeOp.kind === 'offset') {
+      const f = planeOp.v.base === 'face' && planeOp.v.face ? faceOfRef(res.faces, planeOp.v.face.ref) : null;
+      v.selectFaces(f ? [f.index] : []);
+      v.selectEdges([]);
+    } else {
+      const f = planeOp.v.faces[planeOp.v.from];
+      v.selectFaces(f && f.index >= 0 ? [f.index] : []);
+      const ei = edgeOfRef(res.edges, planeOp.v.edge);
+      v.selectEdges(ei != null ? [ei] : []);
+    }
+    v.selectPlanes([]);
+  }, [planeSelKey]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // the planes' names in the view (placed every frame by onPlaneLabels):
+  // clicking one selects the plane, Shift-click adds it; hovering lights it
+  const planeLabelEls = useRef(new Map<string, HTMLDivElement>());
+  const onPlaneLabels = (labels: PlacedPlaneLabel[]) => {
+    const seen = new Set<string>();
+    for (const l of labels) {
+      const key = l.preview ? '\u0000preview' : l.name;
+      const el = planeLabelEls.current.get(key);
+      if (!el) continue;
+      seen.add(key);
+      el.style.display = l.visible ? 'block' : 'none';
+      el.style.transform = `translate(${Math.round(l.x) + 4}px, ${Math.round(l.y) - 18}px)`;
+    }
+    for (const [k, el] of planeLabelEls.current) if (!seen.has(k)) el.style.display = 'none';
+  };
+  const planeColor = (name: string, preview?: boolean) =>
+    preview ? '#5cb8db' : selP.includes(name) ? '#ff9e33' : '#b393f7';
+  const planeLabelsView = faceSketch.active ? null : (
+    <>
+      {shownPlaneList.map((p) => {
+        const key = p.preview ? '\u0000preview' : p.name;
+        return (
+          <div key={key} ref={(el) => { if (el) planeLabelEls.current.set(key, el); else planeLabelEls.current.delete(key); }}
+               onClick={p.preview ? undefined : (e) => { e.stopPropagation(); pickPlane(p.name, e.shiftKey); }}
+               onMouseEnter={p.preview ? undefined : () => viewerRef.current?.hoverPlane(p.name)}
+               onMouseLeave={p.preview ? undefined : () => viewerRef.current?.hoverPlane(null)}
+               title={p.preview ? undefined : `${p.name}: click to select (Shift adds)`}
+               style={{ position: 'absolute', left: 0, top: 0, display: 'none', padding: '1px 6px', fontSize: '11px',
+                        whiteSpace: 'nowrap', borderRadius: '3px', background: 'rgba(20,22,26,0.72)',
+                        color: planeColor(p.name, p.preview), border: `1px solid ${planeColor(p.name, p.preview)}55`,
+                        cursor: p.preview ? 'default' : 'pointer', pointerEvents: p.preview ? 'none' : 'auto',
+                        userSelect: 'none', zIndex: 1 }}>
+            {p.name}{p.preview ? ' (preview)' : ''}
+          </div>
+        );
+      })}
+      {Object.keys(builtPlanes).length > 0 && (
+        <div style={{ position: 'absolute', right: 10, bottom: 30, minWidth: 130, maxWidth: 220, maxHeight: '35%',
+                      overflow: 'auto', padding: '4px 0', background: palette.panelBg,
+                      border: `1px solid ${palette.border}`, borderRadius: '5px', fontSize: '12px', zIndex: 1,
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.25)' }}>
+          <div style={{ padding: '0 8px 2px', fontSize: '10px', color: palette.textSecondary, textTransform: 'uppercase',
+                        letterSpacing: '0.05em' }}>Planes</div>
+          {Object.entries(builtPlanes).map(([name, p]) => {
+            const hidden = hiddenPlanes.includes(name);
+            const bad = p.status === 'ambiguous';
+            return (
+              <div key={name} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '1px 8px',
+                                       background: selP.includes(name) ? palette.buttonBg : 'transparent' }}
+                   onMouseEnter={() => viewerRef.current?.hoverPlane(name)}
+                   onMouseLeave={() => viewerRef.current?.hoverPlane(null)}>
+                <button title={hidden ? `Show ${name}` : `Hide ${name}`} aria-label={hidden ? `Show ${name}` : `Hide ${name}`}
+                        onClick={() => setHiddenPlanes(hidden ? hiddenPlanes.filter((h) => h !== name) : [...hiddenPlanes, name])}
+                        style={{ width: 18, height: 18, padding: 0, border: 'none', background: 'transparent',
+                                 cursor: 'pointer', color: hidden ? palette.textSecondary : '#b393f7' }}>
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
+                    <path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z" />
+                    <circle cx="8" cy="8" r="2" />
+                    {hidden && <path d="M2.5 13.5l11-11" />}
+                  </svg>
+                </button>
+                <span onClick={(e) => pickPlane(name, e.shiftKey)}
+                      title={bad ? `${name}: more than one ${p.kind === 'edge' ? 'edge' : 'face'} matches its reference` : `Select ${name}`}
+                      style={{ flex: 1, cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                               color: hidden ? palette.textSecondary : palette.text }}>
+                  {name}{bad ? ' ⚠' : ''}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
+
   // Extrude, reopened: the options panel on its line (the sketch isn't
   // entered: "Edit sketch" does that, and Done comes back here)
   const [extrudeOp, setExtrudeOp] = useState<ExtrudeEdit | null>(null);
@@ -1198,6 +1466,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const extrudeSketch = extrudeOp ? docSketches.find((sk) => sk.name === extrudeOp.v.sketch) ?? null : null;
   const extrudeNormal = (extrudeOp && (resRef.current?.sketches?.[extrudeOp.v.sketch]?.plane?.normal
     ?? extrudeSketch?.plane?.normal)) as Vec3 | undefined;
+  const extrudeOrigin = (extrudeOp && (resRef.current?.sketches?.[extrudeOp.v.sketch]?.plane?.origin
+    ?? extrudeSketch?.plane?.origin)) as Vec3 | undefined;
+  const partBox = resRef.current?.metrics;
+  const extrudePartAt = extrudeNormal && extrudeOrigin && partBox && !extrudeOp?.firstBody
+    ? partSide(extrudeOrigin, extrudeNormal, partBox.bbox_min, partBox.bbox_max) : undefined;
   const applyExtrude = async () => {
     const o = extrudeOp;
     if (!o || !extrudeOk(o)) return;
@@ -1270,7 +1543,20 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // while the Shell dialog is open, clicking a face opens or closes it, and
   // the faces it opens show as selected; in the Hole dialog it says where the
   // holes go
-  opPickRef.current = edgeOp ? (p) => {
+  opPickRef.current = planeOp ? (p) => {
+    const face = p && 'face' in p ? resRef.current?.faces.find((x) => x.index === p.face.index) : undefined;
+    if (!face) return;
+    if (planeOp.kind === 'edge') {
+      // one of the edge's two faces: it is 0°
+      const i = planeOp.v.faces.findIndex((f) => f.index === face.index);
+      if (i >= 0) setPlaneOp((o) => o && o.kind === 'edge' ? { ...o, v: { ...o.v, from: i } } : o);
+      return;
+    }
+    const ref = face.kind === 'plane' ? refOf(face) : null;
+    if (!ref) { setNotice('An offset plane goes from a flat face: pick a flat one'); window.setTimeout(() => setNotice(''), 5000); return; }
+    setPlaneOp((o) => o && o.kind === 'offset' ? { ...o, v: { ...o.v, base: 'face', face: {
+      ref, center: face.center as Vec3, normal: face.normal as Vec3, hint: ref.hint ?? faceLabel(face.normal) } } } : o);
+  } : edgeOp ? (p) => {
     const r = p && 'edge' in p ? resRef.current?.edges.find((e) => e.index === p.edge)?.ref : null;
     if (!r) return;
     setEdgeOp((o) => o && ({ ...o, v: { ...o.v, edges: toggleEdge(o.v.edges, r) } }));
@@ -1325,14 +1611,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     viewerRef.current?.selectFaces([]);
     viewerRef.current?.selectEdges(idx);
   }, [edgeKey]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const opOpen = !!shellOp || !!holeOp || !!edgeOp || !!extrudeOp || !!argOp;
+  const opOpen = !!shellOp || !!holeOp || !!edgeOp || !!extrudeOp || !!argOp || !!planeOp;
   // Shell, Hole and Round work on faces: while one is open a click picks faces
   // only; Fillet and Chamfer, edges only
-  const viewFilter: PickFilter = shellOp || holeOp || argOp?.v.op === 'auto_round' ? 'faces' : edgeOp ? 'edges'
+  const viewFilter: PickFilter = shellOp || holeOp || planeOp || argOp?.v.op === 'auto_round' ? 'faces' : edgeOp ? 'edges'
     : pickFilter;
   useEffect(() => { viewerRef.current?.setPickFilter(viewFilter); }, [viewFilter]);
   // the dialogs sit at the top left of the view: draw the part beside them
-  const opWidth = holeOp || argOp ? 300 : shellOp || edgeOp || extrudeOp ? 270 : 0;
+  const opWidth = holeOp || argOp || planeOp ? 300 : shellOp || edgeOp || extrudeOp ? 270 : 0;
   useEffect(() => {
     viewerRef.current?.setInset(opWidth ? opWidth + 24 : 0);
   }, [opWidth]);
@@ -1359,6 +1645,10 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         };
         if (op.op === 'auto_round') applySelection([]);
         setArgOp({ line: op.line, end: op.end_line, v, orig: v });
+      } else if (op.op === 'offset_plane' || op.op === 'edge_plane') {
+        const p = planeValuesOf(op.op, op.args, op.exprs ?? {});
+        if (!p) throw new Error('the edge this plane is on isn\'t on the part as built');
+        setPlaneOp({ line: op.line, own: (op.args as { name: string }).name, ...p });
       } else if (op.op === 'shell') {
         const a = op.args as { remove?: FaceRefSpec[]; thickness?: number; inside?: boolean };
         setShellOp({ line: op.line, v: { remove: a.remove ?? [], thickness: Number(a.thickness ?? 2), inside: a.inside !== false } });
@@ -1415,6 +1705,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     }
     const res = resRef.current;
     if (opOpen || !res) return;   // an open dialog has the selection
+    if (st.plane && res.planes?.[st.plane]) { applySelection([], [], [st.plane]); return; }
     const faces = st.faces.map((r) => faceOfRef(res.faces, r)?.index).filter((i): i is number => i != null);
     const edges = st.edges.map((r) => edgeOfRef(res.edges, r)).filter((i): i is number => i != null);
     applySelection(faces, edges);
@@ -1470,18 +1761,29 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const edgeH = edgeOp?.v.edges[0] ? edgeHandle(edgeAsNow(edgeOp.v.edges[0])) : null;
   const edgeHKey = edgeH ? JSON.stringify(edgeH) : '';
   const edgeSize = edgeOp?.v.size ?? 0;
-  const handle: HandleOption | null = edgeOp
+  const handle: HandleOption | null = planeOp
+    ? (planeH ? { name: planeOp.kind === 'offset' ? 'distance' : 'angle', value: edgeDragRef.current ?? planeH.value,
+                  shift: planeH.shift, dr: 0, moves: [] } : null)
+    : edgeOp
     ? (edgeH && edgeSize > 0 ? { name: edgeOp.op === 'fillet' ? 'radius' : 'distance',
                                   value: edgeDragRef.current ?? edgeSize, shift: edgeH.dir, dr: 0, moves: [] } : null)
     : faceHandle;
   handleRef.current = handle;
-  edgeHandleOnRef.current = !!edgeOp;
+  edgeHandleOnRef.current = !!edgeOp || !!planeOp;
+  handleUnitRef.current = planeOp?.kind === 'edge' ? '°' : '';
+  dialogDragNoteRef.current = planeOp?.kind === 'offset' ? 'Shift: 0.1 mm · snaps to faces · Esc cancels'
+    : planeOp ? 'Shift: 0.1° · Esc cancels' : '0.1 mm steps · Esc cancels';
   handleHintRef.current = nHandles > 1 ? `Tab ⇄ ${hi + 1}/${nHandles}` : '';
   const handleKeyRef = useRef(handleKey);
   handleKeyRef.current = handleKey;
   const nHandlesRef = useRef(0);
   nHandlesRef.current = nHandles;
   useEffect(() => {
+    if (planeOp) {
+      if (edgeDragRef.current != null) return;   // its own drag changed the value: leave it be
+      viewerRef.current?.setHandle(planeH);
+      return;
+    }
     if (edgeOp) {
       if (edgeDragRef.current != null) return;   // its own drag changed the size: leave it be
       viewerRef.current?.setHandle(edgeH && edgeSize > 0
@@ -1492,7 +1794,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     viewerRef.current?.setHandle(faceHandle && selFace
       ? { face: selFace.index, shift: faceHandle.shift, dr: faceHandle.dr, value: faceHandle.value, moves: faceHandle.moves }
       : null);
-  }, [faceHandle, selFace, !!edgeOp, edgeHKey, edgeSize]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [faceHandle, selFace, !!edgeOp, edgeHKey, edgeSize, planeHKey]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Tab' || nHandlesRef.current < 2 || faceSketchRef.current.activeRef.current) return;
@@ -1538,6 +1840,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     const s = selRef.current;
     const f = s.length ? resRef.current?.faces.find((x) => x.index === s[s.length - 1]) : undefined;
     if (f) { viewerRef.current?.lookAlong(f.normal); return; }
+    const pl = selectedPlane();
+    if (pl) { viewerRef.current?.lookAlong(pl.normal); return; }
     setViewHint('Select a face, then press N');
     window.clearTimeout(viewHintTimer.current);
     viewHintTimer.current = window.setTimeout(() => setViewHint(''), 2500);
@@ -1554,11 +1858,17 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   };
   const sketchOnSelection = () => {
     const s = selRef.current;
+    const pl = selectedPlane();
+    if (pl) {
+      setPlaneMenu(false); setSketchTip(null);
+      faceSketchRef.current.enterConstruction(pl.name, pl);
+      return;
+    }
     if (!s.length) { setPlaneMenu((o) => !o); return; }
     setPlaneMenu(false);
     const f = s.length === 1 ? resRef.current?.faces.find((x) => x.index === s[0]) : undefined;
     if (f && f.kind === 'plane') { setSketchTip(null); faceSketchRef.current.enter(f); return; }
-    setViewHint('Select one flat face (or nothing, for a base plane), then press K');
+    setViewHint('Select one flat face or construction plane (or nothing, for a base plane), then press K');
     window.clearTimeout(viewHintTimer.current);
     viewHintTimer.current = window.setTimeout(() => setViewHint(''), 2500);
   };
@@ -1596,7 +1906,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         if (ops?.modal) return;
         if (ops?.model.dialogOpen) closeOpRef.current();
         else if (secPointsRef.current) v.clearSectionPoints();
-        else if (selRef.current.length || selERef.current.length) applySelectionRef.current([], []);
+        else if (selRef.current.length || selERef.current.length || selPRef.current.length) applySelectionRef.current([], []);
         else if (layoutRef.current === 'ops') leaveOps();
         else return;
       } else if (e.key.toUpperCase() === FILTER_KEY && !e.shiftKey) cyclePickFilterRef.current();
@@ -1644,6 +1954,10 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // describe the current selection so the assistant can target it in build123d
   const selectionContext = (): string => {
     const res = resRef.current;
+    if (res && selP.length && !sel.length && !selE.length) {
+      return `${selP.length === 1 ? 'this construction plane' : 'these construction planes'}: `
+        + `${selP.map((n) => `PLANES[${JSON.stringify(n)}]`).join(', ')} (use it by name, so what is built on it follows it)`;
+    }
     if (!res || (sel.length === 0 && selE.length === 0)) return '';
     const v = (a: [number, number, number]) => `(${a.map((n) => Math.round(n * 10) / 10).join(', ')})`;
     const desc = (i: number) => {
@@ -1774,6 +2088,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const opSel: OpSelection = {
     faces: sel.map((i) => ({ kind: resRef.current?.faces.find((f) => f.index === i)?.kind ?? '' })),
     edges: selE.map((i) => ({ kind: resRef.current?.edges.find((e) => e.index === i)?.kind ?? '' })),
+    planes: selP.map((name) => ({ name })),
   };
   // Z: on just inside the selected flat face, else through the middle,
   // square to the axis nearest the view; off again
@@ -1787,8 +2102,10 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     const v = viewerRef.current;
     if (!v || !resRef.current?.faces.length) { hint('Build the part first, then press Z'); return; }
     const f = lastFace();
+    const pl = selectedPlane();
     const { back, center } = v.sectionFrame();
-    setSecPlane(f ? sectionOnFace(f) : sectionForView(back, center));
+    setSecPlane(f ? sectionOnFace(f) : pl ? sectionOnFace({ center: pl.origin, normal: pl.normal }, 0)
+      : sectionForView(back, center));
     setSecOn(true);
   };
   const sectionAxisTo = (axis: 0 | 1 | 2) => {
@@ -1804,6 +2121,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   };
   const opCtx: OpContext = {
     sketchOnSelection, sketchOnPlane,
+    offsetPlane: startOffsetPlane,
+    edgePlane: startEdgePlane,
     shell: startShell,
     hole: () => void startHole(),
     fillet: () => startEdgeOp('fillet'),
@@ -2247,7 +2566,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
               <StepsList steps={steps} problems={problems} selected={stepSel} busy={stepBusy}
                 onSelect={selectStep} onEdit={(st) => void editOp(st.line)}
                 onToggle={(st) => void changeStep(st, st.off ? 'on' : 'off')}
-                onDelete={(st) => void changeStep(st, 'delete')} />
+                onDelete={(st) => void changeStep(st, 'delete')}
+                deleteNote={(st) => {
+                  const used = st.plane ? planeSketches(docSketches, st.plane) : [];
+                  return used.length ? `Used by ${used.length > 1 ? 'sketches' : 'sketch'} ${used.map((x) => `“${x.name}”`).join(', ')}` : null;
+                }} />
             )}
             {layout === 'ops' && (
               <OperationsPanel sel={opSel} model={opModel} recent={recent} onRun={runOp} onExample={putInChat}
@@ -2287,7 +2610,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
             {extrudeOp && (
               <ExtrudeDialog value={extrudeOp.v} onChange={(v) => setExtrudeOp((o) => o && { ...o, v })}
                 firstBody={extrudeOp.firstBody} param={extrudeOp.param} preview={extrudePreview.preview}
-                direction={extrudeNormal ? extrudeDirectionText(extrudeOp.v, extrudeNormal) : ''}
+                direction={extrudeNormal ? extrudeDirectionText(extrudeOp.v, extrudeNormal, extrudePartAt) : ''}
                 onEditSketch={editExtrudeSketch} onApply={() => void applyExtrude()} onCancel={closeOp} />
             )}
             {argOp?.v.op === 'auto_round' && (
@@ -2300,6 +2623,20 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
               <TrussDialog value={argOp.v} onChange={(v) => setArgOp((o) => o && { ...o, v })}
                 preview={argPreview.preview} onApply={() => void applyArgOp()} onCancel={closeOp} />
             )}
+            {planeOp?.kind === 'offset' && (
+              <OffsetPlaneDialog value={planeOp.v} editing={planeOp.line != null} params={paramVals}
+                used={planeNames} own={planeOp.own ?? undefined}
+                onChange={(v) => setPlaneOp((o) => o && o.kind === 'offset' ? { ...o, v } : o)}
+                onApply={() => void applyPlaneOp()} onCancel={closeOp} />
+            )}
+            {planeOp?.kind === 'edge' && (
+              <EdgePlaneDialog value={planeOp.v} editing={planeOp.line != null} params={paramVals}
+                used={planeNames} own={planeOp.own ?? undefined}
+                onChange={(v) => setPlaneOp((o) => o && o.kind === 'edge' ? { ...o, v } : o)}
+                onHoverFace={(i) => viewerRef.current?.hoverFace(i)}
+                onApply={() => void applyPlaneOp()} onCancel={closeOp} />
+            )}
+            {planeLabelsView}
             {holeOp && holePresets && (
               <HoleDialog value={holeOp.v} editing={holeOp.line != null} preview={holePreview.preview}
                 onChange={(v) => setHoleOp((o) => o && { ...o, v })}
@@ -2536,9 +2873,13 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
             {secOn && secPlane && !faceSketch.active && (
               <div style={{ position: 'absolute', left: opWidth ? opWidth + 24 : 12, right: 12, bottom: 44, zIndex: 2,
                             display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
-                <SectionPanel plane={secPlane} palette={palette} canAlign={!!lastFace()} dragging={secDragging}
+                <SectionPanel plane={secPlane} palette={palette} canAlign={!!lastFace() || !!selectedPlane()} dragging={secDragging}
                   onAxis={sectionAxisTo}
-                  onAlign={() => { const f = lastFace(); if (f) setSecPlane(sectionOnFace(f)); }}
+                  onAlign={() => {
+                    const f = lastFace(), pl = selectedPlane();
+                    if (f) setSecPlane(sectionOnFace(f));
+                    else if (pl) setSecPlane(sectionOnFace({ center: pl.origin, normal: pl.normal }, 0));
+                  }}
                   onFlip={() => setSecPlane((p) => p && flipSection(p))}
                   onPosition={(v) => setSecPlane((p) => p && atPosition(p, v))}
                   onOff={() => setSecOn(false)} />

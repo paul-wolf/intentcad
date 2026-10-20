@@ -357,6 +357,16 @@ export const buildApi = {
     Promise<{ code: string; param: string | null }> {
     return request('/build/add_edge_op', { method: 'POST', body: JSON.stringify(payload) });
   },
+  /** Append a construction plane line (PLANES["name"] = offset_plane/edge_plane(...)),
+   *  or rewrite the one on `line`; `renamed`: its old name when the name changed. */
+  addPlane(payload: PlanePayload & { code: string; line?: number | null }):
+    Promise<{ code: string; renamed: string | null }> {
+    return request('/build/add_plane', { method: 'POST', body: JSON.stringify(payload) });
+  },
+  /** Rename a construction plane: every PLANES["old"] in the script. */
+  renamePlane(code: string, old: string, name: string): Promise<{ code: string }> {
+    return request('/build/rename_plane', { method: 'POST', body: JSON.stringify({ code, old, new: name }) });
+  },
   /** Every hole size the Hole dialog offers (backend modeling/hole_presets.py). */
   holePresets(): Promise<HolePresets> {
     return request('/build/hole_presets');
@@ -526,7 +536,26 @@ export interface OpAt {
 
 export type ExtrudeOp = 'cut' | 'join' | 'new';
 export type ArgOpKind = 'auto_round' | 'truss_windows';
-export type OpKind = 'extrude' | 'shell' | 'holes' | EdgeOpKind | ArgOpKind;
+export type PlaneOpKind = 'offset_plane' | 'edge_plane';
+export type OpKind = 'extrude' | 'shell' | 'holes' | EdgeOpKind | ArgOpKind | PlaneOpKind;
+
+/** A construction plane as the build put it (backend modeling/planes.py). */
+export interface PlaneReport {
+  /** offset | edge | script (a Plane the script made itself) */
+  kind: 'offset' | 'edge' | 'script';
+  /** from its face_ref / edge_ref */
+  status: 'same' | 'moved' | 'ambiguous';
+  line?: number | null;
+  origin: [number, number, number];
+  normal: [number, number, number];
+  xAxis: [number, number, number];
+}
+
+/** An offset_plane()/edge_plane() line's values, for /build/add_plane. A
+ *  distance or angle is a number, or an expression of P names ("-width / 2"). */
+export type PlanePayload =
+  | { op: 'offset_plane'; name: string; base: 'XY' | 'XZ' | 'YZ' | { face: FaceRefSpec }; distance: number | string }
+  | { op: 'edge_plane'; name: string; edge: EdgeRefSpec; angle: number | string; from_face: FaceRefSpec | null };
 
 /** An auto_round keep item: as written (`src`), and the face_ref inside when it is one. */
 export interface KeepItem { src?: string; ref?: FaceRefSpec | null }
@@ -546,6 +575,8 @@ export interface Step {
   sketch?: string | null;
   faces: FaceRefSpec[];
   edges: EdgeRefSpec[];
+  /** a construction plane's name */
+  plane?: string | null;
 }
 
 /** An auto_round keep item's faces, as the part was when its line ran. */
@@ -622,6 +653,8 @@ export interface RunResponse {
   edge_refs?: FaceRefReport[];
   /** auto_round keep items, each item's faces */
   kept?: KeptFaces[];
+  /** name -> each construction plane in PLANES */
+  planes?: Record<string, PlaneReport>;
 }
 
 /** Mirrors backend modeling.schemas.AutoRoundReport. */

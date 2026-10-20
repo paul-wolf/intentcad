@@ -212,6 +212,24 @@ def _system(production: str = "") -> str:
         "the face it was drawn on exists in `part`. A sketch on a base plane (\"Sketch on "
         "Top plane\", Front, Right) lies on that plane through the origin; with no part "
         "yet, part = extrude(sketch(\"<name>\"), amount=P[\"height\"]) makes the part.\n\n"
+        "CONSTRUCTION PLANES (no import): PLANES is a dict of named build123d Planes "
+        "that follow the part. Define each on one line, in order, before anything "
+        "that uses it: PLANES[\"Lid\"] = offset_plane(face_ref({...}), distance=P[\"lid_gap\"]) "
+        "is parallel to a flat face at `distance` along its outward normal (negative: "
+        "into the part; -P[\"width\"] / 2 from a side face is a midplane that stays in "
+        "the middle); offset_plane(\"XY\" | \"XZ\" | \"YZ\", distance=...) offsets a base "
+        "plane; PLANES[\"Tilt\"] = edge_plane(edge_ref({...}), angle=P[\"tilt\"], "
+        "from_face=face_ref({...})) contains a straight edge, lies in from_face (one of "
+        "the edge's two faces) at 0° and turns about the edge, positive away from the "
+        "material. Use them as planes: PLANES[\"Lid\"] * Cylinder(...), "
+        "Plane.location; a sketch listed as drawn on a construction plane takes its "
+        "plane from PLANES when sketch() runs, so its PLANES line must come first. "
+        "Whenever a plane should follow the part (a midplane, a plane a gap above the "
+        "lid, a tilted window), define a construction plane rather than a hard-coded "
+        "Plane(origin=...) or Plane.XY.offset(number), and put its distance or angle "
+        "in P. Keep each PLANES line's face_ref/edge_ref exactly as written and the "
+        "line on one line (the Offset plane and Plane on edge dialogs reopen it); "
+        "renaming a plane means changing every PLANES[\"old\"] together.\n\n"
         "SHELL (no import): part = shell(part, remove=[…faces to leave open…], "
         "thickness=P[\"wall\"], inside=True) hollows the part to walls `thickness` "
         "thick, open where the removed faces were (none: a closed hollow part). "
@@ -415,6 +433,12 @@ def _face_sketches(document_id: str | None) -> list[str]:
         o = [round(v, 2) for v in pl.get("origin", [])]
         face = prof.get("face") or {}
         on = f"drawn on the {face['hint']}, " if face.get("hint") else ""
+        if prof.get("planeRef"):
+            out.append(f"- {json.dumps(s.get('name'))}: "
+                       f"{len(prof.get('loops') or [])} closed shape(s), drawn on the construction plane "
+                       f"PLANES[{json.dumps(prof['planeRef'])}] (it follows that plane; define the plane "
+                       "before the line that uses the sketch)")
+            continue
         pts = len(prof.get("points") or []) + sum(1 for lp in prof.get("loops") or [] for g in lp if g.get("t") == "circle")
         what = f"{len(prof.get('loops') or [])} closed shape(s)" + (f", {pts} point(s)/circle centre(s)" if pts else "")
         out.append(f"- {json.dumps(s.get('name'))}: {what}, {on}on the plane "

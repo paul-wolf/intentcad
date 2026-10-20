@@ -13,7 +13,8 @@ import {
   type Quat, type StandardView,
 } from './viewOrient';
 import { planeQuat, type PlaneBasis } from './sketchPlane';
-import { choosePick, edgesNear, selectable, type EdgeCandidate, type EdgeLike, type PickFilter, type ScreenEdge } from './edgePick';
+import { labelCorner, outlineSegments, planeCorners, type PlaneShape } from './constructionPlanes';
+import { choosePick, edgesNear, segmentDistance, selectable, EDGE_PX, type EdgeCandidate, type EdgeLike, type PickFilter, type ScreenEdge } from './edgePick';
 import {
   buildOutline, cutDepth, cutNormal, faceBodies, fromPlane, insideOutline, nearestSegment, planeBasis, planePoint,
   shaderPlane, signedVolume6, toPlane, vertexDots, wallThickness, type Outline, type Section,
@@ -219,6 +220,13 @@ void main() {
   gl_FragColor = vec4(uColor * (1.0 - 0.18 * k), 1.0);
 }`;
 
+// a construction plane's fill: flat, translucent
+const FILL_FRAG = `
+precision mediump float;
+uniform vec3 uColor;
+uniform float uAlpha;
+void main() { gl_FragColor = vec4(uColor, uAlpha); }`;
+
 // Screen-space thick lines (GL line width is 1 px on most platforms): each
 // segment is a quad, its corners pushed sideways by half the width in pixels.
 // uBias pulls the line toward the camera so it sits on its face, not in it.
@@ -306,6 +314,13 @@ export interface DragHandle {
   step?: number;
   /** the smallest value the drag goes to */
   min?: number;
+  /** a point handle: snap its value onto the planes of parallel flat faces
+   *  (a construction plane's offset along `shift`) */
+  snapFaces?: boolean;
+  /** a rotation handle about an axis through `at`: the value is an angle in
+   *  degrees, the handle sits at at + arm·(w cos a + n sin a) (w, n unit and
+   *  square to the axis); it snaps to 1° (Shift 0.1°) */
+  turn?: { w: Vec3; n: Vec3 };
 }
 
 /** The handle projected into the current view, for the HTML overlay. */
@@ -333,6 +348,14 @@ export interface Viewer {
   /** Light one edge brightly, through anything in front (a dialog row being
    *  hovered); null for none. */
   hoverEdge(index: number | null): void;
+  /** The construction planes to draw: translucent rectangles the size of the
+   *  part (a little larger), outlined, their names placed via onPlaneLabels.
+   *  A click on an outline picks the plane ({plane: name}). */
+  setPlanes(planes: PlaneShape[]): void;
+  /** Draw these planes as selected. */
+  selectPlanes(names: string[]): void;
+  /** Light one plane (its label or a list row is hovered); null for none. */
+  hoverPlane(name: string | null): void;
   /** What a click picks: faces + edges (an edge near the cursor wins), faces, edges. */
   setPickFilter(f: PickFilter): void;
   /** Set the dimension overlay (empty to clear). Reported back via onDims. */
@@ -418,8 +441,12 @@ export interface SectionMeasure {
  * z toward the viewer) — for drawing an orientation gizmo. */
 export interface AxisDir { name: string; x: number; y: number; z: number; color: string }
 
-/** What a click picked: a face, an edge (build-result index), or nothing. */
-export type ViewerPick = { face: FaceRange } | { edge: number } | null;
+/** What a click picked: a face, an edge (build-result index), a
+ *  construction plane (by name, on its outline), or nothing. */
+export type ViewerPick = { face: FaceRange } | { edge: number } | { plane: string } | null;
+
+/** A construction plane's name, projected for the HTML overlay (CSS px). */
+export interface PlacedPlaneLabel { name: string; x: number; y: number; visible: boolean; preview: boolean }
 
 export interface ViewerOpts {
   color?: [number, number, number];
@@ -453,6 +480,8 @@ export interface ViewerOpts {
   onSectionHandle?: (h: PlacedHandle | null) => void;
   /** Called each frame with the section's measurements (null: off). */
   onSectionMeasure?: (m: SectionMeasure | null) => void;
+  /** Called each frame with where the construction planes' names go. */
+  onPlaneLabels?: (labels: PlacedPlaneLabel[]) => void;
 }
 
 export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): Viewer {
@@ -536,6 +565,15 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   const cColor = gl.getUniformLocation(capProg, 'uColor');
   const cHatch = gl.getUniformLocation(capProg, 'uHatch');
   const cLine = gl.getUniformLocation(capProg, 'uLine');
+  // fifth: construction planes' translucent fills
+  const fillProg = gl.createProgram()!;
+  gl.attachShader(fillProg, compile(gl, gl.VERTEX_SHADER, CAP_VERT));
+  gl.attachShader(fillProg, compile(gl, gl.FRAGMENT_SHADER, FILL_FRAG));
+  gl.linkProgram(fillProg);
+  const fPos = gl.getAttribLocation(fillProg, 'aPos');
+  const fPV = gl.getUniformLocation(fillProg, 'uPV');
+  const fColor = gl.getUniformLocation(fillProg, 'uColor');
+  const fAlpha = gl.getUniformLocation(fillProg, 'uAlpha');
   const hasStencil = !!gl.getContextAttributes()?.stencil;
   const sketchBuf = gl.createBuffer()!;
   let sketchLines: SketchLines[] = [];
@@ -552,7 +590,53 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   let hoverEdgeExt: number | null = null;   // a dialog row (hoverEdge)
   let filter: PickFilter = 'both';
   // what a click at the pointer would pick, lit while hovering
-  let hoverPick: { edge: number } | { face: number } | null = null;
+  let hoverPick: { edge: number } | { face: number } | { plane: string } | null = null;
+  // construction planes: each a fill (a 4-vertex strip) and an outline (4
+  // thick segments) in two buffers, rebuilt when the planes or the part change
+  let planes: PlaneShape[] = [];
+  let selPlanes: string[] = [];
+  let hoverPlaneExt: string | null = null;   // a label or a list row (hoverPlane)
+  const planeFillBuf = gl.createBuffer()!;
+  const planeEdgeBuf = gl.createBuffer()!;
+  let planeGeo: { name: string; corners: Vec3[]; preview: boolean }[] = [];
+  let planeGeoStale = true;
+  const CPLANE: Vec3 = [0.62, 0.44, 0.94];        // violet: not a face, the selection or the section
+  const CPLANE_HOVER: Vec3 = [0.78, 0.66, 1.0];
+  const CPLANE_PREVIEW: Vec3 = [0.36, 0.72, 0.86]; // a dialog's preview (OpDialogs PREVIEW_COLOR)
+  function planeGeometry() {
+    if (!planeGeoStale) return planeGeo;
+    const m = modelRadius * 0.12;
+    planeGeo = planes.map((p) => ({ name: p.name, corners: planeCorners(p, modelMin, modelMax, m), preview: !!p.preview }));
+    const fill: number[] = [], line: number[] = [];
+    for (const g of planeGeo) {
+      const c = g.corners;
+      fill.push(...c[0]!, ...c[1]!, ...c[3]!, ...c[2]!);   // a strip
+      line.push(...outlineSegments(c));
+    }
+    gl!.bindBuffer(gl!.ARRAY_BUFFER, planeFillBuf);
+    gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array(fill), gl!.DYNAMIC_DRAW);
+    gl!.bindBuffer(gl!.ARRAY_BUFFER, planeEdgeBuf);
+    gl!.bufferData(gl!.ARRAY_BUFFER, thickVerts(line), gl!.DYNAMIC_DRAW);
+    planeGeoStale = false;
+    return planeGeo;
+  }
+  // the plane whose outline (or label corner) is within a few px of the pointer
+  function planeAt(px: number, py: number): string | null {
+    if (!planes.length) return null;
+    const toCss = cssProjector();
+    let best: string | null = null, bestD = EDGE_PX;
+    for (const g of planeGeometry()) {
+      if (g.preview) continue;
+      const pts = g.corners.map((c) => toCss(c));
+      for (let i = 0; i < 4; i++) {
+        const a = pts[i]!, b = pts[(i + 1) % 4]!;
+        if (!a[2] || !b[2]) continue;
+        const { d } = segmentDistance(px, py, [a[0], a[1]], [b[0], b[1]]);
+        if (d < bestD) { bestD = d; best = g.name; }
+      }
+    }
+    return best;
+  }
 
   // coordinate frame: a ground grid on the engine's Z=0 plane. Orientation
   // (which way is +X/+Y/+Z) is shown by the corner gizmo, not axis lines.
@@ -830,6 +914,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     modelCenter = center;
     modelMin = [minX, minY, minZ];
     modelMax = [maxX, maxY, maxZ];
+    planeGeoStale = true;
     buildFrame(radius);
   }
 
@@ -959,6 +1044,8 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
 
   // what a click at (px, py) CSS px picks, under the filter
   function pickAt(px: number, py: number): ViewerPick {
+    const onPlane = filter === 'both' ? planeAt(px, py) : null;
+    if (onPlane) return { plane: onPlane };
     const P = ndcProjector();
     let near: EdgeCandidate[] = [];
     if (filter !== 'faces' && edges.length) {
@@ -1002,9 +1089,16 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     if (!handle || !base) return null;
     // a point handle sits its value out from its point (it moves no face to carry it)
     const off = handle.at ? (drag ? drag.value : handle.value) : (drag ? drag.t : 0);
-    const p = add(base, scale(handle.shift, off));
+    let p = add(base, scale(handle.shift, off));
+    let tip = add(p, scale(handle.shift, handleArm() / Math.hypot(...handle.shift)));
+    if (handle.turn) {
+      // round the axis: the knob on the arm at the angle, the arrow the way + turns
+      const r = (off * Math.PI) / 180, { w, n } = handle.turn, arm = handleArm();
+      p = add(base, add(scale(w, arm * Math.cos(r)), scale(n, arm * Math.sin(r))));
+      tip = add(p, add(scale(w, -0.6 * arm * Math.sin(r)), scale(n, 0.6 * arm * Math.cos(r))));
+    }
     const [x, y, v1] = toCss(p);
-    const [ax, ay, v2] = toCss(add(p, scale(handle.shift, handleArm() / Math.hypot(...handle.shift))));
+    const [ax, ay, v2] = toCss(tip);
     const sec = activeSection();
     const cut = !!sec && cutDepth(sec, base) > 1e-3;   // its face is cut away
     return {
@@ -1281,6 +1375,59 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       drawLines(planeBuf, 8, PLANE_LINE);
     }
 
+    // construction planes: a translucent fill (not writing depth, so the part
+    // behind still shows and picks), then the outline, faint where the part
+    // hides it; selected in the selection colour, hovered brighter
+    if (planes.length && !thumbMode && !sk) {
+      const geo = planeGeometry();
+      const pv = multiply(proj, multiply(view, model));
+      const hp = hoverPlaneExt ?? (hoverPick && 'plane' in hoverPick && !drag ? hoverPick.plane : null);
+      const colOf = (g: typeof geo[number]) =>
+        (g.preview ? CPLANE_PREVIEW : selPlanes.includes(g.name) ? SELECT : g.name === hp ? CPLANE_HOVER : CPLANE);
+      gl!.useProgram(fillProg);
+      gl!.uniformMatrix4fv(fPV, false, pv);
+      gl!.bindBuffer(gl!.ARRAY_BUFFER, planeFillBuf);
+      gl!.enableVertexAttribArray(fPos);
+      gl!.vertexAttribPointer(fPos, 3, gl!.FLOAT, false, 0, 0);
+      gl!.enable(gl!.BLEND);
+      gl!.blendFuncSeparate(gl!.SRC_ALPHA, gl!.ONE_MINUS_SRC_ALPHA, gl!.ZERO, gl!.ONE);  // keep canvas alpha
+      gl!.depthMask(false);
+      geo.forEach((g, i) => {
+        gl!.uniform3fv(fColor, colOf(g));
+        gl!.uniform1f(fAlpha, g.preview || selPlanes.includes(g.name) || g.name === hp ? 0.2 : 0.11);
+        gl!.drawArrays(gl!.TRIANGLE_STRIP, i * 4, 4);
+      });
+      gl!.depthMask(true);
+      gl!.disable(gl!.BLEND);
+      gl!.useProgram(thickProg);
+      gl!.uniformMatrix4fv(tPV, false, pv);
+      gl!.uniform2f(tHalfPx, w / 2, h / 2);
+      gl!.uniform1f(tBias, 3e-5);
+      setSec(tSec, tSecOn, false);
+      gl!.bindBuffer(gl!.ARRAY_BUFFER, planeEdgeBuf);
+      gl!.enableVertexAttribArray(tPos);
+      gl!.enableVertexAttribArray(tOther);
+      gl!.enableVertexAttribArray(tSide);
+      gl!.vertexAttribPointer(tPos, 3, gl!.FLOAT, false, 28, 0);
+      gl!.vertexAttribPointer(tOther, 3, gl!.FLOAT, false, 28, 12);
+      gl!.vertexAttribPointer(tSide, 1, gl!.FLOAT, false, 28, 24);
+      for (const depth of [false, true]) {
+        if (depth) gl!.enable(gl!.DEPTH_TEST); else gl!.disable(gl!.DEPTH_TEST);
+        geo.forEach((g, i) => {
+          const col = colOf(g);
+          const strong = g.preview || selPlanes.includes(g.name) || g.name === hp;
+          gl!.uniform3fv(tColor, depth ? col : col.map((c) => c * 0.55) as Vec3);
+          gl!.uniform1f(tWidth, (strong ? 2.6 : 1.4) * dpr);
+          gl!.drawArrays(gl!.TRIANGLES, i * 24, 24);
+        });
+      }
+      gl!.enable(gl!.DEPTH_TEST);
+      gl!.disableVertexAttribArray(tOther);
+      gl!.disableVertexAttribArray(tSide);
+      gl!.useProgram(lineProg);
+      gl!.enableVertexAttribArray(lPos);
+    }
+
     // highlight pass: bright, drawn over the solid (depth off so it's visible)
     setSec(lSec, lSecOn, true);
     if (lineVertexCount && !thumbMode && !sk) {
@@ -1481,6 +1628,13 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     if (!thumbMode) {
       opts.onSectionHandle?.(placeSecHandle(cssProjector()));
       opts.onSectionMeasure?.(placedMeasure);
+      if (opts.onPlaneLabels) {
+        const toCss = cssProjector();
+        opts.onPlaneLabels(sk ? [] : planeGeometry().map((g) => {
+          const [x, y, vis] = toCss(labelCorner(g.corners));
+          return { name: g.name, x, y, visible: vis, preview: g.preview };
+        }));
+      }
     }
   }
 
@@ -1572,6 +1726,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     if (!drag || !handle || !base) return;
     const f = handle.at ? undefined : faceByIndex.get(handle.face);
     const toCss = cssProjector();
+    if (handle.turn) { turnTo(e, base, handle.turn, toCss); return; }
     const [x0, y0] = toCss(base);
     const [x1, y1] = toCss(add(base, dragShift(handle.shift, handle.dr)));
     const sx = x1 - x0, sy = y1 - y0;
@@ -1584,7 +1739,10 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       // a radius stays a radius: no smaller than one step
       const min = handle.min ?? (handle.dr && handle.value > 0 ? (handle.step ?? (e.shiftKey ? 0.1 : 0.5)) : null);
       if (min != null) value = Math.max(min, value);
-      const hit = f && snapToPlane(f, handle.shift, t, Math.hypot(sx, sy), faces, handle.moves);
+      const from = handle.at && handle.snapFaces
+        ? { index: -1, start: 0, count: 0, kind: 'plane', area: 0, center: add(base, scale(handle.shift, handle.value)),
+            normal: handle.shift } : f;
+      const hit = from && snapToPlane(from, handle.shift, t, Math.hypot(sx, sy), faces, handle.moves);
       if (hit) { value = snapToStep(handle.value + hit.t, 0.001); snap = hit.face; }
     }
     const was = drag.value;
@@ -1592,6 +1750,52 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     drag.t = value - handle.value;
     drag.snap = snap;
     if (handle.at && value !== was) opts.onHandleMove?.(value, false);
+    scheduleRender();
+  }
+
+  // a rotation handle: the pointer's turn about the axis since pointer-down
+  // (seen square-on where the view allows, else along the knob's way round),
+  // snapped to 1° (Shift 0.1°), kept within ±180°
+  function turnTo(e: PointerEvent, at: Vec3, turn: { w: Vec3; n: Vec3 },
+                  toCss: (p: Vec3) => [number, number, boolean]) {
+    if (!drag || !handle) return;
+    const rect = canvas.getBoundingClientRect();
+    const arm = handleArm();
+    const [cx, cy] = toCss(at);
+    const [wx, wy] = toCss(add(at, scale(turn.w, arm)));
+    const [nx, ny] = toCss(add(at, scale(turn.n, arm)));
+    const sw = [wx - cx, wy - cy], sn = [nx - cx, ny - cy];
+    const det = sw[0]! * sn[1]! - sw[1]! * sn[0]!;
+    const mx = e.clientX - drag.x0, my = e.clientY - drag.y0;
+    let da: number | null;
+    if (Math.abs(det) > 0.2 * Math.hypot(sw[0]!, sw[1]!) * Math.hypot(sn[0]!, sn[1]!)) {
+      const ang = (px: number, py: number) => {
+        const qx = px - rect.left - cx, qy = py - rect.top - cy;
+        const a = (qx * sn[1]! - qy * sn[0]!) / det, b = (sw[0]! * qy - sw[1]! * qx) / det;
+        return Math.atan2(b, a);
+      };
+      da = ang(e.clientX, e.clientY) - ang(drag.x0, drag.y0);
+      if (da > Math.PI) da -= 2 * Math.PI;
+      if (da < -Math.PI) da += 2 * Math.PI;
+    } else {
+      const r = (handle.value * Math.PI) / 180;
+      const tan = add(scale(turn.w, -arm * Math.sin(r)), scale(turn.n, arm * Math.cos(r)));
+      const k = add(at, add(scale(turn.w, arm * Math.cos(r)), scale(turn.n, arm * Math.sin(r))));
+      const [k0x, k0y] = toCss(k), [k1x, k1y] = toCss(add(k, tan));
+      da = dragAmount([mx, my], [k1x - k0x, k1y - k0y]);
+    }
+    if (da === null) return;
+    let value = handle.value;
+    if (Math.hypot(mx, my) >= 3) {
+      value = snapToStep(handle.value + (da * 180) / Math.PI, handle.step ?? (e.shiftKey ? 0.1 : 1));
+      value = ((value + 180) % 360 + 360) % 360 - 180;
+      if (value === -180) value = 180;
+    }
+    const was = drag.value;
+    drag.value = value;
+    drag.t = value - handle.value;
+    drag.snap = null;
+    if (value !== was) opts.onHandleMove?.(value, false);
     scheduleRender();
   }
 
@@ -1722,12 +1926,12 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       // on the section's cut: measure the wall there instead
       if (measureAt(hoverXY[0], hoverXY[1])) { setHoverPick(null); canvas.style.cursor = 'crosshair'; return; }
       const p = opts.onPick ? pickAt(hoverXY[0], hoverXY[1]) : null;
-      setHoverPick(p && ('edge' in p ? { edge: p.edge } : { face: p.face.index }));
-      canvas.style.cursor = p && 'edge' in p ? 'pointer' : baseCursor;
+      setHoverPick(p && ('edge' in p ? { edge: p.edge } : 'plane' in p ? { plane: p.plane } : { face: p.face.index }));
+      canvas.style.cursor = p && ('edge' in p || 'plane' in p) ? 'pointer' : baseCursor;
     });
   }
-  function setHoverPick(p: { edge: number } | { face: number } | null) {
-    const key = (x: typeof p) => (x ? ('edge' in x ? `e${x.edge}` : `f${x.face}`) : '');
+  function setHoverPick(p: { edge: number } | { face: number } | { plane: string } | null) {
+    const key = (x: typeof p) => (x ? ('edge' in x ? `e${x.edge}` : 'plane' in x ? `p${x.plane}` : `f${x.face}`) : '');
     if (key(p) === key(hoverPick)) return;
     hoverPick = p;
     scheduleRender();
@@ -1864,6 +2068,18 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     hoverEdge(index: number | null) {
       if (index === hoverEdgeExt) return;
       hoverEdgeExt = index;
+      scheduleRender();
+    },
+    setPlanes(list: PlaneShape[]) {
+      planes = list;
+      planeGeoStale = true;
+      if (hoverPick && 'plane' in hoverPick && !list.some((p) => p.name === (hoverPick as { plane: string }).plane)) hoverPick = null;
+      scheduleRender();
+    },
+    selectPlanes(names: string[]) { selPlanes = names; scheduleRender(); },
+    hoverPlane(name: string | null) {
+      if (name === hoverPlaneExt) return;
+      hoverPlaneExt = name;
       scheduleRender();
     },
     setPickFilter(f: PickFilter) {
@@ -2076,6 +2292,9 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       gl.deleteBuffer(outlineBuf);
       gl.deleteBuffer(capBuf);
       gl.deleteBuffer(planeBuf);
+      gl.deleteBuffer(planeFillBuf);
+      gl.deleteBuffer(planeEdgeBuf);
+      gl.deleteProgram(fillProg);
       gl.deleteBuffer(measBuf);
       gl.deleteProgram(prog);
       gl.deleteProgram(lineProg);

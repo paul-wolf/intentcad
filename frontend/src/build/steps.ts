@@ -9,7 +9,7 @@ import type { OpIcon } from './operations';
 
 const ICONS: Record<string, OpIcon> = {
   extrude: 'extrude', shell: 'shell', holes: 'hole', fillet: 'fillet', chamfer: 'chamfer',
-  auto_round: 'round', truss_windows: 'lighten',
+  auto_round: 'round', truss_windows: 'lighten', offset_plane: 'plane-offset', edge_plane: 'plane-edge',
 };
 
 /** The registry icon of a step's operation (none for a run of script). */
@@ -89,6 +89,9 @@ export function stepProblems(steps: Step[], res: RunResponse | null, failure: st
   for (const r of res?.edge_refs ?? []) {
     if (r.status === 'not_found') put(r.line, `The ${r.hint} wasn't found: reopen the step and pick the edge again`);
     else if (r.status === 'ambiguous') put(r.line, `The ${r.hint}: not certain, the nearest edge was used`);
+  }
+  for (const [name, p] of Object.entries(res?.planes ?? {})) {
+    if (p.status === 'ambiguous') put(p.line, `Plane '${name}': its face or edge is not certain, the nearest was used`);
   }
   for (const w of res?.organic?.warnings ?? []) put(w.line, w.message);
   return out;

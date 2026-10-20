@@ -83,6 +83,25 @@ class RunApiTests(TestCase):
                                 data=json.dumps({"code": cut, "document_id": str(doc.id), "sketches": {"Holes": bigger}}))
         self.assertAlmostEqual(resp.json()["metrics"]["volume"], 20 * 20 * 6 - 3.14159265 * 9 * 6, delta=0.5)
 
+    def test_add_and_rename_a_plane(self):
+        self.client.force_login(self.user)
+        code = 'P = dict(w=60)\npart = Box(P["w"], 40, 20)\n'
+        resp = self.client.post("/api/build/add_plane", content_type="application/json",
+                                data=json.dumps({"code": code, "op": "offset_plane", "name": "Mid",
+                                                 "base": "YZ", "distance": "w / 4"}))
+        self.assertEqual(resp.status_code, 200)
+        out = resp.json()["code"]
+        self.assertIn('PLANES["Mid"] = offset_plane("YZ", distance=P["w"] / 4)', out)
+        resp = self.client.post(RUN_URL, content_type="application/json", data=json.dumps({"code": out}))
+        self.assertEqual(resp.json()["planes"]["Mid"]["origin"], [15, 0, 0])
+        resp = self.client.post("/api/build/rename_plane", content_type="application/json",
+                                data=json.dumps({"code": out, "old": "Mid", "new": "Quarter"}))
+        self.assertIn('PLANES["Quarter"]', resp.json()["code"])
+        resp = self.client.post("/api/build/add_plane", content_type="application/json",
+                                data=json.dumps({"code": code, "op": "offset_plane", "name": "X",
+                                                 "base": "YZ", "distance": "nope"}))
+        self.assertEqual(resp.status_code, 422)
+
     def test_bad_script_returns_422(self):
         self.client.force_login(self.user)
         resp = self._post("part = Box(1, 1, 1")  # syntax error

@@ -183,6 +183,13 @@ def rank(part, ref: dict, pl: Plane | None = None) -> tuple[float, list[tuple]]:
     return size, scored
 
 
+def _moved_status(status: str, moved_by: float) -> str:
+    """same / moved / ambiguous, as a construction plane reports it."""
+    if status == "ambiguous":
+        return "ambiguous"
+    return "moved" if abs(moved_by or 0.0) > 1e-6 else "same"
+
+
 def bind(ns: dict, report: list | None = None) -> dict:
     """The script-namespace face_ref(): resolves against the script's `part`
     as it is when the line runs (or `on=`). Each lookup is recorded in
@@ -208,5 +215,7 @@ def bind(ns: dict, report: list | None = None) -> dict:
             raise FaceRefError(f"the {hint} this line refers to is no longer on the part "
                                "(the part changed too much for it to be found again): "
                                "reopen the step and pick the face again")
+        # what a construction plane on it reports (modeling/planes.py)
+        m["face"]._ref_status = _moved_status(m["status"], entry["moved_by"])
         return m["face"]
     return {"face_ref": face_ref}

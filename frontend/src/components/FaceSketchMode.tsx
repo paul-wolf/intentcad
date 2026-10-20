@@ -17,9 +17,9 @@ import type { FaceRange, Viewer } from '@/build/webglViewer';
 import { dot, len, scale, sub } from '@/build/dragHandle';
 import { planeBasis, sketchCamera, fitViewport, type PlaneBasis, type Rect } from '@/build/sketchPlane';
 import {
-  BASE_PLANES, boundPlane, extrudeDirectionText, extrudeGhost, extrudeSpan, faceLabel, faceSketchMenu, newFaceSketch,
-  newPlaneSketch, refreshOutline, sketchBasePlane, sketchBounds, sketchLoops, sketchSegments, type BasePlane,
-  type FaceSketchMenu, type SketchBindings,
+  BASE_PLANES, boundPlane, extrudeDirectionText, extrudeGhost, extrudeSpan, faceLabel, faceSketchMenu, newFaceSketch, partSide,
+  newConstructionSketch, newPlaneSketch, refreshOutline, sketchBasePlane, sketchBounds, sketchLoops, sketchSegments, type BasePlane,
+  type ConstructionPlane, type FaceSketchMenu, type SketchBindings,
 } from '@/build/faceSketch';
 import { resolveSketch } from '@/utils/resolveSketch';
 import type { Sketch } from '@/types/document';
@@ -83,7 +83,7 @@ function matchFace(sk: Sketch, faces: FaceRange[], bound?: SketchBindings): Face
 const PLANE_VIEW = 50;
 const initialFor = (sk: Sketch | undefined) => (w: number, h: number) => {
   let b = sk ? sketchBounds(sk) : null;
-  if (sk && sketchBasePlane(sk)) {
+  if (sk && (sketchBasePlane(sk) || sk.planeRef)) {
     const m = PLANE_VIEW;
     b = { min: { x: Math.min(b?.min.x ?? 0, -m), y: Math.min(b?.min.y ?? 0, -m) },
           max: { x: Math.max(b?.max.x ?? 0, m), y: Math.max(b?.max.y ?? 0, m) } };
@@ -101,6 +101,8 @@ export interface FaceSketchApi {
   enter(face: FaceRange): void;
   /** Sketch on a base plane through the origin: reopen its sketch, or start one. */
   enterPlane(which: BasePlane): void;
+  /** Sketch on the construction plane `name`: reopen its sketch, or start one. */
+  enterConstruction(name: string, plane: ConstructionPlane): void;
   /** Reopen a stored face sketch (double-click on the part). */
   open(sketchId: string): void;
   exit(): void;
@@ -164,7 +166,7 @@ export function useFaceSketch(
     // is now (the part may have changed since), and anything constrained or
     // dimensioned to it solved again
     const f = face >= 0 ? res?.faces?.find((x) => x.index === face) : undefined;
-    const plane = boundPlane(sk, res?.sketches) ?? sk.plane;
+    const plane = boundPlane(sk, res?.sketches, res?.planes) ?? sk.plane;
     const fresh = f && sk.face ? refreshOutline(sk, f, res?.edges ?? [], plane) : null;
     if (fresh) {
       const r = resolveSketch(fresh, { ...useDocumentStore.getState().document.parameters, ...(vars ?? {}) });
@@ -189,7 +191,8 @@ export function useFaceSketch(
     pendingExtrude.current = null;
     const base = sketchBasePlane(sk);
     // drawn on a face: on that face where the last build found it
-    setSession({ sketchId: sk.id, label: base ? BASE_PLANES[base].name : faceLabel(plane.normal), face,
+    const label = sk.planeRef ? `plane '${sk.planeRef}'` : base ? BASE_PLANES[base].name : faceLabel(plane.normal);
+    setSession({ sketchId: sk.id, label, face,
                  plane: planeBasis(plane), datum: !sk.face, prevActive, phase: 'enter' });
   }, [resRef]);
 
@@ -245,6 +248,21 @@ export function useFaceSketch(
       let name = base;
       for (let i = 2; doc.sketches.some((s) => s.name === name); i++) name = `${base} ${i}`;
       sk = newPlaneSketch(name, which);
+      const added = sk;
+      useDocumentStore.setState((s) => ({ document: { ...s.document, sketches: [...s.document.sketches, added] } }));
+    }
+    start(sk, -1);
+  }, [start]);
+
+  const enterConstruction = useCallback((name: string, plane: ConstructionPlane) => {
+    if (sessionRef.current) return;
+    const doc = useDocumentStore.getState().document;
+    let sk = doc.sketches.find((s) => s.planeRef === name);
+    if (!sk) {
+      const base = `Sketch on ${name}`;
+      let label = base;
+      for (let i = 2; doc.sketches.some((s) => s.name === label); i++) label = `${base} ${i}`;
+      sk = newConstructionSketch(label, name, plane);
       const added = sk;
       useDocumentStore.setState((s) => ({ document: { ...s.document, sketches: [...s.document.sketches, added] } }));
     }
@@ -381,7 +399,7 @@ export function useFaceSketch(
     viewerRef.current?.setSketchLines(
       useDocumentStore.getState().document.sketches
         .filter((s) => s.plane && s.visible !== false)
-        .map((s) => ({ id: s.id, name: s.name, segments: sketchSegments(s, boundPlane(s, bound)) })),
+        .map((s) => ({ id: s.id, name: s.name, segments: sketchSegments(s, boundPlane(s, bound, resRef.current?.planes)) })),
     );
   }, [viewerRef, resRef]);
   useEffect(() => { pushLines(); }, [sketches, pushLines]);
@@ -432,6 +450,9 @@ export function useFaceSketch(
     previewing.current = true;
     v.setExtrudePreview({ ...g, color: GHOST[ex.op] });
   }, [extruding, ex, current, phase, viewerRef, resRef]);
+  // where the part is from the plane: the extrude's words for a tilted plane
+  const partM = session && hasPart() ? resRef.current?.metrics : undefined;
+  const partAt = session && partM ? partSide(session.plane.origin, session.plane.normal, partM.bbox_min, partM.bbox_max) : undefined;
 
   const fade = `opacity ${FADE_MS}ms ease`;
   const btn: CSSProperties = {
@@ -495,7 +516,7 @@ export function useFaceSketch(
                       onClick={exit}>Done</button>
               {extruding && (
                 <ExtrudeDialog value={ex} onChange={setEx} shapes={shapes.loops.length} open={shapes.open} datum={session.datum}
-                               direction={extrudeDirectionText(shapeOf(ex, session.datum), session.plane.normal)}
+                               direction={extrudeDirectionText(shapeOf(ex, session.datum), session.plane.normal, partAt)}
                                onApply={applyExtrude} onCancel={() => setExtruding(false)} />
               )}
             </div>
@@ -512,6 +533,7 @@ export function useFaceSketch(
     menuOpen: !!menu,
     enter,
     enterPlane,
+    enterConstruction,
     open,
     exit,
     canvasStyle: glRect
