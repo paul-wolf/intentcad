@@ -186,7 +186,7 @@ def rank(part, ref: dict, pl: Plane | None = None) -> tuple[float, list[tuple]]:
 def bind(ns: dict, report: list | None = None) -> dict:
     """The script-namespace face_ref(): resolves against the script's `part`
     as it is when the line runs (or `on=`). Each lookup is recorded in
-    `report` as {"hint", "status", "moved_by"}; a face that isn't there any
+    `report` as {"hint", "status", "moved_by", "line"}; a face that isn't there any
     more raises, naming it."""
     def face_ref(ref: dict, on=None) -> Face:
         """The face of the part that `ref` describes (see modeling/face_ref.py)."""
@@ -198,8 +198,10 @@ def bind(ns: dict, report: list | None = None) -> dict:
             m = find(part, ref)
         except (KeyError, TypeError, ValueError, IndexError) as exc:
             raise FaceRefError(f"face_ref: can't read the reference to the {hint} ({exc})") from exc
+        from modeling.edge_ref import _script_line
         entry = {"hint": hint, "status": m["status"],
-                 "moved_by": round(float(m["along"]), 6) if m["along"] is not None else 0.0}
+                 "moved_by": round(float(m["along"]), 6) if m["along"] is not None else 0.0,
+                 "line": _script_line()}
         if report is not None:
             report.append(entry)
         if m["face"] is None:

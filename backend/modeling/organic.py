@@ -952,11 +952,14 @@ def truss_windows(part, face, rim, rib, anchors, corner_r, keep_clear=3.0, patte
 def bind(sink, min_wall) -> dict:
     """The script-namespace versions: every call reports to `sink`, and
     min_wall comes from min_wall() (the script's P) unless passed."""
+    from modeling.edge_ref import _script_line
+
     def wrap(fn):
         def call(*args, **kwargs):
             kwargs.pop("report", None)
             kwargs.setdefault("min_wall", min_wall())
-            return fn(*args, report=lambda r: sink({"op": fn.__name__, **r}), **kwargs)
+            line = _script_line()
+            return fn(*args, report=lambda r: sink({"op": fn.__name__, "line": line, **r}), **kwargs)
         call.__name__ = fn.__name__
         call.__doc__ = fn.__doc__
         return call
@@ -981,5 +984,5 @@ def merge(events: list[dict]) -> dict:
             key = (w["kind"], w["message"])
             if key not in seen:
                 seen.add(key)
-                out["warnings"].append(w)
+                out["warnings"].append({**w, "line": e.get("line")})
     return out

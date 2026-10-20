@@ -249,6 +249,7 @@ class OrganicWarning(Schema):
     kind: str                       # 'thin' | 'overhang' | 'blend'
     message: str
     at: list[float] = []            # where, when it's a place
+    line: int | None = None         # the script line of the call that warned
 
 
 class OrganicDrop(Schema):
@@ -298,6 +299,14 @@ class FaceRefReport(Schema):
     line: int | None = None         # edge_ref: the script line that looked it up
 
 
+class KeptFaces(Schema):
+    """Item `item` of the keep list of the auto_round() on `line`: the faces
+    it named (face refs), as the part was when the line ran."""
+    line: int | None = None
+    item: int
+    faces: list[dict] = []
+
+
 class RunResponse(Schema):
     mesh: MeshOut
     faces: list[RunFace] = []
@@ -311,6 +320,7 @@ class RunResponse(Schema):
     sketches: dict[str, SketchBinding] = {}     # name -> where each face sketch went
     face_refs: list[FaceRefReport] = []         # each face_ref() lookup, in order
     edge_refs: list[FaceRefReport] = []         # each edge_ref() lookup (moved_by: mm), in order
+    kept: list[KeptFaces] = []                  # the faces each auto_round keep item is
 
 
 class ExportRequest(Schema):
@@ -343,6 +353,7 @@ class AddExtrudeRequest(Schema):
     flip: bool = False              # reverse the direction
     datum: bool = False             # sketched on a base plane, not a part face
     both: bool = False              # the depth to each side of a base plane
+    line: int | None = None         # rewrite the extrude line there instead of appending
 
 
 class AddExtrudeResponse(Schema):
@@ -353,15 +364,67 @@ class AddExtrudeResponse(Schema):
 class OpAtRequest(Schema):
     code: str
     line: int                       # any script line the operation spans (1-based)
+    datum: list[str] = []           # the sketches on a base plane (an extrude's sign depends on it)
 
 
 class OpAtResponse(Schema):
-    """A Shell/Hole/Fillet/Chamfer line read back for its dialog (paramedit.op_at)."""
-    op: str                         # 'shell' | 'holes' | 'fillet' | 'chamfer'
+    """An operation line read back for its dialog (paramedit.op_at)."""
+    op: str                         # extrude | shell | holes | fillet | chamfer | auto_round | truss_windows
     line: int
     end_line: int
     args: dict                      # its values, P keys resolved
     params: dict[str, str] = {}     # argument -> the P key holding it
+    exprs: dict[str, str] = {}      # argument -> its source, when written as an expression
+
+
+class EditArgsRequest(Schema):
+    code: str
+    line: int
+    op: str                         # 'auto_round' | 'truss_windows'
+    values: dict = {}               # argument -> its new value
+    keep: list[dict] | None = None  # auto_round: the kept faces, {"src"} or {"ref"} each; None: as they are
+    make_param: list[str] = []      # literal arguments to move into P
+
+
+class EditArgsResponse(Schema):
+    code: str
+    params: list[str] = []          # the P keys it added
+
+
+class StepsRequest(Schema):
+    code: str
+    datum: list[str] = []           # the sketches on a base plane
+    points: dict[str, int] = {}     # sketch -> its number of hole points
+
+
+class Step(Schema):
+    """A row of the steps list (paramedit.steps)."""
+    kind: str                       # 'op' | 'script' (a run of other lines)
+    line: int
+    end_line: int
+    op: str | None = None           # extrude | shell | ... ('script': a switched-off non-operation)
+    variant: str | None = None      # an extrude's cut | join | new
+    summary: str | None = None
+    reopenable: bool = False
+    off: bool = False               # switched off: commented out behind "# off: "
+    count: int = 0                  # 'script': its lines
+    sketch: str | None = None       # what it works on, to show
+    faces: list[dict] = []
+    edges: list[dict] = []
+
+
+class StepsResponse(Schema):
+    steps: list[Step]
+
+
+class StepLineRequest(Schema):
+    code: str
+    line: int                       # any line of the step
+    off: bool = True                # suppress: off, or back on
+
+
+class CodeResponse(Schema):
+    code: str
 
 
 class AddShellRequest(Schema):

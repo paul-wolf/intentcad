@@ -334,9 +334,10 @@ export const buildApi = {
   setParams(code: string, params: Record<string, number>): Promise<{ code: string }> {
     return request('/build/set_params', { method: 'POST', body: JSON.stringify({ code, params }) });
   },
-  // append an extrude of a face sketch to the script (its depth becomes a new P key)
-  addExtrude(payload: { code: string; sketch: string; op: 'cut' | 'join' | 'new'; depth: number; through: boolean; flip: boolean;
-                        datum?: boolean; both?: boolean }):
+  /** Append an extrude of a face sketch (its depth a new P key), or rewrite
+   *  the one on `line`: an op change rewrites the operator and sign. */
+  addExtrude(payload: { code: string; sketch: string; op: ExtrudeOp; depth: number; through: boolean; flip: boolean;
+                        datum?: boolean; both?: boolean; line?: number | null }):
     Promise<{ code: string; param: string | null }> {
     return request('/build/add_extrude', { method: 'POST', body: JSON.stringify(payload) });
   },
@@ -360,9 +361,28 @@ export const buildApi = {
   holePresets(): Promise<HolePresets> {
     return request('/build/hole_presets');
   },
-  /** The shell()/holes() line spanning `line`, read back for its dialog. */
-  opAt(code: string, line: number): Promise<OpAt> {
-    return request('/build/op_at', { method: 'POST', body: JSON.stringify({ code, line }) });
+  /** The operation line spanning `line`, read back for its dialog. `datum`: the
+   *  sketches on a base plane (an extrude's sign depends on it). */
+  opAt(code: string, line: number, datum: string[] = []): Promise<OpAt> {
+    return request('/build/op_at', { method: 'POST', body: JSON.stringify({ code, line, datum }) });
+  },
+  /** Rewrite an auto_round()/truss_windows() line: P refs update P, literals in
+   *  place, `make_param` literals move into P; unknown arguments stay. */
+  editArgs(payload: { code: string; line: number; op: ArgOpKind; values?: Record<string, unknown>;
+                      keep?: KeepItem[] | null; make_param?: string[] }): Promise<{ code: string; params: string[] }> {
+    return request('/build/edit_args', { method: 'POST', body: JSON.stringify(payload) });
+  },
+  /** The steps list: every operation in order, summed up. */
+  steps(code: string, datum: string[] = [], points: Record<string, number> = {}): Promise<{ steps: Step[] }> {
+    return request('/build/steps', { method: 'POST', body: JSON.stringify({ code, datum, points }) });
+  },
+  /** Switch the step on `line` off ("# off: " in front of it) or back on. */
+  suppressStep(code: string, line: number, off: boolean): Promise<{ code: string }> {
+    return request('/build/suppress_step', { method: 'POST', body: JSON.stringify({ code, line, off }) });
+  },
+  /** Delete the step on `line`, and the P keys only it used. */
+  deleteStep(code: string, line: number): Promise<{ code: string }> {
+    return request('/build/delete_step', { method: 'POST', body: JSON.stringify({ code, line }) });
   },
   sensitivity(code: string, documentId = '', sketches: Record<string, unknown> = {}): Promise<{ params: Record<string, DimInfo> }> {
     return request('/build/sensitivity', { method: 'POST', body: JSON.stringify({ code, document_id: documentId, sketches }) });
@@ -492,14 +512,44 @@ export interface FaceRefReport {
   length?: number | null; midpoint?: [number, number, number] | null; radius?: number | null; line?: number | null;
 }
 
-/** A Shell/Hole/Fillet/Chamfer line read back (backend paramedit.op_at). Fillet and
- *  chamfer: args {edges: EdgeRefSpec[], size}, params {size: key}. */
+/** An operation line read back (backend paramedit.op_at). Fillet and chamfer:
+ *  args {edges: EdgeRefSpec[], size}, params {size: key}. Extrude: args
+ *  {sketch, op, depth, through, flip, both, datum}, params {depth: key}. */
 export interface OpAt {
-  op: 'shell' | 'holes' | EdgeOpKind; line: number; end_line: number;
+  op: OpKind; line: number; end_line: number;
   args: Record<string, unknown>;
   /** argument -> the P key holding it */
   params: Record<string, string>;
+  /** argument -> its source, when written as an expression (shown, not edited) */
+  exprs?: Record<string, string>;
 }
+
+export type ExtrudeOp = 'cut' | 'join' | 'new';
+export type ArgOpKind = 'auto_round' | 'truss_windows';
+export type OpKind = 'extrude' | 'shell' | 'holes' | EdgeOpKind | ArgOpKind;
+
+/** An auto_round keep item: as written (`src`), and the face_ref inside when it is one. */
+export interface KeepItem { src?: string; ref?: FaceRefSpec | null }
+
+/** A row of the steps list (backend paramedit.steps). */
+export interface Step {
+  kind: 'op' | 'script';
+  line: number; end_line: number;
+  /** 'script' on an op row: a switched-off line that isn't an operation */
+  op?: OpKind | 'script' | null;
+  variant?: ExtrudeOp | null;
+  summary?: string | null;
+  reopenable: boolean;
+  off: boolean;
+  /** a script run: its statements */
+  count: number;
+  sketch?: string | null;
+  faces: FaceRefSpec[];
+  edges: EdgeRefSpec[];
+}
+
+/** An auto_round keep item's faces, as the part was when its line ran. */
+export interface KeptFaces { line?: number | null; item: number; faces: FaceRefSpec[] }
 
 export type EdgeOpKind = 'fillet' | 'chamfer';
 
@@ -570,6 +620,8 @@ export interface RunResponse {
   face_refs?: FaceRefReport[];
   /** each edge_ref() lookup (moved_by: mm from where it was) */
   edge_refs?: FaceRefReport[];
+  /** auto_round keep items, each item's faces */
+  kept?: KeptFaces[];
 }
 
 /** Mirrors backend modeling.schemas.AutoRoundReport. */
@@ -596,7 +648,7 @@ export interface OrganicReport {
   /** Volume truss_windows took away, % (null when it wasn't called). */
   removed_pct: number | null;
   /** Printability ('thin' | 'overhang') and joints left less blended ('blend'). */
-  warnings: { kind: string; message: string; at: number[] }[];
+  warnings: { kind: string; message: string; at: number[]; line?: number | null }[];
 }
 
 // ── chat agent (instruction → feature-tree operations) ──

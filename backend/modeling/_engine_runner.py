@@ -399,8 +399,11 @@ def _run(code: str, export: list | None = None,
 
     rounds: list[dict] = []
 
+    kept: list[dict] = []
+
     def auto_round_reported(part, *args, **kwargs):
         kwargs.pop("report", None)
+        _report_kept(part, args[2] if len(args) > 2 else kwargs.get("keep"), kept)
         return auto_round(part, *args, report=rounds.append, **kwargs)
 
     ns["auto_round"] = auto_round_reported
@@ -645,6 +648,8 @@ def _run(code: str, export: list | None = None,
     }
     if rounds:
         result["auto_round"] = _merge_rounds(rounds)
+    if kept:
+        result["kept"] = kept
     if organic_events:
         result["organic"] = organic.merge(organic_events)
     if sketch_report:
@@ -658,6 +663,26 @@ def _run(code: str, export: list | None = None,
     if fix:
         result["fix"] = fix           # ...and here's the size that would have fit
     return result
+
+
+def _report_kept(part, keep, out: list) -> None:
+    """Which faces each item of an auto_round keep list is (as face refs),
+    for its dialog to show: {"line", "item", "faces"} each."""
+    from modeling.auto_round import _keep_faces
+    from modeling.edge_ref import _script_line
+    from modeling.face_ref import describe
+
+    line = _script_line()
+    try:
+        items = list(keep or [])
+    except TypeError:
+        return
+    for i, item in enumerate(items):
+        try:
+            faces = [describe(f) for f in _keep_faces(part, [item])]
+        except Exception:      # a selector that doesn't resolve: auto_round says so itself
+            faces = []
+        out.append({"line": line, "item": i, "faces": faces})
 
 
 def _merge_rounds(rounds: list[dict]) -> dict:

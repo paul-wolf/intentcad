@@ -3,7 +3,7 @@ import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
 import {
   api, buildApi, errorText, ApiError, type RunResponse, type RunEdge, type FaceRefReport, type UsageResponse, type DimInfo, type ModelInfo, type ModelsResponse, type SizeFix,
-  type FaceRefSpec, type HolePresets, type EdgeOpKind, type EdgeRefSpec,
+  type FaceRefSpec, type HolePresets, type EdgeOpKind, type EdgeRefSpec, type ExtrudeOp, type KeepItem, type Step,
 } from '@/api/client';
 import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, persistSketches, getBackendId } from '@/api/autoSave';
 import { DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
@@ -29,12 +29,15 @@ import { PartVersionsPanel } from './PartVersionsPanel';
 import { PartHelpModal } from './PartHelpModal';
 import { useFaceSketch, type ExtrudeOptions } from './FaceSketchMode';
 import {
-  ShellDialog, HoleDialog, EdgeOpDialog, useOpPreview, refOf, faceOfRef, sameRef, OP_LINE, holesPayload, holeValuesOf,
-  newHoleValues, placeKey, toggleEdge, addEdges, type ShellValues, type HoleValues, type HolePlace, type EdgeOpValues,
+  ShellDialog, HoleDialog, EdgeOpDialog, ExtrudeDialog, RoundDialog, TrussDialog, useOpPreview, refOf, faceOfRef, sameRef,
+  holesPayload, holeValuesOf, newHoleValues, placeKey, toggleEdge, addEdges, argOpPayload, type ShellValues, type HoleValues,
+  type HolePlace, type EdgeOpValues, type ExtrudeValues, type ArgOpValues,
 } from './OpDialogs';
+import { StepsList } from './StepsList';
+import { messageLine, reopenableAt, stepIcon, stepInputs, stepProblems, suppressedNote } from '@/build/steps';
 import {
-  BASE_PLANES, faceLabel, findFaceSketch, referencedProfiles, referencedSketchNames, sketchBindNotes, sketchHolePoints,
-  type BasePlane, type SketchBindings,
+  BASE_PLANES, boundPlane, extrudeDirectionText, faceLabel, findFaceSketch, referencedProfiles, referencedSketchNames,
+  sketchBasePlane, sketchBindNotes, sketchHolePoints, sketchSegments, type BasePlane, type SketchBindings,
 } from '@/build/faceSketch';
 import {
   buildFollowingSketches, followPartSketches, resolvePartSketches, sketchParamWarning, sketchVars,
@@ -76,7 +79,13 @@ const humanBytes = (b: number): string =>
 
 const NO_CHAT: ChatMessage[] = [];
 /** What the code view's Edit button calls a line's dialog. */
-const OP_NAMES = { shell: 'Shell', holes: 'Hole', fillet: 'Fillet', chamfer: 'Chamfer' } as const;
+const OP_NAMES = {
+  shell: 'Shell', holes: 'Hole', fillet: 'Fillet', chamfer: 'Chamfer', extrude: 'Extrude', auto_round: 'Round',
+  truss_windows: 'Lighten',
+} as const;
+/** A reopened extrude line: its values, the P key its depth is in, and
+ *  whether it makes the part (New body, nothing else). */
+interface ExtrudeEdit { line: number; v: ExtrudeValues; param: string | null; firstBody: boolean }
 // the drag preview can't show P moving a face sketch: said once a session
 let sketchDragNoted = false;
 
@@ -952,6 +961,19 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // depth a new parameter) and build. Otherwise rebuild if the script already
   // extrudes this sketch — its shapes are part of the build's inputs.
   const sketchDone = async (name: string, ex: ExtrudeOptions | null) => {
+    const back = sketchBackRef.current;
+    if (back) {
+      // "Edit sketch" from a reopened extrude: rebuild with the new shapes, then
+      // the panel again (with what the sketcher's own extrude panel set, if used)
+      sketchBackRef.current = null;
+      if (code.trim()) await build(code, `Edit sketch ${name}`);
+      const v = ex ? {
+        ...back.v, depth: ex.depth > 0 ? ex.depth : back.v.depth, through: ex.through, flip: ex.flip, both: !!ex.both,
+        op: back.firstBody ? 'new' as const : ex.op === 'new' ? back.v.op : ex.op,
+      } : back.v;
+      setExtrudeOp({ ...back, v });
+      return;
+    }
     if (!ex) {
       if (referencedProfiles(code, useDocumentStore.getState().document.sketches)[name]) await build(code);
       return;
@@ -967,6 +989,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       setMessage(errorText(err));
     }
   };
+  // a reopened extrude whose sketch is being edited: its panel comes back on Done
+  const sketchBackRef = useRef<ExtrudeEdit | null>(null);
   const sketchDoneRef = useRef(sketchDone);
   sketchDoneRef.current = sketchDone;
 
@@ -994,6 +1018,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     setShellOp(null);
     setHoleOp(null);
     setEdgeOp(null);
+    setExtrudeOp(null);
+    setArgOp(null);
     viewerRef.current?.hoverFace(null);
     viewerRef.current?.hoverEdge(null);
     applySelection([]);
@@ -1036,6 +1062,25 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   };
   const docSketches = useDocumentStore((s) => s.document.sketches);
   const holeSketches = docSketches.filter((sk) => sk.plane && sketchHolePoints(sk).length > 0);
+
+  // The steps list: the script's operations, as the backend reads them (the
+  // sketches on a base plane, and each one's hole points, tell it how)
+  const stepInKey = JSON.stringify(stepInputs(docSketches.map((sk) => ({
+    name: sk.name, basePlane: !!sketchBasePlane(sk), points: sketchHolePoints(sk).length,
+  }))));
+  const stepIn = useMemo(() => JSON.parse(stepInKey) as ReturnType<typeof stepInputs>, [stepInKey]);
+  const [steps, setSteps] = useState<Step[]>([]);
+  useEffect(() => {
+    const ac = new AbortController();
+    const t = window.setTimeout(() => {
+      buildApi.steps(code, stepIn.datum, stepIn.points)
+        .then((r) => { if (!ac.signal.aborted) setSteps(r.steps); })
+        .catch(() => { if (!ac.signal.aborted) setSteps([]); });   // a script that doesn't parse: none
+    }, 250);
+    return () => { ac.abort(); window.clearTimeout(t); };
+  }, [code, stepIn]);
+  const [stepSel, setStepSel] = useState<number | null>(null);
+  const [stepBusy, setStepBusy] = useState(false);
   const holePlaces: HolePlace[] = [
     ...holeSketches.map((sk) => {
       const n = sketchHolePoints(sk).length;
@@ -1135,6 +1180,93 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   };
   setEdgeSizeRef.current = (size: number) => setEdgeOp((o) => o && ({ ...o, v: { ...o.v, size } }));
 
+  // Extrude, reopened: the options panel on its line (the sketch isn't
+  // entered: "Edit sketch" does that, and Done comes back here)
+  const [extrudeOp, setExtrudeOp] = useState<ExtrudeEdit | null>(null);
+  const extrudeKey = extrudeOp ? JSON.stringify({ line: extrudeOp.line, v: extrudeOp.v }) : '';
+  const extrudeLine = (o: ExtrudeEdit) => buildApi.addExtrude({
+    code: codeRef.current, sketch: o.v.sketch, op: o.v.op, depth: o.v.depth, through: o.v.through, flip: o.v.flip,
+    both: o.v.both, datum: o.v.datum, line: o.line,
+  });
+  const extrudeOk = (o: ExtrudeEdit) => (o.v.op === 'cut' && o.v.through) || o.v.depth > 0;
+  const extrudePreview = useOpPreview(
+    viewerRef,
+    extrudeOp && extrudeOk(extrudeOp) ? () => extrudeLine(extrudeOp).then((r) => r.code) : null,
+    extrudeKey,
+    (src, signal) => buildApi.run(src, signal, getBackendId() ?? '', buildInputs(src).sketches),
+  );
+  const extrudeSketch = extrudeOp ? docSketches.find((sk) => sk.name === extrudeOp.v.sketch) ?? null : null;
+  const extrudeNormal = (extrudeOp && (resRef.current?.sketches?.[extrudeOp.v.sketch]?.plane?.normal
+    ?? extrudeSketch?.plane?.normal)) as Vec3 | undefined;
+  const applyExtrude = async () => {
+    const o = extrudeOp;
+    if (!o || !extrudeOk(o)) return;
+    try {
+      const src = extrudePreview.built(extrudeKey) ?? (await extrudeLine(o)).code;
+      closeOp();
+      setCode(src);
+      const out = await build(src, `Edit extrude ${o.v.sketch}`);
+      if (out.kind === 'ok') saveDraft(src);
+    } catch (err) {
+      setNotice(`Extrude: ${errorText(err)}`);
+    }
+  };
+  const editExtrudeSketch = () => {
+    const o = extrudeOp;
+    if (!o) return;
+    if (!extrudeSketch) {
+      setNotice(`There is no sketch named “${o.v.sketch}” to edit`);
+      window.setTimeout(() => setNotice(''), 6000);
+      return;
+    }
+    sketchBackRef.current = o;
+    closeOp();
+    faceSketchRef.current.open(extrudeSketch.id);
+  };
+
+  // Round (auto_round) and Lighten (truss_windows), reopened: their arguments
+  // in a dialog; OK rewrites just those (and the P keys they're in)
+  const [argOp, setArgOp] = useState<{ line: number; end: number; v: ArgOpValues; orig: ArgOpValues } | null>(null);
+  const argKey = argOp ? JSON.stringify({ line: argOp.line, v: argOp.v }) : '';
+  const argLine = (o: { line: number; v: ArgOpValues; orig: ArgOpValues }) =>
+    buildApi.editArgs({ code: codeRef.current, line: o.line, op: o.v.op, ...argOpPayload(o.v, o.orig) });
+  const argPreview = useOpPreview(
+    viewerRef,
+    argOp ? () => argLine(argOp).then((r) => r.code) : null,
+    argKey,
+    (src, signal) => buildApi.run(src, signal, getBackendId() ?? '', buildInputs(src).sketches),
+  );
+  const applyArgOp = async () => {
+    const o = argOp;
+    if (!o) return;
+    const name = o.v.op === 'auto_round' ? 'round' : 'lighten';
+    try {
+      const src = argPreview.built(argKey) ?? (await argLine(o)).code;
+      closeOp();
+      setCode(src);
+      const out = await build(src, `Edit ${name}`);
+      if (out.kind === 'ok') saveDraft(src);
+    } catch (err) {
+      setNotice(`${name === 'round' ? 'Round' : 'Lighten'}: ${errorText(err)}`);
+    }
+  };
+  // a kept face's faces on the part as shown: the build's report for that
+  // item of the line, or where its face_ref is now (one added in the dialog)
+  const keepFaces = (k: KeepItem & { item?: number }): number[] => {
+    const res = resRef.current;
+    if (!res || !argOp) return [];
+    const rep = k.item != null
+      ? res.kept?.find((x) => x.line != null && x.line >= argOp.line && x.line <= argOp.end && x.item === k.item) : undefined;
+    const refs = rep ? rep.faces : k.ref ? [k.ref] : [];
+    return refs.map((r) => faceOfRef(res.faces, r)?.index).filter((i): i is number => i != null);
+  };
+  // the face selected in the view, offered to the Round dialog's kept list
+  const roundPick = (() => {
+    if (argOp?.v.op !== 'auto_round' || sel.length !== 1) return null;
+    const f = resRef.current?.faces.find((x) => x.index === sel[0]);
+    return f ? refOf(f) : null;
+  })();
+
   // while the Shell dialog is open, clicking a face opens or closes it, and
   // the faces it opens show as selected; in the Hole dialog it says where the
   // holes go
@@ -1193,22 +1325,41 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     viewerRef.current?.selectFaces([]);
     viewerRef.current?.selectEdges(idx);
   }, [edgeKey]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const opOpen = !!shellOp || !!holeOp || !!edgeOp;
-  // Shell and Hole work on faces: while one is open a click picks faces only;
-  // Fillet and Chamfer, edges only
-  const viewFilter: PickFilter = shellOp || holeOp ? 'faces' : edgeOp ? 'edges' : pickFilter;
+  const opOpen = !!shellOp || !!holeOp || !!edgeOp || !!extrudeOp || !!argOp;
+  // Shell, Hole and Round work on faces: while one is open a click picks faces
+  // only; Fillet and Chamfer, edges only
+  const viewFilter: PickFilter = shellOp || holeOp || argOp?.v.op === 'auto_round' ? 'faces' : edgeOp ? 'edges'
+    : pickFilter;
   useEffect(() => { viewerRef.current?.setPickFilter(viewFilter); }, [viewFilter]);
   // the dialogs sit at the top left of the view: draw the part beside them
-  const opWidth = holeOp ? 300 : shellOp || edgeOp ? 270 : 0;
+  const opWidth = holeOp || argOp ? 300 : shellOp || edgeOp || extrudeOp ? 270 : 0;
   useEffect(() => {
     viewerRef.current?.setInset(opWidth ? opWidth + 24 : 0);
   }, [opWidth]);
 
-  // Reopen a Shell/Hole line: the dialog with the line's values.
+  // Reopen an operation's line: its dialog with the line's values.
   const editOp = async (line: number) => {
     try {
-      const op = await buildApi.opAt(codeRef.current, line);
-      if (op.op === 'shell') {
+      const op = await buildApi.opAt(codeRef.current, line, stepIn.datum);
+      if (opOpen) closeOp();
+      if (op.op === 'extrude') {
+        const a = op.args as { sketch: string; op: ExtrudeOp; depth: number | null; through: boolean; flip: boolean;
+                               both: boolean; datum: boolean };
+        setExtrudeOp({
+          line: op.line, firstBody: a.op === 'new', param: op.params.depth ?? null,
+          v: { sketch: a.sketch, op: a.op, depth: a.depth ?? 5, through: a.through, flip: a.flip, both: a.both, datum: a.datum },
+        });
+      } else if (op.op === 'auto_round' || op.op === 'truss_windows') {
+        const { keep, ...values } = op.args as Record<string, number | boolean | string> & { keep?: unknown };
+        const v: ArgOpValues = {
+          op: op.op, values,
+          keep: op.op === 'auto_round' && Array.isArray(keep)
+            ? (keep as KeepItem[]).map((k, item) => ({ src: k.src, ref: k.ref ?? undefined, item })) : null,
+          params: op.params, exprs: op.exprs ?? {}, make: [],
+        };
+        if (op.op === 'auto_round') applySelection([]);
+        setArgOp({ line: op.line, end: op.end_line, v, orig: v });
+      } else if (op.op === 'shell') {
         const a = op.args as { remove?: FaceRefSpec[]; thickness?: number; inside?: boolean };
         setShellOp({ line: op.line, v: { remove: a.remove ?? [], thickness: Number(a.thickness ?? 2), inside: a.inside !== false } });
       } else if (op.op === 'holes') {
@@ -1241,15 +1392,62 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   };
   // the script line the caret is on, when it's an operation the dialogs reopen
   const [caretLine, setCaretLine] = useState(0);
-  const caretOp = (() => {
-    const l = code.split('\n')[caretLine - 1];
-    const m = l ? OP_LINE.exec(l) : null;
-    return m ? (m[1] as 'shell' | 'holes' | EdgeOpKind) : null;
-  })();
+  const caretStep = reopenableAt(steps, caretLine);
+  const caretOp = caretStep?.op && caretStep.op !== 'script' ? caretStep.op : null;
   const trackCaret = () => {
     const ta = taRef.current;
     if (ta) setCaretLine(ta.value.slice(0, ta.selectionStart).split('\n').length);
   };
+
+  // a step clicked in the list: its lines selected in the code, and its
+  // faces, edges or sketch lit in the view
+  const selectStep = (st: Step) => {
+    setStepSel(st.line);
+    const ta = taRef.current;
+    if (ta) {
+      const lines = ta.value.split('\n');
+      const at = (n: number) => lines.slice(0, n).reduce((k, l) => k + l.length + 1, 0);
+      const start = at(st.line - 1);
+      ta.setSelectionRange(start, Math.max(start, at(st.end_line) - 1));
+      ta.scrollTop = Math.max(0, (st.line - 1) * 19.5 - ta.clientHeight / 3);
+      syncScroll();
+      setCaretLine(st.line);
+    }
+    const res = resRef.current;
+    if (opOpen || !res) return;   // an open dialog has the selection
+    const faces = st.faces.map((r) => faceOfRef(res.faces, r)?.index).filter((i): i is number => i != null);
+    const edges = st.edges.map((r) => edgeOfRef(res.edges, r)).filter((i): i is number => i != null);
+    applySelection(faces, edges);
+    if (!faces.length && !edges.length && st.sketch) {
+      const sk = docSketches.find((x) => x.name === st.sketch);
+      if (sk?.plane) viewerRef.current?.highlightEdges(sketchSegments(sk, boundPlane(sk, res.sketches)));
+    }
+  };
+  // switch a step off or on, or delete it: the script changes, and rebuilds
+  const changeStep = async (st: Step, what: 'off' | 'on' | 'delete') => {
+    if (stepBusy) return;
+    setStepBusy(true);
+    try {
+      if (opOpen) closeOp();
+      const r = what === 'delete' ? await buildApi.deleteStep(codeRef.current, st.line)
+        : await buildApi.suppressStep(codeRef.current, st.line, what === 'off');
+      setStepSel(null);
+      setCode(r.code);
+      const name = st.summary ?? `line ${st.line}`;
+      const out = await build(r.code, `${what === 'delete' ? 'Delete' : what === 'off' ? 'Switch off' : 'Switch on'} ${name}`);
+      // kept even when later steps now fail: the list says why, and switching it back on undoes it
+      if (out.kind !== 'aborted') saveDraft(r.code);
+    } catch (err) {
+      setNotice(`Step: ${errorText(err)}`);
+      window.setTimeout(() => setNotice(''), 8000);
+    } finally {
+      setStepBusy(false);
+    }
+  };
+  // the build's problems, each on the step that caused it
+  const failure = status === 'done' ? warn : status === 'error' ? message : '';
+  const problems = stepProblems(steps, resRef.current, failure);
+  const offNote = suppressedNote(steps, messageLine(failure));
 
   // the viewer keeps its mount-time callbacks, so a drop reaches the current
   // applyParam (which closes over the current code) through a ref
@@ -1766,12 +1964,13 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
           onChange={(e) => setCode(e.target.value)}
           onScroll={syncScroll}
           onSelect={trackCaret}
-          // double-click a Shell/Hole line: its dialog
+          // double-click an operation's line: its dialog
           onDoubleClick={() => {
             const ta = taRef.current;
             if (!ta) return;
             const line = ta.value.slice(0, ta.selectionStart).split('\n').length;
-            if (OP_LINE.test(ta.value.split('\n')[line - 1] ?? '')) void editOp(line);
+            const st = reopenableAt(steps, line);
+            if (st) void editOp(st.line);
           }}
           onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); rebuild(); } }}
           spellCheck={false} autoCapitalize="off" autoCorrect="off" wrap="off"
@@ -1780,19 +1979,34 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                    caretColor: palette.text, outline: 'none', overflow: 'auto' }}
         />
         {/* line-number gutter (opaque; scrolls vertically with the editor) */}
-        <div ref={gutterRef} aria-hidden
+        <div ref={gutterRef}
           style={{ ...monoBase, position: 'absolute', left: 0, top: 0, bottom: 0, width: GUTTER,
                    overflow: 'hidden', padding: '12px 8px 12px 0', boxSizing: 'border-box',
                    textAlign: 'right', color: palette.textSecondary, background: palette.inputBg,
                    borderRight: `1px solid ${palette.border}`, userSelect: 'none', pointerEvents: 'none' }}>
-          {Array.from({ length: lineCount }, (_, i) => i + 1).join('\n')}
+          <span aria-hidden>{Array.from({ length: lineCount }, (_, i) => i + 1).join('\n')}</span>
+          {/* an operation the dialogs reopen: its icon, click to edit */}
+          {steps.filter((st) => st.kind === 'op' && st.reopenable && !st.off && st.line <= lineCount).map((st) => {
+            const icon = stepIcon(st);
+            const name = st.op && st.op !== 'script' ? OP_NAMES[st.op] : 'step';
+            return (
+              <button key={st.line} onClick={() => void editOp(st.line)} onMouseDown={(e) => e.preventDefault()}
+                aria-label={`Edit the ${name.toLowerCase()} on line ${st.line}`}
+                title={`${st.summary ?? name}: click to open its dialog (OK rewrites just this line)`}
+                style={{ position: 'absolute', left: 2, top: 12 + (st.line - 1) * 19.5 + 3, width: 15, height: 14,
+                         padding: 0, border: 'none', background: 'none', cursor: 'pointer', pointerEvents: 'auto',
+                         color: palette.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {icon ? <OpIcon name={icon} size={13} /> : '✎'}
+              </button>
+            );
+          })}
         </div>
         {caretOp && !opOpen && (
-          <button onClick={() => void editOp(caretLine)} onMouseDown={(e) => e.preventDefault()}
-            title={`Open the ${OP_NAMES[caretOp]} dialog with this line's values; OK rewrites just this line (or double-click the line)`}
+          <button onClick={() => void editOp(caretStep?.line ?? caretLine)} onMouseDown={(e) => e.preventDefault()}
+            title={`Open the ${OP_NAMES[caretOp]} dialog with this line's values; OK rewrites just this line (or double-click the line, or click its icon)`}
             style={{ ...btn, position: 'absolute', top: 8, right: 12, padding: '3px 10px', fontSize: '12px',
                      background: palette.primaryBtn, color: '#fff' }}>
-            Edit {caretOp} (line {caretLine})
+            Edit {OP_NAMES[caretOp].toLowerCase()} (line {caretStep?.line ?? caretLine})
           </button>
         )}
       </div>
@@ -2030,6 +2244,12 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                 pricePerM={models.find((m) => m.id === model)?.input_per_m} />
             )}
             {layout === 'ops' && (
+              <StepsList steps={steps} problems={problems} selected={stepSel} busy={stepBusy}
+                onSelect={selectStep} onEdit={(st) => void editOp(st.line)}
+                onToggle={(st) => void changeStep(st, st.off ? 'on' : 'off')}
+                onDelete={(st) => void changeStep(st, 'delete')} />
+            )}
+            {layout === 'ops' && (
               <OperationsPanel sel={opSel} model={opModel} recent={recent} onRun={runOp} onExample={putInChat}
                 onBack={() => { if (opOpen) closeOp(); else leaveOps(); }} />
             )}
@@ -2063,6 +2283,22 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                 edgeIndex={opEdgeIndex} onHoverEdge={(i) => viewerRef.current?.hoverEdge(i)}
                 selection={edgeOp.adds} shownAs={edgeAsNow}
                 onApply={() => void applyEdgeOp()} onCancel={closeOp} />
+            )}
+            {extrudeOp && (
+              <ExtrudeDialog value={extrudeOp.v} onChange={(v) => setExtrudeOp((o) => o && { ...o, v })}
+                firstBody={extrudeOp.firstBody} param={extrudeOp.param} preview={extrudePreview.preview}
+                direction={extrudeNormal ? extrudeDirectionText(extrudeOp.v, extrudeNormal) : ''}
+                onEditSketch={editExtrudeSketch} onApply={() => void applyExtrude()} onCancel={closeOp} />
+            )}
+            {argOp?.v.op === 'auto_round' && (
+              <RoundDialog value={argOp.v} onChange={(v) => setArgOp((o) => o && { ...o, v })}
+                preview={argPreview.preview} keepFaces={keepFaces} picked={roundPick}
+                onHoverFace={(i) => viewerRef.current?.hoverFace(i)}
+                onApply={() => void applyArgOp()} onCancel={closeOp} />
+            )}
+            {argOp?.v.op === 'truss_windows' && (
+              <TrussDialog value={argOp.v} onChange={(v) => setArgOp((o) => o && { ...o, v })}
+                preview={argPreview.preview} onApply={() => void applyArgOp()} onCancel={closeOp} />
             )}
             {holeOp && holePresets && (
               <HoleDialog value={holeOp.v} editing={holeOp.line != null} preview={holePreview.preview}
@@ -2323,6 +2559,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                               fontFamily: 'ui-monospace, Menlo, monospace' }}>
                   {message || 'Build failed'}
                 </div>
+                {offNote && <div style={{ color: palette.warning ?? '#c78a1a', fontSize: '12px' }}>⚠ {offNote}</div>}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                   {fix && fixButton(fix)}
                   <button onClick={() => runById('fix')} disabled={asking}
@@ -2359,6 +2596,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
           {status === 'done' && warn && (
             <span style={{ color: palette.warning ?? '#c78a1a', display: 'inline-flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
               <span>⚠ an operation failed (model shown up to it): {warn}</span>
+              {offNote && <span>{offNote}</span>}
               {fix && fixButton(fix)}
             </span>
           )}

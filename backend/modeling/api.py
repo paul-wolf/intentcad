@@ -13,7 +13,8 @@ from documents.context import ContextFileError, ai_blocks
 from .engine import EngineError, run_script
 from . import hole_presets
 from .llm_models import list_models
-from .paramedit import ParamError, add_edge_op, add_extrude, add_holes, add_shell, op_at, set_params
+from .paramedit import (ParamError, add_edge_op, add_extrude, add_holes, add_shell, delete_step, edit_args, op_at,
+                        set_params, steps, suppress)
 from .schemas import (
     AddEdgeOpRequest,
     AddExtrudeRequest,
@@ -21,6 +22,9 @@ from .schemas import (
     AddHolesRequest,
     AddOpResponse,
     AddShellRequest,
+    CodeResponse,
+    EditArgsRequest,
+    EditArgsResponse,
     OpAtRequest,
     OpAtResponse,
     EditRequest,
@@ -38,6 +42,9 @@ from .schemas import (
     SensitivityResponse,
     SetParamsRequest,
     SetParamsResponse,
+    StepLineRequest,
+    StepsRequest,
+    StepsResponse,
     UsageResponse,
     UsageTotals,
 )
@@ -89,6 +96,7 @@ def run_model(request, payload: RunRequest):
         sketches=r.get("sketches") or {},
         face_refs=r.get("face_refs") or [],
         edge_refs=r.get("edge_refs") or [],
+        kept=r.get("kept") or [],
     )
 
 
@@ -126,13 +134,14 @@ def set_params_endpoint(request, payload: SetParamsRequest):
 @router.post("/add_extrude", response=AddExtrudeResponse)
 def add_extrude_endpoint(request, payload: AddExtrudeRequest):
     """Append an extrude (cut, join, or the first body) of a sketch to the
-    script, with its depth as a new parameter, and return the updated script."""
+    script, with its depth as a new parameter (or rewrite the extrude line on
+    `line`), and return the updated script."""
     err = require_auth(request)
     if err:
         return err
     try:
         code, param = add_extrude(payload.code, payload.sketch, payload.op, payload.depth,
-                                  payload.through, payload.flip, payload.datum, payload.both)
+                                  payload.through, payload.flip, payload.datum, payload.both, payload.line)
     except (ParamError, SyntaxError) as exc:
         return JsonResponse({"message": str(exc)}, status=422)
     return AddExtrudeResponse(code=code, param=param)
@@ -193,13 +202,61 @@ def hole_presets_endpoint(request):
 
 @router.post("/op_at", response=OpAtResponse)
 def op_at_endpoint(request, payload: OpAtRequest):
-    """The shell()/holes()/fillet()/chamfer() line at `line`, read back for its dialog."""
+    """The operation line at `line`, read back for its dialog."""
     err = require_auth(request)
     if err:
         return err
     try:
-        return OpAtResponse(**op_at(payload.code, payload.line))
-    except (ParamError, SyntaxError, KeyError) as exc:
+        return OpAtResponse(**op_at(payload.code, payload.line, payload.datum))
+    except (ParamError, SyntaxError, KeyError, TypeError, ValueError) as exc:
+        return JsonResponse({"message": str(exc)}, status=422)
+
+
+@router.post("/edit_args", response=EditArgsResponse)
+def edit_args_endpoint(request, payload: EditArgsRequest):
+    """Rewrite an auto_round()/truss_windows() line with its dialog's values,
+    keeping every argument the dialog doesn't know."""
+    err = require_auth(request)
+    if err:
+        return err
+    try:
+        code, params = edit_args(payload.code, payload.line, payload.op, payload.values, payload.keep,
+                                 payload.make_param)
+    except (ParamError, SyntaxError, KeyError, TypeError, ValueError) as exc:
+        return JsonResponse({"message": str(exc)}, status=422)
+    return EditArgsResponse(code=code, params=params)
+
+
+@router.post("/steps", response=StepsResponse)
+def steps_endpoint(request, payload: StepsRequest):
+    """The steps list: the script's operations in order, summed up."""
+    err = require_auth(request)
+    if err:
+        return err
+    return StepsResponse(steps=steps(payload.code, payload.datum, payload.points))
+
+
+@router.post("/suppress_step", response=CodeResponse)
+def suppress_step_endpoint(request, payload: StepLineRequest):
+    """Switch the step on `line` off (commented out behind "# off: ") or back on."""
+    err = require_auth(request)
+    if err:
+        return err
+    try:
+        return CodeResponse(code=suppress(payload.code, payload.line, payload.off))
+    except (ParamError, SyntaxError) as exc:
+        return JsonResponse({"message": str(exc)}, status=422)
+
+
+@router.post("/delete_step", response=CodeResponse)
+def delete_step_endpoint(request, payload: StepLineRequest):
+    """Delete the step on `line`, and the P keys only it used."""
+    err = require_auth(request)
+    if err:
+        return err
+    try:
+        return CodeResponse(code=delete_step(payload.code, payload.line))
+    except (ParamError, SyntaxError) as exc:
         return JsonResponse({"message": str(exc)}, status=422)
 
 
