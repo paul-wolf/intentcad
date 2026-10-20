@@ -44,6 +44,9 @@ const ICONS: Record<OpIconName, ReactNode> = {
   protect: <><path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6z" /><path d="M9 12h6" /></>,
   fix: <path d="M15 4a4.5 4.5 0 0 0-4.5 6L4 16.5 7.5 20l6.5-6.5A4.5 4.5 0 0 0 20 9l-3 3-3-1-1-3z" />,
   measure: <><path d="M3 16L16 3l5 5L8 21z" /><path d="M7 12l2 2M10 9l2 2M13 6l2 2" /></>,
+  // a block cut open: the cut face hatched, the plane beyond it
+  section: <><path d="M4 9l5-5h11v11l-5 5H4z" opacity={0.5} /><path d="M4 9h11v11H4z" /><path d="M15 9l5-5" opacity={0.5} />
+    <path d="M4 13l4-4M4 17l8-8M7 20l8-8M11 20l4-4" strokeWidth={1.1} /></>,
   normal: <><path d="M5 3v18" /><path d="M21 12H9M12.5 8.5L9 12l3.5 3.5" /></>,
   ortho: <><path d="M5 4h14M5 20h14" /><path d="M5 4v16M19 4v16" strokeDasharray="2 2" /></>,
   params: <><path d="M4 7h16M4 17h16" /><circle cx="9" cy="7" r="2.2" fill="var(--op-icon-bg, none)" /><circle cx="15" cy="17" r="2.2" fill="var(--op-icon-bg, none)" /></>,

@@ -9,7 +9,7 @@ import { VIEW_KEYS } from './viewOrient';
 const MODEL: OpModel = {
   status: 'done', hasCode: true, dialogOpen: false, sketching: false, canSketch: true, asking: false,
   holeSketches: 0, holeAt: 'at the centre of the top face', autoRound: false, exporting: false, importing: false,
-  hasParams: true, showParams: true, ortho: false, measure: '60.0 × 40.0 mm',
+  hasParams: true, showParams: true, ortho: false, measure: '60.0 × 40.0 mm', section: false,
 };
 const faces = (...kinds: string[]): OpSelection => ({ faces: kinds.map((kind) => ({ kind })), edges: [] });
 const NONE = faces();
@@ -76,7 +76,8 @@ describe('the operation registry', () => {
   it('runs through the editor’s own actions', () => {
     const ctx = Object.fromEntries(
       ['sketchOnSelection', 'sketchOnPlane', 'shell', 'hole', 'fillet', 'chamfer', 'ask', 'build', 'importStep', 'exportAs', 'versions',
-       'process', 'addContextFile', 'toggleParams', 'setView', 'lookAtSelection', 'toggleOrtho', 'copyMeasure'].map((k) => [k, vi.fn()]),
+       'process', 'addContextFile', 'toggleParams', 'setView', 'lookAtSelection', 'toggleOrtho', 'copyMeasure',
+       'section'].map((k) => [k, vi.fn()]),
     ) as unknown as Record<keyof OpContext, ReturnType<typeof vi.fn>>;
     for (const op of OPERATIONS) op.run(ctx as unknown as OpContext);
     expect(ctx.shell).toHaveBeenCalledTimes(1);
@@ -87,6 +88,22 @@ describe('the operation registry', () => {
     expect(ctx.exportAs.mock.calls.map((c) => c[0])).toEqual(['stl', 'step', 'stl-parts', 'dxf', 'dxf-views']);
     expect(ctx.setView).toHaveBeenCalledTimes(7);
     expect(ctx.ask).toHaveBeenCalledTimes(4);   // round, lighten, keep sharp, fix
+    expect(ctx.section).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives Section a key nothing else uses, here or in the sketcher', () => {
+    const op = opById('section')!;
+    expect(op.shortcut).toBe('Z');
+    expect(op.group).toBe('Inspect');
+    expect(opForKey('z')?.id).toBe('section');
+    expect(OPERATIONS.filter((o) => o.shortcut?.split(' ')[0] === 'Z')).toHaveLength(1);
+    expect(Object.keys(RESERVED_KEYS)).not.toContain('Z');
+    expect(SKETCH_KEYS).not.toContain('Z');
+    expect([OPS_KEY, ...Object.keys(VIEW_KEYS)]).not.toContain('Z');
+    // on and off from the same key; N looks at the cut while it is on
+    expect(op.label!({ ...MODEL, section: true })).toBe('Section off');
+    expect(op.needs(NONE, { ...MODEL, sketching: true })).toEqual({ ok: false, reason: 'Finish the sketch first' });
+    expect(ok('normal', NONE, { ...MODEL, section: true }).ok).toBe(true);
   });
 });
 

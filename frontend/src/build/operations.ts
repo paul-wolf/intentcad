@@ -20,7 +20,7 @@ export const OP_GROUPS: OpGroup[] = ['Sketch', 'Create', 'Modify', 'Pattern', 'I
 
 export type OpIcon =
   | 'sketch-face' | 'plane-top' | 'plane-front' | 'plane-right' | 'extrude' | 'hole' | 'shell' | 'fillet' | 'chamfer' | 'round'
-  | 'lighten' | 'protect' | 'fix' | 'measure' | 'normal' | 'ortho' | 'params' | 'build' | 'import'
+  | 'lighten' | 'protect' | 'fix' | 'measure' | 'section' | 'normal' | 'ortho' | 'params' | 'build' | 'import'
   | 'export' | 'stl' | 'parts' | 'dxf' | 'views3' | 'versions' | 'process' | 'context'
   | `view-${StandardView}`;
 
@@ -56,6 +56,8 @@ export interface OpModel {
   ortho: boolean;
   /** the measure readout for the selection, in words (null: nothing to measure) */
   measure: string | null;
+  /** the section view is on */
+  section: boolean;
 }
 
 export type ExportFormat = 'stl' | 'step' | 'stl-parts' | 'dxf' | 'dxf-views';
@@ -85,6 +87,8 @@ export interface OpContext {
   lookAtSelection(): void;
   toggleOrtho(): void;
   copyMeasure(): void;
+  /** Z: the section view on (or off) */
+  section(): void;
 }
 
 export type Need = { ok: true } | { ok: false; reason: string };
@@ -333,14 +337,28 @@ export const OPERATIONS: Operation[] = [
     detail: (_sel, m) => m.measure,
     run: (ctx) => ctx.copyMeasure(),
   },
+  {
+    id: 'section', name: 'Section', group: 'Inspect', icon: 'section', shortcut: 'Z',
+    help: 'Cut the part open with a plane to see inside',
+    longHelp: 'Cuts the 3D view open at a plane, to check wall thicknesses, insert depths and how a board fits; '
+      + 'the script is not changed. With a flat face selected the plane starts just inside it, otherwise through '
+      + 'the middle, square to the view. Drag its arrow or use the panel to move, turn or flip it; hover the cut '
+      + 'for the wall thickness, or click two points on its outline for the distance.',
+    example: 'how thick is the wall around the USB cutout?',
+    label: (m) => (m.section ? 'Section off' : 'Section'),
+    needs: (_sel, m) => first([m.sketching, 'Finish the sketch first']),
+    run: (ctx) => ctx.section(),
+  },
   // View
   {
     id: 'normal', name: 'Look at face', group: 'View', icon: 'normal', shortcut: 'N',
-    help: 'Look straight at the selected face',
+    help: 'Look straight at the selected face, or at the section',
     longHelp: 'Turns the view to look straight at the selected face (the last one clicked), for checking a '
-      + 'sketch or a hole pattern square on. The Normal button below the 3D view does the same.',
+      + 'sketch or a hole pattern square on; with the section on, straight at the cut. The Normal button below '
+      + 'the 3D view does the same.',
     example: 'what is on this face?',
-    needs: (sel) => first([sel.faces.length === 0, 'Select a face']),
+    label: (m) => (m.section ? 'Look at the cut' : 'Look at face'),
+    needs: (sel, m) => first([sel.faces.length === 0 && !m.section, 'Select a face']),
     run: (ctx) => ctx.lookAtSelection(),
   },
   ...VIEW_OPS.map(([view, name, key]): Operation => ({

@@ -7,13 +7,17 @@
  * independent shading, render-on-demand.
  */
 
-import { add, scale, faceMotion, dragAmount, dragShift, snapToStep, snapToPlane, type Vec3 } from './dragHandle';
+import { add, dot, scale, faceMotion, dragAmount, dragShift, snapToStep, snapToPlane, type Vec3 } from './dragHandle';
 import {
   lookFrom, axisView, orbit, slerp, quatToMat4, easeInOutCubic, VIEW_DIRS,
   type Quat, type StandardView,
 } from './viewOrient';
 import { planeQuat, type PlaneBasis } from './sketchPlane';
 import { choosePick, edgesNear, selectable, type EdgeCandidate, type EdgeLike, type PickFilter, type ScreenEdge } from './edgePick';
+import {
+  buildOutline, cutDepth, cutNormal, faceBodies, fromPlane, insideOutline, nearestSegment, planeBasis, planePoint,
+  shaderPlane, signedVolume6, toPlane, vertexDots, wallThickness, type Outline, type Section,
+} from './section';
 
 export interface ViewerMesh {
   positions: number[];
@@ -74,6 +78,38 @@ function mat3Of(m: Mat4): Float32Array {
   return new Float32Array([m[0]!, m[1]!, m[2]!, m[4]!, m[5]!, m[6]!, m[8]!, m[9]!, m[10]!]);
 }
 
+/** Inverse of a 4x4 (column-major); null if singular. */
+function invert(m: Mat4): Mat4 | null {
+  const a = Array.from(m);
+  const inv = new Float32Array(16);
+  const [a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15] = a as number[] as
+    [number, number, number, number, number, number, number, number, number, number, number, number, number, number, number, number];
+  const b0 = a0 * a5 - a1 * a4, b1 = a0 * a6 - a2 * a4, b2 = a0 * a7 - a3 * a4;
+  const b3 = a1 * a6 - a2 * a5, b4 = a1 * a7 - a3 * a5, b5 = a2 * a7 - a3 * a6;
+  const b6 = a8 * a13 - a9 * a12, b7 = a8 * a14 - a10 * a12, b8 = a8 * a15 - a11 * a12;
+  const b9 = a9 * a14 - a10 * a13, b10 = a9 * a15 - a11 * a13, b11 = a10 * a15 - a11 * a14;
+  const det = b0 * b11 - b1 * b10 + b2 * b9 + b3 * b8 - b4 * b7 + b5 * b6;
+  if (!det) return null;
+  const k = 1 / det;
+  inv[0] = (a5 * b11 - a6 * b10 + a7 * b9) * k;
+  inv[1] = (a2 * b10 - a1 * b11 - a3 * b9) * k;
+  inv[2] = (a13 * b5 - a14 * b4 + a15 * b3) * k;
+  inv[3] = (a10 * b4 - a9 * b5 - a11 * b3) * k;
+  inv[4] = (a6 * b8 - a4 * b11 - a7 * b7) * k;
+  inv[5] = (a0 * b11 - a2 * b8 + a3 * b7) * k;
+  inv[6] = (a14 * b2 - a12 * b5 - a15 * b1) * k;
+  inv[7] = (a8 * b5 - a10 * b2 + a11 * b1) * k;
+  inv[8] = (a4 * b10 - a5 * b8 + a7 * b6) * k;
+  inv[9] = (a1 * b8 - a0 * b10 - a3 * b6) * k;
+  inv[10] = (a12 * b4 - a13 * b2 + a15 * b0) * k;
+  inv[11] = (a9 * b2 - a8 * b4 - a11 * b0) * k;
+  inv[12] = (a5 * b7 - a4 * b9 - a6 * b6) * k;
+  inv[13] = (a0 * b9 - a1 * b7 + a2 * b6) * k;
+  inv[14] = (a13 * b1 - a12 * b3 - a14 * b0) * k;
+  inv[15] = (a8 * b3 - a9 * b1 + a10 * b0) * k;
+  return inv;
+}
+
 const VERT = `
 attribute vec3 aPos;
 attribute vec3 aNormal;
@@ -83,15 +119,19 @@ uniform mat4 uModel;
 uniform mat3 uNormal;
 varying vec3 vNormal;
 varying vec3 vWorld;
+varying vec3 vWorldN;
 void main() {
   vNormal = uNormal * aNormal;
   vWorld = aPos;
+  vWorldN = aNormal;
   gl_Position = uProj * uView * uModel * vec4(aPos, 1.0);
 }`;
 
 // uClip: discard what lies beyond the plane dot(p, xyz) = w (sketch mode
-// cuts away the part between the camera and the sketch plane). uDim fades the
-// colour toward a desaturated mix with the background uBg.
+// cuts away the part between the camera and the sketch plane). uSec is the
+// section view's plane the same way, on while uSecOn is 1; a face lying in it
+// whose material was cut away goes too. uDim fades the colour toward a
+// desaturated mix with the background uBg.
 const FRAG = `
 #ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
@@ -100,13 +140,20 @@ precision mediump float;
 #endif
 varying vec3 vNormal;
 varying vec3 vWorld;
+varying vec3 vWorldN;
 uniform vec3 uColor;
 uniform float uAlpha;
 uniform vec4 uClip;
+uniform vec4 uSec;
+uniform float uSecOn;
 uniform float uDim;
 uniform vec3 uBg;
 void main() {
   if (dot(vWorld, uClip.xyz) > uClip.w) discard;
+  if (uSecOn > 0.5) {
+    float s = dot(vWorld, uSec.xyz) - uSec.w;
+    if (s > 1e-4 || (s > -1e-3 && dot(vWorldN, uSec.xyz) < -0.99)) discard;
+  }
   vec3 n = normalize(vNormal);
   vec3 l1 = normalize(vec3(0.4, 0.7, 0.8));
   vec3 l2 = normalize(vec3(-0.5, -0.3, -0.6));
@@ -133,14 +180,44 @@ attribute vec3 aPos;
 uniform mat4 uProj;
 uniform mat4 uView;
 uniform mat4 uModel;
+varying vec3 vWorld;
 void main() {
+  vWorld = aPos;
   gl_Position = uProj * uView * uModel * vec4(aPos, 1.0);
 }`;
 
+// lines are cut by the section too (uSec, as in FRAG)
 const LINE_FRAG = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+varying vec3 vWorld;
+uniform vec3 uColor;
+uniform vec4 uSec;
+uniform float uSecOn;
+void main() {
+  if (uSecOn > 0.5 && dot(vWorld, uSec.xyz) > uSec.w + 1e-4) discard;
+  gl_FragColor = vec4(uColor, 1.0);
+}`;
+
+// the section's cap: flat, with a fine diagonal hatch in screen space
+// (uHatch: its spacing, uLine: a line's width, both in device px)
+const CAP_VERT = `
+attribute vec3 aPos;
+uniform mat4 uPV;
+void main() { gl_Position = uPV * vec4(aPos, 1.0); }`;
+const CAP_FRAG = `
 precision mediump float;
 uniform vec3 uColor;
-void main() { gl_FragColor = vec4(uColor, 1.0); }`;
+uniform float uHatch;
+uniform float uLine;
+void main() {
+  float d = abs(mod(gl_FragCoord.x + gl_FragCoord.y, uHatch) - 0.5 * uHatch);
+  float k = 1.0 - smoothstep(0.5 * uLine, 0.5 * uLine + 1.0, d);
+  gl_FragColor = vec4(uColor * (1.0 - 0.18 * k), 1.0);
+}`;
 
 // Screen-space thick lines (GL line width is 1 px on most platforms): each
 // segment is a quad, its corners pushed sideways by half the width in pixels.
@@ -153,7 +230,9 @@ uniform mat4 uPV;
 uniform vec2 uHalfPx;
 uniform float uWidth;
 uniform float uBias;
+varying vec3 vWorld;
 void main() {
+  vWorld = aPos;
   vec4 a = uPV * vec4(aPos, 1.0);
   vec4 b = uPV * vec4(aOther, 1.0);
   vec2 d = b.xy / b.w * uHalfPx - a.xy / a.w * uHalfPx;
@@ -167,7 +246,7 @@ void main() {
 export interface SketchLines { id: string; name: string; segments: number[] }
 
 /** Thick-line vertex data for segment pairs: 6 vertices × (pos, other, side). */
-function thickVerts(segs: number[]): Float32Array {
+function thickVerts(segs: ArrayLike<number>): Float32Array {
   const n = Math.floor(segs.length / 6);
   const out = new Float32Array(n * 6 * 7);
   let o = 0;
@@ -310,7 +389,29 @@ export interface Viewer {
   /** A dialog covers `px` CSS px along the left of the view: draw the part
    *  centred in the rest (0 for the whole view). */
   setInset(px: number): void;
+  /** The section view: cut the part open at this plane (null: whole). Kept
+   *  across update(); off while sketching and in a thumbnail. Clears the
+   *  measured points. */
+  setSection(s: Section | null): void;
+  /** For starting a section: the direction toward the camera (from the part)
+   *  and the part's centre. */
+  sectionFrame(): { back: Vec3; center: Vec3 };
+  /** Drop the points clicked on the section outline. */
+  clearSectionPoints(): void;
+  /** Cancel a drag in progress (a handle or the section plane), as Esc does;
+   *  false if there was none. */
+  cancelDrag(): boolean;
   dispose(): void;
+}
+
+/** What the section view measures, each frame while it is on: the wall under
+ *  the pointer, and the distance between two points clicked on the outline.
+ *  x, y: CSS px of the measure line's middle; `approx` when a curved face
+ *  (measured on its tessellation) is involved. */
+export interface SectionMeasure {
+  wall: { mm: number; approx: boolean; x: number; y: number } | null;
+  points: number;
+  distance: { mm: number; approx: boolean; x: number; y: number } | null;
 }
 
 /** A world axis as seen in the current view: unit direction (x right, y up,
@@ -344,11 +445,19 @@ export interface ViewerOpts {
   onSketchHover?: (hit: { id: string; name: string; x: number; y: number } | null) => void;
   /** A drawn sketch was double-clicked. */
   onSketchOpen?: (id: string) => void;
+  /** The section plane was dragged (`dragging` until released; a cancelled
+   *  drag reports the start again, not dragging). `snapFace`: the parallel
+   *  face it snapped onto. */
+  onSection?: (s: Section, st: { dragging: boolean; snapFace: number | null }) => void;
+  /** Called each frame with the section plane's arrow handle (null: off). */
+  onSectionHandle?: (h: PlacedHandle | null) => void;
+  /** Called each frame with the section's measurements (null: off). */
+  onSectionMeasure?: (m: SectionMeasure | null) => void;
 }
 
 export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): Viewer {
   const color = opts.color ?? [0.62, 0.66, 0.72];
-  const gl = canvas.getContext('webgl', { antialias: true, depth: true, preserveDrawingBuffer: true });
+  const gl = canvas.getContext('webgl', { antialias: true, depth: true, stencil: true, preserveDrawingBuffer: true });
   if (!gl) throw new Error('WebGL not available');
 
   const prog = gl.createProgram()!;
@@ -371,6 +480,8 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   const uClip = gl.getUniformLocation(prog, 'uClip');
   const uDim = gl.getUniformLocation(prog, 'uDim');
   const uBg = gl.getUniformLocation(prog, 'uBg');
+  const uSec = gl.getUniformLocation(prog, 'uSec');
+  const uSecOn = gl.getUniformLocation(prog, 'uSecOn');
 
   const posBuf = gl.createBuffer()!;
   const normBuf = gl.createBuffer()!;
@@ -378,7 +489,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   // an operation's candidate result (setPreviewMesh), drawn in place of the part
   const candPosBuf = gl.createBuffer()!;
   const candNormBuf = gl.createBuffer()!;
-  let cand: { count: number; color: Vec3 } | null = null;
+  let cand: { count: number; color: Vec3; inverted: boolean } | null = null;
   let hovered: number | null = null;
   const HOVER: [number, number, number] = [1.0, 0.85, 0.3];
 
@@ -392,6 +503,8 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   const lView = gl.getUniformLocation(lineProg, 'uView');
   const lModel = gl.getUniformLocation(lineProg, 'uModel');
   const lColor = gl.getUniformLocation(lineProg, 'uColor');
+  const lSec = gl.getUniformLocation(lineProg, 'uSec');
+  const lSecOn = gl.getUniformLocation(lineProg, 'uSecOn');
   const lineBuf = gl.createBuffer()!;
   let lineVertexCount = 0;
   const HIGHLIGHT: [number, number, number] = [1.0, 0.5, 0.05];
@@ -409,6 +522,21 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   const tWidth = gl.getUniformLocation(thickProg, 'uWidth');
   const tBias = gl.getUniformLocation(thickProg, 'uBias');
   const tColor = gl.getUniformLocation(thickProg, 'uColor');
+  const tSec = gl.getUniformLocation(thickProg, 'uSec');
+  const tSecOn = gl.getUniformLocation(thickProg, 'uSecOn');
+
+  // fourth program: the section's caps, drawn where the stencil says the
+  // plane is inside the solid
+  const capProg = gl.createProgram()!;
+  gl.attachShader(capProg, compile(gl, gl.VERTEX_SHADER, CAP_VERT));
+  gl.attachShader(capProg, compile(gl, gl.FRAGMENT_SHADER, CAP_FRAG));
+  gl.linkProgram(capProg);
+  const cPos = gl.getAttribLocation(capProg, 'aPos');
+  const cPV = gl.getUniformLocation(capProg, 'uPV');
+  const cColor = gl.getUniformLocation(capProg, 'uColor');
+  const cHatch = gl.getUniformLocation(capProg, 'uHatch');
+  const cLine = gl.getUniformLocation(capProg, 'uLine');
+  const hasStencil = !!gl.getContextAttributes()?.stencil;
   const sketchBuf = gl.createBuffer()!;
   let sketchLines: SketchLines[] = [];
   let sketchRanges: { id: string; first: number; count: number }[] = [];
@@ -492,6 +620,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   let dims: DimAnchor[] = [];
   let modelRadius = 40;
   let modelCenter: Vec3 = [0, 0, 0];
+  let modelMin: Vec3 = [-40, -40, -40], modelMax: Vec3 = [40, 40, 40];
   let thumbMode = false;   // when capturing a thumbnail: draw the solid only (no grid/overlays)
   const SELECT: [number, number, number] = [1.0, 0.62, 0.2];
   const SNAP: [number, number, number] = [0.18, 0.83, 0.75];
@@ -509,6 +638,167 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     pending: boolean;           // released, waiting for the rebuild
   } | null = null;
   const handleArm = () => modelRadius * 0.22;   // drawn arrow length (world)
+
+  // the section view (setSection): the plane, and for the part and for an
+  // operation's preview the vertex dots along its dir (kept while it only
+  // moves) and the outline at its offset
+  let section: Section | null = null;
+  interface Cut {
+    pos: ArrayLike<number>; nrm: ArrayLike<number>;
+    dir: Vec3 | null; dots: Float32Array | null;
+    offset: number; outline: Outline | null; uploaded: boolean;
+  }
+  const newCut = (pos: ArrayLike<number>, nrm: ArrayLike<number>): Cut =>
+    ({ pos, nrm, dir: null, dots: null, offset: NaN, outline: null, uploaded: false });
+  let partCut = newCut([], []);
+  let candCut = newCut([], []);
+  function cutOutline(c: Cut, s: Section): Outline {
+    if (!c.dots || !c.dir || c.dir[0] !== s.dir[0] || c.dir[1] !== s.dir[1] || c.dir[2] !== s.dir[2]) {
+      c.dots = vertexDots(c.pos, s.dir);
+      c.dir = s.dir;
+      c.outline = null;
+    }
+    if (!c.outline || c.offset !== s.offset) {
+      c.outline = buildOutline(c.pos, c.nrm, c.dots, s.dir, s.offset);
+      c.offset = s.offset;
+      c.uploaded = false;
+    }
+    return c.outline;
+  }
+  const outlineBuf = gl.createBuffer()!;
+  let outlineFrom: Cut | null = null;   // which cut outlineBuf holds
+  const capBuf = gl.createBuffer()!;      // the plane's rectangle, a strip (the cap)
+  const planeBuf = gl.createBuffer()!;    // …and its outline, lines
+  const measBuf = gl.createBuffer()!;     // the measure lines
+  // the part's bodies, for capping each on its own (a tint each): faces
+  // joined by edges are one body; a body wound inside out counts the other way
+  type CapGroup = { tint: Vec3; bodies: { ranges: [number, number][]; inverted: boolean }[] };
+  let capGroups: CapGroup[] | null = null;
+  const CAP_TINTS: Vec3[] = [[0.80, 0.36, 0.33], [0.76, 0.47, 0.30], [0.70, 0.34, 0.47], [0.84, 0.44, 0.40]];
+  const OUTLINE: Vec3 = [0.24, 0.07, 0.06];
+  const PLANE_LINE: Vec3 = [0.5, 0.56, 0.64];
+  let triFace = new Int32Array(0);   // each triangle's face (its place in `faces`), -1 none
+  // dragging the plane along its dir: like a handle drag, but nothing rebuilds
+  let secDrag: { x0: number; y0: number; offset0: number; snap: number | null } | null = null;
+  // measuring: the wall under the pointer; points clicked on the outline
+  let secHover: { a: Vec3; b: Vec3; mm: number; approx: boolean } | null = null;
+  let secPts: { p: Vec3; approx: boolean }[] = [];
+  const activeSection = (): Section | null => (section && !sketch && vertexCount ? section : null);
+
+  function partCapGroups(): CapGroup[] {
+    if (capGroups) return capGroups;
+    const groups: CapGroup[] = [];
+    if (!faces.length) {
+      groups.push({ tint: CAP_TINTS[0]!, bodies: [{ ranges: [[0, vertexCount]],
+        inverted: signedVolume6(meshPositions, 0, vertexCount) < 0 }] });
+    } else {
+      const at = new Map(faces.map((f, i) => [f.index, i]));
+      const body = faceBodies(faces.length, edges.map((e) => ({ faceIndices: e.faceIndices.map((i) => at.get(i) ?? -1) })));
+      const bodies = new Map<number, { ranges: [number, number][]; vol: number }>();
+      faces.forEach((f, i) => {
+        const b = body[i]!;
+        let e = bodies.get(b);
+        if (!e) bodies.set(b, e = { ranges: [], vol: 0 });
+        const last = e.ranges[e.ranges.length - 1];
+        if (last && last[0] + last[1] === f.start) last[1] += f.count;   // contiguous: one draw
+        else e.ranges.push([f.start, f.count]);
+        e.vol += signedVolume6(meshPositions, f.start, f.count);
+      });
+      for (const [b, e] of bodies) {
+        const g = b % CAP_TINTS.length;
+        groups[g] ??= { tint: CAP_TINTS[g]!, bodies: [] };
+        groups[g]!.bodies.push({ ranges: e.ranges, inverted: e.vol < 0 });
+      }
+    }
+    return capGroups = groups.filter(Boolean);
+  }
+
+  // the plane's rectangle: the part's box seen square-on, with a margin
+  function planeRect(s: Section): Vec3[] {
+    const [u, v] = planeBasis(s.dir);
+    let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+    for (let i = 0; i < 8; i++) {
+      const c: Vec3 = [i & 1 ? modelMax[0] : modelMin[0], i & 2 ? modelMax[1] : modelMin[1], i & 4 ? modelMax[2] : modelMin[2]];
+      const a = dot(c, u), b = dot(c, v);
+      u0 = Math.min(u0, a); u1 = Math.max(u1, a); v0 = Math.min(v0, b); v1 = Math.max(v1, b);
+    }
+    const m = modelRadius * 0.08;
+    const w = scale(s.dir, s.offset);
+    const at = (a: number, b: number) => add(add(scale(u, a), scale(v, b)), w);
+    return [at(u0 - m, v0 - m), at(u1 + m, v0 - m), at(u0 - m, v1 + m), at(u1 + m, v1 + m)];
+  }
+
+  // the pixel ray (CSS px) meets the plane: the world point, or null
+  function onPlaneAt(px: number, py: number, s: Section): Vec3 | null {
+    const { proj, view, model } = mvp(canvas.width, canvas.height);
+    const inv = invert(multiply(proj, multiply(view, model)));
+    if (!inv) return null;
+    const nx = (px / canvas.clientWidth) * 2 - 1, ny = 1 - (py / canvas.clientHeight) * 2;
+    const un = (z: number): Vec3 => {
+      const x = inv[0]! * nx + inv[4]! * ny + inv[8]! * z + inv[12]!;
+      const y = inv[1]! * nx + inv[5]! * ny + inv[9]! * z + inv[13]!;
+      const zz = inv[2]! * nx + inv[6]! * ny + inv[10]! * z + inv[14]!;
+      const w = inv[3]! * nx + inv[7]! * ny + inv[11]! * z + inv[15]!;
+      return [x / w, y / w, zz / w];
+    };
+    const a = un(-1), b = un(1);
+    const d: Vec3 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const den = dot(d, s.dir);
+    if (Math.abs(den) < 1e-12) return null;
+    const t = (s.offset - dot(a, s.dir)) / den;
+    return t < 0 || t > 1 ? null : add(a, scale(d, t));
+  }
+
+  // the camera looks at the cut face (not at the part's kept outside)
+  function seesCut(s: Section): boolean {
+    const rot = quatToMat4(q);
+    const back: Vec3 = [rot[2]!, rot[6]!, rot[10]!];
+    if (orthographic) return dot(back, cutNormal(s)) > 0;
+    return cutDepth(s, add(center, scale(back, distance))) > 0;
+  }
+
+  // CSS px per mm on the plane at p
+  function pxPerMm(p: Vec3, o: Outline): number {
+    const toCss = cssProjector();
+    const [x0, y0] = toCss(p);
+    const [x1, y1] = toCss(add(p, o.basis[0]));
+    return Math.max(Math.hypot(x1 - x0, y1 - y0), 1e-6);
+  }
+
+  const segApprox = (o: Outline, seg: number): boolean => {
+    const fi = triFace[o.tri[seg]!] ?? -1;
+    return fi < 0 || faces[fi]?.kind !== 'plane';
+  };
+
+  // the nearest outline point to the pointer, within tolPx (or anywhere, on the cap)
+  function outlineAt(px: number, py: number, tolPx: number, onCap: boolean) {
+    const s = activeSection();
+    if (!s || cand || !seesCut(s)) return null;
+    const o = cutOutline(partCut, s);
+    const P = onPlaneAt(px, py, s);
+    if (!P || !o.count) return null;
+    const qq = toPlane(o, P);
+    const inside = onCap && insideOutline(o, qq);
+    const near = nearestSegment(o, qq, inside ? Infinity : tolPx / pxPerMm(P, o));
+    return near ? { s, o, near, inside } : null;
+  }
+
+  // hover: the wall's thickness across the cap at the pointer; true when the
+  // pointer is on the cut (so nothing else is hovered)
+  function measureAt(px: number, py: number): boolean {
+    const r = outlineAt(px, py, 6, true);
+    const was = secHover;
+    secHover = null;
+    if (r) {
+      const w = wallThickness(r.o, r.near.seg, r.near.p);
+      if (w) {
+        secHover = { a: fromPlane(r.o, r.s, r.near.p), b: fromPlane(r.o, r.s, w.to), mm: w.mm,
+                     approx: segApprox(r.o, r.near.seg) || segApprox(r.o, w.seg) };
+      }
+    }
+    if (was || secHover) scheduleRender();
+    return !!r;
+  }
   function uploadMesh(mesh: ViewerMesh) {
     gl!.bindBuffer(gl!.ARRAY_BUFFER, posBuf);
     gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array(mesh.positions), gl!.STATIC_DRAW);
@@ -538,6 +828,8 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     distance = radius / Math.tan((45 * Math.PI) / 180 / 2) * 1.4;
     modelRadius = radius;
     modelCenter = center;
+    modelMin = [minX, minY, minZ];
+    modelMax = [maxX, maxY, maxZ];
     buildFrame(radius);
   }
 
@@ -567,23 +859,27 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     return hitAt(px, py)?.face ?? null;
   }
 
-  // the frontmost face under (px, py) CSS px, and its NDC depth there
-  function hitAt(px: number, py: number): { face: FaceRange; depth: number } | null {
+  // the frontmost face under (px, py) CSS px, and its NDC depth there. With
+  // a section, what is cut away isn't there, and the cap (face null) is
+  function hitAt(px: number, py: number): { face: FaceRange | null; depth: number } | null {
     if (!vertexCount || faces.length === 0) return null;
+    const sec = activeSection();
     const w = canvas.width, h = canvas.height;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const sx = px * dpr, sy = py * dpr;
     const { proj, view, model } = mvp(w, h);
     const pv = multiply(proj, multiply(view, model));
-    const project = (i: number): [number, number, number] | null => {
+    const project = (i: number): [number, number, number, number] | null => {
       const x = meshPositions[i * 3]!, y = meshPositions[i * 3 + 1]!, z = meshPositions[i * 3 + 2]!;
       const cw = pv[3]! * x + pv[7]! * y + pv[11]! * z + pv[15]!;
       if (cw <= 0) return null;
       const cx = pv[0]! * x + pv[4]! * y + pv[8]! * z + pv[12]!;
       const cy = pv[1]! * x + pv[5]! * y + pv[9]! * z + pv[13]!;
       const cz = pv[2]! * x + pv[6]! * y + pv[10]! * z + pv[14]!;
-      return [(cx / cw * 0.5 + 0.5) * w, (1 - (cy / cw * 0.5 + 0.5)) * h, cz / cw];
+      return [(cx / cw * 0.5 + 0.5) * w, (1 - (cy / cw * 0.5 + 0.5)) * h, cz / cw, cw];
     };
+    const depthIn = (i: number) => (sec
+      ? cutDepth(sec, [meshPositions[i * 3]!, meshPositions[i * 3 + 1]!, meshPositions[i * 3 + 2]!]) : 0);
     let bestDepth = Infinity, bestFace: FaceRange | null = null;
     for (const f of faces) {
       for (let v = f.start; v < f.start + f.count; v += 3) {
@@ -597,7 +893,24 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
         const t = 1 - u - w2;
         if (u < 0 || w2 < 0 || t < 0) continue;
         const depth = u * a[2] + w2 * b[2] + t * c[2];
-        if (depth < bestDepth) { bestDepth = depth; bestFace = f; }
+        if (depth >= bestDepth) continue;
+        if (sec) {
+          // how far into the cut side the point is (perspective-correct)
+          const k = u / a[3] + w2 / b[3] + t / c[3];
+          const s = (u * depthIn(v) / a[3] + w2 * depthIn(v + 1) / b[3] + t * depthIn(v + 2) / c[3]) / k;
+          if (s > 1e-4) continue;
+        }
+        bestDepth = depth; bestFace = f;
+      }
+    }
+    if (sec) {
+      // the cap, in front of what was hit
+      const P = onPlaneAt(px, py, sec);
+      if (P) {
+        const o = cutOutline(partCut, sec);
+        const cw = pv[3]! * P[0] + pv[7]! * P[1] + pv[11]! * P[2] + pv[15]!;
+        const cz = pv[2]! * P[0] + pv[6]! * P[1] + pv[10]! * P[2] + pv[14]!;
+        if (cw > 0 && cz / cw < bestDepth && insideOutline(o, toPlane(o, P))) return { face: null, depth: cz / cw };
       }
     }
     return bestFace ? { face: bestFace, depth: bestDepth } : null;
@@ -649,8 +962,13 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     const P = ndcProjector();
     let near: EdgeCandidate[] = [];
     if (filter !== 'faces' && edges.length) {
+      const sec = activeSection();
       const screen: ScreenEdge[] = edges.filter(selectable).map((e) => ({
-        index: e.index, pts: e.polyline.map((p) => { const s = P.toCss(p); return s ? [s[0], s[1]] as [number, number] : null; }),
+        index: e.index, pts: e.polyline.map((p) => {
+          if (sec && cutDepth(sec, p) > 1e-4) return null;   // cut away
+          const s = P.toCss(p);
+          return s ? [s[0], s[1]] as [number, number] : null;
+        }),
       }));
       near = edgesNear(screen, px, py);
     }
@@ -687,10 +1005,22 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     const p = add(base, scale(handle.shift, off));
     const [x, y, v1] = toCss(p);
     const [ax, ay, v2] = toCss(add(p, scale(handle.shift, handleArm() / Math.hypot(...handle.shift))));
+    const sec = activeSection();
+    const cut = !!sec && cutDepth(sec, base) > 1e-3;   // its face is cut away
     return {
-      x, y, ax, ay, visible: v1 && v2, dragging: !!drag,
+      x, y, ax, ay, visible: v1 && v2 && !cut, dragging: !!drag,
       value: drag ? drag.value : handle.value, snapFace: drag ? drag.snap : null,
     };
+  }
+
+  // the section plane's arrow: from the plane's middle, into the cut side
+  function placeSecHandle(toCss: (p: Vec3) => [number, number, boolean]): PlacedHandle | null {
+    const s = activeSection();
+    if (!s) return null;
+    const p = planePoint(s, modelCenter);
+    const [x, y, v1] = toCss(p);
+    const [ax, ay, v2] = toCss(add(p, scale(cutNormal(s), handleArm())));
+    return { x, y, ax, ay, visible: v1 && v2, dragging: !!secDrag, value: s.offset, snapFace: secDrag?.snap ?? null };
   }
 
   let raf = 0;
@@ -736,6 +1066,14 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     }
     gl!.uniform1f(uDim, sk ? dimK : 0);
     gl!.uniform3fv(uBg, sk ? sk.bg : [0, 0, 0]);
+    // the section (never in a thumbnail, nor while sketching)
+    const sec = thumbMode ? null : activeSection();
+    const secPlane = sec ? shaderPlane(sec) : null;
+    const setSec = (loc: WebGLUniformLocation | null, onLoc: WebGLUniformLocation | null, on: boolean) => {
+      if (on && secPlane) gl!.uniform4f(loc, secPlane[0], secPlane[1], secPlane[2], secPlane[3]);
+      gl!.uniform1f(onLoc, on && secPlane ? 1 : 0);
+    };
+    setSec(uSec, uSecOn, true);
 
     gl!.bindBuffer(gl!.ARRAY_BUFFER, posBuf);
     gl!.enableVertexAttribArray(aPos);
@@ -785,6 +1123,68 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       } else {
         gl!.drawArrays(gl!.TRIANGLES, 0, vertexCount);
       }
+    }
+
+    // the section's caps: per group of bodies, count the kept surfaces behind
+    // (or in front of) the plane in the stencil — back faces up, front faces
+    // down; where the count isn't 0 the plane is inside the solid — then fill
+    // the plane's rectangle there
+    if (sec && hasStencil && (showCand ? cand!.count : vertexCount)) {
+      const rect = planeRect(sec);
+      const strip = new Float32Array(12);
+      rect.forEach((c, i) => strip.set(c, i * 3));
+      gl!.bindBuffer(gl!.ARRAY_BUFFER, capBuf);
+      gl!.bufferData(gl!.ARRAY_BUFFER, strip, gl!.DYNAMIC_DRAW);
+      const groups: CapGroup[] = showCand
+        ? [{ tint: CAP_TINTS[0]!, bodies: [{ ranges: [[0, cand!.count]], inverted: cand!.inverted }] }]
+        : partCapGroups();
+      const pvm = multiply(proj, multiply(view, model));
+      gl!.enable(gl!.STENCIL_TEST);
+      for (const g of groups) {
+        gl!.clear(gl!.STENCIL_BUFFER_BIT);
+        gl!.useProgram(prog);
+        gl!.bindBuffer(gl!.ARRAY_BUFFER, showCand ? candPosBuf : posBuf);
+        gl!.enableVertexAttribArray(aPos);
+        gl!.vertexAttribPointer(aPos, 3, gl!.FLOAT, false, 0, 0);
+        gl!.bindBuffer(gl!.ARRAY_BUFFER, showCand ? candNormBuf : normBuf);
+        gl!.enableVertexAttribArray(aNormal);
+        gl!.vertexAttribPointer(aNormal, 3, gl!.FLOAT, false, 0, 0);
+        gl!.colorMask(false, false, false, false);
+        gl!.depthMask(false);
+        gl!.disable(gl!.DEPTH_TEST);
+        gl!.stencilFunc(gl!.ALWAYS, 0, 0xff);
+        for (const b of g.bodies) {
+          const up = b.inverted ? gl!.DECR_WRAP : gl!.INCR_WRAP, down = b.inverted ? gl!.INCR_WRAP : gl!.DECR_WRAP;
+          gl!.stencilOpSeparate(gl!.BACK, gl!.KEEP, gl!.KEEP, up);
+          gl!.stencilOpSeparate(gl!.FRONT, gl!.KEEP, gl!.KEEP, down);
+          for (const [first, n] of b.ranges) gl!.drawArrays(gl!.TRIANGLES, first, n);
+        }
+        gl!.colorMask(true, true, true, true);
+        gl!.depthMask(true);
+        gl!.enable(gl!.DEPTH_TEST);
+        gl!.stencilFunc(gl!.NOTEQUAL, 0, 0xff);
+        gl!.stencilOp(gl!.KEEP, gl!.KEEP, gl!.KEEP);
+        gl!.disableVertexAttribArray(aNormal);
+        gl!.useProgram(capProg);
+        gl!.uniformMatrix4fv(cPV, false, pvm);
+        gl!.uniform3fv(cColor, g.tint);
+        gl!.uniform1f(cHatch, 9 * dpr);
+        gl!.uniform1f(cLine, 1.1 * dpr);
+        gl!.bindBuffer(gl!.ARRAY_BUFFER, capBuf);
+        gl!.enableVertexAttribArray(cPos);
+        gl!.vertexAttribPointer(cPos, 3, gl!.FLOAT, false, 0, 0);
+        gl!.drawArrays(gl!.TRIANGLE_STRIP, 0, 4);
+      }
+      gl!.disable(gl!.STENCIL_TEST);
+      // back to the part
+      gl!.useProgram(prog);
+      gl!.bindBuffer(gl!.ARRAY_BUFFER, posBuf);
+      gl!.enableVertexAttribArray(aPos);
+      gl!.vertexAttribPointer(aPos, 3, gl!.FLOAT, false, 0, 0);
+      gl!.bindBuffer(gl!.ARRAY_BUFFER, normBuf);
+      gl!.enableVertexAttribArray(aNormal);
+      gl!.vertexAttribPointer(aNormal, 3, gl!.FLOAT, false, 0, 0);
+      gl!.uniform3fv(uColor, color);
     }
 
     // sketch mode: the face being sketched on stays lit (less dimmed)
@@ -867,12 +1267,22 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     };
 
     // ground grid on the Z=0 plane (orientation is shown by the corner gizmo)
+    setSec(lSec, lSecOn, false);
     if (!thumbMode && !sk) {
       gl!.lineWidth(1);
       drawLines(gridBuf, gridCount, [0.45, 0.48, 0.53]);
     }
+    // the section plane: its rectangle, faint (outline only)
+    if (sec) {
+      const r = planeRect(sec);
+      const lines = new Float32Array([...r[0]!, ...r[1]!, ...r[1]!, ...r[3]!, ...r[3]!, ...r[2]!, ...r[2]!, ...r[0]!]);
+      gl!.bindBuffer(gl!.ARRAY_BUFFER, planeBuf);
+      gl!.bufferData(gl!.ARRAY_BUFFER, lines, gl!.DYNAMIC_DRAW);
+      drawLines(planeBuf, 8, PLANE_LINE);
+    }
 
     // highlight pass: bright, drawn over the solid (depth off so it's visible)
+    setSec(lSec, lSecOn, true);
     if (lineVertexCount && !thumbMode && !sk) {
       gl!.disable(gl!.DEPTH_TEST);
       gl!.lineWidth(2);
@@ -887,6 +1297,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       gl!.uniform2f(tHalfPx, w / 2, h / 2);
       gl!.uniform1f(tWidth, 1.6 * dpr);
       gl!.uniform1f(tBias, 3e-5);   // a few depth-buffer steps
+      setSec(tSec, tSecOn, true);
       gl!.bindBuffer(gl!.ARRAY_BUFFER, sketchBuf);
       gl!.enableVertexAttribArray(tPos);
       gl!.enableVertexAttribArray(tOther);
@@ -910,6 +1321,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       gl!.uniformMatrix4fv(tPV, false, multiply(proj, multiply(view, model)));
       gl!.uniform2f(tHalfPx, w / 2, h / 2);
       gl!.uniform1f(tBias, 6e-5);
+      setSec(tSec, tSecOn, true);
       gl!.bindBuffer(gl!.ARRAY_BUFFER, edgeBuf);
       gl!.enableVertexAttribArray(tPos);
       gl!.enableVertexAttribArray(tOther);
@@ -945,6 +1357,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       gl!.uniformMatrix4fv(tPV, false, multiply(proj, multiply(view, model)));
       gl!.uniform2f(tHalfPx, w / 2, h / 2);
       gl!.uniform1f(tBias, 3e-5);
+      setSec(tSec, tSecOn, false);
       gl!.bindBuffer(gl!.ARRAY_BUFFER, ghostBuf);
       gl!.enableVertexAttribArray(tPos);
       gl!.enableVertexAttribArray(tOther);
@@ -967,6 +1380,82 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       gl!.disableVertexAttribArray(tSide);
     }
 
+    // the section's outline: crisp, on the cap; then what is measured on it
+    let placedMeasure: SectionMeasure | null = null;
+    if (sec) {
+      const cut = showCand ? candCut : partCut;
+      const o = cutOutline(cut, sec);
+      if (outlineFrom !== cut || !cut.uploaded) {
+        gl!.bindBuffer(gl!.ARRAY_BUFFER, outlineBuf);
+        gl!.bufferData(gl!.ARRAY_BUFFER, thickVerts(o.pts), gl!.DYNAMIC_DRAW);
+        outlineFrom = cut; cut.uploaded = true;
+      }
+      gl!.useProgram(thickProg);
+      gl!.uniformMatrix4fv(tPV, false, multiply(proj, multiply(view, model)));
+      gl!.uniform2f(tHalfPx, w / 2, h / 2);
+      setSec(tSec, tSecOn, false);
+      gl!.enableVertexAttribArray(tPos);
+      gl!.enableVertexAttribArray(tOther);
+      gl!.enableVertexAttribArray(tSide);
+      const bindThick = (buf: WebGLBuffer) => {
+        gl!.bindBuffer(gl!.ARRAY_BUFFER, buf);
+        gl!.vertexAttribPointer(tPos, 3, gl!.FLOAT, false, 28, 0);
+        gl!.vertexAttribPointer(tOther, 3, gl!.FLOAT, false, 28, 12);
+        gl!.vertexAttribPointer(tSide, 1, gl!.FLOAT, false, 28, 24);
+      };
+      if (o.count) {
+        bindThick(outlineBuf);
+        gl!.uniform1f(tBias, 6e-5);
+        gl!.uniform1f(tWidth, 1.5 * dpr);
+        gl!.uniform3fv(tColor, OUTLINE);
+        gl!.drawArrays(gl!.TRIANGLES, 0, o.count * 6);
+      }
+      // measure lines: across the wall under the pointer (ticks at its ends),
+      // the clicked points (small crosses) and the line between two
+      const toCss = cssProjector();
+      const mid = (a: Vec3, b: Vec3) => { const [x, y] = toCss(scale(add(a, b), 0.5)); return { x, y }; };
+      const segs: number[] = [];
+      const ppm = pxPerMm(planePoint(sec, modelCenter), o);
+      const n = cutNormal(sec);
+      const tick = (p: Vec3, along: Vec3, px: number) => {
+        const l = Math.hypot(...along) || 1;
+        const t = scale(along, px / ppm / l);
+        segs.push(...add(p, t), ...add(p, scale(t, -1)));
+      };
+      let wall: SectionMeasure['wall'] = null, dist: SectionMeasure['distance'] = null;
+      if (secHover && !showCand) {
+        const { a, b } = secHover;
+        const m: Vec3 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        const side: Vec3 = [n[1] * m[2] - n[2] * m[1], n[2] * m[0] - n[0] * m[2], n[0] * m[1] - n[1] * m[0]];
+        segs.push(...a, ...b);
+        tick(a, side, 5); tick(b, side, 5);
+        wall = { mm: secHover.mm, approx: secHover.approx, ...mid(a, b) };
+      }
+      if (!showCand) {
+        const [bu, bv] = o.basis;
+        for (const pt of secPts) { tick(pt.p, add(bu, bv), 5); tick(pt.p, add(bu, scale(bv, -1)), 5); }
+        if (secPts.length === 2) {
+          const [a, b] = [secPts[0]!.p, secPts[1]!.p];
+          segs.push(...a, ...b);
+          dist = { mm: Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]),
+                   approx: secPts[0]!.approx || secPts[1]!.approx, ...mid(a, b) };
+        }
+      }
+      if (segs.length) {
+        gl!.bindBuffer(gl!.ARRAY_BUFFER, measBuf);
+        gl!.bufferData(gl!.ARRAY_BUFFER, thickVerts(segs), gl!.DYNAMIC_DRAW);
+        bindThick(measBuf);
+        gl!.disable(gl!.DEPTH_TEST);
+        gl!.uniform1f(tWidth, 2 * dpr);
+        gl!.uniform3fv(tColor, HOVER);
+        gl!.drawArrays(gl!.TRIANGLES, 0, segs.length);
+        gl!.enable(gl!.DEPTH_TEST);
+      }
+      gl!.disableVertexAttribArray(tOther);
+      gl!.disableVertexAttribArray(tSide);
+      placedMeasure = { wall, points: showCand ? 0 : secPts.length, distance: dist };
+    }
+
     // report the view-space direction of each world axis (columns of the
     // rotation) so the UI can draw an orientation gizmo
     if (opts.onAxes && !thumbMode) {
@@ -985,10 +1474,14 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
         const [x, y, vis] = toCss(d.point);
         let ax = x, ay = y;
         if (d.dir) [ax, ay] = toCss(add(d.point, scale(d.dir, arm)));
-        return { key: d.key, label: d.label, x, y, ax, ay, visible: vis };
+        return { key: d.key, label: d.label, x, y, ax, ay, visible: vis && !(sec && cutDepth(sec, d.point) > 1e-3) };
       }));
     }
     if (opts.onHandle && !thumbMode) opts.onHandle(placeHandle(cssProjector()));
+    if (!thumbMode) {
+      opts.onSectionHandle?.(placeSecHandle(cssProjector()));
+      opts.onSectionMeasure?.(placedMeasure);
+    }
   }
 
   const dot3 = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -1034,12 +1527,15 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   function sketchAt(px: number, py: number): SketchLines | null {
     if (!sketchLines.length) return null;
     const toCss = cssProjector();
+    const sec = activeSection();
     let best: SketchLines | null = null, bestD = 6;
     for (const s of sketchLines) {
       const g = s.segments;
       for (let i = 0; i + 5 < g.length; i += 6) {
-        const [ax, ay, va] = toCss([g[i]!, g[i + 1]!, g[i + 2]!]);
-        const [bx, by, vb] = toCss([g[i + 3]!, g[i + 4]!, g[i + 5]!]);
+        const a: Vec3 = [g[i]!, g[i + 1]!, g[i + 2]!], b: Vec3 = [g[i + 3]!, g[i + 4]!, g[i + 5]!];
+        if (sec && (cutDepth(sec, a) > 1e-4 || cutDepth(sec, b) > 1e-4)) continue;   // cut away
+        const [ax, ay, va] = toCss(a);
+        const [bx, by, vb] = toCss(b);
         if (!va || !vb) continue;
         const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
         const u = l2 > 0 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2)) : 0;
@@ -1053,13 +1549,12 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   // ── interaction ──
   // a gesture is an orbit (or a click → pick) or a handle drag, fixed at
   // pointer-down; a handle drag never orbits
-  let mode: 'none' | 'orbit' | 'handle' = 'none';
+  let mode: 'none' | 'orbit' | 'handle' | 'section' = 'none';
   let lastX = 0, lastY = 0;
   let downX = 0, downY = 0, moved = 0;
   const baseCursor = canvas.style.cursor;
 
-  function overHandle(e: PointerEvent): boolean {
-    const h = placeHandle(cssProjector());
+  function overHandle(e: PointerEvent, h = placeHandle(cssProjector())): boolean {
     if (!h || !h.visible) return false;
     const rect = canvas.getBoundingClientRect();
     const px = e.clientX - rect.left, py = e.clientY - rect.top;
@@ -1100,6 +1595,43 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     scheduleRender();
   }
 
+  // the section plane dragged along its dir, snapped like a handle: to a 0.5
+  // grid (Shift 0.1), or onto a parallel flat face within a few px
+  function secDragTo(e: PointerEvent) {
+    const s = section;
+    if (!secDrag || !s) return;
+    const base = add(planePoint(s, modelCenter), scale(s.dir, secDrag.offset0 - s.offset));
+    const toCss = cssProjector();
+    const [x0, y0] = toCss(base);
+    const [x1, y1] = toCss(add(base, s.dir));
+    const sx = x1 - x0, sy = y1 - y0;
+    const mx = e.clientX - secDrag.x0, my = e.clientY - secDrag.y0;
+    const t = dragAmount([mx, my], [sx, sy]);
+    if (t === null) return;
+    let offset = secDrag.offset0, snap: number | null = null;
+    if (Math.hypot(mx, my) >= 3) {
+      offset = snapToStep(secDrag.offset0 + t, e.shiftKey ? 0.1 : 0.5);
+      const plane = { index: -1, start: 0, count: 0, kind: 'plane', center: base, normal: s.dir };
+      const hit = snapToPlane(plane, s.dir, t, Math.hypot(sx, sy), faces, []);
+      if (hit) { offset = secDrag.offset0 + hit.t; snap = hit.face; }
+    }
+    if (offset === s.offset && snap === secDrag.snap) return;
+    section = { ...s, offset };
+    secDrag.snap = snap;
+    secHover = null; secPts = [];
+    opts.onSection?.(section, { dragging: true, snapFace: snap });
+    scheduleRender();
+  }
+  function endSecDrag(cancel: boolean) {
+    window.removeEventListener('keydown', onKey);
+    canvas.style.cursor = baseCursor;
+    if (!secDrag) return;
+    if (cancel && section) section = { ...section, offset: secDrag.offset0 };
+    secDrag = null;
+    if (section) opts.onSection?.(section, { dragging: false, snapFace: null });
+    scheduleRender();
+  }
+
   function endHandleDrag(cancel: boolean) {
     window.removeEventListener('keydown', onKey);
     canvas.style.cursor = baseCursor;
@@ -1115,7 +1647,12 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     scheduleRender();
   }
   function onKey(e: KeyboardEvent) {
-    if (e.key === 'Escape' && drag && !drag.pending) { e.preventDefault(); endHandleDrag(true); }
+    if (e.key === 'Escape' && cancelDrag()) e.preventDefault();
+  }
+  function cancelDrag(): boolean {
+    if (secDrag) { mode = 'none'; endSecDrag(true); return true; }
+    if (drag && !drag.pending) { mode = 'none'; endHandleDrag(true); return true; }
+    return false;
   }
 
   function onDown(e: PointerEvent) {
@@ -1133,23 +1670,38 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       scheduleRender();
       return;
     }
+    const sec = activeSection();
+    if (e.button === 0 && sec && !drag?.pending && overHandle(e, placeSecHandle(cssProjector()))) {
+      mode = 'section';
+      secDrag = { x0: e.clientX, y0: e.clientY, offset0: sec.offset, snap: null };
+      secHover = null;
+      canvas.style.cursor = 'grabbing';
+      window.addEventListener('keydown', onKey);
+      scheduleRender();
+      return;
+    }
     anim = null;   // grabbing the view stops a view animation where it is
+    if (secHover) { secHover = null; scheduleRender(); }
     mode = 'orbit';
     hoverXY = null;
     setHoverPick(null);
   }
   function onMove(e: PointerEvent) {
     if (mode === 'handle') { if (drag && !drag.pending) dragTo(e); return; }
+    if (mode === 'section') { secDragTo(e); return; }
     if (mode === 'none') {   // hover: show the handle is grabbable
       if (sketch) return;
-      const onHandle = handle && !drag?.pending && overHandle(e);
+      const onHandle = (handle && !drag?.pending && overHandle(e))
+        || (activeSection() && overHandle(e, placeSecHandle(cssProjector())));
       const rect = canvas.getBoundingClientRect();
       const px = e.clientX - rect.left, py = e.clientY - rect.top;
       const s = onHandle ? null : sketchAt(px, py);
       if ((s?.id ?? null) !== hoverSketch) { hoverSketch = s?.id ?? null; scheduleRender(); }
       opts.onSketchHover?.(s ? { id: s.id, name: s.name, x: px, y: py } : null);
-      if (onHandle || s) { setHoverPick(null); canvas.style.cursor = 'pointer'; }
-      else hoverLater(px, py);
+      if (onHandle || s) {
+        setHoverPick(null); canvas.style.cursor = 'pointer';
+        if (secHover) { secHover = null; scheduleRender(); }
+      } else hoverLater(px, py);
       return;
     }
     moved += Math.abs(e.clientX - lastX) + Math.abs(e.clientY - lastY);
@@ -1167,6 +1719,8 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     hoverRaf = requestAnimationFrame(() => {
       hoverRaf = 0;
       if (!hoverXY || mode !== 'none' || sketch) return;
+      // on the section's cut: measure the wall there instead
+      if (measureAt(hoverXY[0], hoverXY[1])) { setHoverPick(null); canvas.style.cursor = 'crosshair'; return; }
       const p = opts.onPick ? pickAt(hoverXY[0], hoverXY[1]) : null;
       setHoverPick(p && ('edge' in p ? { edge: p.edge } : { face: p.face.index }));
       canvas.style.cursor = p && 'edge' in p ? 'pointer' : baseCursor;
@@ -1186,6 +1740,20 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     if (was === 'handle') {
       if (drag && !drag.pending) endHandleDrag(false);
       return;
+    }
+    if (was === 'section') { endSecDrag(false); return; }
+    if (was === 'orbit' && moved < 4) {
+      // a click on the section's outline: a point to measure from (a third
+      // starts again); anywhere else drops them
+      const rect = canvas.getBoundingClientRect();
+      const r = outlineAt(downX - rect.left, downY - rect.top, 8, false);
+      if (r) {
+        if (secPts.length >= 2) secPts = [];
+        secPts.push({ p: fromPlane(r.o, r.s, r.near.p), approx: segApprox(r.o, r.near.seg) });
+        scheduleRender();
+        return;
+      }
+      if (secPts.length) { secPts = []; scheduleRender(); }
     }
     if (was === 'orbit' && moved < 4 && opts.onPick) {  // a click, not a drag → pick a face or an edge
       const rect = canvas.getBoundingClientRect();
@@ -1227,6 +1795,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   }
   function onLeave() {
     if (hoverSketch) { hoverSketch = null; scheduleRender(); }
+    if (secHover) { secHover = null; scheduleRender(); }
     opts.onSketchHover?.(null);
     hoverXY = null;
     setHoverPick(null);
@@ -1252,6 +1821,13 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       meshPositions = mesh.positions;
       faces = facesArg ?? [];
       faceByIndex = new Map(faces.map((f) => [f.index, f]));
+      // the section stays; its outline and caps are the new mesh's
+      partCut = newCut(mesh.positions, mesh.normals);
+      capGroups = null;
+      triFace = new Int32Array(mesh.positions.length / 9).fill(-1);
+      faces.forEach((f, i) => triFace.fill(i, f.start / 3, (f.start + f.count) / 3));
+      secHover = null; secPts = [];
+      if (secDrag) endSecDrag(true);
       selected = [];
       hovered = null;
       hoverPick = null;
@@ -1278,6 +1854,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       }
       gl!.bindBuffer(gl!.ARRAY_BUFFER, edgeBuf);
       gl!.bufferData(gl!.ARRAY_BUFFER, thickVerts(all), gl!.STATIC_DRAW);
+      capGroups = null;   // the bodies come from which faces the edges join
       selEdges = [];
       hoverEdgeExt = null;
       hoverPick = null;
@@ -1295,12 +1872,15 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       scheduleRender();
     },
     setPreviewMesh(p) {
-      if (!p) { cand = null; scheduleRender(); return; }
+      if (!p) { cand = null; candCut = newCut([], []); scheduleRender(); return; }
       gl!.bindBuffer(gl!.ARRAY_BUFFER, candPosBuf);
       gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array(p.mesh.positions), gl!.STATIC_DRAW);
       gl!.bindBuffer(gl!.ARRAY_BUFFER, candNormBuf);
       gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array(p.mesh.normals), gl!.STATIC_DRAW);
-      cand = { count: p.mesh.positions.length / 3, color: p.color };
+      const count = p.mesh.positions.length / 3;
+      cand = { count, color: p.color, inverted: signedVolume6(p.mesh.positions, 0, count) < 0 };
+      candCut = newCut(p.mesh.positions, p.mesh.normals);
+      secHover = null;
       scheduleRender();
     },
     hoverFace(index: number | null) {
@@ -1314,6 +1894,23 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       scheduleRender();
     },
     setDims(d: DimAnchor[]) { dims = d; scheduleRender(); },
+    setSection(sArg: Section | null) {
+      if (sArg === section) return;   // our own onSection, echoed back
+      if (secDrag) { secDrag = null; mode = 'none'; window.removeEventListener('keydown', onKey); canvas.style.cursor = baseCursor; }
+      section = sArg;
+      secHover = null; secPts = [];
+      hoverPick = null;
+      if (!sArg) opts.onSectionMeasure?.(null);
+      scheduleRender();
+    },
+    sectionFrame() {
+      const rot = quatToMat4(anim ? anim.to : q);
+      return { back: [rot[2]!, rot[6]!, rot[10]!] as Vec3, center: modelCenter };
+    },
+    clearSectionPoints() {
+      if (secPts.length) { secPts = []; scheduleRender(); }
+    },
+    cancelDrag,
     setHandle(h: DragHandle | null) {
       if (drag) endHandleDrag(true);
       handle = h;
@@ -1474,9 +2071,16 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       gl.deleteBuffer(sketchBuf);
       gl.deleteBuffer(ghostBuf);
       gl.deleteBuffer(edgeBuf);
+      gl.deleteBuffer(candPosBuf);
+      gl.deleteBuffer(candNormBuf);
+      gl.deleteBuffer(outlineBuf);
+      gl.deleteBuffer(capBuf);
+      gl.deleteBuffer(planeBuf);
+      gl.deleteBuffer(measBuf);
       gl.deleteProgram(prog);
       gl.deleteProgram(lineProg);
       gl.deleteProgram(thickProg);
+      gl.deleteProgram(capProg);
     },
   };
 }

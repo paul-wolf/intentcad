@@ -8,7 +8,13 @@ import {
 import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, persistSketches, getBackendId } from '@/api/autoSave';
 import { DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
 import type { ChatMessage } from '@/types/document';
-import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim, type PlacedHandle, type ViewerPick } from '@/build/webglViewer';
+import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim, type PlacedHandle, type ViewerPick,
+         type SectionMeasure } from '@/build/webglViewer';
+import {
+  atPosition, axisSection, cutNormal, flipSection, loadSection, saveSection, sectionAxis, sectionForView, sectionOnFace,
+  sectionPosition, type Section,
+} from '@/build/section';
+import { SectionPanel } from './SectionPanel';
 import {
   FILTER_KEY, PICK_FILTERS, clickSelect, edgeHandle, edgeLength, edgeLoop, edgeOfRef, faceEdges, measureEdges, nextFilter,
   sameEdgeRef, selectEdges, tangentChain, type PickFilter,
@@ -268,6 +274,72 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         : p.dragging ? (edge ? '0.1 mm steps · Esc cancels' : 'Shift: 0.1 steps · Esc cancels')
         : edge ? 'drag to change' : handleHintRef.current;
     }
+  };
+
+  // the section view (Z): a plane cutting the 3D view open. View-only: the
+  // script never hears of it. The plane is reported back by the viewer as
+  // it is dragged; state follows only when the drag ends
+  const [secPlane, setSecPlane] = useState<Section | null>(null);
+  const [secOn, setSecOn] = useState(false);
+  const [secDragging, setSecDragging] = useState(false);
+  const secLiveRef = useRef<Section | null>(null);    // the viewer's plane, also mid-drag
+  const secFromRef = useRef<number | null>(null);     // its position when the drag began
+  const secPointsRef = useRef(0);                     // outline points clicked for a distance
+  const onSection = (sNow: Section, st: { dragging: boolean; snapFace: number | null }) => {
+    secLiveRef.current = sNow;
+    if (st.dragging) {
+      if (secFromRef.current == null) { secFromRef.current = sectionPosition(secPlaneRef.current ?? sNow); setSecDragging(true); }
+      return;
+    }
+    secFromRef.current = null;
+    setSecDragging(false);
+    setSecPlane(sNow);
+  };
+  const secPlaneRef = useRef<Section | null>(null);
+  secPlaneRef.current = secPlane;
+  type SecEls = HandleEls & { wall: HTMLDivElement | null; dist: HTMLDivElement | null };
+  const sEls = useRef<SecEls>({ line: null, knob: null, label: null, sub: null, wall: null, dist: null });
+  const onSectionHandle = (p: PlacedHandle | null) => {
+    const { line, knob, label, sub: subEl } = sEls.current;
+    const plane = secLiveRef.current;
+    const show = !!(p && p.visible && plane);
+    for (const el of [line, knob, label, subEl]) el?.setAttribute('opacity', show ? '1' : '0');
+    if (!show || !p || !plane) return;
+    line?.setAttribute('x1', `${p.x}`); line?.setAttribute('y1', `${p.y}`);
+    line?.setAttribute('x2', `${p.ax}`); line?.setAttribute('y2', `${p.ay}`);
+    knob?.setAttribute('cx', `${p.x}`); knob?.setAttribute('cy', `${p.y}`);
+    const right = p.ax >= p.x;
+    const lx = `${p.ax + (right ? 9 : -9)}`, anchor = right ? 'start' : 'end';
+    const name = sectionAxis(plane) ?? 'Plane';
+    const at = sectionPosition(plane), from = secFromRef.current;
+    if (label) {
+      label.setAttribute('x', lx); label.setAttribute('y', `${p.ay + 4}`);
+      label.setAttribute('text-anchor', anchor);
+      label.textContent = p.dragging && from != null && Math.abs(from - at) > 1e-9
+        ? `${name} ${from.toFixed(2)} → ${at.toFixed(2)} mm` : `${name} ${at.toFixed(2)} mm`;
+    }
+    if (subEl) {
+      subEl.setAttribute('x', lx); subEl.setAttribute('y', `${p.ay + 18}`);
+      subEl.setAttribute('text-anchor', anchor);
+      const snapped = p.snapFace !== null;
+      subEl.setAttribute('fill', snapped ? '#2dd4bf' : '#cfd6df');
+      subEl.textContent = snapped ? `snap → face #${p.snapFace}`
+        : p.dragging ? 'Shift: 0.1 steps · Esc cancels' : 'drag to move the cut';
+    }
+  };
+  // the wall under the cursor and the two-point distance, beside what they measure
+  const onSectionMeasure = (m: SectionMeasure | null) => {
+    secPointsRef.current = m?.points ?? 0;
+    const put = (el: HTMLDivElement | null, v: SectionMeasure['wall'], what: string) => {
+      if (!el) return;
+      el.style.display = v ? 'block' : 'none';
+      if (!v) return;
+      el.style.left = `${v.x + 14}px`; el.style.top = `${v.y + 12}px`;
+      el.firstElementChild!.textContent = `${v.approx ? '≈ ' : ''}${v.mm.toFixed(2)} mm`;
+      el.lastElementChild!.textContent = v.approx ? `${what} · curved: measured on the mesh` : what;
+    };
+    put(sEls.current.wall, m?.wall ?? null, 'wall');
+    put(sEls.current.dist, m?.distance ?? null, 'distance');
   };
 
   const [code, setCode] = useState('');
@@ -572,12 +644,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         try {
           viewerRef.current = createViewer(canvasRef.current, {
             onPick, onEdgeDoubleClick, onAxes, onDims, onHandle, onHandleDrop, onHandleMove,
+            onSection, onSectionHandle, onSectionMeasure,
             ...(sketchOnFace ? {
               onSketchHover: (h: { name: string; x: number; y: number } | null) => setSketchTip(h),
               onSketchOpen: (id: string) => { setSketchTip(null); faceSketchRef.current.open(id); },
             } : {}),
           });
           if (sketchOnFace) faceSketchRef.current.pushLines();
+          viewerRef.current.setSection(secLiveRef.current);
         } catch (err) {
           setStatus('error');
           setMessage(errorText(err));
@@ -733,6 +807,20 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     return () => window.clearInterval(t);
   }, [docId]);
   const ctxOwner = useMemo(() => (docId ? { document: docId } : null), [docId]);
+  // the section is remembered per part
+  useEffect(() => {
+    if (!docId) return;
+    const saved = loadSection(docId);
+    if (saved) { setSecPlane(saved.plane); setSecOn(saved.on); }
+  }, [docId]);
+  useEffect(() => {
+    if (docId && secPlane) saveSection(docId, { on: secOn, plane: secPlane });
+  }, [docId, secPlane, secOn]);
+  useEffect(() => {
+    const live = secOn ? secPlane : null;
+    secLiveRef.current = live;
+    viewerRef.current?.setSection(live);
+  }, [secOn, secPlane]);
   const ctxStore = useContextFiles(ctxOwner);
   // files left out of the next message only (the chips' ×); cleared after it is sent
   const [skipCtx, setSkipCtx] = useState<ReadonlySet<string>>(new Set());
@@ -1244,8 +1332,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     background: 'rgba(0,0,0,0.25)', border: `1px solid ${palette.border}`, borderRadius: '4px',
     color: palette.textSecondary, fontSize: '11px', padding: '2px 7px', cursor: 'pointer', lineHeight: 1.4,
   };
-  // N / the Normal button: the last face clicked
+  // N / the Normal button: the last face clicked; with the section on,
+  // straight at the cut (from the side it cuts away)
   const lookAtSelection = () => {
+    const cut = secLiveRef.current;
+    if (cut) { viewerRef.current?.lookAlong(cutNormal(cut)); return; }
     const s = selRef.current;
     const f = s.length ? resRef.current?.faces.find((x) => x.index === s[s.length - 1]) : undefined;
     if (f) { viewerRef.current?.lookAlong(f.normal); return; }
@@ -1297,12 +1388,16 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       }
       const ops = opsRef.current;
       const op = opForKey(e.key);
+      if (e.key === 'Escape' && v.cancelDrag()) {   // a drag in the view: back to where it began
+        e.preventDefault(); e.stopPropagation(); return;
+      }
       if (e.key === 'Escape') {
         if (faceSketchRef.current.menuOpen) return;
         // a dialog closes first, then the selection clears; then (Operations)
         // back to the layout before
         if (ops?.modal) return;
         if (ops?.model.dialogOpen) closeOpRef.current();
+        else if (secPointsRef.current) v.clearSectionPoints();
         else if (selRef.current.length || selERef.current.length) applySelectionRef.current([], []);
         else if (layoutRef.current === 'ops') leaveOps();
         else return;
@@ -1482,10 +1577,32 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     faces: sel.map((i) => ({ kind: resRef.current?.faces.find((f) => f.index === i)?.kind ?? '' })),
     edges: selE.map((i) => ({ kind: resRef.current?.edges.find((e) => e.index === i)?.kind ?? '' })),
   };
+  // Z: on just inside the selected flat face, else through the middle,
+  // square to the axis nearest the view; off again
+  const lastFace = () => {
+    const s = selRef.current;
+    const f = s.length ? resRef.current?.faces.find((x) => x.index === s[s.length - 1]) : undefined;
+    return f && f.kind === 'plane' ? f : null;
+  };
+  const toggleSection = () => {
+    if (secOn) { setSecOn(false); return; }
+    const v = viewerRef.current;
+    if (!v || !resRef.current?.faces.length) { hint('Build the part first, then press Z'); return; }
+    const f = lastFace();
+    const { back, center } = v.sectionFrame();
+    setSecPlane(f ? sectionOnFace(f) : sectionForView(back, center));
+    setSecOn(true);
+  };
+  const sectionAxisTo = (axis: 0 | 1 | 2) => {
+    const v = viewerRef.current;
+    if (!v || !secPlane || sectionAxis(secPlane) === 'XYZ'[axis]) return;
+    const { back, center } = v.sectionFrame();
+    setSecPlane(axisSection(axis, center, back));
+  };
   const opModel: OpModel = {
     status, hasCode: !!code.trim(), dialogOpen: opOpen, sketching: faceSketch.active, canSketch: sketchOnFace,
     asking, holeSketches: holeSketches.length, holeAt: holeAtText, autoRound: !!resRef.current?.auto_round,
-    exporting: !!exporting, importing, hasParams, showParams, ortho, measure: measureText,
+    exporting: !!exporting, importing, hasParams, showParams, ortho, measure: measureText, section: secOn,
   };
   const opCtx: OpContext = {
     sketchOnSelection, sketchOnPlane,
@@ -1515,6 +1632,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         void navigator.clipboard.writeText(text).then(() => hint(`Copied ${text}`), () => hint(text));
       } catch { hint(text); }
     },
+    section: toggleSection,
   };
   // the last few operations used, for the grid's Recent row
   const [recent, setRecent] = useState<string[]>(loadRecent);
@@ -2042,10 +2160,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                   {view === 'iso' ? 'Iso' : `${view[0]!.toUpperCase()}${view.slice(1)}`}
                 </button>
               ))}
-              <button style={{ ...viewBtn, marginLeft: '6px', opacity: sel.length ? 1 : 0.45,
-                               cursor: sel.length ? 'pointer' : 'default' }}
-                      disabled={!sel.length} onClick={lookAtSelection}
-                      title={sel.length ? 'Look straight at the selected face (N)' : 'Select a face first (then N or this button)'}>
+              <button style={{ ...viewBtn, marginLeft: '6px', opacity: sel.length || secOn ? 1 : 0.45,
+                               cursor: sel.length || secOn ? 'pointer' : 'default' }}
+                      disabled={!sel.length && !secOn} onClick={lookAtSelection}
+                      title={secOn ? 'Look straight at the cut (N)' : sel.length ? 'Look straight at the selected face (N)'
+                        : 'Select a face first (then N or this button)'}>
                 Normal
               </button>
               {sketchOnFace && (() => {
@@ -2148,6 +2267,47 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
               <text ref={(el) => { hEls.current.sub = el; }} opacity={0} fontSize={10.5}
                     style={{ paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.7)', strokeWidth: 3 }} />
             </svg>
+            {/* the section plane's arrow (positioned per frame by onSectionHandle) */}
+            <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%',
+                          pointerEvents: 'none', overflow: 'hidden' }}>
+              <defs>
+                <marker id="sectionArrow" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12"
+                        refX="4" refY="6" orient="auto">
+                  <path d="M0,1 L11,6 L0,11 Z" fill="#e0784a" />
+                </marker>
+              </defs>
+              <line ref={(el) => { sEls.current.line = el; }} opacity={0}
+                    stroke="#e0784a" strokeWidth={2.5} strokeLinecap="round" markerEnd="url(#sectionArrow)" />
+              <circle ref={(el) => { sEls.current.knob = el; }} opacity={0} r={4.5}
+                      fill="#e0784a" stroke="#fff" strokeWidth={1.5} />
+              <text ref={(el) => { sEls.current.label = el; }} opacity={0}
+                    fontSize={12} fontWeight={600} fill="#f5b08e"
+                    style={{ paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.7)', strokeWidth: 3.5 }} />
+              <text ref={(el) => { sEls.current.sub = el; }} opacity={0} fontSize={10.5}
+                    style={{ paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.7)', strokeWidth: 3 }} />
+            </svg>
+            {/* the section's readouts: the wall under the cursor, two points' distance */}
+            {(['wall', 'dist'] as const).map((k) => (
+              <div key={k} ref={(el) => { sEls.current[k] = el; }}
+                   style={{ display: 'none', position: 'absolute', padding: '4px 8px', pointerEvents: 'none',
+                            background: 'rgba(20,22,26,0.86)', border: '1px solid rgba(255,255,255,0.12)',
+                            borderRadius: '4px', color: '#eef1f5', whiteSpace: 'nowrap', zIndex: 3,
+                            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontVariantNumeric: 'tabular-nums' }}>
+                <div style={{ fontSize: '14px', fontWeight: 600, color: '#f2ca63' }} />
+                <div style={{ fontSize: '10.5px', opacity: 0.7 }} />
+              </div>
+            ))}
+            {secOn && secPlane && !faceSketch.active && (
+              <div style={{ position: 'absolute', left: opWidth ? opWidth + 24 : 12, right: 12, bottom: 44, zIndex: 2,
+                            display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
+                <SectionPanel plane={secPlane} palette={palette} canAlign={!!lastFace()} dragging={secDragging}
+                  onAxis={sectionAxisTo}
+                  onAlign={() => { const f = lastFace(); if (f) setSecPlane(sectionOnFace(f)); }}
+                  onFlip={() => setSecPlane((p) => p && flipSection(p))}
+                  onPosition={(v) => setSecPlane((p) => p && atPosition(p, v))}
+                  onOff={() => setSecOn(false)} />
+              </div>
+            )}
             {Object.keys(paramVals).length > 0 && status === 'done' && (
               <div style={{ position: 'absolute', right: 10, bottom: 10, fontSize: '11px',
                             color: dimsOn ? '#e0b24a' : palette.textSecondary, pointerEvents: 'none',

@@ -24,6 +24,7 @@ operations cost nothing to support, they just don't get UI.
 - STEP import; STL / STEP / DXF export
 - Measure (face readouts), standard views, normal-to, ortho
 - Versions; Operations panel (one registry, selection-aware)
+- Section view (Z): draggable clipping plane with hatched caps, wall-thickness and two-point readouts
 
 ## Foundation: edge selection (next, highest priority)
 
@@ -37,7 +38,7 @@ lines, pattern directions, revolve axes and "up to" references all depend on it.
 |---|---------|-------|------|
 | 1 | Fillet / chamfer on selected edges | The most-used CAD operation. First user of edge selection. | M |
 | 2 | Reopen any operation to edit | Shell/Hole reopen already; Extrude and the rest must too. | S |
-| 3 | Section view | Draggable clipping plane: walls, insert depth, board fit. | S |
+| 3 | ~~Section view~~ ✓ done | Draggable clipping plane: walls, insert depth, board fit. | S |
 | 4 | Mirror (features or body, across a plane) | Symmetric parts, left/right versions. | M |
 | 5 | 3D pattern (linear / circular) | Vents, ribs, boss circles. Follow the 2D copy dialogs. | M |
 | 6 | Offset plane | Sketch at a height or mid-way between faces. | S |
