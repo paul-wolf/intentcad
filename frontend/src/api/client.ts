@@ -82,13 +82,20 @@ export class ApiError extends Error {
   fix?: SizeFix;
   /** For a failed build: the script's editable params as far as it got. */
   params?: Record<string, number>;
+  /** For a failed AI edit: what its calls cost before it gave up. */
+  usage?: Pick<EditResponse, 'tokens_in' | 'tokens_out' | 'cost_usd' | 'cache_read_tokens'>;
   constructor(status: number, body: string) {
     let detail = body;
     let fix: SizeFix | undefined;
     let params: Record<string, number> | undefined;
+    let usage: ApiError['usage'];
     try {
       const j = JSON.parse(body);
       if (j && typeof j.message === 'string') detail = j.message;
+      if (j && typeof j.cost_usd === 'number') {
+        usage = { tokens_in: j.tokens_in ?? 0, tokens_out: j.tokens_out ?? 0, cost_usd: j.cost_usd,
+                       cache_read_tokens: j.cache_read_tokens ?? 0 };
+      }
       if (j && j.fix && typeof j.fix === 'object') fix = j.fix as SizeFix;
       if (j && j.params && typeof j.params === 'object') params = j.params as Record<string, number>;
     } catch { /* not JSON — keep the raw body */ }
@@ -98,6 +105,7 @@ export class ApiError extends Error {
     this.detail = detail;
     this.fix = fix;
     this.params = params;
+    this.usage = usage;
   }
 }
 
@@ -311,13 +319,14 @@ export const buildApi = {
   },
   edit(payload: { code: string; instruction: string; context?: string; document_id?: string;
                   history?: { role: string; text: string }[]; model?: string; production?: string;
-                  build_error?: string }): Promise<EditResponse> {
+                  build_error?: string; skip_context?: string[] }): Promise<EditResponse> {
     return request('/build/edit', { method: 'POST', body: JSON.stringify(payload) });
   },
   /** The Claude models the AI edit can use right now (discovered server-side
-   *  from the Models API, so a new release appears without a frontend change). */
-  models(): Promise<ModelsResponse> {
-    return request('/build/models');
+   *  from the Models API, so a new release appears without a frontend change).
+   *  `refresh` has the server ask the API again now (it allows that once a minute). */
+  models(refresh = false): Promise<ModelsResponse> {
+    return request(`/build/models${refresh ? '?refresh=true' : ''}`);
   },
   usage(documentId: string): Promise<UsageResponse> {
     return request(`/build/usage?document=${encodeURIComponent(documentId)}`);
@@ -376,10 +385,72 @@ export interface DimInfo {
 export interface EditResponse {
   kind: 'edit' | 'question';
   code: string; note?: string; question: string;
+  /** all input read, cached or not; of it, cache_read_tokens came from the prompt cache */
   tokens_in: number; tokens_out: number; cost_usd: number;
+  cache_read_tokens?: number; cache_write_tokens?: number;
+  /** the ids of the context files sent */
+  context_files?: string[];
 }
 
-export interface UsageTotals { edits: number; tokens_in: number; tokens_out: number; cost_usd: number }
+export interface UsageTotals {
+  edits: number; tokens_in: number; tokens_out: number; cost_usd: number; cache_read_tokens?: number;
+}
+
+// ── context files (reference PDFs and images the AI reads) ──
+
+export interface ContextFile {
+  id: string;
+  scope: 'part' | 'project';
+  project_id: string | null;
+  document_id: string | null;
+  filename: string;
+  title: string;
+  note: string;
+  content_type: string;
+  size: number;
+  page_count: number | null;
+  width: number | null;
+  height: number | null;
+  in_context: boolean;
+  /** 1-based pages sent to the AI; null = all */
+  pages: number[] | null;
+  page_tokens: number[];
+  est_tokens: number;
+  created_at: string;
+}
+
+export interface ContextFiles { part: ContextFile[]; project: ContextFile[]; project_id: string | null }
+
+export type ContextOwner = { document: string } | { project: string };
+
+const ownerQuery = (o: ContextOwner) =>
+  'document' in o ? `document=${encodeURIComponent(o.document)}` : `project=${encodeURIComponent(o.project)}`;
+
+export const contextApi = {
+  list(owner: ContextOwner): Promise<ContextFiles> {
+    return request(`/context/?${ownerQuery(owner)}`);
+  },
+  upload(owner: ContextOwner, file: File, note = ''): Promise<ContextFile> {
+    const body = new FormData();
+    body.append('file', file);
+    if (note) body.append('note', note);
+    return request(`/context/?${ownerQuery(owner)}`, { method: 'POST', body });
+  },
+  update(id: string, patch: { title?: string; note?: string; in_context?: boolean; pages?: number[];
+                              all_pages?: boolean }): Promise<ContextFile> {
+    return request(`/context/${id}`, { method: 'PATCH', body: JSON.stringify(patch) });
+  },
+  remove(id: string): Promise<void> {
+    return request(`/context/${id}`, { method: 'DELETE' });
+  },
+  /** an <img> URL for one page (the session cookie authenticates it) */
+  thumbnailUrl(id: string, page = 1, width = 320): string {
+    return `${API_BASE}/context/${id}/thumbnail?page=${page}&width=${width}`;
+  },
+  fileUrl(id: string): string {
+    return `${API_BASE}/context/${id}/file`;
+  },
+};
 export interface ModelInfo {
   id: string;
   label: string;          // short menu name, e.g. "Opus 5"

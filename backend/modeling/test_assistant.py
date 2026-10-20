@@ -41,6 +41,61 @@ class EditTests(SimpleTestCase):
                         llm=_fake({"code": "part = Box(2,2,2)", "note": "ok", "usage": {"input": 1_000_000, "output": 0}}))
         self.assertEqual(r["cost_usd"], 10.0)
 
+    def test_context_files_go_before_the_text_on_every_call(self):
+        seen = []
+        outs = iter([{"code": "part = Box(1,1,1) +", "note": "x"},     # fails to build
+                     {"code": "part = Box(2,2,2)", "note": "ok"}])
+        def llm(system, user, tools):
+            seen.append(user)
+            return next(outs)
+        pdf = {"type": "document", "source": {"type": "base64", "media_type": "application/pdf",
+                                              "data": "JVBERi0="}, "cache_control": {"type": "ephemeral"}}
+        edit_script("part = Box(1,1,1)", "make a case for the board", files=[pdf],
+                    file_listing=["1. carrier.pdf: all 7 pages"], llm=llm)
+        self.assertEqual(len(seen), 2)              # the retry sends the files too (cached)
+        for user in seen:
+            self.assertIs(user[0], pdf)
+            self.assertEqual(user[1]["type"], "text")
+            self.assertTrue(user[1]["text"].startswith(
+                "CONTEXT FILES (attached above, in this order):\n1. carrier.pdf: all 7 pages"))
+        self.assertIn("failed to build", seen[1][1]["text"])
+
+    def test_without_files_the_prompt_is_plain_text(self):
+        seen = {}
+        def llm(system, user, tools):
+            seen["user"] = user
+            return {"code": "part = Box(1,1,1)", "note": "ok"}
+        edit_script("part = Box(2,2,2)", "smaller", llm=llm)
+        self.assertIsInstance(seen["user"], str)
+        self.assertNotIn("CONTEXT FILES", seen["user"])
+
+    def test_cached_tokens_are_priced_and_reported(self):
+        usage = {"input": 2_000, "output": 1_000, "cache_read": 1_000_000, "cache_write": 0}
+        r = edit_script("part = Box(1,1,1)", "bigger", model="claude-opus-5",
+                        llm=_fake({"code": "part = Box(2,2,2)", "note": "ok", "usage": usage}))
+        self.assertEqual(r["tokens_in"], 1_002_000)
+        self.assertEqual((r["cache_read_tokens"], r["cache_write_tokens"]), (1_000_000, 0))
+        # $5/MTok input: 2k fresh = 0.01, 1M read at 0.1× = 0.5; 1k out at $25/MTok = 0.025
+        self.assertAlmostEqual(r["cost_usd"], 0.535, places=4)
+        self.assertEqual(llm_models.cache_read_rate("claude-opus-5-5"), 0.05)
+        self.assertEqual(llm_models.cache_read_rate("claude-fable-5-1"), 0.025)
+
+    def test_system_prompt_has_the_provenance_rules(self):
+        seen = {}
+        def llm(system, user, tools):
+            seen["system"], seen["tools"] = system, tools
+            return {"code": "part = Box(1,1,1)", "note": "ok"}
+        edit_script("part = Box(2,2,2)", "a case", llm=llm)
+        s = seen["system"]
+        for kind in ("(stated)", "(estimated from drawing scale, ±0.5)", "(user said 3.2 in chat)"):
+            self.assertIn(kind, s)
+        self.assertIn("Never present an estimate as exact", s)
+        self.assertIn("note MUST list every estimated value", s)
+        self.assertIn("ask_clarification instead of guessing", s)
+        self.assertIn("known reference", s)
+        note = seen["tools"][0]["input_schema"]["properties"]["note"]["description"]
+        self.assertIn("estimated", note)
+
     def test_returns_validated_script(self):
         r = edit_script("part = Box(10,10,10)", "make it a cylinder",
                         llm=_fake({"code": "part = Cylinder(5, 10)", "note": "Made it a cylinder."}))
@@ -148,6 +203,17 @@ class EditTests(SimpleTestCase):
                 {"code": "part = nope(", "note": "a"},
                 {"code": "part = also_bad(", "note": "b"},
             ))
+
+    def test_failed_edit_still_reports_what_it_cost(self):
+        u = {"input": 1000, "output": 500}
+        with self.assertRaises(AssistantError) as cm:
+            edit_script("part = Box(1,1,1)", "x", llm=_fake(
+                {"code": "part = nope(", "note": "a", "usage": u},
+                {"code": "part = also_bad(", "note": "b", "usage": u},
+            ))
+        usage = cm.exception.usage
+        self.assertEqual((usage["tokens_in"], usage["tokens_out"]), (2000, 1000))
+        self.assertGreater(usage["cost_usd"], 0)
 
     def test_empty_instruction_rejected(self):
         with self.assertRaises(AssistantError):

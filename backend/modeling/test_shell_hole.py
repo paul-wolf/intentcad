@@ -165,6 +165,16 @@ class HoleTests(SimpleTestCase):
     def holes_of(self, r, radius):
         return [f for f in r["faces"] if f["kind"] == "cylinder" and abs(f["radius"] - radius) < 1e-6]
 
+    def test_plain_tuple_point_normal_pairs(self):
+        r = self.run_holes('part = holes(part, at=[((x, y, P["h"]), (0, 0, 1)) for x, y in [(-30, -20), (30, 20)]], '
+                           'kind="clearance", size="M3")')
+        self.assertEqual(len(self.holes_of(r, 1.7)), 2)
+
+    def test_a_bare_point_asks_for_its_normal(self):
+        from modeling.shell_hole import HoleError, _places
+        with self.assertRaisesRegex(HoleError, "needs its outward normal"):
+            _places([(1, 2, 3)])
+
     def test_four_points_give_four_through_holes(self):
         r = self.run_holes('part = holes(part, at=sketch_points("S"), kind="clearance", size="M3")')
         self.assertEqual(len(self.holes_of(r, 1.7)), 4)                   # normal fit: 3.4

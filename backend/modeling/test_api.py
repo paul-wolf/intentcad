@@ -90,6 +90,25 @@ class RunApiTests(TestCase):
         self.assertIn("message", resp.json())
 
 
+class FailedEditSpendTests(TestCase):
+    def test_a_failed_edit_logs_and_returns_its_spend(self):
+        from unittest import mock
+        from modeling.assistant import AssistantError
+        from modeling.models import AiEdit
+        user = get_user_model().objects.create_user(username="f", email="f@example.com", password="pw")
+        client = Client()
+        client.force_login(user)
+        usage = {"tokens_in": 2000, "tokens_out": 1000, "cache_read_tokens": 0,
+                 "cache_write_tokens": 0, "cost_usd": 0.03}
+        with mock.patch("modeling.api.edit_script",
+                        side_effect=AssistantError("couldn't produce a script that builds", usage=usage)):
+            r = client.post("/api/build/edit", data=json.dumps({"code": PART, "instruction": "x"}),
+                            content_type="application/json")
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(r.json()["cost_usd"], 0.03)
+        self.assertEqual(AiEdit.objects.get(user=user).cost_usd, 0.03)
+
+
 class UsageTests(TestCase):
     def setUp(self):
         self.client = Client()

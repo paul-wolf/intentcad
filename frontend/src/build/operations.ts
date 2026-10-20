@@ -21,7 +21,7 @@ export const OP_GROUPS: OpGroup[] = ['Sketch', 'Create', 'Modify', 'Pattern', 'I
 export type OpIcon =
   | 'sketch-face' | 'plane-top' | 'plane-front' | 'plane-right' | 'extrude' | 'hole' | 'shell' | 'fillet' | 'chamfer' | 'round'
   | 'lighten' | 'protect' | 'fix' | 'measure' | 'normal' | 'ortho' | 'params' | 'build' | 'import'
-  | 'export' | 'stl' | 'parts' | 'dxf' | 'views3' | 'versions' | 'process'
+  | 'export' | 'stl' | 'parts' | 'dxf' | 'views3' | 'versions' | 'process' | 'context'
   | `view-${StandardView}`;
 
 /** What's selected: the faces and the edges, in the order they were picked. */
@@ -78,6 +78,8 @@ export interface OpContext {
   exportAs(format: ExportFormat): void;
   versions(): void;
   process(): void;
+  /** the Context layout, and the file picker for a reference PDF or photo */
+  addContextFile(): void;
   toggleParams(): void;
   setView(view: StandardView): void;
   lookAtSelection(): void;
@@ -416,6 +418,16 @@ export const OPERATIONS: Operation[] = [
     needs: (_sel, m) => first([m.sketching, 'Finish the sketch first']),
     run: (ctx) => ctx.process(),
   },
+  {
+    id: 'context-add', name: 'Add context file', group: 'File', icon: 'context',
+    help: 'Add a datasheet PDF or a photo for the AI to design from',
+    longHelp: 'Adds a reference file (a PDF such as a board\'s datasheet, or a photo) to this part or to the whole '
+      + 'project. The AI reads the files that are in context with each message and cites the page each dimension '
+      + 'came from. Opens the Context layout, where you choose pages and switch files on or off.',
+    example: 'make a case for the board in the datasheet',
+    needs: (_sel, m) => first([m.sketching, 'Finish the sketch first']),
+    run: (ctx) => ctx.addContextFile(),
+  },
 ];
 
 export const opById = (id: string): Operation | undefined => OPERATIONS.find((o) => o.id === id);
@@ -430,10 +442,11 @@ export function opForKey(key: string): Operation | undefined {
 // ---- layouts ----
 
 /** What sits beside the 3D view, in the order L (or Ctrl/⌘+\) steps through them. */
-export type Layout = 'code' | 'chat' | 'model' | 'ops';
+export type Layout = 'code' | 'chat' | 'context' | 'model' | 'ops';
 export const LAYOUTS: [Layout, string, string][] = [
   ['code', 'Code', 'Script on the left, chat along the bottom'],
   ['chat', 'Chat', 'Chat on the left in place of the script'],
+  ['context', 'Context', 'The reference files (PDFs, photos) the AI reads, for this part and the project'],
   ['model', '3D', 'The 3D view alone, as large as the window allows'],
   ['ops', 'Operations', 'Every operation as a grid, enabled by what is selected'],
 ];

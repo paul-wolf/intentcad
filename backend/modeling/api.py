@@ -9,6 +9,7 @@ from projects.access import require_auth
 
 from .assistant import AssistantError, edit_script
 from .models import AiEdit
+from documents.context import ContextFileError, ai_blocks
 from .engine import EngineError, run_script
 from . import hole_presets
 from .llm_models import list_models
@@ -225,34 +226,73 @@ def edit_model(request, payload: EditRequest):
     if err:
         return err
     history = [{"role": t.role, "text": t.text} for t in payload.history]
+    sent = context_files_for(payload.document_id, payload.skip_context)
+    try:
+        prepared = ai_blocks(sent)
+    except ContextFileError as exc:
+        return JsonResponse({"message": str(exc)}, status=exc.status)
     try:
         r = edit_script(payload.code, payload.instruction, payload.context, history,
                         payload.model or None, production=payload.production,
-                        build_error=payload.build_error, document_id=payload.document_id)
+                        build_error=payload.build_error, document_id=payload.document_id,
+                        files=prepared.blocks, file_listing=prepared.listing)
     except AssistantError as exc:
-        return JsonResponse({"message": str(exc)}, status=422)
-    AiEdit.objects.create(
-        user=request.user, document_id=payload.document_id,
-        instruction=payload.instruction[:500],
-        tokens_in=r.get("tokens_in", 0), tokens_out=r.get("tokens_out", 0),
-        cost_usd=r.get("cost_usd", 0.0),
-    )
+        # a failed edit can still have been billed (a script that didn't build,
+        # then a retry): log that spend and report it with the error
+        if exc.usage:
+            _log_ai_edit(request, payload, exc.usage)
+        return JsonResponse({"message": str(exc), **(exc.usage or {})}, status=422)
+    usage = _log_ai_edit(request, payload, r)
     return EditResponse(
         kind=r.get("kind", "edit"),
         code=r.get("code", ""), note=r.get("note"), question=r.get("question", ""),
-        tokens_in=r.get("tokens_in", 0), tokens_out=r.get("tokens_out", 0),
-        cost_usd=r.get("cost_usd", 0.0),
+        cost_usd=r.get("cost_usd", 0.0), context_files=[str(cf.id) for cf in sent], **usage,
     )
 
 
+def context_files_for(document_id: str, skip: list[str]) -> list:
+    """The context files sent with an edit of `document_id`: the project's and
+    then the part's files that are in context, minus those skipped for this
+    message. Project files go first: they change least, so they head the
+    cached prefix."""
+    from django.core.exceptions import ValidationError
+    from documents.models import ContextFile, Document
+
+    if not document_id:
+        return []
+    try:
+        doc = Document.objects.filter(id=document_id).only("id", "project_id").first()
+    except (ValidationError, ValueError):
+        return []
+    if not doc:
+        return []
+    files = list(ContextFile.objects.filter(project_id=doc.project_id, in_context=True)) \
+        if doc.project_id else []
+    files += list(ContextFile.objects.filter(document=doc, in_context=True))
+    skip = set(skip)
+    return [cf for cf in files if str(cf.id) not in skip]
+
+
+def _log_ai_edit(request, payload, r: dict) -> dict:
+    """Record one AI edit's spend; returns its token counts."""
+    usage = {k: r.get(k, 0) for k in ("tokens_in", "tokens_out", "cache_read_tokens",
+                                      "cache_write_tokens")}
+    AiEdit.objects.create(
+        user=request.user, document_id=payload.document_id,
+        instruction=payload.instruction[:500], cost_usd=r.get("cost_usd", 0.0), **usage,
+    )
+    return usage
+
+
 @router.get("/models", response=ModelsResponse)
-def models(request):
+def models(request, refresh: bool = False):
     """Which Claude models the AI edit can use — discovered from the Models API
-    (cached an hour) so the picker never goes stale."""
+    (cached an hour) so the picker never goes stale. `refresh` asks the API
+    again now (at most once a minute)."""
     err = require_auth(request)
     if err:
         return err
-    return ModelsResponse(**list_models())
+    return ModelsResponse(**list_models(force=refresh))
 
 
 @router.get("/usage", response=UsageResponse)
@@ -263,10 +303,11 @@ def usage(request, document: str = ""):
         return err
 
     def totals(qs) -> UsageTotals:
-        a = qs.aggregate(edits=Count("id"), tin=Sum("tokens_in"),
-                         tout=Sum("tokens_out"), cost=Sum("cost_usd"))
+        a = qs.aggregate(edits=Count("id"), tin=Sum("tokens_in"), tout=Sum("tokens_out"),
+                         cread=Sum("cache_read_tokens"), cost=Sum("cost_usd"))
         return UsageTotals(edits=a["edits"] or 0, tokens_in=a["tin"] or 0,
-                           tokens_out=a["tout"] or 0, cost_usd=round(a["cost"] or 0.0, 4))
+                           tokens_out=a["tout"] or 0, cache_read_tokens=a["cread"] or 0,
+                           cost_usd=round(a["cost"] or 0.0, 4))
 
     mine = AiEdit.objects.filter(user=request.user)
     return UsageResponse(document=totals(mine.filter(document_id=document)), all_time=totals(mine))

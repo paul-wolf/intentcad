@@ -56,6 +56,8 @@ const ICONS: Record<OpIconName, ReactNode> = {
   views3: <><path d="M3 3h8v8H3zM13 3h8v8h-8zM3 13h8v8H3z" /></>,
   versions: <><path d="M4 12a8 8 0 1 0 2.5-5.8" /><path d="M4 4v4h4" /><path d="M12 8v4l3 2" /></>,
   process: <><path d="M8 3h8v6l-4 4-4-4z" /><path d="M12 13v3M4 20h16" /></>,
+  // a page with a paper clip: a reference file
+  context: <><path d="M6 3h8l4 4v14H6z" /><path d="M14 3v4h4" /><path d="M10 11v5a1.5 1.5 0 0 0 3 0v-6" /></>,
   'view-front': cube('front'),
   'view-back': cube('back'),
   'view-left': cube('left'),

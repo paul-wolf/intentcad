@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, type CSSProperties } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 import { useDocumentStore } from '@/stores/documentStore';
@@ -13,6 +13,7 @@ import type { Project } from '@/types/project';
 import { TopNav } from '@/ui/TopNav';
 import { DocCard } from '@/ui/DocCard';
 import { useTokens, SANS, MONO } from '@/ui/tokens';
+import { ContextPane, useContextFiles, type CtxColors } from './ContextPane';
 
 function relativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -30,6 +31,13 @@ export function DocumentListPage() {
   const navigate = useNavigate();
   const { projectId } = useParams<{ projectId: string }>();
   const t = useTokens();
+  // the project's context files: reference PDFs and photos every part's AI can read
+  const ctxOwner = useMemo(() => (projectId ? { project: projectId } : null), [projectId]);
+  const ctxStore = useContextFiles(ctxOwner);
+  const ctxColors: CtxColors = {
+    text: t.text, dim: t.textDim, mute: t.textMute, border: t.border, surface: t.surface2, card: t.surface,
+    accent: t.accent, primary: t.accent, danger: t.danger, warning: t.part,
+  };
   const { user } = useAuthStore();
   const setDocument = useDocumentStore((s) => s.setDocument);
   const [docs, setDocs] = useState<DocumentListItem[]>([]);
@@ -341,7 +349,7 @@ export function DocumentListPage() {
 
           {!showParts && !showSketches && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6,
-                          padding: '64px 20px', border: `1px dashed ${t.border2}`, borderRadius: 14, background: t.surface }}>
+                          padding: '64px 20px', border: `1px dashed ${t.border2}`, borderRadius: 14, background: t.surface, marginBottom: 40 }}>
               <div style={{ fontFamily: MONO, fontSize: '13px', color: t.textDim }}>
                 {docs.length === 0 ? 'No documents yet' : 'Nothing matches'}
               </div>
@@ -349,6 +357,17 @@ export function DocumentListPage() {
                 {docs.length === 0 ? 'Create a part or a sketch to get started.' : 'Try a different search or filter.'}
               </div>
             </div>
+          )}
+
+          {projectId && (
+            <>
+              {sectionHeader(t.violet, 'CONTEXT FILES', ctxStore.files?.project.length ?? 0)}
+              <div style={{ display: 'flex', flexDirection: 'column', marginBottom: 40, border: `1px solid ${t.border}`,
+                            borderRadius: 12, background: t.surface2, overflow: 'hidden' }}>
+                <ContextPane store={ctxStore} c={ctxColors} partOwned={false} viewerHeight="75vh"
+                  intro="Datasheets, drawings and photos every part in this project can give the AI. Drop files here; a part's own files are in its Context layout." />
+              </div>
+            </>
           )}
         </div>
       )}

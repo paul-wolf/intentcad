@@ -84,8 +84,9 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
       ['Normal', 'Look straight at the selected face (key N).'],
       ['Persp / Ortho', 'Perspective or orthographic — no perspective, for checking alignment (key O).'],
       ['Click X / Y / Z', 'In the axes at bottom left: view from that axis. Click again for the opposite side.'],
-      ['Code · Chat · 3D · Operations', 'At the top: what sits beside the 3D view. Code shows the script with the '
-        + 'chat along the bottom; Chat puts the conversation where the script was; 3D gives the whole window to the '
+      ['Code · Chat · Context · 3D · Operations', 'At the top: what sits beside the 3D view. Code shows the script with the '
+        + 'chat along the bottom; Chat puts the conversation where the script was; Context shows the reference files '
+        + 'the AI reads (below); 3D gives the whole window to the '
         + 'part; Operations (the grid icon) shows every operation. Key L (or Ctrl/⌘+\\, even while typing) steps '
         + 'through them, Shift+L (Ctrl/⌘+Shift+\\) steps back; U goes to Operations and back to where you were.'],
       ['Operations', 'Every operation as a tile, by group, with the last four used at the top. A tile that can\'t '
@@ -94,6 +95,13 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
         + 'the AI instead — clicking the example puts it in the chat box (it isn\'t sent). Arrow keys move between '
         + 'tiles, Enter runs one, Esc goes back. The top bar keeps the most used ones (Sketch on face, Hole, '
         + 'Shell, Fillet, Round, Build); the Operations button (U) opens the rest.'],
+      ['Context', 'Datasheets, drawings and photos the AI reads with each message: this part\'s, and the '
+        + 'project\'s (shared by its parts). Drop files on the pane, use + Add file (or the Add context file '
+        + 'operation), or paste a photo into the chat box. The switch on a card takes a file in or out of context; '
+        + 'click a card to page through it, zoom (wheel, double-click) and pan (drag), and tick the pages the AI '
+        + 'gets. The chips above the chat box are the files the next message sends; × leaves one out of that '
+        + 'message only. The AI cites the file and page for each dimension it takes from them and lists '
+        + 'the values it estimated, so check those before printing.'],
       ['Params', 'Shows or hides the parameters (key P, or × on the pane). They sit above the script or chat, '
         + 'and float at the top right of the 3D view when it is maximised.'],
     ],

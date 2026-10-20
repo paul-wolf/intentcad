@@ -12,6 +12,10 @@ class AiEdit(models.Model):
     instruction = models.TextField(blank=True, default="")
     tokens_in = models.IntegerField(default=0)
     tokens_out = models.IntegerField(default=0)
+    # of tokens_in, how many were read from / written to the prompt cache
+    # (context files are cached across chat turns)
+    cache_read_tokens = models.IntegerField(default=0)
+    cache_write_tokens = models.IntegerField(default=0)
     cost_usd = models.FloatField(default=0.0)
     created_at = models.DateTimeField(auto_now_add=True)
 

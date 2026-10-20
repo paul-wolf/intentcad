@@ -11,3 +11,9 @@ anthropic>=0.40
 # 0.11+ depends on cadquery-ocp-novtk (no VTK), which is what we run. Do NOT add
 # `cadquery` here — it pulls the heavy VTK OCP build and conflicts with novtk.
 build123d>=0.11,<0.12
+# Context files (reference PDFs/photos for the AI): page counts and page
+# splitting, page thumbnails, and iPhone HEIC photos converted to JPEG.
+pypdf>=6.0,<7.0
+pypdfium2>=5.0,<6.0
+Pillow>=11.0
+pillow-heif>=1.0,<2.0

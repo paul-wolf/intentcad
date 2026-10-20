@@ -76,7 +76,7 @@ describe('the operation registry', () => {
   it('runs through the editor’s own actions', () => {
     const ctx = Object.fromEntries(
       ['sketchOnSelection', 'sketchOnPlane', 'shell', 'hole', 'fillet', 'chamfer', 'ask', 'build', 'importStep', 'exportAs', 'versions',
-       'process', 'toggleParams', 'setView', 'lookAtSelection', 'toggleOrtho', 'copyMeasure'].map((k) => [k, vi.fn()]),
+       'process', 'addContextFile', 'toggleParams', 'setView', 'lookAtSelection', 'toggleOrtho', 'copyMeasure'].map((k) => [k, vi.fn()]),
     ) as unknown as Record<keyof OpContext, ReturnType<typeof vi.fn>>;
     for (const op of OPERATIONS) op.run(ctx as unknown as OpContext);
     expect(ctx.shell).toHaveBeenCalledTimes(1);
@@ -165,15 +165,23 @@ describe('what each operation needs', () => {
 });
 
 describe('the layouts', () => {
-  it('step through Code, Chat, 3D and Operations, and back', () => {
+  it('step through Code, Chat, Context, 3D and Operations, and back', () => {
     const fwd: Layout[] = [];
     let l: Layout = 'code';
-    for (let i = 0; i < 4; i++) fwd.push(l = stepLayout(l, 1));
-    expect(fwd).toEqual(['chat', 'model', 'ops', 'code']);
+    for (let i = 0; i < 5; i++) fwd.push(l = stepLayout(l, 1));
+    expect(fwd).toEqual(['chat', 'context', 'model', 'ops', 'code']);
     const back: Layout[] = [];
-    for (let i = 0; i < 4; i++) back.push(l = stepLayout(l, -1));
-    expect(back).toEqual(['ops', 'model', 'chat', 'code']);
-    expect(LAYOUTS.map(([k]) => k)).toEqual(['code', 'chat', 'model', 'ops']);
+    for (let i = 0; i < 5; i++) back.push(l = stepLayout(l, -1));
+    expect(back).toEqual(['ops', 'model', 'context', 'chat', 'code']);
+    expect(LAYOUTS.map(([k]) => k)).toEqual(['code', 'chat', 'context', 'model', 'ops']);
+  });
+
+  it('Add context file is a File operation that opens the Context layout', () => {
+    const op = OPERATIONS.find((o) => o.id === 'context-add')!;
+    expect([op.name, op.group]).toEqual(['Add context file', 'File']);
+    const ctx = { addContextFile: vi.fn() } as unknown as OpContext;
+    op.run(ctx);
+    expect(ctx.addContextFile).toHaveBeenCalledTimes(1);
   });
 
   it('U goes to Operations and back to the layout before', () => {

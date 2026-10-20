@@ -104,15 +104,26 @@ def _places(at) -> list[tuple[Vector, Vector]]:
             raise HoleError(f"sketch {getattr(at, 'name', '')!r} has no points or circles to put holes at")
         n = Vector(normal).normalized()
         return [(Vector(p), n) for p in at]
-    if (isinstance(at, tuple) and len(at) == 2 and not isinstance(at[0], (Face, tuple, list))
-            and hasattr(at[1], "__len__")):
-        return [(Vector(at[0]), Vector(at[1]).normalized())]
+    if isinstance(at, (tuple, list)) and len(at) == 2 and _is_xyz(at[0]) and _is_xyz(at[1]):
+        return [(Vector(*at[0]), Vector(*at[1]).normalized())]
+    if _is_xyz(at):
+        raise HoleError(f"holes(at=...): the point {tuple(at)} needs its outward normal — "
+                        "give (point, normal) pairs, e.g. [((x, y, z), (0, 0, 1)), …]")
     if isinstance(at, (list, tuple)):
         out = []
         for a in at:
             out.extend(_places(a))
         return out
-    raise HoleError("holes(at=...): give a face, sketch_points(\"name\") or (point, normal) pairs")
+    raise HoleError("holes(at=...): give a face, sketch_points(\"name\") or (point, normal) "
+                    "pairs, e.g. [((x, y, z), (0, 0, 1)), …]")
+
+
+def _is_xyz(v) -> bool:
+    """A 3D point or direction: a Vector or three numbers."""
+    if isinstance(v, Vector):
+        return True
+    return (isinstance(v, (tuple, list)) and len(v) == 3
+            and all(isinstance(c, (int, float)) and not isinstance(c, bool) for c in v))
 
 
 def _tool(kind: str, v: dict, depth: float):

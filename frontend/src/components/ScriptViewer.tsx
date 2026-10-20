@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
 import {
-  api, buildApi, errorText, ApiError, type RunResponse, type RunEdge, type FaceRefReport, type UsageResponse, type DimInfo, type ModelInfo, type SizeFix,
+  api, buildApi, errorText, ApiError, type RunResponse, type RunEdge, type FaceRefReport, type UsageResponse, type DimInfo, type ModelInfo, type ModelsResponse, type SizeFix,
   type FaceRefSpec, type HolePresets, type EdgeOpKind, type EdgeRefSpec,
 } from '@/api/client';
 import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, persistSketches, getBackendId } from '@/api/autoSave';
@@ -42,6 +42,9 @@ import {
 } from '@/build/operations';
 import { OperationsPanel, Kbd } from './OperationsPanel';
 import { OpIcon, OPS_GRID_ICON } from './OpIcons';
+import { ContextChips, ContextPane, useContextFiles, type CtxColors } from './ContextPane';
+import { acceptable, filesToSend, skipList, usageLabel } from '@/build/contextFiles';
+import { chooseModel, modelsStale } from '@/build/modelList';
 
 // the view buttons, in key order (1–6, then 0)
 const VIEW_BUTTONS = (['1', '2', '3', '4', '5', '6', '0'] as const)
@@ -677,22 +680,64 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
 
   const [ask, setAsk] = useState('');
   const [asking, setAsking] = useState(false);
-  // Model picker. The list comes from the server (which asks the Models API),
-  // so it never goes stale; '' means "server default" until the list arrives.
-  // A remembered pick that the API no longer offers (a retired model) is
-  // dropped in favour of the default.
+  // Model picker. The list comes from the server (which asks the Models API);
+  // '' means "server default" until the list arrives. The page asks again when
+  // its list is old — on coming back to the tab or focusing the picker — so a
+  // new model shows up without a reload. Someone who never chose follows the
+  // default; a remembered pick the API no longer offers falls back to it.
   const [models, setModels] = useState<ModelInfo[]>([]);
+  const [modelsSource, setModelsSource] = useState<ModelsResponse['source'] | null>(null);
+  const modelsAt = useRef(0);
+  const modelsLoading = useRef(false);
   const [model, setModel] = useState<string>(() => { try { return localStorage.getItem('intentcad-edit-model') || ''; } catch { return ''; } });
   const pickModel = (m: string) => { setModel(m); try { localStorage.setItem('intentcad-edit-model', m); } catch { /* ignore */ } };
-  useEffect(() => {
-    buildApi.models().then((r) => {
+  const loadModels = useRef((refresh: boolean) => {
+    if (modelsLoading.current) return;
+    modelsLoading.current = true;
+    buildApi.models(refresh).then((r) => {
+      modelsAt.current = Date.now();
       setModels(r.models);
-      setModel((cur) => (cur && r.models.some((m) => m.id === cur) ? cur : r.default));
-    }).catch(() => { /* keep the free-text id; the server falls back to its default */ });
+      setModelsSource(r.source);
+      let picked = false;
+      try { picked = !!localStorage.getItem('intentcad-edit-model'); } catch { /* ignore */ }
+      setModel((cur) => chooseModel(cur, r, picked));
+    }).catch(() => { /* keep the free-text id; the server falls back to its default */ })
+      .finally(() => { modelsLoading.current = false; });
+  }).current;
+  const modelsSourceRef = useRef(modelsSource);
+  modelsSourceRef.current = modelsSource;
+  const refreshModelsIfStale = () => {
+    if (modelsStale(modelsAt.current, modelsSourceRef.current, Date.now())) loadModels(true);
+  };
+  useEffect(() => {
+    loadModels(false);
+    const onVisible = () => { if (document.visibilityState === 'visible') refreshModelsIfStale(); };
+    window.addEventListener('focus', refreshModelsIfStale);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', refreshModelsIfStale);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const modelTitle = (m: ModelInfo) =>
-    `${m.label} — ${m.note}. $${m.input_per_m}/M in · $${m.output_per_m}/M out (released ${m.released})`;
+    `${m.label} — ${m.note}. $${m.input_per_m}/M in · $${m.output_per_m}/M out (released ${m.released})`
+    + (modelsSource === 'static' ? '. Offline list: the Models API could not be reached; retrying.' : '');
   const [usage, setUsage] = useState<UsageResponse | null>(null);
+  // context files (reference PDFs and photos the AI reads): the part's and its
+  // project's, once the part has a server id (a new part gets one on first save)
+  const [docId, setDocId] = useState<string | null>(() => getBackendId());
+  useEffect(() => {
+    if (docId) return;
+    const t = window.setInterval(() => { const id = getBackendId(); if (id) setDocId(id); }, 250);
+    return () => window.clearInterval(t);
+  }, [docId]);
+  const ctxOwner = useMemo(() => (docId ? { document: docId } : null), [docId]);
+  const ctxStore = useContextFiles(ctxOwner);
+  // files left out of the next message only (the chips' ×); cleared after it is sent
+  const [skipCtx, setSkipCtx] = useState<ReadonlySet<string>>(new Set());
+  const ctxPick = useRef<(() => void) | null>(null);
+  const [chatUploading, setChatUploading] = useState('');
   // what the window shows beside the 3D view: the script, the chat, or nothing
   // (the 3D view maximised); the parameters are shown or hidden separately
   // (or the Operations grid); the keys reach it through refs, and the
@@ -1338,7 +1383,9 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     const instruction = (text ?? ask).trim();
     if (!instruction || asking) return;
     setAsking(true);
-    const userMsg: ChatMessage = { role: 'user', text: instruction, at: Date.now() };
+    const sent = filesToSend(ctxStore.files, skipCtx);
+    const userMsg: ChatMessage = { role: 'user', text: instruction, at: Date.now(),
+                                   ...(sent.length ? { files: sent.map((f) => f.title) } : {}) };
     const base = [...chat, userMsg];
     persistChat(base);          // show the user's message immediately (and persist)
     setAsk('');
@@ -1351,11 +1398,15 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         // if the current script doesn't build, the assistant repairs it as part
         // of this edit (see assistant.py) — no need to paste the error
         build_error: status === 'error' ? message : '',
+        // the context files go with it, except those removed for this message
+        skip_context: skipList(ctxStore.files, skipCtx),
       });
+      setSkipCtx(new Set());
+      const spent = usageLabel(r);
       if (r.kind === 'question') {
-        persistChat([...base, { role: 'assistant', kind: 'question', text: r.question, at: Date.now() }]);
+        persistChat([...base, { role: 'assistant', kind: 'question', text: r.question, usage: spent, at: Date.now() }]);
       } else {
-        persistChat([...base, { role: 'assistant', kind: 'edit', text: r.note || 'Done.', code: r.code, at: Date.now() }]);
+        persistChat([...base, { role: 'assistant', kind: 'edit', text: r.note || 'Done.', code: r.code, usage: spent, at: Date.now() }]);
         setCode(r.code);
         saveDraft(r.code);
         await build(r.code, r.note || instruction);
@@ -1363,7 +1414,10 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       fetchUsage();
     } catch (err) {
       const msg = `⚠ ${errorText(err)}`;
-      persistChat([...base, { role: 'assistant', kind: 'question', text: msg, at: Date.now() }]);
+      // a failed edit can still have been billed (a script that didn't build, then a retry)
+      const spent = err instanceof ApiError && err.usage ? usageLabel(err.usage) : undefined;
+      persistChat([...base, { role: 'assistant', kind: 'question', text: msg, usage: spent, at: Date.now() }]);
+      if (spent) fetchUsage();
     } finally {
       setAsking(false);
     }
@@ -1445,6 +1499,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     exportAs: (format) => void doExport(format),
     versions: () => setShowVersions(true),
     process: openProduction,
+    addContextFile: () => {
+      setLayout('context');
+      // the pane's file input mounts with the layout
+      window.setTimeout(() => ctxPick.current?.(), 30);
+    },
     toggleParams,
     setView: (view) => viewerRef.current?.setView(view),
     lookAtSelection,
@@ -1621,6 +1680,27 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       </div>
     );
   })();
+  const ctxColors: CtxColors = {
+    text: palette.text, dim: palette.textSecondary, mute: palette.textMuted, border: palette.border,
+    surface: palette.background, card: palette.inputBg, accent: palette.accent, primary: palette.primaryBtn,
+    danger: palette.danger, warning: palette.warning,
+  };
+  // images pasted or dropped into the chat: added to this part, in context
+  const attachToChat = async (list: File[]) => {
+    const ok = list.filter(acceptable);
+    if (!ok.length) { ctxStore.setError('Only PDF, PNG, JPEG, WebP or HEIC files can go with a message.'); return; }
+    for (const f of ok) {
+      setChatUploading(f.name || 'image');
+      // a pasted screenshot is called image.png; give it a name worth citing
+      const named = f.name && f.name !== 'image.png' ? f
+        : new File([f], `pasted-${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')}.${f.type.split('/')[1] || 'png'}`, { type: f.type });
+      const added = await ctxStore.upload('part', named);
+      if (added && !added.in_context) await ctxStore.update(added.id, { in_context: true });
+      if (added) setSkipCtx((cur) => { if (!cur.has(added.id)) return cur; const n = new Set(cur); n.delete(added.id); return n; });
+    }
+    setChatUploading('');
+    chatInputRef.current?.focus();
+  };
   const chatHistory = (
     <div ref={chatScrollRef} style={{ ...(layout === 'chat' ? { flex: 1, minHeight: 0 } : { maxHeight: '30vh' }), overflowY: 'auto', padding: '10px 16px',
                                       display: 'flex', flexDirection: 'column', gap: '7px' }}>
@@ -1639,12 +1719,23 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                        cursor: revertable ? 'pointer' : 'default' }}>
               {isQ && <span style={{ color: palette.warning ?? '#c78a1a', fontWeight: 700, marginRight: 5 }}>?</span>}
               {m.text}
+              {m.files?.length ? (
+                <span style={{ display: 'block', fontSize: '11px', opacity: 0.75, marginTop: 3 }}>
+                  📎 {m.files.join(', ')}
+                </span>
+              ) : null}
               {revertable && (
                 <span style={{ display: 'block', fontSize: '11px', opacity: 0.6, marginTop: 3 }}>
                   ↩ click to revert here
                 </span>
               )}
             </div>
+            {m.usage && (
+              <div title="This call: input tokens (of them, read from the prompt cache) · output tokens · cost"
+                style={{ fontSize: '10.5px', color: palette.textSecondary, marginTop: 2, paddingLeft: 4 }}>
+                {m.usage}
+              </div>
+            )}
           </div>
         );
       })}
@@ -1654,19 +1745,36 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     </div>
   );
   const chatInput = (
+  <div onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) e.preventDefault(); }}
+    onDrop={(e) => { const l = [...e.dataTransfer.files]; if (l.length) { e.preventDefault(); void attachToChat(l); } }}>
+  <ContextChips files={filesToSend(ctxStore.files, new Set())} skipped={skipCtx} c={ctxColors}
+    onOpen={() => setLayout('context')}
+    onSkip={(id, skip) => setSkipCtx((cur) => { const n = new Set(cur); if (skip) n.add(id); else n.delete(id); return n; })} />
+  {(chatUploading || (ctxStore.error && layout !== 'context')) && (
+    <div onClick={() => ctxStore.setError('')}
+      style={{ padding: '4px 16px 0', fontSize: '12px', color: chatUploading ? palette.textSecondary : palette.danger }}>
+      {chatUploading ? `Attaching ${chatUploading}…` : ctxStore.error}
+    </div>
+  )}
   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px' }}>
   <input
     ref={chatInputRef}
     value={ask}
     onChange={(e) => setAsk(e.target.value)}
     onKeyDown={(e) => { if (e.key === 'Enter') void sendChat(); }}
+    onPaste={(e) => {
+      // a pasted photo or screenshot becomes a context file of this part
+      const l = [...e.clipboardData.files];
+      if (l.length) { e.preventDefault(); void attachToChat(l); }
+    }}
     placeholder={sel.length ? 'e.g. chamfer this edge 2mm  (targets your selection)' : 'Describe a change — e.g. add four M4 corner bolt holes'}
     disabled={asking}
     style={{ flex: 1, padding: '6px 10px', background: palette.inputBg,
              border: `1px solid ${palette.inputBorder}`, borderRadius: '4px',
              color: palette.text, fontSize: '13px', outline: 'none' }}
   />
-  <select value={model} onChange={(e) => pickModel(e.target.value)} disabled={asking || models.length === 0}
+  <select value={model} onChange={(e) => pickModel(e.target.value)} onFocus={refreshModelsIfStale}
+    disabled={asking || models.length === 0}
     title={models.find((m) => m.id === model) ? modelTitle(models.find((m) => m.id === model)!)
            : 'Model for AI edits — stronger tiers cost more; use them for hard tasks'}
     style={{ padding: '6px 8px', background: palette.inputBg, color: palette.textSecondary,
@@ -1691,6 +1799,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       Clear
     </button>
   )}
+  </div>
   </div>
   );
 
@@ -1736,7 +1845,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
             </h2>
           )}
           {usage && (usage.all_time.edits > 0) && (
-            <span title={`This model: ${usage.document.tokens_in.toLocaleString()} in / ${usage.document.tokens_out.toLocaleString()} out.  All-time: ${usage.all_time.tokens_in.toLocaleString()} in / ${usage.all_time.tokens_out.toLocaleString()} out.`}
+            <span title={`This model: ${usage.document.tokens_in.toLocaleString()} in (${(usage.document.cache_read_tokens ?? 0).toLocaleString()} from the prompt cache) / ${usage.document.tokens_out.toLocaleString()} out.  All-time: ${usage.all_time.tokens_in.toLocaleString()} in (${(usage.all_time.cache_read_tokens ?? 0).toLocaleString()} cached) / ${usage.all_time.tokens_out.toLocaleString()} out.`}
               style={{ fontSize: '12px', color: palette.textSecondary }}>
               AI spend · this model ${usage.document.cost_usd.toFixed(3)} ({usage.document.edits}) · all-time ${usage.all_time.cost_usd.toFixed(2)} ({usage.all_time.edits})
             </span>
@@ -1797,6 +1906,10 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                 )}
                 <div style={{ borderTop: `1px solid ${palette.border}` }}>{chatInput}</div>
               </>
+            )}
+            {layout === 'context' && (
+              <ContextPane store={ctxStore} c={ctxColors} partOwned pickRef={ctxPick}
+                pricePerM={models.find((m) => m.id === model)?.input_per_m} />
             )}
             {layout === 'ops' && (
               <OperationsPanel sel={opSel} model={opModel} recent={recent} onRun={runOp} onExample={putInChat}
@@ -2070,7 +2183,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
             it can ask a question instead of guessing, and each edit is a
             checkpoint you can click to revert to. In the Chat layout it fills the
             left column instead; the 3D layout leaves it out */}
-        {layout === 'code' && (
+        {(layout === 'code' || layout === 'context') && (
           <div style={{ borderTop: `1px solid ${palette.border}`, display: 'flex', flexDirection: 'column' }}>
             {chat.length > 0 && chatHistory}
             {chatInput}

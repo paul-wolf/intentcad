@@ -16,7 +16,7 @@ from typing import Callable
 
 from .engine import EngineError, asset_refs, load_assets, load_sketches, run_script
 from .paramedit import ParamError, set_params
-from .llm_models import is_known, list_models, price_for
+from .llm_models import call_cost, is_known, list_models
 
 # Per-attempt cap on an Anthropic call, and how many times the SDK retries it.
 # The SDK's own default is more patient than gunicorn's --timeout, so without
@@ -32,7 +32,13 @@ LLM_RETRIES = int(os.environ.get("LLM_RETRIES", "1"))
 
 
 class AssistantError(RuntimeError):
-    """The edit failed (no key, model error, or couldn't produce a building script)."""
+    """The edit failed (no key, model error, or couldn't produce a building script).
+    `usage` is what the calls made before the failure cost (cost() keys), so the
+    spend is still logged and shown."""
+
+    def __init__(self, message: str, usage: dict | None = None):
+        super().__init__(message)
+        self.usage = usage
 
 
 def _fmt(v: float) -> str:
@@ -111,6 +117,42 @@ def geometry_summary(faces: list[dict], metrics: dict | None = None, max_lines: 
     if len(body) > room:
         body = body[:room - 1] + [f"  … {len(body) - room + 1} more lines omitted"]
     return "\n".join(lines + body)
+
+
+# How the AI uses reference files (context files) and says where each number
+# came from. Always present: it also covers dimensions the user gives in chat.
+PROVENANCE = (
+    "\n\nREFERENCE FILES AND WHERE DIMENSIONS COME FROM. CONTEXT FILES (PDF datasheets, "
+    "drawings, photos) may be attached before the request; they are listed by number "
+    "with their titles. Read them for the dimensions of the thing being designed "
+    "around. Every dimension you take from them, or from the user in chat, goes into "
+    "P with a comment on the same line saying where it came from, in one of these "
+    "four kinds:\n"
+    "    board_w=47,        # drone-pi-carrier.pdf p.6 (stated)\n"
+    "    usb_x=12.5,        # drone-pi-carrier.pdf p.6 (estimated from drawing scale, ±0.5)\n"
+    "    cam_x=20,          # photo IMG_0412.jpg (estimated, 47 mm board width as reference, ±1)\n"
+    "    hole_d=3.2,        # photo IMG_0412.jpg (user said 3.2 in chat)\n"
+    "(stated) = a number printed in the document; (estimated from drawing scale, ±x) = "
+    "measured off a drawing by scaling from dimensioned features; (estimated, <reference>, "
+    "±x) = measured in a photo; (user said …) = given in chat. Cite the file by its title "
+    "and a PDF by its page number in the file (p.1 is the file's first page), not a page "
+    "label printed on the page. Values you derive from cited ones (e.g. a hole's distance "
+    "from an edge, from the outline and the pattern) are computed in the script from those "
+    "params, not typed in again.\n"
+    "Never present an estimate as exact: give its uncertainty, and when you write the "
+    "script, the note MUST list every estimated value (name, value, ±, source) so the user "
+    "can check them before printing. Clearances and design choices of your own (wall, "
+    "gaps) are not estimates; don't cite a file for them. But an opening sized or placed "
+    "to clear something a file shows (a connector, port, cable, LED, button) depends on "
+    "that file: give its position and size their own P values tagged as estimated (with "
+    "±), add margin for the uncertainty, and list them in the note like any estimate.\n"
+    "Critical dimensions — the board or object outline and the mounting-hole pattern — "
+    "must be stated in a file or given by the user. If one is only drawn without a number, "
+    "or could only be guessed from a photo with no scale reference, ask for it with "
+    "ask_clarification instead of guessing. Measure from a photo only when it has a known "
+    "reference in it (a ruler, or a dimension the user gave or a file states), and say "
+    "which reference you used; with no such reference, ask."
+)
 
 
 def _system(production: str = "") -> str:
@@ -205,7 +247,8 @@ def _system(production: str = "") -> str:
         "screw holes along the face's normal into the part. at= sketch_points(\"<name>\") "
         "(the points and circle centres of a face sketch, on its face as it is now; "
         "a list of Vectors with .normal), a flat face (its centre: a selector or "
-        "face_ref), or [(point, outward normal), …]. kind= \"clearance\" (fit=\"close\" "
+        "face_ref), or (point, outward normal) pairs for places computed from P "
+        "with no sketch, e.g. [((x, y, P[\"floor\"]), (0, 0, 1)) for x, y in pts]. kind= \"clearance\" (fit=\"close\" "
         "or \"normal\"), \"tapped\" (tap drill / self-tapping), \"insert\" (heat-set, "
         "CNC Kitchen sizes), \"counterbore\" (socket head cap screw), \"countersink\" "
         "(90° countersunk screw); size= \"M2\", \"M2.5\", \"M3\", \"M4\" or \"M5\". "
@@ -273,7 +316,7 @@ def _system(production: str = "") -> str:
         "(which face? what dimension? which of several holes?), call "
         "ask_clarification with ONE short question instead of guessing — a wrong "
         "guess is worse than a question. Otherwise, make the edit."
-    )
+    ) + PROVENANCE
     if production.strip():
         base += (
             "\n\nMANUFACTURING CONTEXT — the user's target production process for "
@@ -292,7 +335,9 @@ WRITE_TOOL = {
         "type": "object",
         "properties": {
             "code": {"type": "string", "description": "the complete build123d script; must bind `part`"},
-            "note": {"type": "string", "description": "one short sentence describing the change"},
+            "note": {"type": "string", "description": "one short sentence describing the change; "
+                     "then, if any value is estimated (from a drawing's scale or a photo), list each: "
+                     "name = value ±uncertainty (source)"},
         },
         "required": ["code", "note"],
         "additionalProperties": False,
@@ -362,7 +407,9 @@ def _face_sketches(document_id: str | None) -> list[str]:
                    f"through {o} with normal {n} (as drawn; it follows its face)")
     return out
 
-def _anthropic_call(system: str, user: str, tools: list[dict], model: str) -> dict:
+def _anthropic_call(system: str, user: str | list[dict], tools: list[dict], model: str) -> dict:
+    """One model call. `user` is the prompt text, or content blocks (context
+    files, then the prompt text) when files are attached."""
     try:
         import anthropic
     except ImportError as exc:  # pragma: no cover
@@ -391,7 +438,10 @@ def _anthropic_call(system: str, user: str, tools: list[dict], model: str) -> di
         ) from exc
     except anthropic.APIError as exc:
         raise AssistantError(f"Anthropic API error: {exc}") from exc
-    usage = {"input": resp.usage.input_tokens, "output": resp.usage.output_tokens}
+    u = resp.usage
+    usage = {"input": u.input_tokens, "output": u.output_tokens,
+             "cache_read": getattr(u, "cache_read_input_tokens", 0) or 0,
+             "cache_write": getattr(u, "cache_creation_input_tokens", 0) or 0}
     text = ""
     for block in resp.content:
         if block.type == "tool_use" and block.name == "write_script":
@@ -424,8 +474,10 @@ def edit_script(
     production: str = "",
     build_error: str = "",
     document_id: str | None = None,
+    files: list[dict] | None = None,
+    file_listing: list[str] | None = None,
     *,
-    llm: Callable[[str, str, list[dict]], dict] | None = None,
+    llm: Callable[[str, str | list[dict], list[dict]], dict] | None = None,
 ) -> dict:
     """Turn `instruction` into either an edit of `code` or a clarifying question.
 
@@ -435,7 +487,9 @@ def edit_script(
     the error the current `code` fails with, if any — the model is asked to
     repair it as part of the edit. `document_id` resolves the uploaded files
     the script imports (ASSETS[...]); for such a script the prompt also gets a
-    GEOMETRY SUMMARY of the current build. Returns {kind: "edit", code, note, tokens…} for an edit
+    GEOMETRY SUMMARY of the current build. `files` are content blocks for the
+    context files (documents/context.py ai_blocks), sent before the prompt
+    text, which lists them (`file_listing`) so the model can cite them. Returns {kind: "edit", code, note, tokens…} for an edit
     (validated to build, one corrective retry) or {kind: "question", question,
     tokens…} when the model asks for clarification."""
     instruction = (instruction or "").strip()
@@ -470,26 +524,40 @@ def edit_script(
             convo = "RECENT CONVERSATION:\n" + "\n".join(turns) + "\n\n"
         geom = (f"GEOMETRY SUMMARY (of the current build):\n{summary}\n\n"
                 if summary else "")
+        attached = ("CONTEXT FILES (attached above, in this order):\n" + "\n".join(file_listing)
+                    + "\n\n") if files and file_listing else ""
         return (
-            f"CURRENT SCRIPT:\n```python\n{code}\n```\n\n"
+            f"{attached}CURRENT SCRIPT:\n```python\n{code}\n```\n\n"
             f"{geom}{sk}{convo}{berr}{sel}INSTRUCTION: {instruction}\n{extra}"
         )
 
-    tok_in = tok_out = 0
+    tok = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+    usd = [0.0]   # priced per request: a long prompt can change the rate
 
     def call(extra: str = "") -> dict:
-        nonlocal tok_in, tok_out
-        o = llm(_system(production), prompt(extra), [WRITE_TOOL, ASK_TOOL])
+        text = prompt(extra)
+        # files first, then the text (the API reads documents and images best
+        # before the question); their cache_control makes the next turn cheap
+        user = [*files, {"type": "text", "text": text}] if files else text
+        try:
+            o = llm(_system(production), user, [WRITE_TOOL, ASK_TOOL])
+        except AssistantError as exc:
+            if usd[0]:          # an earlier call of this edit was billed
+                exc.usage = cost()
+            raise
         u = o.get("usage") or {}
-        tok_in += u.get("input", 0)
-        tok_out += u.get("output", 0)
+        for k in tok:
+            tok[k] += u.get(k, 0)
+        usd[0] += call_cost(model, u)
         return o
 
     def cost() -> dict:
-        pin, pout = price_for(model)
         return {
-            "tokens_in": tok_in, "tokens_out": tok_out,
-            "cost_usd": round(tok_in * pin + tok_out * pout, 4),
+            # every input token the model read, cached or not
+            "tokens_in": tok["input"] + tok["cache_read"] + tok["cache_write"],
+            "tokens_out": tok["output"],
+            "cache_read_tokens": tok["cache_read"], "cache_write_tokens": tok["cache_write"],
+            "cost_usd": round(usd[0], 4),
         }
 
     def validate(script: str) -> None:
@@ -537,7 +605,9 @@ def edit_script(
             "Fix that cause — don't just remove the feature. If the error states "
             "the largest size that fits (fillet radius, chamfer length), use that "
             "value or less; otherwise compute a size that fits from the neighbouring "
-            "dimensions. Return a corrected complete script.")
+            "dimensions. Return a corrected complete script. Its note is what the user "
+            "reads: describe the design as a whole (and list every estimated value, if "
+            "any), not only this fix.")
         if out.get("kind") == "question":
             return {"kind": "question", "question": out.get("question", ""), **cost()}
         new_code = out.get("code", "")
@@ -546,7 +616,8 @@ def edit_script(
         except EngineError as exc2:
             fixed = apply_fix(new_code, exc2)
             if fixed is None:
-                raise AssistantError(f"couldn't produce a script that builds: {exc2}") from exc2
+                raise AssistantError(f"couldn't produce a script that builds: {exc2}",
+                                     usage=cost()) from exc2
             new_code = fixed
 
     return {"kind": "edit", "code": new_code, "note": out.get("note", ""), **cost()}
