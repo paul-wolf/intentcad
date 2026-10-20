@@ -25,7 +25,7 @@ class FaceRefTests(SimpleTestCase):
         self.assertEqual(top["area"], 5400)
         code = BLOCK.format(h=25) + f"f = face_ref({top})\nP['z'] = f.center().Z\n"
         out = run_script(code)
-        self.assertEqual(out["face_refs"], [{"hint": "top face", "status": "found", "moved_by": 0.0}])
+        self.assertEqual(out["face_refs"], [{"hint": "top face", "status": "found", "moved_by": 0.0, "line": 3}])
         self.assertAlmostEqual(out["params"]["z"], 25)
 
     def test_a_shells_removed_top_is_found_after_a_height_change(self):

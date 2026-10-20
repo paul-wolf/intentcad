@@ -12,7 +12,7 @@ import { generateId } from '@/utils/id';
 import { arcFromBulge, arcMidpoint, bulgeFromMidpoint } from '@/utils/arcGeometry';
 import { rectangleOutline, rectanglePath } from '@/utils/rectPath';
 import { bezierPoint } from '@/utils/bezierGeometry';
-import { dot, len, scale, sub, type Vec3 } from './dragHandle';
+import { add, dot, len, scale, sub, type Vec3 } from './dragHandle';
 import { planeBasis, planeForFace, sketchToWorld, worldToSketch, type PlaneBasis } from './sketchPlane';
 import { isRef } from '@/utils/brokenRefs';
 import { followRefs, type OutlineEdge } from './sketchRefs';
@@ -50,9 +50,14 @@ export type SketchBindings = Record<string, SketchBinding>;
 
 /** The plane a sketch is on in the last build: where its face went, else as drawn.
  *  (The stored plane is never changed — the build works it out each time.) */
-export function boundPlane(s: Sketch, bound?: SketchBindings | null): Sketch['plane'] {
-  return (s.plane && bound?.[s.name]?.plane) || s.plane;
+export function boundPlane(s: Sketch, bound?: SketchBindings | null,
+                           planes?: Record<string, ConstructionPlane> | null): Sketch['plane'] {
+  const on = s.planeRef ? planes?.[s.planeRef] : null;
+  return (s.plane && bound?.[s.name]?.plane) || (on ? { origin: on.origin, normal: on.normal, xAxis: on.xAxis } : s.plane);
 }
+
+/** A construction plane's geometry, as the build reports it (RunResponse.planes). */
+export interface ConstructionPlane { origin: Vec3; normal: Vec3; xAxis: Vec3 }
 
 /** "top face", "front face"… from the outward normal. */
 export function faceLabel(n: readonly number[]): string {
@@ -216,7 +221,7 @@ export type BasePlane = keyof typeof BASE_PLANES;
 
 /** The base plane a sketch is on (null: on a part face, or none). */
 export function sketchBasePlane(s: Sketch): BasePlane | null {
-  if (!s.plane || s.face) return null;
+  if (!s.plane || s.face || s.planeRef) return null;
   const b = planeBasis(s.plane);
   if (len(b.origin) > 1e-6) return null;
   for (const [k, p] of Object.entries(BASE_PLANES)) if (dot(b.normal, p.normal) > 0.999) return k as BasePlane;
@@ -232,6 +237,28 @@ export function newPlaneSketch(name: string, which: BasePlane): Sketch {
     constraints: [{ id: generateId('c'), type: 'fixed', entityId: origin.id }],
     plane: { origin: [0, 0, 0], normal: round(plane.normal), xAxis: round(plane.xAxis) },
   };
+}
+
+/** A new sketch on the construction plane `planeName` (where the build last
+ *  put it), with the plane's origin as a fixed reference point. */
+export function newConstructionSketch(name: string, planeName: string, plane: ConstructionPlane): Sketch {
+  const origin: Entity = { id: generateId('e'), type: 'point', position: { x: 0, y: 0 }, construction: true, reference: true };
+  return {
+    id: generateId('sk'), name, visible: true, entities: [origin],
+    constraints: [{ id: generateId('c'), type: 'fixed', entityId: origin.id }],
+    plane: { origin: round(plane.origin), normal: round(plane.normal), xAxis: round(plane.xAxis) },
+    planeRef: planeName,
+  };
+}
+
+/** The sketches drawn on the construction plane `name`. */
+export function planeSketches(sketches: Sketch[], name: string): Sketch[] {
+  return sketches.filter((s) => s.planeRef === name);
+}
+
+/** The sketches with a plane renamed from `old` to `name` pointing at it. */
+export function renamePlaneRefs(sketches: Sketch[], old: string, name: string): Sketch[] {
+  return sketches.map((s) => (s.planeRef === old ? { ...s, planeRef: name } : s));
 }
 
 // samples within 0.01 mm of the circle through the first, middle and last points
@@ -366,6 +393,7 @@ export interface SketchProfile {
   loops: ProfileSegment[][];
   points?: XY[];        // its point entities: with the circle centres, where sketch_points() puts holes
   face?: FaceRef;
+  planeRef?: string;    // on a construction plane: the build takes the plane from PLANES[planeRef]
 }
 
 const xy = (p: Point): XY => [Math.round(p.x * 1e6) / 1e6, Math.round(p.y * 1e6) / 1e6];
@@ -463,6 +491,7 @@ export function sketchProfile(sketch: Sketch): SketchProfile | null {
     plane: sketch.plane, loops: sketchLoops(sketch).loops,
     ...(points.length ? { points } : {}),
     ...(sketch.face ? { face: sketch.face } : {}),
+    ...(sketch.planeRef ? { planeRef: sketch.planeRef } : {}),
   };
 }
 
@@ -542,8 +571,15 @@ const AXIS_WORDS: [Vec3, string, string][] = [
   [[1, 0, 0], 'to the right', 'X'], [[-1, 0, 0], 'to the left', 'X'],
 ];
 
-/** Where the extrude goes, in words: "Into the part · down (−Z)". */
-export function extrudeDirectionText(o: ExtrudeShape, normal: Vec3): string {
+/** Where the part's middle is from a plane, along its normal (+: the side the
+ *  normal points to), from the part's box. */
+export const partSide = (origin: Vec3, normal: Vec3, min: readonly number[], max: readonly number[]): number =>
+  dot(sub(scale(add(min as Vec3, max as Vec3), 0.5), origin), normal);
+
+/** Where the extrude goes, in words: "Into the part · down (−Z)". `partAt`
+ *  (partSide) says, for a tilted plane with no axis to name, whether it goes
+ *  toward the part or away from it. */
+export function extrudeDirectionText(o: ExtrudeShape, normal: Vec3, partAt?: number): string {
   const d = scale(normal, extrudeSign(o));
   const ax = AXIS_WORDS.find(([v]) => dot(v, d) > 0.999);
   if (o.op === 'cut' && o.through && o.datum) return 'Through the part, both ways from the plane';
@@ -554,7 +590,10 @@ export function extrudeDirectionText(o: ExtrudeShape, normal: Vec3): string {
     : o.op === 'cut'
       ? (s < 0 ? 'Into the part' : 'Out of the face — cuts nothing there')
       : (s > 0 ? 'Out of the face' : 'Into the part');
-  if (!ax) return what;
+  if (!ax) {
+    if (!o.datum || partAt === undefined || Math.abs(partAt) < 1e-6) return what;
+    return `${what} · ${partAt * s > 0 ? 'toward the part' : 'away from the part'}`;
+  }
   const sign = dot(ax[0], [1, 1, 1]) > 0 ? '+' : '−';
   return `${what} · ${ax[1]} (${sign}${ax[2]})`;
 }

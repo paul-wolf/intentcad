@@ -1,22 +1,24 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { useThemeStore } from '@/theme';
 import {
-  ApiError, errorText, type EdgeOpKind, type EdgeRefSpec, type FaceRefSpec, type HoleKind, type HolePreset, type HolePresets, type HoleSizeKey,
-  type HolesPayload, type RunFace, type RunResponse, type SizeFix,
+  ApiError, errorText, type ArgOpKind, type EdgeOpKind, type EdgeRefSpec, type ExtrudeOp, type FaceRefSpec, type HoleKind,
+  type HolePreset, type HolePresets, type HoleSizeKey, type HolesPayload, type KeepItem, type RunFace, type RunResponse, type SizeFix,
 } from '@/api/client';
 import type { Viewer } from '@/build/webglViewer';
 import { faceLabel } from '@/build/faceSketch';
 import { sameEdgeRef } from '@/build/edgePick';
+import {
+  amountText, amountValue, edgeSummary, offsetSummary, planeNameProblem, type BaseName, type EdgePlaneValues,
+  type OffsetPlaneValues,
+} from '@/build/constructionPlanes';
+import { ParamExprInput } from './ParamExprInput';
 
-// The part editor's explicit operations (Shell, Hole, Fillet, Chamfer): a dialog that writes
-// one script line, with the result previewed as a ghost while it's open.
+// The part editor's explicit operations (Shell, Hole, Fillet, Chamfer; and reopened,
+// Extrude, Round, Lighten): a dialog that writes one script line, with the result
+// previewed as a ghost while it's open.
 
 /** The colour the candidate result is drawn in. */
 export const PREVIEW_COLOR: [number, number, number] = [0.36, 0.72, 0.86];
-
-/** A script line the dialogs write or reopen: `part = shell(...)`, `part = holes(...)`,
- *  `part = fillet(part, edges_ref(...), ...)`, `part = chamfer(part, ...)`. */
-export const OP_LINE = /^\s*part\s*=\s*(shell|holes|fillet|chamfer)\s*\(/;
 
 export interface PreviewState {
   state: 'idle' | 'running' | 'ok' | 'warning' | 'error';
@@ -644,6 +646,444 @@ export function EdgeOpDialog({ op, value, onChange, editing, preview, edgeIndex,
         )}
         <div style={{ color: palette.textSecondary, marginTop: '4px', fontSize: '11px' }}>
           Click an edge to add or remove it; double-click for its whole loop.
+        </div>
+      </div>
+    </OpFrame>
+  );
+}
+
+// ---------------------------------------------------------------- Extrude (reopened)
+
+/** An extrude line's values (op_at): the sketch it extrudes, how, and the P
+ *  key its depth is in (null: through, or not one yet). */
+export interface ExtrudeValues {
+  sketch: string;
+  op: ExtrudeOp;
+  depth: number;
+  through: boolean;
+  flip: boolean;
+  both: boolean;
+  datum: boolean;
+}
+
+export function ExtrudeDialog({ value, onChange, firstBody, param, direction, preview, onEditSketch, onApply, onCancel }: {
+  value: ExtrudeValues; onChange: (v: ExtrudeValues) => void;
+  /** the line makes the part: New body, and nothing else */
+  firstBody: boolean;
+  /** the P key the depth is in */
+  param: string | null;
+  /** which way it goes, in words */
+  direction: string;
+  preview: PreviewState;
+  onEditSketch: () => void;
+  onApply: () => void; onCancel: () => void;
+}) {
+  const { palette, seg, row, num, note } = useStyles();
+  const set = (p: Partial<ExtrudeValues>) => onChange({ ...value, ...p });
+  const through = value.op === 'cut' && value.through;
+  const both = value.datum && !through && value.both;
+  const flipOff = both || (through && value.datum);
+  const d = Number.isFinite(value.depth) ? value.depth : 0;
+  const ok = (through || d > 0) && preview.state !== 'running';
+  const what = value.op === 'cut' ? 'Cuts' : value.op === 'join' ? 'Grows' : 'Makes the part from';
+  return (
+    <OpFrame title="Edit extrude" preview={preview} ok={ok} onCancel={onCancel} onApply={onApply} applyLabel="Update">
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: palette.text }}>
+        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              title={value.sketch}>
+          Sketch <b>{value.sketch}</b>
+        </span>
+        <button onClick={onEditSketch} title="Open the sketch to change its shapes; Done brings you back here"
+                style={{ fontSize: '12px', padding: '2px 8px', cursor: 'pointer', borderRadius: '4px',
+                         background: palette.buttonBg, color: palette.text, border: `1px solid ${palette.border}` }}>
+          Edit sketch
+        </button>
+      </div>
+      {firstBody ? (
+        <div style={{ color: palette.text, lineHeight: 1.4 }}>
+          <b>New body</b>
+          <div style={{ color: palette.textSecondary }}>This line makes the part: it stays a new body.</div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex' }}>
+          <button style={{ ...seg(value.op === 'cut'), borderRadius: '4px 0 0 4px' }} onClick={() => set({ op: 'cut' })}
+                  title="Remove the shapes from the part (holes, pockets)">Cut</button>
+          <button style={{ ...seg(value.op === 'join'), borderRadius: '0 4px 4px 0', borderLeft: 'none' }}
+                  onClick={() => set({ op: 'join' })} title="Add the shapes to the part (pegs, bosses)">Join</button>
+        </div>
+      )}
+      {value.op === 'cut' && (
+        <label style={row}>
+          <input type="checkbox" checked={value.through} onChange={(e) => set({ through: e.target.checked })} />
+          Through all{value.datum ? ' (both ways)' : ''}
+        </label>
+      )}
+      <label style={{ ...row, opacity: through ? 0.45 : 1 }}>
+        <span style={{ width: 56 }}>{both ? 'Each way' : value.op === 'cut' ? 'Depth' : 'Height'}</span>
+        <input type="number" min={0} step={0.5} value={value.depth} disabled={through} autoFocus
+               onChange={(e) => set({ depth: parseFloat(e.target.value) })} style={num} />
+        <span style={{ color: palette.textSecondary, flex: 1 }}>mm</span>
+        {param && !through && <ParamChip name={param} />}
+      </label>
+      {value.datum && !through && (
+        <label style={row} title="Extrude the depth to both sides of the plane, so the plane is the middle">
+          <input type="checkbox" checked={both} onChange={(e) => set({ both: e.target.checked })} />
+          Both ways (symmetric)
+        </label>
+      )}
+      <label style={{ ...row, opacity: flipOff ? 0.45 : 1 }}
+             title="Send it the other way along the face's normal — the preview shows where it goes">
+        <input type="checkbox" checked={value.flip && !flipOff} disabled={flipOff}
+               onChange={(e) => set({ flip: e.target.checked })} />
+        Flip direction
+      </label>
+      <div style={note}>
+        {what} “{value.sketch}” {through ? 'through the part' : `${d} mm${both ? ' each way' : ''}`}.
+        <div><b>{direction}</b></div>
+      </div>
+    </OpFrame>
+  );
+}
+
+// ---------------------------------------------------------------- Round, Lighten (reopened)
+
+/** An auto_round()/truss_windows() line's values (op_at), and what the dialog
+ *  changes: `make` the literals to move into P. */
+export interface ArgOpValues {
+  op: ArgOpKind;
+  values: Record<string, number | boolean | string>;
+  /** auto_round: the kept faces, `item` their index in the line as read
+   *  (their faces in the build: RunResponse.kept) */
+  keep: (KeepItem & { item?: number })[] | null;
+  /** argument -> the P key holding it */
+  params: Record<string, string>;
+  /** argument -> its source, when written as an expression (not edited here) */
+  exprs: Record<string, string>;
+  make: string[];
+}
+
+/** The P key `make` will give an argument (backend ARG_OPS bases). */
+const P_BASE: Record<string, string> = {
+  convex: 'round_r', concave: 'blend_r', rim: 'truss_rim', rib: 'truss_rib', corner_r: 'truss_corner_r',
+  keep_clear: 'truss_clear',
+};
+
+/** What a dialog sends to /build/edit_args: the changed values, and those
+ *  moved into P. */
+export function argOpPayload(v: ArgOpValues, orig: ArgOpValues): { values: Record<string, unknown>; keep: KeepItem[] | null;
+                                                                    make_param: string[] } {
+  const values: Record<string, unknown> = {};
+  for (const [k, x] of Object.entries(v.values)) {
+    if (k in v.exprs) continue;
+    if (x !== orig.values[k] || v.make.includes(k)) values[k] = x;
+  }
+  const keep = v.keep && orig.keep ? v.keep.map((k) => (k.src ? { src: k.src } : { ref: k.ref })) : null;
+  return { values, keep, make_param: v.make.filter((k) => !(k in v.params) && !(k in v.exprs)) };
+}
+
+function ParamChip({ name }: { name: string }) {
+  const { palette } = useStyles();
+  return (
+    <span title={`A parameter: changing this changes P["${name}"]`}
+          style={{ fontSize: '11px', fontFamily: 'ui-monospace, Menlo, monospace', color: palette.accent,
+                   padding: '0 4px', border: `1px solid ${palette.border}`, borderRadius: '3px', whiteSpace: 'nowrap' }}>
+      {name}
+    </span>
+  );
+}
+
+/** A number argument: a P key shows its name; a literal offers "make this a
+ *  parameter"; an expression is shown, not edited. */
+function ArgField({ label, field, v, onChange, title, step = 0.5 }: {
+  label: string; field: string; v: ArgOpValues; onChange: (v: ArgOpValues) => void; title: string; step?: number;
+}) {
+  const { palette, row, num } = useStyles();
+  const expr = v.exprs[field];
+  const key = v.params[field];
+  const made = v.make.includes(field);
+  const x = v.values[field];
+  return (
+    <label style={row} title={title}>
+      <span style={{ width: 74 }}>{label}</span>
+      {expr != null ? (
+        <span title="Written as an expression: edit it in the code"
+              style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                       fontFamily: 'ui-monospace, Menlo, monospace', fontSize: '11px', color: palette.textSecondary }}>
+          {expr}
+        </span>
+      ) : (
+        <>
+          <input type="number" min={0} step={step} value={typeof x === 'number' ? x : ''}
+                 onChange={(e) => onChange({ ...v, values: { ...v.values, [field]: parseFloat(e.target.value) } })}
+                 style={num} />
+          <span style={{ color: palette.textSecondary, flex: 1 }}>mm</span>
+          {key ? <ParamChip name={key} /> : made ? (
+            <button onClick={(e) => { e.preventDefault(); onChange({ ...v, make: v.make.filter((m) => m !== field) }); }}
+                    title={`It becomes P["${P_BASE[field] ?? field}"] when you update; click to keep it a number`}
+                    style={{ background: 'none', border: 'none', color: palette.accent, cursor: 'pointer', fontSize: '11px', padding: 0 }}>
+              → {P_BASE[field] ?? field} ↺
+            </button>
+          ) : (
+            <button onClick={(e) => { e.preventDefault(); onChange({ ...v, make: [...v.make, field] }); }}
+                    title="Move this number into P, so it shows with the parameters and can be dragged"
+                    style={{ background: 'none', border: 'none', color: palette.textSecondary, cursor: 'pointer',
+                             fontSize: '11px', padding: 0, textDecoration: 'underline', textUnderlineOffset: '2px' }}>
+              make parameter
+            </button>
+          )}
+        </>
+      )}
+    </label>
+  );
+}
+
+const num0 = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) ? x : 0);
+
+export function RoundDialog({ value, onChange, preview, keepFaces, onHoverFace, picked, onApply, onCancel }: {
+  value: ArgOpValues; onChange: (v: ArgOpValues) => void;
+  preview: PreviewState;
+  /** the faces of the shown part a kept item names (to light them) */
+  keepFaces: (k: KeepItem & { item?: number }) => number[];
+  onHoverFace: (index: number | null) => void;
+  /** the face picked in the view, to add to the kept list */
+  picked: FaceRefSpec | null;
+  onApply: () => void; onCancel: () => void;
+}) {
+  const { palette, row, note } = useStyles();
+  const a = value.values;
+  const keep = value.keep ?? [];
+  const exprOk = (f: string) => f in value.exprs || num0(a[f]) >= 0;
+  const ok = exprOk('convex') && exprOk('concave') && preview.state !== 'running';
+  const canAdd = !!picked && value.keep != null && !keep.some((k) => k.ref && sameRef(k.ref, picked));
+  const r = (f: string) => (f in value.exprs ? value.exprs[f] : `${num0(a[f])} mm`);
+  return (
+    <OpFrame title="Edit round" preview={preview} ok={ok} onCancel={onCancel} onApply={onApply} applyLabel="Update" width={300}>
+      <ArgField label="Convex" field="convex" v={value} onChange={onChange} step={0.25}
+                title="The radius outside edges are rounded to (0: leave them sharp)" />
+      <ArgField label="Concave" field="concave" v={value} onChange={onChange} step={0.25}
+                title="The radius inside corners are filled to (0: leave them sharp)" />
+      <label style={row} title="Leave the face the part prints on, and the edges round it, sharp">
+        <input type="checkbox" checked={a.keep_bed !== false}
+               onChange={(e) => onChange({ ...value, values: { ...a, keep_bed: e.target.checked } })} />
+        Keep the print bed face sharp
+      </label>
+      <label style={row} title="Leave the walls of small holes, and their edges, sharp">
+        <input type="checkbox" checked={a.protect_holes !== false}
+               onChange={(e) => onChange({ ...value, values: { ...a, protect_holes: e.target.checked } })} />
+        Keep small holes sharp
+      </label>
+      <div style={note}>
+        Rounds outside edges to <b>{r('convex')}</b> and fills inside corners to <b>{r('concave')}</b>, each capped to
+        the wall there{a.keep_bed !== false ? '; the bed face stays sharp' : ''}{keep.length ? `; ${keep.length} kept face${keep.length > 1 ? 's' : ''} stay sharp` : ''}.
+      </div>
+      <div>
+        <div style={{ color: palette.textSecondary, marginBottom: '4px' }}>Kept sharp {keep.length ? `(${keep.length})` : ''}</div>
+        {value.keep == null && (
+          <div style={{ color: palette.textSecondary, lineHeight: 1.4 }}>Written as an expression: edit it in the code.</div>
+        )}
+        {value.keep != null && keep.length === 0 && (
+          <div style={{ color: palette.textSecondary, lineHeight: 1.4 }}>None besides the bed and holes.</div>
+        )}
+        {keep.map((k, i) => {
+          const faces = keepFaces(k);
+          const name = k.ref?.hint ?? k.src ?? 'face';
+          return (
+            <div key={`${i}|${k.src ?? ''}|${k.ref?.center.join() ?? ''}`}
+                 onMouseEnter={() => onHoverFace(faces[0] ?? null)} onMouseLeave={() => onHoverFace(null)}
+                 title={faces.length ? `Lit in the view${faces.length > 1 ? ` (the first of ${faces.length} faces)` : ''}${k.src ? `\n${k.src}` : ''}`
+                   : `Not on the part as shown${k.src ? `\n${k.src}` : ''}`}
+                 style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '2px 4px', borderRadius: '3px',
+                          color: palette.text, cursor: 'default' }}
+                 onMouseOver={(e) => { e.currentTarget.style.background = palette.buttonBg; }}
+                 onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                             ...(k.ref ? {} : { fontFamily: 'ui-monospace, Menlo, monospace', fontSize: '11px' }) }}>
+                {name}
+                {faces.length > 1 && <span style={{ color: palette.textSecondary }}> · {faces.length} faces</span>}
+              </span>
+              <button aria-label={`Round the ${name} too`} title="Round this face too (take it off the list)"
+                      onClick={() => { onHoverFace(null); onChange({ ...value, keep: keep.filter((_, j) => j !== i) }); }}
+                      style={{ background: 'none', border: 'none', color: palette.textSecondary, cursor: 'pointer',
+                               fontSize: '14px', lineHeight: 1, padding: '0 2px' }}>&times;</button>
+            </div>
+          );
+        })}
+        {value.keep != null && (
+          <button disabled={!canAdd}
+                  onClick={() => picked && onChange({ ...value, keep: [...keep, { ref: picked }] })}
+                  title={canAdd ? 'Keep this face and its edges sharp' : 'Click a face of the part first'}
+                  style={{ marginTop: '4px', fontSize: '12px', padding: '2px 8px', cursor: canAdd ? 'pointer' : 'default',
+                           borderRadius: '4px', opacity: canAdd ? 1 : 0.5,
+                           background: palette.buttonBg, color: palette.text, border: `1px solid ${palette.border}` }}>
+            Add the selected face{picked?.hint ? ` (${picked.hint})` : ''}
+          </button>
+        )}
+        <div style={{ color: palette.textSecondary, marginTop: '4px', fontSize: '11px' }}>
+          Click a face of the part to select it, then add it to keep it sharp (mounting and mating faces).
+        </div>
+      </div>
+    </OpFrame>
+  );
+}
+
+export const TRUSS_PATTERNS = ['fan', 'triangulate'] as const;
+
+export function TrussDialog({ value, onChange, preview, onApply, onCancel }: {
+  value: ArgOpValues; onChange: (v: ArgOpValues) => void;
+  preview: PreviewState;
+  onApply: () => void; onCancel: () => void;
+}) {
+  const { seg, note } = useStyles();
+  const a = value.values;
+  const pos = (f: string) => f in value.exprs || num0(a[f]) > 0;
+  const ok = pos('rim') && pos('rib') && pos('corner_r') && preview.state !== 'running';
+  const t = (f: string) => (f in value.exprs ? value.exprs[f] : `${num0(a[f])} mm`);
+  return (
+    <OpFrame title="Edit lighten" preview={preview} ok={ok} onCancel={onCancel} onApply={onApply} applyLabel="Update" width={300}>
+      <ArgField label="Rim" field="rim" v={value} onChange={onChange}
+                title="The solid band kept round the plate's edge and round each hole" />
+      <ArgField label="Rib" field="rib" v={value} onChange={onChange} title="The width of the ribs between the windows" />
+      <ArgField label="Corner R" field="corner_r" v={value} onChange={onChange} step={0.25}
+                title="The radius the windows' corners are rounded to" />
+      <ArgField label="Keep clear" field="keep_clear" v={value} onChange={onChange}
+                title="How far the windows stay from protected faces and bosses" />
+      <div style={{ display: 'flex' }}>
+        {TRUSS_PATTERNS.map((p, i) => (
+          <button key={p} onClick={() => onChange({ ...value, values: { ...a, pattern: p } })}
+                  style={{ ...seg(a.pattern === p), borderRadius: i ? '0 4px 4px 0' : '4px 0 0 4px', borderLeft: i ? 'none' : undefined }}
+                  title={p === 'fan' ? 'Ribs radiate from the anchors' : 'Ribs join the anchors in triangles'}>
+            {p === 'fan' ? 'Fan' : 'Triangulate'}
+          </button>
+        ))}
+      </div>
+      <div style={note}>
+        Cuts windows between ribs <b>{t('rib')}</b> wide that {a.pattern === 'triangulate' ? 'join the anchors in triangles' : 'fan out from the anchors'},
+        keeping a <b>{t('rim')}</b> rim round the edge and holes and {t('keep_clear')} clear of protected faces; window corners
+        rounded {t('corner_r')}.
+      </div>
+    </OpFrame>
+  );
+}
+
+// ---------------------------------------------------------------- construction planes
+
+/** The plane previews are drawn in the view as they are typed (no candidate
+ *  build): the frame says "preview" while the values make a plane. */
+const planePreview = (problem: string | null): PreviewState =>
+  problem ? { state: 'error', message: problem, fix: null } : { state: 'ok', message: '', fix: null };
+
+const BASE_WORDS: Record<BaseName, string> = { XY: 'XY plane', XZ: 'XZ plane', YZ: 'YZ plane' };
+
+/** Offset plane: a name, what it is offset from (the face picked, or a base
+ *  plane) and the distance (a number or an expression of P names). */
+export function OffsetPlaneDialog({ value, onChange, editing, params, used, own, onApply, onCancel }: {
+  value: OffsetPlaneValues; onChange: (v: OffsetPlaneValues) => void;
+  editing: boolean;
+  params: Record<string, number>;
+  /** the planes already defined (a new name must differ), and this one's own name */
+  used: string[]; own?: string;
+  onApply: () => void; onCancel: () => void;
+}) {
+  const { palette, seg, row, note } = useStyles();
+  const set = (p: Partial<OffsetPlaneValues>) => onChange({ ...value, ...p });
+  const d = amountValue(value.distance, params);
+  const nameBad = planeNameProblem(value.name, used, own);
+  const problem = nameBad ?? (d === null ? 'The distance must be a number or an expression of the parameters' : null)
+    ?? (value.base === 'face' && !value.face ? 'Click a flat face in the view, or pick a base plane' : null);
+  const baseText = value.base === 'face' ? (value.face?.hint ?? 'face') : BASE_WORDS[value.base];
+  const bases: (BaseName | 'face')[] = ['face', 'XY', 'XZ', 'YZ'];
+  return (
+    <OpFrame title={editing ? 'Edit offset plane' : 'Offset plane'} preview={planePreview(problem)} ok={!problem}
+             onCancel={onCancel} onApply={onApply} applyLabel={editing ? 'Update' : 'Add plane'} width={300}>
+      <label style={row}>
+        <span style={{ width: 56 }}>Name</span>
+        <input value={value.name} onChange={(e) => set({ name: e.target.value })} spellCheck={false}
+               style={{ flex: 1, fontSize: '12px', padding: '2px 4px', background: palette.inputBg, color: palette.text,
+                        border: `1px solid ${nameBad ? palette.danger : palette.border}`, borderRadius: '3px' }} />
+      </label>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <span style={{ color: palette.textSecondary }}>Offset from</span>
+        <div style={{ display: 'flex' }}>
+          {bases.map((b, i) => (
+            <button key={b} onClick={() => set({ base: b })}
+                    title={b === 'face' ? (value.face ? `The ${value.face.hint} (click another flat face to change it)`
+                      : 'Click a flat face in the view') : `The ${BASE_WORDS[b]} through the origin`}
+                    style={{ ...seg(value.base === b), borderRadius: i === 0 ? '4px 0 0 4px' : i === bases.length - 1 ? '0 4px 4px 0' : 0,
+                             borderLeft: i ? 'none' : undefined }}>
+              {b === 'face' ? 'Face' : b}
+            </button>
+          ))}
+        </div>
+        {value.base === 'face' && (
+          <span style={{ color: value.face ? palette.text : palette.textSecondary }}>
+            {value.face ? <>The <b>{value.face.hint}</b> · click another flat face to change it</> : 'Click a flat face in the view'}
+          </span>
+        )}
+      </div>
+      <div style={{ ...row, alignItems: 'flex-start' }}>
+        <span style={{ width: 56, paddingTop: 3 }}>Distance</span>
+        <ParamExprInput value={amountText(value.distance)} onChange={(t) => set({ distance: t })} params={params}
+                        unit="mm" autoFocus title="A number, or an expression of the parameters (e.g. -width / 2); negative goes into the part" />
+        <span style={{ color: palette.textSecondary, paddingTop: 3 }}>mm</span>
+      </div>
+      <div style={note}>
+        <b>{value.name.trim() || 'The plane'}</b>: {offsetSummary(baseText, d)}.
+        <div style={{ color: palette.textSecondary, marginTop: 2 }}>
+          Drag the arrow on the plane to change the distance (it snaps to parallel faces).
+        </div>
+      </div>
+    </OpFrame>
+  );
+}
+
+/** Plane on edge: a name, the angle (a number or an expression of P names)
+ *  and which of the edge's two faces is 0°. */
+export function EdgePlaneDialog({ value, onChange, editing, params, used, own, onHoverFace, onApply, onCancel }: {
+  value: EdgePlaneValues; onChange: (v: EdgePlaneValues) => void;
+  editing: boolean;
+  params: Record<string, number>;
+  used: string[]; own?: string;
+  onHoverFace: (index: number | null) => void;
+  onApply: () => void; onCancel: () => void;
+}) {
+  const { palette, seg, row, note } = useStyles();
+  const set = (p: Partial<EdgePlaneValues>) => onChange({ ...value, ...p });
+  const a = amountValue(value.angle, params);
+  const nameBad = planeNameProblem(value.name, used, own);
+  const problem = nameBad ?? (a === null ? 'The angle must be a number or an expression of the parameters' : null);
+  const face = value.faces[value.from];
+  return (
+    <OpFrame title={editing ? 'Edit plane on edge' : 'Plane on edge'} preview={planePreview(problem)} ok={!problem}
+             onCancel={onCancel} onApply={onApply} applyLabel={editing ? 'Update' : 'Add plane'} width={300}>
+      <label style={row}>
+        <span style={{ width: 56 }}>Name</span>
+        <input value={value.name} onChange={(e) => set({ name: e.target.value })} spellCheck={false}
+               style={{ flex: 1, fontSize: '12px', padding: '2px 4px', background: palette.inputBg, color: palette.text,
+                        border: `1px solid ${nameBad ? palette.danger : palette.border}`, borderRadius: '3px' }} />
+      </label>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <span style={{ color: palette.textSecondary }}>0° is in the</span>
+        <div style={{ display: 'flex' }} onMouseLeave={() => onHoverFace(face?.index ?? null)}>
+          {value.faces.map((f, i) => (
+            <button key={i} onClick={() => set({ from: i })} onMouseEnter={() => onHoverFace(f.index)}
+                    title={`At 0° the plane lies in the ${f.hint}`}
+                    style={{ ...seg(value.from === i), borderRadius: i === 0 ? '4px 0 0 4px' : '0 4px 4px 0',
+                             borderLeft: i ? 'none' : undefined, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {f.hint}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{ ...row, alignItems: 'flex-start' }}>
+        <span style={{ width: 56, paddingTop: 3 }}>Angle</span>
+        <ParamExprInput value={amountText(value.angle)} onChange={(t) => set({ angle: t })} params={params} unit="°"
+                        autoFocus title="Degrees about the edge: positive tilts out of the part, negative into it" />
+        <span style={{ color: palette.textSecondary, paddingTop: 3 }}>°</span>
+      </div>
+      <div style={note}>
+        <b>{value.name.trim() || 'The plane'}</b>: through the edge, {edgeSummary(face?.hint ?? 'face', a)}.
+        <div style={{ color: palette.textSecondary, marginTop: 2 }}>
+          Drag the round handle to turn it about the edge (1° steps, Shift 0.1°).
         </div>
       </div>
     </OpFrame>

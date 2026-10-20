@@ -399,8 +399,11 @@ def _run(code: str, export: list | None = None,
 
     rounds: list[dict] = []
 
+    kept: list[dict] = []
+
     def auto_round_reported(part, *args, **kwargs):
         kwargs.pop("report", None)
+        _report_kept(part, args[2] if len(args) > 2 else kwargs.get("keep"), kept)
         return auto_round(part, *args, report=rounds.append, **kwargs)
 
     ns["auto_round"] = auto_round_reported
@@ -442,6 +445,11 @@ def _run(code: str, export: list | None = None,
     ns.update(face_ref.bind(ns, face_report))
     ns.update(edge_ref.bind(ns, edge_report))
     ns.update(shell_hole.bind(ns))
+    # PLANES["name"] = offset_plane(...) / edge_plane(...) — construction
+    # planes that follow the part (modeling/planes.py); each → result["planes"]
+    from modeling import planes
+
+    ns.update(planes.bind(ns))
     ns["__editor_ops__"] = edge_ops.bind()
     # Run the script. If an operation fails partway (e.g. a chamfer too big),
     # `part` still holds the model built up to that line — render THAT plus the
@@ -645,6 +653,8 @@ def _run(code: str, export: list | None = None,
     }
     if rounds:
         result["auto_round"] = _merge_rounds(rounds)
+    if kept:
+        result["kept"] = kept
     if organic_events:
         result["organic"] = organic.merge(organic_events)
     if sketch_report:
@@ -653,11 +663,34 @@ def _run(code: str, export: list | None = None,
         result["face_refs"] = face_report
     if edge_report:
         result["edge_refs"] = edge_report
+    plane_report = planes.report(ns.get("PLANES"))
+    if plane_report:
+        result["planes"] = plane_report
     if warning:
         result["warning"] = warning   # an op failed; we rendered up to it
     if fix:
         result["fix"] = fix           # ...and here's the size that would have fit
     return result
+
+
+def _report_kept(part, keep, out: list) -> None:
+    """Which faces each item of an auto_round keep list is (as face refs),
+    for its dialog to show: {"line", "item", "faces"} each."""
+    from modeling.auto_round import _keep_faces
+    from modeling.edge_ref import _script_line
+    from modeling.face_ref import describe
+
+    line = _script_line()
+    try:
+        items = list(keep or [])
+    except TypeError:
+        return
+    for i, item in enumerate(items):
+        try:
+            faces = [describe(f) for f in _keep_faces(part, [item])]
+        except Exception:      # a selector that doesn't resolve: auto_round says so itself
+            faces = []
+        out.append({"line": line, "item": i, "faces": faces})
 
 
 def _merge_rounds(rounds: list[dict]) -> dict:

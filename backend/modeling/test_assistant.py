@@ -7,7 +7,7 @@ network — but do exercise the engine.
 
 from unittest import mock
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 
 from modeling import llm_models
 from modeling.assistant import AssistantError, edit_script, geometry_summary
@@ -133,6 +133,17 @@ class EditTests(SimpleTestCase):
         for word in ("mounting", "mating", "clamping", "bearing", "sealing"):
             self.assertIn(word, s)            # functional faces go in keep
         self.assertIn("not hand-picked fillet()", s)
+
+    def test_system_prompt_explains_construction_planes(self):
+        seen = {}
+        def llm(system, user, tools):
+            seen["system"] = system
+            return {"code": "part = Box(1,1,1)", "note": "ok"}
+        edit_script("part = Box(2,2,2)", "add a midplane slot", llm=llm)
+        s = seen["system"]
+        for word in ("PLANES[", "offset_plane(", "edge_plane(", "from_face=", "away from the "
+                     "material", "rather than a hard-coded"):
+            self.assertIn(word, s)
 
     def test_system_prompt_explains_organic_shapes(self):
         seen = {}
@@ -332,3 +343,17 @@ class ImportedGeometryEditTests(SimpleTestCase):
         r = edit_script(self.code, "add a hole", document_id="doc", llm=llm)
         self.assertIn(self.sha, r["code"])
         self.assertIn("no longer imports", seen[1])
+
+
+class PlaneSketchListingTests(TestCase):
+    def test_a_sketch_on_a_construction_plane_is_listed_with_its_plane(self):
+        from django.contrib.auth import get_user_model
+        from documents.models import Document
+        from modeling.assistant import _face_sketches
+        user = get_user_model().objects.create_user(username="pl", email="pl@example.com", password="pw")
+        prof = {"plane": {"origin": [0, 0, 25], "normal": [0, 0, 1], "xAxis": [1, 0, 0]},
+                "loops": [[{"t": "circle", "c": [0, 0], "r": 2}]], "planeRef": "Lid"}
+        doc = Document.objects.create(name="p", created_by=user, data={"sketches": [{"name": "Boss", "profile": prof}]})
+        (line,) = _face_sketches(str(doc.id))
+        self.assertIn('"Boss"', line)
+        self.assertIn('construction plane PLANES["Lid"]', line)

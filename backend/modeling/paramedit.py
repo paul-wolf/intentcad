@@ -125,9 +125,81 @@ def _assigns_part(tree: ast.Module) -> bool:
                for n in tree.body)
 
 
+# the P key a new extrude's depth gets: cut1_depth, join1_height, body1_height
+_EXTRUDE_KEY = {"cut": ("cut", "depth"), "join": ("join", "height"), "new": ("body", "height")}
+_EXTRUDE_SYM = {"cut": "-=", "join": "+=", "new": "="}
+_BB = "part.bounding_box()"
+_THROUGH = f"{_BB}.diagonal"                                  # a through cut, one way
+_THROUGH_BOTH = f"{_BB}.diagonal + {_BB}.center().length"     # a base-plane sketch's, both ways
+
+
+def _extrude_text(sketch: str, op: str, key: str | None, through: bool, flip: bool,
+                  datum: bool, both: bool) -> str:
+    """The script line of an extrude (add_extrude's doc says what each option
+    does); `key` is the P key of its depth (None for a through cut)."""
+    into = op == "cut" and not datum      # negative amount: into the part
+    sign = "-" if into != flip else ""
+    if op == "cut" and through:
+        amount = f"{_THROUGH_BOTH}, both=True" if datum else f"{sign}{_THROUGH}"
+    else:
+        amount = f'P["{key}"], both=True' if both and datum else f'{sign}P["{key}"]'
+    return f"part {_EXTRUDE_SYM[op]} extrude(sketch({json.dumps(sketch)}), amount={amount})"
+
+
+def _read_extrude(stmt, call, pv: dict, datum_sketches) -> tuple[dict, str | None]:
+    """An extrude line written as _extrude_text writes it, back into its
+    options: ({"sketch", "op", "depth", "through", "flip", "both", "datum"},
+    the depth's P key). A line in any other form raises ParamError.
+    `datum_sketches`: the names of the sketches on a base plane (a cut's sign
+    means the opposite on a face sketch and on a base plane)."""
+    op = ("cut" if isinstance(stmt.op, ast.Sub) else "join") if isinstance(stmt, ast.AugAssign) else "new"
+    bad = ParamError("this extrude isn't written the way the editor writes them: edit it in the code")
+    kws = [k.arg for k in call.keywords]
+    if len(call.args) != 1 or kws not in (["amount"], ["amount", "both"]):
+        raise bad
+    s = call.args[0]
+    if not (isinstance(s, ast.Call) and isinstance(s.func, ast.Name) and s.func.id == "sketch"
+            and len(s.args) == 1 and not s.keywords
+            and isinstance(s.args[0], ast.Constant) and isinstance(s.args[0].value, str)):
+        raise bad
+    sketch = s.args[0].value
+    kw = {k.arg: k.value for k in call.keywords}
+    both = "both" in kw
+    if both and not (isinstance(kw["both"], ast.Constant) and kw["both"].value is True):
+        raise bad
+    amt = kw["amount"]
+    neg = isinstance(amt, ast.UnaryOp) and isinstance(amt.op, ast.USub)
+    inner = amt.operand if neg else amt
+    key = _p_key(inner)
+    datum = both or sketch in datum_sketches
+    through = False
+    if key is not None:
+        if both and neg:
+            raise bad
+    elif op == "cut" and not both and ast.unparse(inner) == _THROUGH:
+        through = True
+    elif op == "cut" and both and not neg and ast.unparse(inner) == _THROUGH_BOTH:
+        through, both = True, False      # through both ways: implied by the base plane
+    else:
+        raise bad
+    into = op == "cut" and not datum
+    flip = False if both or (through and datum) else neg != into
+    depth = pv.get(key) if key else None
+    return ({"sketch": sketch, "op": op, "depth": depth, "through": through, "flip": flip,
+             "both": both, "datum": datum}, key)
+
+
+def _part_before(tree: ast.Module, line: int) -> bool:
+    """Whether a statement before script line `line` makes `part`."""
+    return any(n.lineno < line and (
+        (isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "part" for t in n.targets))
+        or (isinstance(n, (ast.AnnAssign, ast.AugAssign)) and isinstance(n.target, ast.Name)
+            and n.target.id == "part")) for n in tree.body)
+
+
 def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
                 through: bool = False, flip: bool = False, datum: bool = False,
-                both: bool = False) -> tuple[str, str | None]:
+                both: bool = False, line: int | None = None) -> tuple[str, str | None]:
     """Append an extrude of sketch `sketch` to the script: op "cut" removes
     it from `part`, "join" adds it, "new" makes it the part (a script with no
     `part` yet). The depth becomes a new P key (unless `through`: a cut
@@ -139,37 +211,67 @@ def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
     through cut goes both ways. `flip` reverses the direction; `both` extrudes
     the depth to each side of a base plane (symmetric) instead.
 
-    Returns (code, the new param name or None)."""
-    if op not in ("cut", "join", "new"):
+    With `line`, rewrite the extrude line there instead (its sketch stays):
+    the depth goes in the line's own P key, a new one when it had none, and
+    a key the line no longer uses is dropped. New is only for the line that
+    makes the part first.
+
+    Returns (code, the depth's param name or None)."""
+    if op not in _EXTRUDE_SYM:
         raise ParamError(f"unknown extrude operation {op!r}")
+    through = bool(through) and op == "cut"
+    if not through and not float(depth) > 0:
+        raise ParamError("the depth must be more than 0")
     tree = ast.parse(code)
-    blank = not code.strip()
-    if op == "new" and _assigns_part(tree):
-        raise ParamError("the script already makes a part: Cut or Join this sketch instead")
-    into = op == "cut" and not datum      # negative amount: into the part
-    sign = "-" if into != flip else ""
-    ref = f"sketch({json.dumps(sketch)})"
-    param = None
-    if op == "cut" and through:
-        bb = "part.bounding_box()"
-        amount = f"{bb}.diagonal + {bb}.center().length, both=True" if datum else f"{sign}{bb}.diagonal"
-    else:
-        stem, suffix = {"cut": ("cut", "depth"), "join": ("join", "height"), "new": ("body", "height")}[op]
-        param = _unique(param_names(code), stem, suffix)
-        code = add_param(code, param, float(depth))
-        amount = f'P["{param}"], both=True' if both and datum else f'{sign}P["{param}"]'
-    sym = {"cut": "-=", "join": "+=", "new": "="}[op]
-    line = f"part {sym} extrude({ref}, amount={amount})"
-    code = code.strip() if blank else code.rstrip("\n")
-    gap = "\n\n" if op == "new" else "\n"
-    return code + gap + line + "\n", param
+    if line is None:
+        if op == "new" and _assigns_part(tree):
+            raise ParamError("the script already makes a part: Cut or Join this sketch instead")
+        blank = not code.strip()
+        key = None
+        if not through:
+            key = _unique(param_names(code), *_EXTRUDE_KEY[op])
+            code = add_param(code, key, float(depth))
+        text = _extrude_text(sketch, op, key, through, flip, datum, both)
+        code = code.strip() if blank else code.rstrip("\n")
+        gap = "\n\n" if op == "new" else "\n"
+        return code + gap + text + "\n", key
+
+    hit = _op_stmt(tree, line)
+    if hit is None or hit[2] != "extrude":
+        raise ParamError(f"line {line} is not an extrude line any more")
+    stmt, call, _ = hit
+    old, old_key = _read_extrude(stmt, call, _p_values(code), {sketch} if datum else set())
+    before = _part_before(tree, stmt.lineno)
+    if op == "new" and before:
+        raise ParamError("New body is only for the first body: the part is made before this line")
+    if op != "new" and not before:
+        raise ParamError(f"there is no part before this line to {op} with: it can only be a New body")
+    names = param_names(code)
+    key = None
+    if not through:
+        key = old_key if old_key in names else None
+        # an editor-named key follows the operation: cut1_depth → join1_height
+        if key and old["op"] != op and re.fullmatch(r"{}\d+_{}".format(*_EXTRUDE_KEY[old["op"]]), key):
+            key = None
+        if key is None:
+            key = _unique(names, *_EXTRUDE_KEY[op])
+    code = _write_op(code, _extrude_text(old["sketch"], op, key, through, flip, datum, both), line, "extrude")
+    if key:
+        code = set_params(code, {key: float(depth)}) if key in names else add_param(code, key, float(depth))
+    if old_key and old_key != key:
+        code = drop_param(code, old_key)
+    return code, key
 
 
-# --- Shell, Hole, Fillet and Chamfer: one script line each, written by the editor's dialogs and
-# read back (op_at) to reopen the dialog on it. Editing rewrites that line in
-# place and sets the values of the P keys it uses; nothing else changes.
+# --- The operations: one script line each, written by the editor's dialogs (or
+# the AI, in the same form) and read back (op_at) to reopen the dialog on it.
+# Each has a reader (line → the dialog's values) and a writer (values → the
+# line). Editing rewrites that line in place and sets the values of the P keys
+# it uses; nothing else changes.
 
-OPS = ("shell", "holes", "fillet", "chamfer")
+OPS = ("extrude", "shell", "holes", "fillet", "chamfer", "auto_round", "truss_windows")
+# construction planes: PLANES["name"] = offset_plane(...) / edge_plane(...)
+PLANE_OPS = ("offset_plane", "edge_plane")
 # the P key base of each edge operation's size, and its argument
 EDGE_OPS = {"fillet": ("fillet_r", "radius"), "chamfer": ("chamfer_d", "length")}
 
@@ -231,21 +333,38 @@ def _p_key(node) -> str | None:
     return None
 
 
+def _recognise(node):
+    """(call, op) of an operation statement: `part = shell(...)` (holes,
+    fillet, chamfer, auto_round, truss_windows, extrude: a new body),
+    `part -= / += extrude(...)` or a construction plane,
+    `PLANES["name"] = offset_plane(...) / edge_plane(...)`. Else None."""
+    if _plane_name(node) is not None and isinstance(node.value, ast.Call) \
+            and isinstance(node.value.func, ast.Name) and node.value.func.id in PLANE_OPS:
+        return node.value, node.value.func.id
+    if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "part" and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name) and node.value.func.id in OPS):
+        return node.value, node.value.func.id
+    if (isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name) and node.target.id == "part"
+            and isinstance(node.op, (ast.Sub, ast.Add)) and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name) and node.value.func.id == "extrude"):
+        return node.value, "extrude"
+    return None
+
+
 def _op_stmt(tree: ast.Module, line: int):
-    """The top-level `part = shell(...)`/`holes(...)`/`fillet(...)`/`chamfer(...)` statement on script
-    line `line` (1-based, any line it spans): (statement, call, op) or None."""
+    """The top-level operation statement on script line `line` (1-based, any
+    line it spans): (statement, call, op) or None."""
     for node in tree.body:
         if not (node.lineno <= line <= (node.end_lineno or node.lineno)):
             continue
-        if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
-                and isinstance(node.value.func, ast.Name) and node.value.func.id in OPS):
-            return node, node.value, node.value.func.id
-        return None
+        hit = _recognise(node)
+        return (node, *hit) if hit else None
     return None
 
 
 def op_lines(code: str) -> list[dict]:
-    """Every Shell/Hole/Fillet/Chamfer line of the script: [{"op", "line", "end_line"}]."""
+    """Every operation line of the script: [{"op", "line", "end_line"}]."""
     try:
         tree = ast.parse(code)
     except SyntaxError:
@@ -319,29 +438,45 @@ def _dict_items(node) -> list[tuple[str, ast.AST]]:
     raise ParamError(f"can't read {ast.unparse(node)!r}: edit this line in the code")
 
 
-def op_at(code: str, line: int) -> dict:
-    """The Shell/Hole operation on script line `line`, for its dialog:
-    {"op", "line", "end_line", "args", "params"} where args holds the values
-    (P keys resolved) and params which P key holds each ("standoff.h" for
-    a standoff's)."""
+def op_at(code: str, line: int, datum=()) -> dict:
+    """The operation on script line `line`, for its dialog: {"op", "line",
+    "end_line", "args", "params", "exprs"} where args holds the values (P keys
+    resolved), params which P key holds each ("standoff.h" for a standoff's)
+    and exprs the source of each value written as an expression (shown, not
+    edited). `datum`: the names of the sketches on a base plane. A line not
+    in the form the editor writes raises ParamError."""
     tree = ast.parse(code)
     hit = _op_stmt(tree, line)
     if hit is None:
-        raise ParamError(f"line {line} is not a shell(), holes(), fillet() or chamfer() line")
+        raise ParamError(f"line {line} is not an operation the editor reopens")
     stmt, call, op = hit
     pv = _p_values(code)
+    args, params, exprs = _read_op(code, stmt, call, op, pv, datum)
+    return {"op": op, "line": stmt.lineno, "end_line": stmt.end_lineno or stmt.lineno,
+            "args": args, "params": {k: v for k, v in params.items() if v}, "exprs": exprs}
+
+
+def _read_op(code: str, stmt, call, op: str, pv: dict, datum=()) -> tuple[dict, dict, dict]:
+    """op_at's (args, params, exprs) of an operation statement in `code`."""
     kw = {k.arg: k.value for k in call.keywords if k.arg}
     args: dict = {}
     params: dict = {}
-    if op in EDGE_OPS:
+    exprs: dict = {}
+    if op == "extrude":
+        args, params["depth"] = _read_extrude(stmt, call, pv, set(datum))
+    elif op in PLANE_OPS:
+        args, exprs = _read_plane(stmt, call, op, pv)
+    elif op in ARG_OPS:
+        args, params, exprs = _read_args(code, op, call, pv)
+    elif op in EDGE_OPS:
         _, arg = EDGE_OPS[op]
         edges = call.args[1] if len(call.args) > 1 else kw.get("edges")
         if edges is None:
-            raise ParamError(f"line {line}: {op}() without edges: edit this line in the code")
+            raise ParamError(f"line {stmt.lineno}: {op}() without edges: edit this line in the code")
         args["edges"] = _edge_refs(edges)
         size = call.args[2] if len(call.args) > 2 else kw.get(arg)
         if size is None:
-            raise ParamError(f"line {line}: {op}() without a {arg}: edit this line in the code")
+            raise ParamError(f"line {stmt.lineno}: {op}() without a {arg}: edit this line in the code")
         args["size"], params["size"] = _value(size, pv)
     elif op == "shell":
         args["remove"] = _face_refs(kw["remove"]) if "remove" in kw else []
@@ -363,8 +498,7 @@ def op_at(code: str, line: int) -> dict:
             args["standoff"] = {}
             for k, node in _dict_items(kw["standoff"]):
                 args["standoff"][k], params[f"standoff.{k}"] = _value(node, pv)
-    return {"op": op, "line": stmt.lineno, "end_line": stmt.end_lineno or stmt.lineno,
-            "args": args, "params": {k: v for k, v in params.items() if v}}
+    return args, params, exprs
 
 
 def _write_op(code: str, text: str, line: int | None, op: str) -> str:
@@ -377,8 +511,15 @@ def _write_op(code: str, text: str, line: int | None, op: str) -> str:
         raise ParamError(f"line {line} is not a {op}() line any more")
     stmt = hit[0]
     lines = code.split("\n")
-    lines[stmt.lineno - 1:stmt.end_lineno] = [lines[stmt.lineno - 1][:stmt.col_offset] + text]
+    tail = _chars(lines[stmt.end_lineno - 1], stmt.end_col_offset)      # a comment after it stays
+    lines[stmt.lineno - 1:stmt.end_lineno] = [lines[stmt.lineno - 1][:stmt.col_offset] + text
+                                              + lines[stmt.end_lineno - 1][tail:]]
     return "\n".join(lines)
+
+
+def _chars(row: str, col: int) -> int:
+    """The character index in `row` of ast's UTF-8 byte offset `col`."""
+    return len(row.encode()[:col].decode(errors="ignore"))
 
 
 def _number(code: str, value: float, key: str | None, base: str, names: set[str]) -> tuple[str, str]:
@@ -441,6 +582,9 @@ def drop_param(code: str, key: str) -> str:
     spans lines: then it is left)."""
     tree = ast.parse(code)
     if any(_p_key(n) == key for n in ast.walk(tree)):
+        return code
+    use = re.compile(rf"""\b(P|params)\[\s*["']{re.escape(key)}["']\s*\]""")
+    if any(use.search(text) for _, _, text in _off_blocks(code)):     # a step switched off uses it
         return code
     target = _params_assignment(tree)
     if isinstance(target, ast.Call):
@@ -535,3 +679,635 @@ def add_holes(code: str, at: dict, kind: str = "clearance", size: str = "M3",
     for k in set(old.values()) - set(keys.values()):
         code = drop_param(code, k)
     return code, keys.get("depth")
+
+
+# --- auto_round and truss_windows: the AI writes them (Round, Lighten) and so can
+# people. Their dialogs edit the arguments they know where they are: a
+# P["key"] value sets P, a literal is rewritten in place, and every other
+# argument stays exactly as written.
+
+# each one's parameters in signature order, and those its dialog edits:
+# {name: (kind, default, the P key a literal moved into P gets)}
+ARG_OPS = {
+    "auto_round": (
+        ("part", "convex", "concave", "keep", "keep_bed", "protect_holes", "hole_max_r", "min_edge",
+         "max_thickness_frac", "time_budget"),
+        {"convex": ("num", 1.0, "round_r"), "concave": ("num", 2.0, "blend_r"),
+         "keep": ("faces", None, None), "keep_bed": ("bool", True, None),
+         "protect_holes": ("bool", True, None)}),
+    "truss_windows": (
+        ("part", "face", "rim", "rib", "anchors", "corner_r", "keep_clear", "pattern", "max_span",
+         "keep", "keep_bed", "protect_holes", "hole_max_r", "min_wall"),
+        {"rim": ("num", None, "truss_rim"), "rib": ("num", None, "truss_rib"),
+         "corner_r": ("num", None, "truss_corner_r"), "keep_clear": ("num", 3.0, "truss_clear"),
+         "pattern": ("choice", "fan", None)}),
+}
+PATTERNS = ("fan", "triangulate")
+# these may be 0 (auto_round: leave that kind of edge sharp); the rest must be more
+_ZERO_OK = {"convex", "concave", "keep_clear"}
+
+
+def _call_args(call, sig) -> dict:
+    """A call's argument nodes by parameter name."""
+    out = {sig[i]: a for i, a in enumerate(call.args) if i < len(sig) and not isinstance(a, ast.Starred)}
+    out.update({k.arg: k.value for k in call.keywords if k.arg})
+    return out
+
+
+def _keep_items(code: str, node) -> list[dict]:
+    """A keep list: [{"src": the item as written, "ref": its face_ref's dict,
+    or None for a selector}]."""
+    out = []
+    for it in node.elts:
+        ref = None
+        if isinstance(it, ast.Call) and isinstance(it.func, ast.Name) and it.func.id == "face_ref" and it.args:
+            try:
+                ref = ast.literal_eval(it.args[0])
+            except ValueError:
+                pass
+        out.append({"src": ast.get_source_segment(code, it), "ref": ref if isinstance(ref, dict) else None})
+    return out
+
+
+def _read_args(code: str, op: str, call, pv: dict) -> tuple[dict, dict, dict]:
+    sig, fields = ARG_OPS[op]
+    nodes = _call_args(call, sig)
+    args: dict = {}
+    params: dict = {}
+    exprs: dict = {}
+    for f, (kind, default, _) in fields.items():
+        node = nodes.get(f)
+        if node is None:
+            args[f] = [] if kind == "faces" else default
+        elif kind == "faces":
+            if isinstance(node, (ast.List, ast.Tuple)):
+                args[f] = _keep_items(code, node)
+            else:
+                args[f], exprs[f] = None, ast.get_source_segment(code, node)
+        elif _p_key(node) is not None and _p_key(node) in pv:
+            args[f], params[f] = pv[_p_key(node)], _p_key(node)
+        else:
+            try:
+                if _p_key(node) is not None:
+                    raise ValueError
+                args[f] = ast.literal_eval(node)
+            except ValueError:
+                args[f], exprs[f] = None, ast.get_source_segment(code, node)
+    return args, params, exprs
+
+
+def _coerce(f: str, kind: str, v):
+    if kind == "bool":
+        return bool(v)
+    if kind == "choice":
+        if v not in PATTERNS:
+            raise ParamError(f"{f} must be one of {', '.join(PATTERNS)}, not {v!r}")
+        return v
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        raise ParamError(f"{f} must be a number") from None
+    if v < 0 or (v == 0 and f not in _ZERO_OK):
+        raise ParamError(f"{f} must be more than 0")
+    return v
+
+
+def edit_args(code: str, line: int, op: str, values: dict | None = None, keep: list | None = None,
+              make_param=()) -> tuple[str, list[str]]:
+    """Rewrite the auto_round() / truss_windows() line on `line` with its
+    dialog's `values` ({argument: value}), `keep` (auto_round's kept faces,
+    each {"src": an item as written} or {"ref": a face_ref's dict}; None
+    leaves them) and `make_param` (arguments written as literals to move
+    into P, under a new key). An argument given as P["key"] sets that key;
+    a literal is rewritten where it is, or added when it wasn't written and
+    isn't the default; everything else stays as written. Returns (code, the
+    new P keys)."""
+    if op not in ARG_OPS:
+        raise ParamError(f"{op}() has no dialog")
+    tree = ast.parse(code)
+    hit = _op_stmt(tree, line)
+    if hit is None or hit[2] != op:
+        raise ParamError(f"line {line} is not a {op}() line any more")
+    _, call, _ = hit
+    sig, fields = ARG_OPS[op]
+    nodes = _call_args(call, sig)
+    pv, names = _p_values(code), param_names(code)
+    values = dict(values or {})
+    rows = code.split("\n")
+    starts = [0]
+    for row in rows:
+        starts.append(starts[-1] + len(row) + 1)
+
+    def span(n) -> tuple[int, int]:
+        return (starts[n.lineno - 1] + _chars(rows[n.lineno - 1], n.col_offset),
+                starts[n.end_lineno - 1] + _chars(rows[n.end_lineno - 1], n.end_col_offset))
+
+    edits: list[tuple[int, int, str]] = []
+    adds: list[str] = []
+    p_set: dict = {}
+    p_new: list[tuple[str, float]] = []
+    for f in [*values, *(m for m in make_param if m not in values)]:
+        if f not in fields or fields[f][0] == "faces":
+            raise ParamError(f"{op}() has no {f!r} its dialog edits")
+        kind, default, base = fields[f]
+        node = nodes.get(f)
+        key = _p_key(node) if node is not None else None
+        if key is not None:
+            if key not in pv:
+                raise ParamError(f'P["{key}"] is an expression: edit it in the code')
+            if f in values and pv[key] != _coerce(f, kind, values[f]):
+                p_set[key] = _coerce(f, kind, values[f])
+            continue
+        old = default
+        if node is not None:
+            try:
+                old = ast.literal_eval(node)
+            except ValueError:
+                raise ParamError(f"{f} is written as an expression: edit it in the code") from None
+        v = _coerce(f, kind, values[f] if f in values else old)
+        if f in make_param:
+            if kind != "num":
+                raise ParamError(f"{f} can't be a parameter")
+            k = _name(names, base)
+            names.add(k)
+            p_new.append((k, v))
+            text = f'P["{k}"]'
+        elif old == v:
+            continue
+        else:
+            text = _lit(v)
+        if node is not None:
+            edits.append((*span(node), text))
+        else:
+            adds.append(f"{f}={text}")
+    if keep is not None:
+        if "keep" not in fields:
+            raise ParamError(f"{op}() has no keep list its dialog edits")
+        texts = []
+        for it in keep:
+            if it.get("src"):
+                texts.append(it["src"])
+            elif isinstance(it.get("ref"), dict):
+                texts.append(f"face_ref({_lit(it['ref'])})")
+            else:
+                raise ParamError("a kept face needs its source or a face reference")
+        node = nodes.get("keep")
+        if node is None:
+            if texts:
+                adds.append(f"keep=[{', '.join(texts)}]")
+        elif not isinstance(node, (ast.List, ast.Tuple)):
+            raise ParamError("keep is written as an expression: edit it in the code")
+        elif [ast.get_source_segment(code, e) for e in node.elts] != texts:
+            edits.append((*span(node), f"[{', '.join(texts)}]"))
+    if adds:
+        last = max([*call.args, *call.keywords], key=lambda n: (n.end_lineno, n.end_col_offset), default=None)
+        at = span(last)[1] if last is not None else span(call)[1] - 1
+        edits.append((at, at, (", " if last is not None else "") + ", ".join(adds)))
+    for a, b, text in sorted(edits, reverse=True):
+        code = code[:a] + text + code[b:]
+    if p_set:
+        code = set_params(code, p_set)
+    for k, v in p_new:
+        code = add_param(code, k, v)
+    return code, [k for k, _ in p_new]
+
+
+# --- Construction planes (modeling/planes.py): one line each,
+#     PLANES["Lid"] = offset_plane(face_ref({...}), distance=P["lid_gap"])
+#     PLANES["Cam"] = edge_plane(edge_ref({...}), angle=30, from_face=face_ref({...}))
+# A distance or angle is a number, or an expression of P names that the
+# dialog shows and takes with bare names ("-width / 2") and the line holds
+# as Python ('-P["width"] / 2').
+
+_EXPR_NODES = (ast.Expression, ast.BinOp, ast.UnaryOp, ast.Constant, ast.Name, ast.Load,
+               ast.Add, ast.Sub, ast.Mult, ast.Div, ast.USub, ast.UAdd, ast.Pow, ast.Mod, ast.FloorDiv)
+
+
+def _plane_name(node) -> str | None:
+    """The name of a `PLANES["name"] = ...` statement, else None."""
+    if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
+        return None
+    t = node.targets[0]
+    if (isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name) and t.value.id == "PLANES"
+            and isinstance(t.slice, ast.Constant) and isinstance(t.slice.value, str)):
+        return t.slice.value
+    return None
+
+
+def plane_names(code: str) -> list[str]:
+    """The construction planes the script defines, in order."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
+    return [n for n in map(_plane_name, tree.body) if n is not None]
+
+
+class _Bare(ast.NodeTransformer):
+    def visit_Subscript(self, node):
+        key = _p_key(node)
+        if key is None:
+            raise ParamError(f"can't read {ast.unparse(node)!r}: edit this line in the code")
+        if not key.isidentifier():
+            raise ParamError(f"the parameter {key!r} isn't a plain name: edit this line in the code")
+        return ast.copy_location(ast.Name(id=key, ctx=ast.Load()), node)
+
+
+def _eval(tree, pv: dict) -> float | None:
+    def ev(n):
+        if isinstance(n, ast.Expression):
+            return ev(n.body)
+        if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)) and not isinstance(n.value, bool):
+            return float(n.value)
+        if isinstance(n, ast.Name):
+            return float(pv[n.id])
+        if isinstance(n, ast.UnaryOp):
+            v = ev(n.operand)
+            return -v if isinstance(n.op, ast.USub) else v
+        if isinstance(n, ast.BinOp):
+            a, b = ev(n.left), ev(n.right)
+            ops = {ast.Add: lambda: a + b, ast.Sub: lambda: a - b, ast.Mult: lambda: a * b,
+                   ast.Div: lambda: a / b, ast.Pow: lambda: a ** b, ast.Mod: lambda: a % b,
+                   ast.FloorDiv: lambda: a // b}
+            return ops[type(n.op)]()
+        raise ValueError
+    try:
+        return ev(tree)
+    except (KeyError, ValueError, TypeError, ZeroDivisionError, OverflowError):
+        return None
+
+
+def _read_amount(node, pv: dict) -> tuple[float | None, str | None]:
+    """(value, expression) of a distance/angle argument: a number → (it, None);
+    anything with P in it → (its value with P's, the bare-name expression)."""
+    if isinstance(node, ast.UnaryOp) and isinstance(node.operand, ast.Constant):
+        try:
+            return float(ast.literal_eval(node)), None
+        except (ValueError, TypeError):
+            pass
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+        return float(node.value), None
+    bare = _Bare().visit(ast.Expression(body=ast.parse(ast.unparse(node), mode="eval").body))
+    if not all(isinstance(n, _EXPR_NODES) for n in ast.walk(bare)):
+        raise ParamError(f"can't read {ast.unparse(node)!r}: edit this line in the code")
+    return _eval(bare, pv), ast.unparse(bare.body)
+
+
+def _write_amount(value, names: set[str], what: str) -> str:
+    """A distance/angle for the line: a number as itself, an expression of P
+    names ("-width / 2") as Python ('-P["width"] / 2')."""
+    if isinstance(value, bool):
+        raise ParamError(f"the {what} must be a number or an expression of parameters")
+    if isinstance(value, (int, float)):
+        return _lit(float(value))
+    text = str(value).strip()
+    if not text:
+        raise ParamError(f"give the {what}")
+    try:
+        tree = ast.parse(text, mode="eval")
+    except SyntaxError:
+        raise ParamError(f"can't read the {what} {text!r}") from None
+    if not all(isinstance(n, _EXPR_NODES) for n in ast.walk(tree)):
+        raise ParamError(f"the {what} {text!r} may only use numbers, parameters and + - * / ( )")
+    unknown = sorted({n.id for n in ast.walk(tree) if isinstance(n, ast.Name)} - names)
+    if unknown:
+        raise ParamError(f"the {what} {text!r} uses {', '.join(map(repr, unknown))}, "
+                         f"which {'is not a parameter' if len(unknown) == 1 else 'are not parameters'}")
+
+    class _P(ast.NodeTransformer):
+        def visit_Name(self, node):
+            return ast.copy_location(ast.Subscript(value=ast.Name(id="P", ctx=ast.Load()),
+                                                   slice=ast.Constant(value=node.id), ctx=ast.Load()), node)
+    out = ast.unparse(_P().visit(tree).body)
+    return out.replace("P['", 'P["').replace("']", '"]')
+
+
+def _ref_arg(node, fn: str, what: str) -> dict:
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == fn and node.args):
+        ref = ast.literal_eval(node.args[0])
+        if isinstance(ref, dict):
+            return ref
+    raise ParamError(f"can't read the {what} {ast.unparse(node)[:60]!r}: edit this line in the code")
+
+
+def _read_plane(stmt, call, op: str, pv: dict) -> tuple[dict, dict]:
+    """A construction plane's (args, exprs): {"name", "base" (a face ref as
+    {"face": ref}, or "XY" / "XZ" / "YZ"), "distance"} or {"name", "edge",
+    "angle", "from_face" (a face ref or None)}; exprs holds the distance or
+    angle when it is an expression (bare P names)."""
+    kw = {k.arg: k.value for k in call.keywords if k.arg}
+    args: dict = {"name": _plane_name(stmt)}
+    exprs: dict = {}
+    if op == "offset_plane":
+        base = call.args[0] if call.args else kw.get("base")
+        if base is None:
+            raise ParamError(f"line {stmt.lineno}: offset_plane() without a base: edit this line in the code")
+        if isinstance(base, ast.Constant) and isinstance(base.value, str) and base.value.upper() in ("XY", "XZ", "YZ"):
+            args["base"] = base.value.upper()
+        else:
+            args["base"] = {"face": _ref_arg(base, "face_ref", "face")}
+        dist = call.args[1] if len(call.args) > 1 else kw.get("distance")
+        args["distance"], e = _read_amount(dist, pv) if dist is not None else (0.0, None)
+        if e is not None:
+            exprs["distance"] = e
+    else:
+        edge = call.args[0] if call.args else kw.get("edge")
+        if edge is None:
+            raise ParamError(f"line {stmt.lineno}: edge_plane() without an edge: edit this line in the code")
+        args["edge"] = _ref_arg(edge, "edge_ref", "edge")
+        ang = call.args[1] if len(call.args) > 1 else kw.get("angle")
+        args["angle"], e = _read_amount(ang, pv) if ang is not None else (0.0, None)
+        if e is not None:
+            exprs["angle"] = e
+        face = call.args[2] if len(call.args) > 2 else kw.get("from_face")
+        args["from_face"] = None if face is None or (isinstance(face, ast.Constant) and face.value is None) \
+            else _ref_arg(face, "face_ref", "face")
+    return args, exprs
+
+
+def _check_plane_name(code: str, name: str, keep: str | None = None) -> str:
+    name = str(name or "").strip()
+    if not name:
+        raise ParamError("give the plane a name")
+    if any(c in name for c in "\"\\\n"):
+        raise ParamError("a plane's name can't have quotes, backslashes or line breaks in it")
+    if name != keep and name in plane_names(code):
+        raise ParamError(f"there is a plane named {name!r} already")
+    return name
+
+
+def add_plane(code: str, op: str, name: str, *, base=None, distance=0.0, edge: dict | None = None,
+              angle=0.0, from_face: dict | None = None, line: int | None = None) -> tuple[str, str | None]:
+    """Append a construction plane line — or, with `line`, rewrite the one
+    there (a new name renames it everywhere: rename_plane). offset_plane:
+    `base` is a face ref or "XY" / "XZ" / "YZ"; edge_plane: `edge` an edge
+    ref, `from_face` the face ref that is 0°. A distance or angle is a number
+    or an expression of P names. Returns (code, the old name when renamed)."""
+    if op not in PLANE_OPS:
+        raise ParamError(f"unknown plane {op!r}")
+    old = None
+    if line is not None:
+        hit = _op_stmt(ast.parse(code), line)
+        if hit is None or hit[2] != op:
+            raise ParamError(f"line {line} is not an {op}() line any more")
+        old = _plane_name(hit[0])
+    name = _check_plane_name(code, name, old)
+    names = param_names(code)
+    if op == "offset_plane":
+        if isinstance(base, str) and base.upper() in ("XY", "XZ", "YZ"):
+            b = _lit(base.upper())
+        elif isinstance(base, dict) and base:
+            ref = base.get("face", base)
+            b = f"face_ref({_lit(ref)})"
+        else:
+            raise ParamError("pick a flat face, or the XY, XZ or YZ plane, to offset from")
+        text = f"PLANES[{_lit(name)}] = offset_plane({b}, distance={_write_amount(distance, names, 'distance')})"
+    else:
+        if not edge:
+            raise ParamError("select a straight edge for the plane")
+        face = f", from_face=face_ref({_lit(from_face)})" if from_face else ""
+        text = (f"PLANES[{_lit(name)}] = edge_plane(edge_ref({_lit(edge)}), "
+                f"angle={_write_amount(angle, names, 'angle')}{face})")
+    code = _write_op(code, text, line, op)
+    if old is not None and old != name:
+        code = rename_plane(code, old, name, check=False)
+        return code, old
+    return code, None
+
+
+def rename_plane(code: str, old: str, new: str, check: bool = True) -> str:
+    """Every PLANES["old"] of the script (its definition, its uses and lines
+    switched off) as PLANES["new"]. The editor renames the sketches' planeRef
+    with it."""
+    if check:
+        if old not in plane_names(code):
+            raise ParamError(f"there is no plane named {old!r}")
+        new = _check_plane_name(code, new, old)
+    pat = re.compile(r"""\bPLANES\[\s*(["'])""" + re.escape(old) + r"""\1\s*\]""")
+    return pat.sub(lambda m: f"PLANES[{_lit(new)}]", code)
+
+
+# --- The steps list: the script's operations in order, each summed up in a few
+# words. A step can be switched off (its lines commented out behind OFF, and
+# put back exactly) or deleted (with the P keys only it used).
+
+OFF = "# off: "
+
+
+def _off_text(row: str) -> str | None:
+    """A switched-off line's own text, else None."""
+    if row.startswith(OFF):
+        return row[len(OFF):]
+    return "" if row.rstrip() == OFF.rstrip() else None
+
+
+def _off_blocks(code: str) -> list[tuple[int, int, str]]:
+    """The switched-off statements: [(first line, last line, its text)],
+    one per statement (a run of off lines is split where a statement ends)."""
+    rows = code.split("\n")
+    out = []
+    i = 0
+    while i < len(rows):
+        if _off_text(rows[i]) is None:
+            i += 1
+            continue
+        j, body = i, []
+        while j < len(rows) and _off_text(rows[j]) is not None:
+            body.append(_off_text(rows[j]))
+            j += 1
+            try:
+                ast.parse("\n".join(body))
+                break
+            except SyntaxError:
+                continue
+        out.append((i + 1, j, "\n".join(body)))
+        i = j
+    return out
+
+
+def _mm(v) -> str:
+    try:
+        return f"{round(float(v), 3):g} mm"
+    except (TypeError, ValueError):
+        return "?"
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+TITLES = {"extrude": "Extrude", "shell": "Shell", "holes": "Holes", "fillet": "Fillet", "chamfer": "Chamfer",
+          "auto_round": "Round", "truss_windows": "Lighten", "offset_plane": "Offset plane",
+          "edge_plane": "Plane on edge"}
+_EXTRUDE_TITLES = {"cut": "Cut", "join": "Join", "new": "New body"}
+
+
+def _deg(v) -> str:
+    try:
+        return f"{round(float(v), 3):g}°"
+    except (TypeError, ValueError):
+        return "?"
+
+
+def _summary(op: str, a: dict, points: dict) -> str:
+    if op == "offset_plane":
+        base = a["base"]
+        where = f"{base} plane" if isinstance(base, str) else str(base["face"].get("hint") or "face")
+        return f"Plane {a['name']!r} · {_mm(a['distance'])} from {where}"
+    if op == "edge_plane":
+        edge = str(a["edge"].get("hint") or "edge")
+        return f"Plane {a['name']!r} · {_deg(a['angle'])} on {edge}"
+    if op == "extrude":
+        how = "through all" if a["through"] else _mm(a["depth"])
+        return (f"{_EXTRUDE_TITLES[a['op']]} {a['sketch']!r} {how}" + (" both ways" if a["both"] else "")
+                + (" · flipped" if a["flip"] else ""))
+    if op == "shell":
+        opens = [str(r.get("hint") or "face").removesuffix(" face") for r in a["remove"]]
+        where = f"{', '.join(opens)} open" if opens else "closed"
+        return f"Shell {_mm(a['thickness'])}, {where}" + ("" if a["inside"] else " · walls outward")
+    if op in EDGE_OPS:
+        return f"{TITLES[op]} {_mm(a['size'])} · {_plural(len(a['edges']), 'edge')}"
+    if op == "holes":
+        at = a["at"] or {}
+        n = points.get(at["sketch"]) if "sketch" in at else 1 if "face" in at else None
+        return (f"Holes {a['size']} {a['kind']}" + (f" ×{n}" if n else "")
+                + (" + standoffs" if a["standoff"] else ""))
+    if op == "auto_round":
+        def r(f):
+            return _mm(a[f]) if a[f] is not None else "?"
+        kept = f" · {len(a['keep'])} kept" if a["keep"] else ""
+        return f"Round {r('convex')}, blends {r('concave')}{kept}"
+    def t(f):
+        return _mm(a[f]) if a[f] is not None else "?"
+    return f"Lighten: rim {t('rim')}, rib {t('rib')}, {a['pattern'] or '?'}"
+
+
+def _variant(stmt) -> str | None:
+    if isinstance(stmt, ast.AugAssign):
+        return "cut" if isinstance(stmt.op, ast.Sub) else "join"
+    return "new" if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Call) \
+        and getattr(stmt.value.func, "id", None) == "extrude" else None
+
+
+def _op_step(code: str, stmt, call, op: str, pv: dict, datum, points: dict, shift: int, off: bool) -> dict:
+    step = {"kind": "op", "op": op, "variant": _variant(stmt), "line": stmt.lineno + shift,
+            "end_line": (stmt.end_lineno or stmt.lineno) + shift, "off": off, "reopenable": False,
+            "sketch": None, "faces": [], "edges": [], "plane": _plane_name(stmt)}
+    try:
+        a, _, _ = _read_op(code, stmt, call, op, pv, datum)
+    except (ValueError, KeyError, TypeError, SyntaxError):
+        title = _EXTRUDE_TITLES.get(step["variant"] or "", TITLES[op])
+        step["summary"] = f"{title} · written in code"
+        return step
+    step["summary"] = _summary(op, a, points)
+    step["reopenable"] = not off
+    if op == "extrude":
+        step["sketch"] = a["sketch"]
+    elif op == "shell":
+        step["faces"] = a["remove"]
+    elif op in EDGE_OPS:
+        step["edges"] = a["edges"]
+    elif op == "holes":
+        at = a["at"] or {}
+        step["sketch"] = at.get("sketch")
+        step["faces"] = [at["face"]] if "face" in at else []
+    elif op == "auto_round":
+        step["faces"] = [k["ref"] for k in a["keep"] or [] if k["ref"]]
+    elif op == "offset_plane":
+        step["faces"] = [a["base"]["face"]] if isinstance(a["base"], dict) else []
+    elif op == "edge_plane":
+        step["edges"] = [a["edge"]]
+        step["faces"] = [a["from_face"]] if a["from_face"] else []
+    return step
+
+
+def steps(code: str, datum=(), points: dict | None = None) -> list[dict]:
+    """The steps list: every operation of the script in order, switched off
+    or not, as {"kind": "op", "op", "variant" (an extrude's cut / join /
+    new), "line", "end_line", "summary", "reopenable", "off", "sketch",
+    "faces", "edges" (what it works on, to show)}, and each run of other
+    statements as {"kind": "script", "line", "end_line", "count"} (the
+    imports and P left out). `datum`: the sketches on a base plane; `points`:
+    each sketch's number of hole points."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []
+    points = points or {}
+    pv = _p_values(code)
+    p_node = _params_assignment(tree)
+    raw = []
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)) or (isinstance(node, ast.Assign) and node.value is p_node):
+            continue
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            continue       # a docstring
+        hit = _recognise(node)
+        if hit:
+            raw.append(_op_step(code, node, *hit, pv, datum, points, 0, False))
+        else:
+            raw.append({"kind": "script", "line": node.lineno, "end_line": node.end_lineno or node.lineno, "off": False})
+    for a, b, text in _off_blocks(code):
+        try:
+            sub = ast.parse(text).body
+        except SyntaxError:
+            sub = []
+        hit = _recognise(sub[0]) if len(sub) == 1 else None
+        if hit:
+            raw.append(_op_step(text, sub[0], *hit, pv, datum, points, a - 1, True))
+        else:
+            raw.append({"kind": "op", "op": "script", "variant": None, "line": a, "end_line": b, "off": True,
+                        "reopenable": False, "summary": "Script", "sketch": None, "faces": [], "edges": [],
+                        "plane": None})
+    raw.sort(key=lambda st: st["line"])
+    out: list[dict] = []
+    for st in raw:
+        n = st["end_line"] - st["line"] + 1
+        if st["kind"] == "script" and out and out[-1]["kind"] == "script":
+            out[-1]["end_line"] = st["end_line"]
+            out[-1]["count"] += n
+        elif st["kind"] == "script":
+            out.append({**st, "count": n})
+        else:
+            out.append(st)
+    return out
+
+
+def suppress(code: str, line: int, off: bool = True) -> str:
+    """Switch the step on `line` off (each of its lines behind OFF) or back
+    on (exactly as it was)."""
+    rows = code.split("\n")
+    if off:
+        node = next((n for n in ast.parse(code).body if n.lineno <= line <= (n.end_lineno or n.lineno)), None)
+        if node is None:
+            raise ParamError(f"line {line} has no step to switch off")
+        for i in range(node.lineno - 1, node.end_lineno or node.lineno):
+            rows[i] = OFF + rows[i]
+        return "\n".join(rows)
+    block = next(((a, b) for a, b, _ in _off_blocks(code) if a <= line <= b), None)
+    if block is None:
+        raise ParamError(f"line {line} is not switched off")
+    for i in range(block[0] - 1, block[1]):
+        rows[i] = _off_text(rows[i])
+    return "\n".join(rows)
+
+
+def delete_step(code: str, line: int) -> str:
+    """The script without the step on `line` (switched off or not), and
+    without the P keys only it used."""
+    rows = code.split("\n")
+    block = next(((a, b, text) for a, b, text in _off_blocks(code) if a <= line <= b), None)
+    if block is not None:
+        a, b, text = block
+        keys = set(re.findall(r"""\b(?:P|params)\[\s*["']([^"']+)["']\s*\]""", text))
+    else:
+        node = next((n for n in ast.parse(code).body if n.lineno <= line <= (n.end_lineno or n.lineno)), None)
+        if node is None:
+            raise ParamError(f"line {line} has no step to delete")
+        a, b = node.lineno, node.end_lineno or node.lineno
+        keys = {k for k in map(_p_key, ast.walk(node)) if k}
+    del rows[a - 1:b]
+    code = "\n".join(rows)
+    for k in sorted(keys):
+        code = drop_param(code, k)
+    return code

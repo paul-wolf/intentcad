@@ -26,7 +26,7 @@ from __future__ import annotations
 import math
 import sys
 
-from build123d import Edge, ShapeList, Vector
+from build123d import Edge, Face, ShapeList, Vector
 
 from modeling import face_ref
 from modeling.face_ref import vec
@@ -184,7 +184,7 @@ def find(part, ref: dict) -> dict:
     sb, rb = face_ref.rank(part, fb)
     ra = [t for t in ra[:TRY] if t[3] or t[1] <= sa]   # as face_ref.find's not_found
     rb = [t for t in rb[:TRY] if t[3] or t[1] <= sb]
-    scored: list[tuple[float, Edge]] = []
+    scored: list[tuple[float, Edge, Face, Face]] = []
     for ta in ra:
         for tb in rb:
             if ta[5].wrapped.IsSame(tb[5].wrapped):
@@ -192,14 +192,15 @@ def find(part, ref: dict) -> dict:
             shared = _shared(ta[5], tb[5])
             same = [e for e in shared if _kind(e) == ref.get("kind")] or shared
             for e in same:
-                scored.append((ta[0] + tb[0] + _gap(ref, e) / scale, e))
+                scored.append((ta[0] + tb[0] + _gap(ref, e) / scale, e, ta[5], tb[5]))
     if scored:
         scored.sort(key=lambda t: t[0])
-        best, edge = scored[0]
+        best, edge, f0, f1 = scored[0]
         status = "found"
-        rival = next((s for s, e in scored[1:] if not e.wrapped.IsSame(edge.wrapped)), None)
+        rival = next((s for s, e, *_ in scored[1:] if not e.wrapped.IsSame(edge.wrapped)), None)
         if rival is not None and rival <= best * (1 + AMBIGUOUS) + 1e-9:
             status = "ambiguous"
+        edge._ref_faces = (f0, f1)    # the ref's two faces, in its order (planes.edge_plane)
         return {"status": status, "edge": edge, "moved_by": (midpoint(edge) - m0).length}
     # the faces aren't there as a pair: the edge most like it, nearby
     reach = max(0.5 * length0, 3.0)
@@ -261,6 +262,7 @@ def bind(ns: dict, report: list | None = None) -> dict:
             raise EdgeRefError(f"the {name} this line refers to is no longer on the part "
                                "(the part changed too much for it to be found again): "
                                "reopen the step and pick the edge again")
+        m["edge"]._ref_status = face_ref._moved_status(m["status"], m["moved_by"] or 0.0)
         return m["edge"]
 
     def edges_ref(refs, on=None) -> ShapeList:

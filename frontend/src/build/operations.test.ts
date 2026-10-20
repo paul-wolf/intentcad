@@ -77,7 +77,7 @@ describe('the operation registry', () => {
     const ctx = Object.fromEntries(
       ['sketchOnSelection', 'sketchOnPlane', 'shell', 'hole', 'fillet', 'chamfer', 'ask', 'build', 'importStep', 'exportAs', 'versions',
        'process', 'addContextFile', 'toggleParams', 'setView', 'lookAtSelection', 'toggleOrtho', 'copyMeasure',
-       'section'].map((k) => [k, vi.fn()]),
+       'section', 'offsetPlane', 'edgePlane'].map((k) => [k, vi.fn()]),
     ) as unknown as Record<keyof OpContext, ReturnType<typeof vi.fn>>;
     for (const op of OPERATIONS) op.run(ctx as unknown as OpContext);
     expect(ctx.shell).toHaveBeenCalledTimes(1);
@@ -89,6 +89,8 @@ describe('the operation registry', () => {
     expect(ctx.setView).toHaveBeenCalledTimes(7);
     expect(ctx.ask).toHaveBeenCalledTimes(4);   // round, lighten, keep sharp, fix
     expect(ctx.section).toHaveBeenCalledTimes(1);
+    expect(ctx.offsetPlane).toHaveBeenCalledTimes(1);
+    expect(ctx.edgePlane).toHaveBeenCalledTimes(1);
   });
 
   it('gives Section a key nothing else uses, here or in the sketcher', () => {
@@ -216,5 +218,39 @@ describe('the recent row', () => {
     expect(r).toEqual(['lighten', 'export-stl', 'shell', 'round']);
     expect(r).toHaveLength(RECENT_MAX);
     expect(pushRecent(r, 'nope')).toBe(r);
+  });
+});
+
+describe('construction planes', () => {
+  const edges = (...kinds: string[]): OpSelection => ({ faces: [], edges: kinds.map((kind) => ({ kind })) });
+  const plane = (name: string): OpSelection => ({ faces: [], edges: [], planes: [{ name }] });
+
+  it('are in their own Construct group', () => {
+    expect(OP_GROUPS).toContain('Construct');
+    expect(opById('offset-plane')!.group).toBe('Construct');
+    expect(opById('plane-edge')!.group).toBe('Construct');
+  });
+
+  it('offset from one flat face, or from a base plane with nothing selected', () => {
+    expect(ok('offset-plane', FLOOR).ok).toBe(true);
+    expect(ok('offset-plane', NONE).ok).toBe(true);
+    expect(opById('offset-plane')!.detail!(NONE, MODEL)).toBe('from a base plane');
+    expect(reason('offset-plane', CURVED)).not.toBeNull();
+    expect(reason('offset-plane', TWO)).not.toBeNull();
+    expect(reason('offset-plane', edges('line'))).toBe('Select one flat face, or nothing');
+    expect(reason('offset-plane', NONE, { ...MODEL, status: 'idle' })).not.toBeNull();
+  });
+
+  it('go on one straight edge', () => {
+    expect(ok('plane-edge', edges('line')).ok).toBe(true);
+    expect(reason('plane-edge', edges('circle'))).toBe('Select a straight edge, not a curved one');
+    expect(reason('plane-edge', edges('line', 'line'))).toBe('Select one straight edge');
+    expect(reason('plane-edge', NONE)).toBe('Select one straight edge');
+  });
+
+  it('can be sketched on, and looked at, when one is selected', () => {
+    expect(ok('sketch-face', plane('Lid')).ok).toBe(true);
+    expect(opById('sketch-face')!.detail!(plane('Lid'), MODEL)).toBe("on plane 'Lid'");
+    expect(ok('normal', plane('Lid')).ok).toBe(true);
   });
 });

@@ -250,6 +250,10 @@ export interface Sketch {
   plane?: import('@/types/geometry').Plane;
   /** Drawn on a part's face: that face, so the build can find it again (see faceSketch.ts FaceRef). */
   face?: import('@/build/faceSketch').FaceRef;
+  /** Drawn on a construction plane: its name in the script's PLANES. The
+   *  build takes the plane from PLANES, so the sketch follows it; `plane`
+   *  is a copy of where it was, for drawing. */
+  planeRef?: string;
   /** Its closed shapes, saved with it for the script's sketch("name") (see faceSketch.ts). */
   profile?: import('@/build/faceSketch').SketchProfile;
   entities: Entity[];
