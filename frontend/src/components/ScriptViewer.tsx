@@ -12,7 +12,7 @@ import type { ChatMessage } from '@/types/document';
 import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim, type PlacedHandle, type ViewerPick,
          type SectionMeasure, type PlacedPlaneLabel, type DragHandle } from '@/build/webglViewer';
 import {
-  amountValue, edgePayload, edgePlaneShape, loadHiddenPlanes, newPlaneName, offsetBasePoint, offsetPayload,
+  amountValue, edgePayload, edgePlaneShape, faceBesideEdge, loadHiddenPlanes, newPlaneName, offsetBasePoint, offsetPayload,
   offsetPlaneShape, renameHidden, reopenedFromFace, saveHiddenPlanes, shownPlanes, type BaseName, type EdgePlaneValues,
   type OffsetPlaneValues, type PlaneShape,
 } from '@/build/constructionPlanes';
@@ -1229,12 +1229,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   };
   const planeNotice = (text: string) => { setNotice(text); window.setTimeout(() => setNotice(''), 6000); };
   // an edge's two faces, as the Plane on edge dialog lists them
-  const edgeFacesOf = (ref: EdgeRefSpec): EdgePlaneValues['faces'] => {
-    const faces = resRef.current?.faces ?? [];
+  const edgeFacesOf = (ref: EdgeRefSpec, ends: [Vec3, Vec3] | null): EdgePlaneValues['faces'] => {
+    const res = resRef.current, faces = res?.faces ?? [];
     return ref.faces.map((fr, i) => {
       const f = faceOfRef(faces, fr);
+      const at = f && ends && res
+        ? faceBesideEdge(res.mesh.positions, { ...f, normal: f.normal as Vec3 }, ends[0], ends[1], res.mesh.normals) : null;
       return { ref: fr, center: (f?.center ?? fr.center) as Vec3, normal: (f?.normal ?? fr.normal) as Vec3,
-               hint: fr.hint ?? faceLabel(f?.normal ?? fr.normal), index: f?.index ?? -1 - i };
+               hint: fr.hint ?? faceLabel(f?.normal ?? fr.normal), index: f?.index ?? -1 - i, at };
     });
   };
   const edgeEnds = (ref: EdgeRefSpec, poly?: [number, number, number][]): [Vec3, Vec3] | null => {
@@ -1259,7 +1261,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     if (!res || !e) return;
     if (e.kind !== 'line' || !e.ref) { planeNotice('A plane on an edge goes through a straight edge: pick one'); return; }
     const ends = edgeEnds(e.ref, e.polyline);
-    const faces = edgeFacesOf(e.ref);
+    const faces = edgeFacesOf(e.ref, ends);
     if (!ends || !faces.length) { planeNotice('That edge has no face to measure the angle from'); return; }
     setPlaneOp({ line: null, own: null, kind: 'edge', v: {
       name: newPlaneName(planeNames), edge: e.ref, faces, from: 0, angle: 30, a: ends[0], b: ends[1],
@@ -1287,7 +1289,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     const ei = res ? edgeOfRef(res.edges, a.edge) : null;
     const e = ei != null ? res?.edges.find((x) => x.index === ei) : undefined;
     const ends = edgeEnds(a.edge, e?.polyline);
-    const { faces, from } = reopenedFromFace(edgeFacesOf(e?.ref ?? a.edge), a.from_face);
+    const { faces, from } = reopenedFromFace(edgeFacesOf(e?.ref ?? a.edge, ends), a.from_face);
     if (!ends || !faces.length) return null;
     return { kind: 'edge', v: { name, edge: a.edge, faces, from, angle: exprs.angle ?? a.angle, a: ends[0], b: ends[1] } };
   };

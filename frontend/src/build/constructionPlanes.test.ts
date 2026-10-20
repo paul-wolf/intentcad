@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { PlaneReport } from '@/api/client';
 import {
-  amountOut, amountText, amountValue, edgePayload, edgePlaneShape, edgeSummary, labelCorner, loadHiddenPlanes,
+  amountOut, amountText, amountValue, edgePayload, edgePlaneShape, edgeSummary, faceBesideEdge, labelCorner, loadHiddenPlanes,
   newPlaneName, offsetBasePoint, offsetPayload, offsetPlaneShape, offsetSummary, outlineSegments, planeAxes,
   planeCorners, planeNameProblem, renameHidden, reopenedFromFace, saveHiddenPlanes, shownPlanes, type EdgePlaneValues,
   type OffsetPlaneValues,
@@ -78,6 +78,29 @@ describe('planes on an edge', () => {
     expect(r.faces[1]!.ref).toBe(top);          // the line's own reference is kept
     expect(r.faces[0]!.ref).toBe(front);
     expect(reopenedFromFace(faces, null).from).toBe(0);
+  });
+
+  it('find the face’s side from its triangles at the edge, not its centre (round a pocket)', () => {
+    // the top face (z = 10) of a box with a pocket 20 × 40 in its middle: the
+    // pocket's back edge y = 20 has the face beyond it (y > 20), while the
+    // face's centre is in the middle of the pocket, on the other side
+    const tris = [[-10, 20, 10], [10, 20, 10], [10, 30, 10],  [-10, 20, 10], [10, 30, 10], [-10, 30, 10],
+                  [-30, -30, 10], [30, -30, 10], [30, -20, 10]].flat();   // elsewhere on the face
+    const pa: Vec3 = [-10, 20, 10], pb: Vec3 = [10, 20, 10];
+    const face = { start: 0, count: 9, normal: [0, 0, 1] as Vec3 };
+    const at = faceBesideEdge(tris, face, pa, pb)!;
+    close(at.w, [0, 1, 0]);
+    close(at.n, [0, 0, 1]);
+    // the normals per vertex orient a triangle wound the other way
+    const flipped = [[10, 20, 10], [-10, 20, 10], [10, 30, 10]].flat();
+    close(faceBesideEdge(flipped, { ...face, count: 3 }, pa, pb, Array(9).fill(0).map((_, i) => (i % 3 === 2 ? 1 : 0)))!.n, [0, 0, 1]);
+    // +30°: the half over the face (y > 20) lifts out of it, as the backend's edge_plane
+    const r = Math.PI / 6;
+    const s = edgePlaneShape(pa, pb, { center: [0, 0, 10], normal: [0, 0, 1], at }, 30);
+    close(s.normal, [0, -Math.sin(r), Math.cos(r)]);
+    // the centre alone gets it backwards here
+    expect(edgePlaneShape(pa, pb, { center: [0, 0, 10], normal: [0, 0, 1] }, 30).normal[1]).toBeGreaterThan(0);
+    expect(faceBesideEdge(tris, face, [50, 50, 0], [60, 50, 0])).toBeNull();
   });
 
   it('give the same plane whichever way the edge runs', () => {

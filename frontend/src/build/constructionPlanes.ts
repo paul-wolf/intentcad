@@ -75,19 +75,62 @@ export function offsetBasePoint(base: BaseName | { center: Vec3; normal: Vec3 },
   return add(partCenter, scale(n, dot(sub(f.center, partCenter), n)));
 }
 
+/** Where a face lies beside the edge a→b, read off its own triangles the way
+ *  the backend's edge_plane reads it off the face: `w` across the edge onto
+ *  the face, `n` the face's outward normal there. The face's centre can't
+ *  tell: round a hole or pocket it is on the far side of the edge. The face
+ *  is the mesh's vertices [start, start+count), flat triangles; `normals`
+ *  (per vertex) orient it, else the face's own normal does. null: no
+ *  triangle of the face lies along the edge. */
+export function faceBesideEdge(positions: ArrayLike<number>, face: { start: number; count: number; normal: Vec3 },
+                               a: Vec3, b: Vec3, normals?: ArrayLike<number>): { w: Vec3; n: Vec3 } | null {
+  const L = len(sub(b, a));
+  if (L < 1e-9) return null;
+  const d = scale(sub(b, a), 1 / L), tol = 1e-4 * L + 1e-6;
+  const vtx = (i: number): Vec3 => [positions[i * 3]!, positions[i * 3 + 1]!, positions[i * 3 + 2]!];
+  const along = (p: Vec3) => dot(sub(p, a), d) / L;
+  const off = (p: Vec3) => len(sub(sub(p, a), scale(d, dot(sub(p, a), d))));
+  let best: { w: Vec3; n: Vec3; gap: number } | null = null;
+  for (let v = face.start; v + 2 < face.start + face.count; v += 3) {
+    const p = [vtx(v), vtx(v + 1), vtx(v + 2)];
+    const on = [0, 1, 2].filter((i) => off(p[i]!) < tol);
+    if (on.length !== 2) continue;
+    const t0 = along(p[on[0]!]!), t1 = along(p[on[1]!]!);
+    const lo = Math.min(t0, t1), hi = Math.max(t0, t1);
+    if (hi < -1e-6 || lo > 1 + 1e-6) continue;
+    // the triangle spanning the edge's middle, else the one nearest it
+    const gap = lo <= 0.5 && 0.5 <= hi ? 0 : Math.min(Math.abs(lo - 0.5), Math.abs(hi - 0.5));
+    if (best && gap >= best.gap) continue;
+    const c = p[3 - on[0]! - on[1]!]!;
+    const w = sub(sub(c, a), scale(d, dot(sub(c, a), d)));
+    let n = cross(sub(p[1]!, p[0]!), sub(p[2]!, p[0]!));
+    if (len(w) < 1e-12 || len(n) < 1e-12) continue;
+    const vn: Vec3 = normals
+      ? [0, 1, 2].reduce<Vec3>((s, i) => add(s, [normals[(v + i) * 3]!, normals[(v + i) * 3 + 1]!, normals[(v + i) * 3 + 2]!]), [0, 0, 0])
+      : face.normal;
+    if (dot(n, vn) < 0) n = scale(n, -1);
+    best = { w: unit(w), n: unit(n), gap };
+  }
+  return best && { w: best.w, n: best.n };
+}
+
 /** A plane-on-edge's geometry (planes.edge_plane): through the straight edge
  *  a→b; at 0° the plane of `face`, turned `angle` degrees about the edge,
  *  positive lifting the half over the face out of the material. Also gives
  *  the rotation frame: `w` points across the face from the edge, `n` is the
- *  face's normal (the handle turns in the w–n plane). */
-export function edgePlaneShape(a: Vec3, b: Vec3, face: { center: Vec3; normal: Vec3 }, angle: number):
+ *  face's normal (the handle turns in the w–n plane). `face.at` is where the
+ *  face lies at the edge (faceBesideEdge); without it, toward its centre. */
+export function edgePlaneShape(a: Vec3, b: Vec3, face: { center: Vec3; normal: Vec3; at?: { w: Vec3; n: Vec3 } | null },
+                               angle: number):
   Omit<PlaneShape, 'name'> & { mid: Vec3; d: Vec3; w: Vec3; n: Vec3 } {
   let d = unit(sub(b, a));
   const mid = scale(add(a, b), 0.5);
-  const n = unit(sub(face.normal, scale(d, dot(face.normal, d))));
+  const fn = face.at?.n ?? face.normal;
+  const n = unit(sub(fn, scale(d, dot(fn, d))));
   let w = cross(n, d);
-  // w points onto the face: toward its centre
-  if (dot(sub(face.center, mid), w) < 0) { d = scale(d, -1); w = scale(w, -1); }
+  // w points onto the face
+  const onto = face.at?.w ?? sub(face.center, mid);
+  if (dot(onto, w) < 0) { d = scale(d, -1); w = scale(w, -1); }
   const r = (angle * Math.PI) / 180;
   const normal = sub(scale(n, Math.cos(r)), scale(w, Math.sin(r)));
   const origin = sub(a, scale(d, dot(a, d)));
@@ -149,7 +192,9 @@ export interface EdgePlaneValues {
   name: string;
   edge: EdgeRefSpec;
   /** the edge's two faces (their refs and where they are), and which is 0° */
-  faces: { ref: FaceRefSpec; center: Vec3; normal: Vec3; hint: string; index: number }[];
+  faces: { ref: FaceRefSpec; center: Vec3; normal: Vec3; hint: string; index: number;
+           /** where it lies at the edge, from its triangles (faceBesideEdge) */
+           at?: { w: Vec3; n: Vec3 } | null }[];
   from: number;
   angle: Amount;
   /** the edge's ends */
