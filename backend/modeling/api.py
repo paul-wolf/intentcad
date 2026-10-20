@@ -13,13 +13,15 @@ from documents.context import ContextFileError, ai_blocks
 from .engine import EngineError, run_script
 from . import hole_presets
 from .llm_models import list_models
-from .paramedit import (ParamError, add_edge_op, add_extrude, add_holes, add_plane, add_shell, delete_step,
-                        edit_args, op_at, rename_plane, set_params, steps, suppress)
+from .paramedit import (ParamError, add_edge_op, add_extrude, add_holes, add_mirror_body, add_plane, add_shell,
+                        delete_step, edit_args, mirror_steps, op_at, rename_plane, set_params, steps, suppress,
+                        unlink)
 from .schemas import (
     AddEdgeOpRequest,
     AddExtrudeRequest,
     AddExtrudeResponse,
     AddHolesRequest,
+    AddMirrorBodyRequest,
     AddOpResponse,
     AddPlaneRequest,
     AddPlaneResponse,
@@ -35,6 +37,8 @@ from .schemas import (
     ExportRequest,
     ExportResponse,
     MeshOut,
+    MirrorStepsRequest,
+    MirrorStepsResponse,
     ModelsResponse,
     RunEdge,
     RunFace,
@@ -275,19 +279,57 @@ def suppress_step_endpoint(request, payload: StepLineRequest):
     if err:
         return err
     try:
-        return CodeResponse(code=suppress(payload.code, payload.line, payload.off))
+        return CodeResponse(code=suppress(payload.code, payload.line, payload.off, payload.copies == "with"))
     except (ParamError, SyntaxError) as exc:
         return JsonResponse({"message": str(exc)}, status=422)
 
 
 @router.post("/delete_step", response=CodeResponse)
 def delete_step_endpoint(request, payload: StepLineRequest):
-    """Delete the step on `line`, and the P keys only it used."""
+    """Delete the step on `line`, and the P keys only it used (its mirrored
+    copies too, with copies='delete'; else they stay, unlinked)."""
     err = require_auth(request)
     if err:
         return err
     try:
-        return CodeResponse(code=delete_step(payload.code, payload.line))
+        return CodeResponse(code=delete_step(payload.code, payload.line, payload.copies))
+    except (ParamError, SyntaxError) as exc:
+        return JsonResponse({"message": str(exc)}, status=422)
+
+
+@router.post("/add_mirror_body", response=CodeResponse)
+def add_mirror_body_endpoint(request, payload: AddMirrorBodyRequest):
+    """Append `part = mirror_body(part, PLANE, join=...)` (or rewrite the one on `line`)."""
+    err = require_auth(request)
+    if err:
+        return err
+    try:
+        return CodeResponse(code=add_mirror_body(payload.code, payload.plane, payload.join, payload.line))
+    except (ParamError, SyntaxError, KeyError, TypeError, ValueError) as exc:
+        return JsonResponse({"message": str(exc)}, status=422)
+
+
+@router.post("/mirror_steps", response=MirrorStepsResponse)
+def mirror_steps_endpoint(request, payload: MirrorStepsRequest):
+    """A mirrored copy of each chosen step, linked to it, after the last of them."""
+    err = require_auth(request)
+    if err:
+        return err
+    try:
+        code, made, skipped = mirror_steps(payload.code, payload.lines, payload.plane)
+    except (ParamError, SyntaxError, KeyError, TypeError, ValueError) as exc:
+        return JsonResponse({"message": str(exc)}, status=422)
+    return MirrorStepsResponse(code=code, made=made, skipped=skipped)
+
+
+@router.post("/unlink_step", response=CodeResponse)
+def unlink_step_endpoint(request, payload: StepLineRequest):
+    """The mirrored copy on `line` without its link: a step of its own."""
+    err = require_auth(request)
+    if err:
+        return err
+    try:
+        return CodeResponse(code=unlink(payload.code, payload.line))
     except (ParamError, SyntaxError) as exc:
         return JsonResponse({"message": str(exc)}, status=422)
 

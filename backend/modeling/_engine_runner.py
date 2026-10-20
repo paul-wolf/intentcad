@@ -8,6 +8,7 @@ Part/Solid/Compound), then tessellates + exports STEP and prints the result.
 We do no CAD here — build123d does. We only take the artifacts out.
 """
 
+import ast
 import base64
 import hashlib
 import json
@@ -450,6 +451,11 @@ def _run(code: str, export: list | None = None,
     from modeling import planes
 
     ns.update(planes.bind(ns))
+    # mirror_body() / mirrored() — the editor's Mirror body and Mirror steps
+    # (modeling/mirror.py), across a face, a base plane or a construction plane
+    from modeling import mirror
+
+    ns.update(mirror.bind(ns))
     ns["__editor_ops__"] = edge_ops.bind()
     # Run the script. If an operation fails partway (e.g. a chamfer too big),
     # `part` still holds the model built up to that line — render THAT plus the
@@ -457,7 +463,9 @@ def _run(code: str, export: list | None = None,
     warning = None
     fix = None
     try:
-        exec(compile(f"from build123d import *; globals().update(__editor_ops__)\n{code}", "<script>", "exec"), ns)  # noqa: S102 - sandboxed subprocess
+        src = f"from build123d import *; globals().update(__editor_ops__)\n{code}"
+        tree = mirror.defer_refs(ast.parse(src, "<script>"))
+        exec(compile(tree, "<script>", "exec"), ns)  # noqa: S102 - sandboxed subprocess
     except Exception as exc:
         warning = _describe_error(exc, code)
         fix = _fix_for(exc, ns)
@@ -649,6 +657,7 @@ def _run(code: str, export: list | None = None,
             "area": float(part.area),
             "bbox_min": [bb.min.X, bb.min.Y, bb.min.Z],
             "bbox_max": [bb.max.X, bb.max.Y, bb.max.Z],
+            "solids": len(part.solids()),
         },
     }
     if rounds:

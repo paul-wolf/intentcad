@@ -386,13 +386,30 @@ export const buildApi = {
   steps(code: string, datum: string[] = [], points: Record<string, number> = {}): Promise<{ steps: Step[] }> {
     return request('/build/steps', { method: 'POST', body: JSON.stringify({ code, datum, points }) });
   },
-  /** Switch the step on `line` off ("# off: " in front of it) or back on. */
-  suppressStep(code: string, line: number, off: boolean): Promise<{ code: string }> {
-    return request('/build/suppress_step', { method: 'POST', body: JSON.stringify({ code, line, off }) });
+  /** Switch the step on `line` off ("# off: " in front of it) or back on;
+   *  `withCopies`: its mirrored copies follow. */
+  suppressStep(code: string, line: number, off: boolean, withCopies = false): Promise<{ code: string }> {
+    return request('/build/suppress_step', { method: 'POST',
+      body: JSON.stringify({ code, line, off, ...(withCopies ? { copies: 'with' } : {}) }) });
   },
-  /** Delete the step on `line`, and the P keys only it used. */
-  deleteStep(code: string, line: number): Promise<{ code: string }> {
-    return request('/build/delete_step', { method: 'POST', body: JSON.stringify({ code, line }) });
+  /** Delete the step on `line`, and the P keys only it used. `copies`: what
+   *  happens to its mirrored copies ('keep': they stay, unlinked). */
+  deleteStep(code: string, line: number, copies?: 'keep' | 'delete'): Promise<{ code: string }> {
+    return request('/build/delete_step', { method: 'POST', body: JSON.stringify({ code, line, ...(copies ? { copies } : {}) }) });
+  },
+  /** Append `part = mirror_body(part, PLANE, join=…)`, or rewrite the one on `line`. */
+  addMirrorBody(payload: { code: string; plane: MirrorPlane; join: boolean; line?: number | null }): Promise<{ code: string }> {
+    return request('/build/add_mirror_body', { method: 'POST', body: JSON.stringify(payload) });
+  },
+  /** One linked mirrored copy of each step on `lines`, after the last of them;
+   *  `skipped`: the steps that can't be, and why. */
+  mirrorSteps(code: string, lines: number[], plane: MirrorPlane):
+    Promise<{ code: string; made: { of: number; line: number }[]; skipped: { line: number; reason: string }[] }> {
+    return request('/build/mirror_steps', { method: 'POST', body: JSON.stringify({ code, lines, plane }) });
+  },
+  /** Drop a mirrored copy's link comment: it no longer follows its original. */
+  unlinkStep(code: string, line: number): Promise<{ code: string }> {
+    return request('/build/unlink_step', { method: 'POST', body: JSON.stringify({ code, line }) });
   },
   sensitivity(code: string, documentId = '', sketches: Record<string, unknown> = {}): Promise<{ params: Record<string, DimInfo> }> {
     return request('/build/sensitivity', { method: 'POST', body: JSON.stringify({ code, document_id: documentId, sketches }) });
@@ -532,12 +549,18 @@ export interface OpAt {
   params: Record<string, string>;
   /** argument -> its source, when written as an expression (shown, not edited) */
   exprs?: Record<string, string>;
+  /** a mirrored copy (`mirrored(..., PLANE)`): across what, and the line of the
+   *  step it follows (null: unlinked) */
+  mirror?: { plane: MirrorPlane; label: string; of: number | null } | null;
 }
+
+/** A plane to mirror across, as the API has it (backend paramedit._plane_src). */
+export type MirrorPlane = { base: 'XY' | 'XZ' | 'YZ' } | { plane: string } | { face: FaceRefSpec };
 
 export type ExtrudeOp = 'cut' | 'join' | 'new';
 export type ArgOpKind = 'auto_round' | 'truss_windows';
 export type PlaneOpKind = 'offset_plane' | 'edge_plane';
-export type OpKind = 'extrude' | 'shell' | 'holes' | EdgeOpKind | ArgOpKind | PlaneOpKind;
+export type OpKind = 'extrude' | 'shell' | 'holes' | EdgeOpKind | ArgOpKind | PlaneOpKind | 'mirror_body';
 
 /** A construction plane as the build put it (backend modeling/planes.py). */
 export interface PlaneReport {
@@ -577,6 +600,9 @@ export interface Step {
   edges: EdgeRefSpec[];
   /** a construction plane's name */
   plane?: string | null;
+  /** a mirrored copy: the line of the step it follows, and the plane's label */
+  mirror_of?: number | null;
+  mirror_plane?: string | null;
 }
 
 /** An auto_round keep item's faces, as the part was when its line ran. */

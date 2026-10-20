@@ -4,7 +4,7 @@ import { useDocumentStore } from '@/stores/documentStore';
 import {
   api, buildApi, errorText, ApiError, type RunResponse, type RunEdge, type FaceRefReport, type UsageResponse, type DimInfo, type ModelInfo, type ModelsResponse, type SizeFix,
   type FaceRefSpec, type HolePresets, type EdgeOpKind, type EdgeRefSpec, type ExtrudeOp, type KeepItem, type Step,
-  type PlaneReport,
+  type PlaneReport, type MirrorPlane,
 } from '@/api/client';
 import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, persistSketches, getBackendId } from '@/api/autoSave';
 import { DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
@@ -37,11 +37,13 @@ import { useFaceSketch, type ExtrudeOptions } from './FaceSketchMode';
 import {
   ShellDialog, HoleDialog, EdgeOpDialog, ExtrudeDialog, RoundDialog, TrussDialog, useOpPreview, refOf, faceOfRef, sameRef,
   holesPayload, holeValuesOf, newHoleValues, placeKey, toggleEdge, addEdges, argOpPayload, OffsetPlaneDialog, EdgePlaneDialog,
+  MirrorOpDialog, MirrorCopyDialog,
   type ShellValues, type HoleValues,
-  type HolePlace, type EdgeOpValues, type ExtrudeValues, type ArgOpValues,
+  type HolePlace, type EdgeOpValues, type ExtrudeValues, type ArgOpValues, type MirrorValues,
 } from './OpDialogs';
+import { facePlane, mirrorPlaneShape, mirrorSkip, nextStepSelection } from '@/build/mirror';
 import { StepsList } from './StepsList';
-import { messageLine, reopenableAt, stepIcon, stepInputs, stepProblems, suppressedNote } from '@/build/steps';
+import { messageLine, reopenableAt, stepIcon, stepInputs, stepLabel, stepProblems, suppressedNote } from '@/build/steps';
 import {
   BASE_PLANES, boundPlane, extrudeDirectionText, faceLabel, findFaceSketch, partSide, referencedProfiles, referencedSketchNames,
   planeSketches, renamePlaneRefs, sketchBasePlane, sketchBindNotes, sketchHolePoints, sketchSegments, type BasePlane,
@@ -89,7 +91,7 @@ const NO_CHAT: ChatMessage[] = [];
 /** What the code view's Edit button calls a line's dialog. */
 const OP_NAMES = {
   shell: 'Shell', holes: 'Hole', fillet: 'Fillet', chamfer: 'Chamfer', extrude: 'Extrude', auto_round: 'Round',
-  truss_windows: 'Lighten', offset_plane: 'Offset plane', edge_plane: 'Plane on edge',
+  truss_windows: 'Lighten', offset_plane: 'Offset plane', edge_plane: 'Plane on edge', mirror_body: 'Mirror body',
 } as const;
 /** An Offset plane or Plane on edge dialog: `line` the line it was reopened
  *  from (null: a new plane), `own` the plane's name in the script then. */
@@ -1051,6 +1053,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     setExtrudeOp(null);
     setArgOp(null);
     setPlaneOp(null);
+    setMirrorOp(null);
+    setCopyOp(null);
     viewerRef.current?.hoverFace(null);
     viewerRef.current?.hoverEdge(null);
     applySelection([]);
@@ -1110,7 +1114,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     }, 250);
     return () => { ac.abort(); window.clearTimeout(t); };
   }, [code, stepIn]);
-  const [stepSel, setStepSel] = useState<number | null>(null);
+  // the steps chosen in the list (Ctrl/Shift-click for more: Mirror steps
+  // copies them), the last one clicked first for Shift's run
+  const [stepPick, setStepSel] = useState<number[]>([]);
+  const stepAnchor = useRef<number | null>(null);
+  const stepSel = stepPick.filter((l) => steps.some((s) => s.line === l));
   const [stepBusy, setStepBusy] = useState(false);
   const holePlaces: HolePlace[] = [
     ...holeSketches.map((sk) => {
@@ -1170,7 +1178,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // the part as built (its refs keep the length and middle they had when picked).
   type EdgeNow = { ref: EdgeRefSpec; length: number; midpoint: [number, number, number]; radius?: number };
   const [edgeOp, setEdgeOp] = useState<{ op: EdgeOpKind; line: number | null; v: EdgeOpValues; adds: EdgeRefSpec[];
-                                         now: EdgeNow[] } | null>(null);
+                                         now: EdgeNow[]; mirrored?: string } | null>(null);
   const edgeKey = edgeOp ? JSON.stringify({ op: edgeOp.op, line: edgeOp.line, v: edgeOp.v }) : '';
   const edgeOpLine = (o: { op: EdgeOpKind; line: number | null; v: EdgeOpValues }) =>
     buildApi.addEdgeOp({ code: codeRef.current, op: o.op, edges: o.v.edges, size: o.v.size, line: o.line });
@@ -1350,8 +1358,111 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       setNotice(`${label}: ${errorText(err)}`);
     }
   };
+  // ── Mirror: Mirror body writes `part = mirror_body(part, PLANE, join=…)`,
+  // Mirror steps one linked `mirrored(...)` copy of each chosen step; both
+  // previewed as a ghost, the plane drawn. `line`: a mirror_body() line reopened.
+  type MirrorOp = { kind: 'body' | 'steps'; line: number | null; lines: number[]; v: MirrorValues };
+  const [mirrorOp, setMirrorOp] = useState<MirrorOp | null>(null);
+  // a linked copy reopened: edit its original, or unlink it
+  const [copyOp, setCopyOp] = useState<{ line: number; of: number; across: string; original: string } | null>(null);
+  const lastMirrorPlane = useRef<MirrorPlane | null>(null);
+  const mirrorKey = mirrorOp ? JSON.stringify([mirrorOp.kind, mirrorOp.line, mirrorOp.lines, mirrorOp.v.plane, mirrorOp.v.join]) : '';
+  const mirrorLine = async (o: MirrorOp, plane: MirrorPlane) => {
+    if (o.kind === 'body') return (await buildApi.addMirrorBody({ code: codeRef.current, plane, join: o.v.join, line: o.line })).code;
+    const r = await buildApi.mirrorSteps(codeRef.current, o.lines, plane);
+    if (!r.made.length) throw new Error(r.skipped[0] ? `Line ${r.skipped[0].line}: ${r.skipped[0].reason}` : 'Nothing to mirror');
+    return r.code;
+  };
+  const mirrorPreview = useOpPreview(
+    viewerRef,
+    mirrorOp?.v.plane ? () => mirrorLine(mirrorOp, mirrorOp.v.plane!) : null,
+    mirrorKey,
+    (src, signal) => buildApi.run(src, signal, getBackendId() ?? '', buildInputs(src).sketches),
+  );
+  // where to mirror across from the selection: one flat face, or one construction plane
+  const mirrorPlaneOfSelection = (): { plane: MirrorPlane | null; face: FaceRefSpec | null } => {
+    const res = resRef.current;
+    const f = selRef.current.length === 1 && !selERef.current.length ? res?.faces.find((x) => x.index === selRef.current[0]) : undefined;
+    const ref = f && f.kind === 'plane' ? refOf(f) : null;
+    if (ref && f) { const p = facePlane(ref, f.normal); return { plane: p, face: 'face' in p ? p.face : null }; }
+    const pl = selectedPlane();
+    return { plane: pl ? { plane: pl.name } : null, face: null };
+  };
+  const startMirrorBody = () => {
+    if (!resRef.current) return;
+    const { plane, face } = mirrorPlaneOfSelection();
+    setMirrorOp({ kind: 'body', line: null, lines: [], v: { plane, join: true, face } });
+  };
+  const startMirrorSteps = () => {
+    if (!resRef.current) return;
+    const lines = stepSel.filter((l) => steps.some((s) => s.line === l && !mirrorSkip(s)));
+    if (!lines.length) { planeNotice('Choose extrudes, holes, fillets or chamfers in the steps list first (Ctrl-click for more)'); return; }
+    // the steps' own faces and edges light up when chosen: only a plane picked in the view counts
+    const pl = selectedPlane();
+    const last = lastMirrorPlane.current;
+    const plane: MirrorPlane | null = pl ? { plane: pl.name }
+      : last && (!('plane' in last) || planeNames.includes(last.plane)) ? last : null;
+    setMirrorOp({ kind: 'steps', line: null, lines: [...stepSel].sort((a, b) => a - b), v: {
+      plane, join: true, face: plane && 'face' in plane ? plane.face : null } });
+  };
+  const mirrorRows = mirrorOp?.kind === 'steps'
+    ? mirrorOp.lines.flatMap((l) => {
+      const st = steps.find((s) => s.line === l);
+      return st ? [{ line: l, label: stepLabel(st), reason: mirrorSkip(st) }] : [];
+    }) : [];
+  const mirrorAfter = mirrorOp?.kind === 'steps'
+    ? Math.max(0, ...mirrorRows.filter((r) => !r.reason).map((r) => steps.find((s) => s.line === r.line)?.end_line ?? r.line)) || null
+    : null;
+  const applyMirror = async () => {
+    const o = mirrorOp;
+    if (!o?.v.plane) return;
+    const label = o.kind === 'body' ? (o.line != null ? 'Edit mirror body' : 'Mirror body') : 'Mirror steps';
+    try {
+      const src = mirrorPreview.built(mirrorKey) ?? (await mirrorLine(o, o.v.plane));
+      lastMirrorPlane.current = o.v.plane;
+      closeOp();
+      setStepSel([]);
+      setCode(src);
+      const out = await build(src, label);
+      if (out.kind === 'ok') saveDraft(src);
+    } catch (err) {
+      setNotice(`${label}: ${errorText(err)}`);
+    }
+  };
+  const unlinkCopy = async (line: number) => {
+    try {
+      const r = await buildApi.unlinkStep(codeRef.current, line);
+      closeOp();
+      setCode(r.code);
+      const out = await build(r.code, 'Unlink mirrored copy');
+      if (out.kind === 'ok') saveDraft(r.code);
+    } catch (err) {
+      setNotice(`Unlink: ${errorText(err)}`);
+    }
+  };
+  // the mirror plane is drawn while the dialog is open (a face: where it is now)
+  const mirrorShape = (() => {
+    const p = mirrorOp?.v.plane;
+    if (!p) return null;
+    const f = 'face' in p ? faceOfRef(resRef.current?.faces ?? [], p.face) : null;
+    const shape = mirrorPlaneShape(p, builtPlanes, f ? { center: f.center as Vec3, normal: f.normal as Vec3 } : null);
+    return shape && 'face' in p ? { ...shape, name: `Mirror · ${p.face.hint ?? 'face'}` } : shape;
+  })();
+  // the face mirrored across shows as selected
+  const mirrorFaceKey = mirrorOp ? JSON.stringify(mirrorOp.v.plane) : '';
+  useEffect(() => {
+    const v = viewerRef.current, p = mirrorOp?.v.plane;
+    if (!mirrorOp || !v) return;
+    const f = p && 'face' in p ? faceOfRef(resRef.current?.faces ?? [], p.face) : null;
+    selRef.current = f ? [f.index] : [];
+    setSel(selRef.current);
+    v.selectFaces(selRef.current);
+    v.selectEdges([]);
+    v.selectPlanes(p && 'plane' in p ? [p.plane] : []);
+  }, [mirrorFaceKey]);   // eslint-disable-line react-hooks/exhaustive-deps
   // the plane being edited is drawn as the preview, not as built
-  const shownPlaneList = shownPlanes(builtPlanes, planeOp?.own ? [...hiddenPlanes, planeOp.own] : hiddenPlanes, planePreview);
+  const shownPlaneList = shownPlanes(builtPlanes, planeOp?.own ? [...hiddenPlanes, planeOp.own] : hiddenPlanes,
+                                     planePreview ?? mirrorShape);
   const shownPlanesKey = JSON.stringify(shownPlaneList);
   useEffect(() => {
     viewerRef.current?.setPlanes(shownPlaneList);
@@ -1545,7 +1656,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // while the Shell dialog is open, clicking a face opens or closes it, and
   // the faces it opens show as selected; in the Hole dialog it says where the
   // holes go
-  opPickRef.current = planeOp ? (p) => {
+  opPickRef.current = mirrorOp ? (p) => {
+    const face = p && 'face' in p ? resRef.current?.faces.find((x) => x.index === p.face.index) : undefined;
+    if (!face) return;
+    const ref = face.kind === 'plane' ? refOf(face) : null;
+    if (!ref) { planeNotice('Mirror across a flat face: pick a flat one'); return; }
+    const pl = facePlane(ref, face.normal);
+    setMirrorOp((o) => o && ({ ...o, v: { ...o.v, plane: pl, face: 'face' in pl ? pl.face : null } }));
+  } : planeOp ? (p) => {
     const face = p && 'face' in p ? resRef.current?.faces.find((x) => x.index === p.face.index) : undefined;
     if (!face) return;
     if (planeOp.kind === 'edge') {
@@ -1558,7 +1676,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     if (!ref) { setNotice('An offset plane goes from a flat face: pick a flat one'); window.setTimeout(() => setNotice(''), 5000); return; }
     setPlaneOp((o) => o && o.kind === 'offset' ? { ...o, v: { ...o.v, base: 'face', face: {
       ref, center: face.center as Vec3, normal: face.normal as Vec3, hint: ref.hint ?? faceLabel(face.normal) } } } : o);
-  } : edgeOp ? (p) => {
+  } : edgeOp?.mirrored ? null : edgeOp ? (p) => {
     const r = p && 'edge' in p ? resRef.current?.edges.find((e) => e.index === p.edge)?.ref : null;
     if (!r) return;
     setEdgeOp((o) => o && ({ ...o, v: { ...o.v, edges: toggleEdge(o.v.edges, r) } }));
@@ -1580,7 +1698,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       ? o.v.remove.filter((x) => !sameRef(x, r)) : [...o.v.remove, r] } }));
   } : null;
   // a double-clicked loop or chain goes into the Fillet / Chamfer list
-  opEdgesRef.current = edgeOp ? (list) => {
+  opEdgesRef.current = edgeOp && !edgeOp.mirrored ? (list) => {
     const res = resRef.current;
     const refs = list.map((i) => res?.edges.find((e) => e.index === i)?.ref).filter((r): r is EdgeRefSpec => !!r);
     setEdgeOp((o) => o && ({ ...o, v: { ...o.v, edges: addEdges(o.v.edges, refs) } }));
@@ -1605,7 +1723,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // the edges a Fillet / Chamfer line names show as selected (those on the part as shown)
   useEffect(() => {
     if (!edgeOp) return;
-    const idx = edgeOp.v.edges.map(opEdgeIndex).filter((i): i is number => i != null);
+    // a mirrored copy's edges are the original's: they aren't lit
+    const idx = edgeOp.mirrored ? [] : edgeOp.v.edges.map(opEdgeIndex).filter((i): i is number => i != null);
     selRef.current = [];
     selERef.current = idx;
     setSel([]);
@@ -1613,14 +1732,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     viewerRef.current?.selectFaces([]);
     viewerRef.current?.selectEdges(idx);
   }, [edgeKey]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const opOpen = !!shellOp || !!holeOp || !!edgeOp || !!extrudeOp || !!argOp || !!planeOp;
+  const opOpen = !!shellOp || !!holeOp || !!edgeOp || !!extrudeOp || !!argOp || !!planeOp || !!mirrorOp || !!copyOp;
   // Shell, Hole and Round work on faces: while one is open a click picks faces
   // only; Fillet and Chamfer, edges only
-  const viewFilter: PickFilter = shellOp || holeOp || planeOp || argOp?.v.op === 'auto_round' ? 'faces' : edgeOp ? 'edges'
+  const viewFilter: PickFilter = shellOp || holeOp || planeOp || mirrorOp || argOp?.v.op === 'auto_round' ? 'faces' : edgeOp ? 'edges'
     : pickFilter;
   useEffect(() => { viewerRef.current?.setPickFilter(viewFilter); }, [viewFilter]);
   // the dialogs sit at the top left of the view: draw the part beside them
-  const opWidth = holeOp || argOp || planeOp ? 300 : shellOp || edgeOp || extrudeOp ? 270 : 0;
+  const opWidth = holeOp || argOp || planeOp || mirrorOp ? 300 : shellOp || edgeOp || extrudeOp || copyOp ? 270 : 0;
   useEffect(() => {
     viewerRef.current?.setInset(opWidth ? opWidth + 24 : 0);
   }, [opWidth]);
@@ -1630,7 +1749,16 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     try {
       const op = await buildApi.opAt(codeRef.current, line, stepIn.datum);
       if (opOpen) closeOp();
-      if (op.op === 'extrude') {
+      if (op.mirror?.of != null) {
+        // a linked copy follows its original: edit that, or unlink it
+        const orig = steps.find((s) => s.line === op.mirror!.of);
+        setCopyOp({ line: op.line, of: op.mirror.of, across: op.mirror.label,
+                    original: orig ? stepLabel(orig) : `line ${op.mirror.of}` });
+      } else if (op.op === 'mirror_body') {
+        const a = op.args as { plane: MirrorPlane; join: boolean };
+        setMirrorOp({ kind: 'body', line: op.line, lines: [],
+                      v: { plane: a.plane, join: a.join !== false, face: 'face' in a.plane ? a.plane.face : null } });
+      } else if (op.op === 'extrude') {
         const a = op.args as { sketch: string; op: ExtrudeOp; depth: number | null; through: boolean; flip: boolean;
                                both: boolean; datum: boolean };
         setExtrudeOp({
@@ -1675,7 +1803,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
           return f?.length != null && f.midpoint
             ? [{ ref, length: f.length, midpoint: f.midpoint, radius: f.radius ?? undefined }] : [];
         });
-        setEdgeOp({ op: op.op, line: op.line, v: { edges, size: Number(a.size ?? 1) }, adds, now });
+        setEdgeOp({ op: op.op, line: op.line, v: { edges, size: Number(a.size ?? 1) }, adds: op.mirror ? [] : adds,
+                    now: op.mirror ? [] : now, mirrored: op.mirror?.label });
       }
     } catch (err) {
       setNotice(`Can't edit line ${line}: ${errorText(err)}`);
@@ -1693,8 +1822,16 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
 
   // a step clicked in the list: its lines selected in the code, and its
   // faces, edges or sketch lit in the view
-  const selectStep = (st: Step) => {
-    setStepSel(st.line);
+  const selectStep = (clicked: Step, mode: 'only' | 'toggle' | 'range' = 'only', order: number[] = []) => {
+    const next = nextStepSelection(stepSel, order, clicked.line, stepAnchor.current, mode);
+    if (mode !== 'range') stepAnchor.current = clicked.line;
+    setStepSel(next);
+    const st = next.length === 1 ? steps.find((s) => s.line === next[0]) : undefined;
+    if (!st) {
+      // several chosen (for Mirror steps), or none: none of them lit in the view
+      if (!opOpen) applySelection([]);
+      return;
+    }
     const ta = taRef.current;
     if (ta) {
       const lines = ta.value.split('\n');
@@ -1717,14 +1854,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     }
   };
   // switch a step off or on, or delete it: the script changes, and rebuilds
-  const changeStep = async (st: Step, what: 'off' | 'on' | 'delete') => {
+  const changeStep = async (st: Step, what: 'off' | 'on' | 'delete', copies?: 'keep' | 'delete' | 'with') => {
     if (stepBusy) return;
     setStepBusy(true);
     try {
       if (opOpen) closeOp();
-      const r = what === 'delete' ? await buildApi.deleteStep(codeRef.current, st.line)
-        : await buildApi.suppressStep(codeRef.current, st.line, what === 'off');
-      setStepSel(null);
+      const r = what === 'delete' ? await buildApi.deleteStep(codeRef.current, st.line, copies === 'with' ? undefined : copies)
+        : await buildApi.suppressStep(codeRef.current, st.line, what === 'off', copies === 'with');
+      setStepSel([]);
       setCode(r.code);
       const name = st.summary ?? `line ${st.line}`;
       const out = await build(r.code, `${what === 'delete' ? 'Delete' : what === 'off' ? 'Switch off' : 'Switch on'} ${name}`);
@@ -2120,6 +2257,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     status, hasCode: !!code.trim(), dialogOpen: opOpen, sketching: faceSketch.active, canSketch: sketchOnFace,
     asking, holeSketches: holeSketches.length, holeAt: holeAtText, autoRound: !!resRef.current?.auto_round,
     exporting: !!exporting, importing, hasParams, showParams, ortho, measure: measureText, section: secOn,
+    mirrorSteps: stepSel.filter((l) => steps.some((s) => s.line === l && !mirrorSkip(s))).length,
   };
   const opCtx: OpContext = {
     sketchOnSelection, sketchOnPlane,
@@ -2152,6 +2290,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       } catch { hint(text); }
     },
     section: toggleSection,
+    mirrorBody: startMirrorBody,
+    mirrorSteps: startMirrorSteps,
   };
   // the last few operations used, for the grid's Recent row
   const [recent, setRecent] = useState<string[]>(loadRecent);
@@ -2567,8 +2707,9 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
             {layout === 'ops' && (
               <StepsList steps={steps} problems={problems} selected={stepSel} busy={stepBusy}
                 onSelect={selectStep} onEdit={(st) => void editOp(st.line)}
-                onToggle={(st) => void changeStep(st, st.off ? 'on' : 'off')}
-                onDelete={(st) => void changeStep(st, 'delete')}
+                onToggle={(st, withCopies) => void changeStep(st, st.off ? 'on' : 'off', withCopies ? 'with' : undefined)}
+                onDelete={(st, copies) => void changeStep(st, 'delete', copies)}
+                onMirror={opModel.mirrorSteps > 0 && !opOpen ? startMirrorSteps : undefined}
                 deleteNote={(st) => {
                   const used = st.plane ? planeSketches(docSketches, st.plane) : [];
                   return used.length ? `Used by ${used.length > 1 ? 'sketches' : 'sketch'} ${used.map((x) => `“${x.name}”`).join(', ')}` : null;
@@ -2606,7 +2747,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
               <EdgeOpDialog op={edgeOp.op} value={edgeOp.v} editing={edgeOp.line != null} preview={edgePreview.preview}
                 onChange={(v) => setEdgeOp((o) => o && { ...o, v })}
                 edgeIndex={opEdgeIndex} onHoverEdge={(i) => viewerRef.current?.hoverEdge(i)}
-                selection={edgeOp.adds} shownAs={edgeAsNow}
+                selection={edgeOp.adds} shownAs={edgeAsNow} mirrored={edgeOp.mirrored}
                 onApply={() => void applyEdgeOp()} onCancel={closeOp} />
             )}
             {extrudeOp && (
@@ -2637,6 +2778,17 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                 onChange={(v) => setPlaneOp((o) => o && o.kind === 'edge' ? { ...o, v } : o)}
                 onHoverFace={(i) => viewerRef.current?.hoverFace(i)}
                 onApply={() => void applyPlaneOp()} onCancel={closeOp} />
+            )}
+            {mirrorOp && (
+              <MirrorOpDialog kind={mirrorOp.kind} value={mirrorOp.v} editing={mirrorOp.line != null}
+                preview={mirrorPreview.preview} planes={planeNames} steps={mirrorRows} after={mirrorAfter}
+                onChange={(v) => setMirrorOp((o) => o && { ...o, v })}
+                onApply={() => void applyMirror()} onCancel={closeOp} />
+            )}
+            {copyOp && (
+              <MirrorCopyDialog of={copyOp.of} across={copyOp.across} original={copyOp.original}
+                onEditOriginal={() => { const of = copyOp.of; closeOp(); void editOp(of); }}
+                onUnlink={() => void unlinkCopy(copyOp.line)} onCancel={closeOp} />
             )}
             {planeLabelsView}
             {holeOp && holePresets && (

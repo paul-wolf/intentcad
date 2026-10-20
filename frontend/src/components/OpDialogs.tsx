@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode, type R
 import { useThemeStore } from '@/theme';
 import {
   ApiError, errorText, type ArgOpKind, type EdgeOpKind, type EdgeRefSpec, type ExtrudeOp, type FaceRefSpec, type HoleKind,
-  type HolePreset, type HolePresets, type HoleSizeKey, type HolesPayload, type KeepItem, type RunFace, type RunResponse, type SizeFix,
+  type HolePreset, type HolePresets, type HoleSizeKey, type HolesPayload, type KeepItem, type MirrorPlane, type RunFace,
+  type RunResponse, type SizeFix,
 } from '@/api/client';
 import type { Viewer } from '@/build/webglViewer';
 import { faceLabel } from '@/build/faceSketch';
@@ -11,6 +12,7 @@ import {
   amountText, amountValue, edgeSummary, offsetSummary, planeNameProblem, type BaseName, type EdgePlaneValues,
   type OffsetPlaneValues,
 } from '@/build/constructionPlanes';
+import { mirrorBodySummary, mirrorStepsSummary } from '@/build/mirror';
 import { ParamExprInput } from './ParamExprInput';
 
 // The part editor's explicit operations (Shell, Hole, Fillet, Chamfer; and reopened,
@@ -569,7 +571,7 @@ const EDGE_WORDS: Record<EdgeOpKind, { title: string; size: string; verb: string
 };
 
 export function EdgeOpDialog({ op, value, onChange, editing, preview, edgeIndex, onHoverEdge, selection, shownAs = (r) => r,
-                               onApply, onCancel }: {
+                               mirrored, onApply, onCancel }: {
   op: EdgeOpKind;
   value: EdgeOpValues; onChange: (v: EdgeOpValues) => void;
   /** reopened from its script line */
@@ -583,6 +585,9 @@ export function EdgeOpDialog({ op, value, onChange, editing, preview, edgeIndex,
   /** an edge as the part has it now (its length, middle and radius), when that
    *  differs from when it was picked */
   shownAs?: (r: EdgeRefSpec) => EdgeRefSpec;
+  /** an unlinked mirrored copy: the plane's label (its edges are the
+   *  original's, reflected when the line runs, so they aren't picked here) */
+  mirrored?: string;
   onApply: () => void; onCancel: () => void;
 }) {
   const { palette, row, num, note } = useStyles();
@@ -591,7 +596,7 @@ export function EdgeOpDialog({ op, value, onChange, editing, preview, edgeIndex,
   const s = Number.isFinite(value.size) ? value.size : 0;
   const ok = s > 0 && value.edges.length > 0 && preview.state !== 'running';
   const total = value.edges.reduce((a, e) => a + shownAs(e).length, 0);
-  const toAdd = selection.filter((r) => !value.edges.some((e) => sameEdgeRef(e, r)));
+  const toAdd = mirrored ? [] : selection.filter((r) => !value.edges.some((e) => sameEdgeRef(e, r)));
   const n = value.edges.length;
   return (
     <OpFrame title={editing ? `Edit ${op}` : w.title} preview={preview} ok={ok} onCancel={onCancel}
@@ -630,10 +635,10 @@ export function EdgeOpDialog({ op, value, onChange, editing, preview, edgeIndex,
                   {' · '}{now.radius != null ? `R ${now.radius.toFixed(2)}` : `${now.length.toFixed(1)} mm`}
                 </span>
               </span>
-              <button aria-label={`Leave the ${r.hint ?? 'edge'} sharp`} title={`Leave this edge out of the ${op}`}
+              {!mirrored && <button aria-label={`Leave the ${r.hint ?? 'edge'} sharp`} title={`Leave this edge out of the ${op}`}
                       onClick={() => { onHoverEdge(null); set({ edges: value.edges.filter((_, j) => j !== i) }); }}
                       style={{ background: 'none', border: 'none', color: palette.textSecondary, cursor: 'pointer',
-                               fontSize: '14px', lineHeight: 1, padding: '0 2px' }}>&times;</button>
+                               fontSize: '14px', lineHeight: 1, padding: '0 2px' }}>&times;</button>}
             </div>
           );
         })}
@@ -645,7 +650,8 @@ export function EdgeOpDialog({ op, value, onChange, editing, preview, edgeIndex,
           </button>
         )}
         <div style={{ color: palette.textSecondary, marginTop: '4px', fontSize: '11px' }}>
-          Click an edge to add or remove it; double-click for its whole loop.
+          {mirrored ? `Mirrored across ${mirrored}: these are the original's edges, reflected when the line runs.`
+            : 'Click an edge to add or remove it; double-click for its whole loop.'}
         </div>
       </div>
     </OpFrame>
@@ -1086,6 +1092,139 @@ export function EdgePlaneDialog({ value, onChange, editing, params, used, own, o
           Drag the round handle to turn it about the edge (1° steps, Shift 0.1°).
         </div>
       </div>
+    </OpFrame>
+  );
+}
+
+// ---------------------------------------------------------------- Mirror
+
+/** A Mirror dialog's values: the plane, and (Mirror body) whether the mirror
+ *  image joins the part. `face`: the flat face picked, kept while another
+ *  plane is tried. */
+export interface MirrorValues {
+  plane: MirrorPlane | null;
+  join: boolean;
+  face: FaceRefSpec | null;
+}
+
+/** A step Mirror steps was given: what it is, and why it can't be mirrored (null: it can). */
+export interface MirrorStepRow { line: number; label: string; reason: string | null }
+
+/** Mirror body / Mirror steps: the plane (the face picked, XY, XZ, YZ or a
+ *  construction plane), Join or Separate body (Mirror body), the steps it
+ *  copies and those it can't (Mirror steps); the result is previewed. */
+export function MirrorOpDialog({ kind, value, onChange, editing, preview, planes, steps = [], after = null,
+                                 onApply, onCancel }: {
+  kind: 'body' | 'steps';
+  value: MirrorValues; onChange: (v: MirrorValues) => void;
+  editing: boolean;
+  preview: PreviewState;
+  /** the construction planes the script defines */
+  planes: string[];
+  steps?: MirrorStepRow[];
+  /** the line the copies go after */
+  after?: number | null;
+  onApply: () => void; onCancel: () => void;
+}) {
+  const { palette, seg, note } = useStyles();
+  const set = (p: Partial<MirrorValues>) => onChange({ ...value, ...p });
+  const p = value.plane;
+  const on = (b: 'face' | 'XY' | 'XZ' | 'YZ') => (b === 'face' ? !!p && 'face' in p : !!p && 'base' in p && p.base === b);
+  const named = p && 'plane' in p ? p.plane : '';
+  const ok = !!p && preview.state !== 'running' && preview.state !== 'error' && (kind === 'body' || steps.some((s) => !s.reason));
+  const bases: ('face' | 'XY' | 'XZ' | 'YZ')[] = ['face', 'XY', 'XZ', 'YZ'];
+  const can = steps.filter((s) => !s.reason);
+  const cant = steps.filter((s) => s.reason);
+  const title = kind === 'body' ? (editing ? 'Edit mirror body' : 'Mirror body') : 'Mirror steps';
+  return (
+    <OpFrame title={title} preview={preview} ok={ok} onCancel={onCancel} onApply={onApply} width={300}
+             applyLabel={editing ? 'Update' : kind === 'body' ? 'Mirror' : `Mirror ${can.length === 1 ? 'step' : `${can.length} steps`}`}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <span style={{ color: palette.textSecondary }}>Across</span>
+        <div style={{ display: 'flex' }}>
+          {bases.map((b, i) => (
+            <button key={b} disabled={b === 'face' && !value.face}
+                    onClick={() => set({ plane: b === 'face' ? (value.face ? { face: value.face } : null) : { base: b } })}
+                    title={b === 'face' ? (value.face ? `The ${value.face.hint ?? 'face'} (click another flat face to change it)`
+                      : 'Click a flat face in the view') : `The ${b} plane through the origin`}
+                    style={{ ...seg(on(b)), borderRadius: i === 0 ? '4px 0 0 4px' : i === bases.length - 1 ? '0 4px 4px 0' : 0,
+                             borderLeft: i ? 'none' : undefined, opacity: b === 'face' && !value.face ? 0.5 : 1 }}>
+              {b === 'face' ? 'Face' : b}
+            </button>
+          ))}
+        </div>
+        {planes.length > 0 && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', color: palette.text }}>
+            <span style={{ color: palette.textSecondary }}>or plane</span>
+            <select value={named} onChange={(e) => { if (e.target.value) set({ plane: { plane: e.target.value } }); }}
+                    style={{ flex: 1, fontSize: '12px', padding: '2px 4px', background: named ? palette.accent : palette.inputBg,
+                             color: named ? '#fff' : palette.text, border: `1px solid ${named ? palette.accent : palette.border}`,
+                             borderRadius: '3px' }}>
+              <option value="">{named ? '' : 'a construction plane…'}</option>
+              {planes.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
+        )}
+        <span style={{ color: p ? palette.text : palette.textSecondary }}>
+          {p && 'face' in p ? <>The <b>{p.face.hint ?? 'face'}</b> · click another flat face to change it</>
+            : p ? 'Or click a flat face in the view' : 'Click a flat face in the view, or pick a plane'}
+        </span>
+      </div>
+      {kind === 'body' && (
+        <div style={{ display: 'flex' }}>
+          {([true, false] as const).map((j, i) => (
+            <button key={String(j)} onClick={() => set({ join: j })}
+                    title={j ? 'Fuse the mirror image with the part: one solid' : 'Keep the mirror image as its own body'}
+                    style={{ ...seg(value.join === j), borderRadius: i === 0 ? '4px 0 0 4px' : '0 4px 4px 0',
+                             borderLeft: i ? 'none' : undefined }}>
+              {j ? 'Join' : 'Separate body'}
+            </button>
+          ))}
+        </div>
+      )}
+      {kind === 'steps' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          {can.map((s) => (
+            <div key={s.line} style={{ color: palette.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                 title={s.label}>
+              ✓ {s.label} <span style={{ color: palette.textSecondary }}>· line {s.line}</span>
+            </div>
+          ))}
+          {cant.map((s) => (
+            <div key={s.line} style={{ color: palette.textSecondary }} title={s.label}>
+              <span style={{ textDecoration: 'line-through' }}>{s.label}</span> · can't be mirrored: {s.reason}
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={note}>
+        {kind === 'body' ? mirrorBodySummary(p, value.join) : mirrorStepsSummary(p, can.length, after)}
+        <div style={{ color: palette.textSecondary, marginTop: 2 }}>
+          The plane is drawn in the view; the blue ghost is the result.
+        </div>
+      </div>
+    </OpFrame>
+  );
+}
+
+/** A mirrored copy reopened: it follows its original, so the original's
+ *  dialog changes both; Unlink makes it a step of its own. */
+export function MirrorCopyDialog({ of, across, original, onEditOriginal, onUnlink, onCancel }: {
+  of: number; across: string; original: string;
+  onEditOriginal: () => void; onUnlink: () => void; onCancel: () => void;
+}) {
+  const { palette, note } = useStyles();
+  return (
+    <OpFrame title="Mirrored copy" preview={IDLE} ok onCancel={onCancel} onApply={onEditOriginal} applyLabel="Edit the original">
+      <div style={note}>
+        This step is the mirror of <b>{original}</b> (line {of}) across <b>{across}</b>. It follows the original: edit the
+        original and both change.
+      </div>
+      <button onClick={onUnlink} title="Drop the link: the copy keeps its values and no longer follows the original"
+              style={{ alignSelf: 'flex-start', fontSize: '12px', padding: '2px 8px', cursor: 'pointer', borderRadius: '4px',
+                       background: palette.buttonBg, color: palette.text, border: `1px solid ${palette.border}` }}>
+        Unlink, edit it on its own
+      </button>
     </OpFrame>
   );
 }

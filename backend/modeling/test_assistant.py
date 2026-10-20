@@ -145,6 +145,17 @@ class EditTests(SimpleTestCase):
                      "material", "rather than a hard-coded"):
             self.assertIn(word, s)
 
+    def test_system_prompt_explains_mirror(self):
+        seen = {}
+        def llm(system, user, tools):
+            seen["system"] = system
+            return {"code": "part = Box(1,1,1)", "note": "ok"}
+        edit_script("part = Box(2,2,2)", "make it symmetric", llm=llm)
+        s = seen["system"]
+        for word in ("mirror_body(part, PLANE, join=True)", "join=False", "mirrored(x, PLANE)",
+                     "# mirror of line N across NAME", "model one half"):
+            self.assertIn(word, s)
+
     def test_system_prompt_explains_organic_shapes(self):
         seen = {}
         def llm(system, user, tools):
