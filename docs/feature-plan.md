@@ -32,6 +32,7 @@ operations cost nothing to support, they just don't get UI.
 - Pattern: linear (one or two directions, spacing or extent, symmetric, skip) and circular (round an axis: X/Y/Z, a straight edge, a hole's rim or cylinder) of a whole body or of chosen steps, as linked copies like Mirror; numbers in P, drag handles for spacing and count, click a copy to leave it out
 - Tangent plane on a cylindrical face (outward on a boss, toward the axis in a bore) at an angle round it from X/Y/Z or a flat face (a shaft's flat), angle in P, set by clicking the face or dragging a handle; for radial holes, with circular pattern for several
 - Context files: datasheets and photos the AI reads, with cited dimensions (step 1 of 3)
+- Sketcher gaps: H/V between any two points; point on line / circle and symmetric about a line; corner fillet (radius a dimension, clamped when too large); trim (splits polylines and circles, keeps the constraints that still apply); offset of a closed shape, circle or chain (arcs or miters, follows its source, distance a dimension, unlink); project part edges onto a face/plane sketch (follow the part, broken when the edge goes)
 
 ## Foundation: edge selection ✓ done
 
@@ -52,7 +53,7 @@ lines, pattern directions, revolve axes and "up to" references all depend on it.
 | 6b | ~~Tangent plane on a cylinder~~ ✓ done | Touches a cylindrical face at an angle round its axis (angle from a stated reference, in P); sketch x along the axis. For radial holes: set screws in hubs/knobs, cable holes in round enclosures. Pairs with up-to-face (#8) and circular pattern. Later: Hole tool places radial holes on a clicked cylinder directly. | S |
 | 7 | Revolve | Knobs, spacers, pulleys. Reuses extrude plumbing. | S-M |
 | 8 | Extrude "up to face" / "up to next" | Bosses meeting walls; geometry-defined depths. | S-M |
-| 9 | Sketcher gaps | H/V between two points, offset curve, trim, project edges of other faces. | S each |
+| 9 | ~~Sketcher gaps~~ ✓ done | H/V between two points, point on curve and symmetric, corner fillet, trim, offset (linked to its source), project edges of other faces. | S each |
 
 ## Tier 2: specific to 3D printing
 
@@ -74,7 +75,7 @@ it), simulation, sheet metal, surface modelling, rendering.
 
 ## Order
 
-Done: edge selection, 1, 2, 3, 4, 5, 6, 6b. Next: 9 (sketcher gaps) ->
+Done: edge selection, 1, 2, 3, 4, 5, 6, 6b, 9. Next:
 7 (revolve) -> 13 (overhang highlight) -> 8 (up to face) -> 12, 10, 11. Context files
 steps 2-3 run on their own track. Each step stands alone and is kept or reverted on
 its own merit.
