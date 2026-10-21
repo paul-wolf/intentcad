@@ -123,6 +123,9 @@ function renderGrid(ctx: RenderContext) {
   }
 }
 
+/** How far down the view (px) the V axis label sits. */
+const TOP_LABEL_Y = 46;
+
 /** Step 2b: Draw the active sketch's axes (utils/sketchAxes.ts) across the
  *  whole view, faint, each labelled at the view's edge: H and V through the
  *  origin, and a face sketch's centre lines; a selected one stands out. */
@@ -154,7 +157,8 @@ function renderAxes(ctx: RenderContext) {
         { ...text, textAlign: right ? 'right' : 'left', textBaseline: 'bottom' });
     } else {
       const top = a.id === AXIS_V;
-      renderer.drawText(axisLabel(a.id), { x: at.x + 4, y: top ? M : H - M },
+      // the top one below the "Sketching on …" banner of a sketch on a part
+      renderer.drawText(axisLabel(a.id), { x: at.x + 4, y: top ? TOP_LABEL_Y : H - M },
         { ...text, textAlign: 'left', textBaseline: top ? 'top' : 'bottom' });
     }
   }
