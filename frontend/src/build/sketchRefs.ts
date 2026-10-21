@@ -9,6 +9,7 @@
  * wall gets thicker. A new face edge becomes a new reference edge; a
  * reference edge whose face edge is gone is kept, marked broken
  * (utils/brokenRefs.ts), when something uses it, and dropped otherwise.
+ * The face's centre lines (utils/sketchAxes.ts) move with its outline.
  */
 import type { Constraint, Entity, Point, Sketch } from '@/types/document';
 import { generateId } from '@/utils/id';
@@ -16,6 +17,7 @@ import { arcFromBulge, bulgeFromMidpoint } from '@/utils/arcGeometry';
 import { solveConstraints } from '@/utils/constraintSolver';
 import { dimensionEntities, measureDimension, resolveSketch } from '@/utils/resolveSketch';
 import { brokenIds, isBroken, isProjected, isRef, onBroken, targetsOf } from '@/utils/brokenRefs';
+import { AXIS_H, AXIS_V, FACE_AXIS_H, FACE_AXIS_V, faceAxes, faceCentre, isAxis } from '@/utils/sketchAxes';
 
 type XY = [number, number];
 
@@ -182,7 +184,7 @@ export function followRefs(sk: Sketch, fresh: Entity[], vars?: Record<string, nu
   const same: Followed = { sketch: sk, changed: false, moved: false, added: 0, broken: [...brokenIds(sk.entities)] };
   const outlineOn = !!sk.face && fresh.length > 0;
   if (!outlineOn && !projected?.size) return same;
-  const old = sk.entities.filter((e) => isRef(e) && !isProjected(e));
+  const old = sk.entities.filter((e) => isRef(e) && !isProjected(e) && !isAxis(e));
   const pairs = outlineOn ? matchEdges(old, fresh) : [];
   const matchOf = new Map(pairs.map(([i, j]) => [old[i]!.id, fresh[j]!]));
   const takenNew = new Set(pairs.map(([, j]) => j));
@@ -193,7 +195,7 @@ export function followRefs(sk: Sketch, fresh: Entity[], vars?: Record<string, nu
   const dropped = new Set<string>();
   const entities: Entity[] = [];
   for (const e of sk.entities) {
-    if (!isRef(e)) { entities.push(e); continue; }
+    if (!isRef(e) || isAxis(e)) { entities.push(e); continue; }
     if (isProjected(e)) {
       if (!projected?.has(e.id)) { entities.push(e); continue; }
       const n = projected.get(e.id);
@@ -234,6 +236,16 @@ export function followRefs(sk: Sketch, fresh: Entity[], vars?: Record<string, nu
   const added = outlineOn ? fresh.filter((_, j) => !takenNew.has(j)) : [];
   if (added.length) anyChange = true;
   if (!anyChange) return same;
+  // the face's centre lines, through the middle of the outline as it is now
+  const centre = outlineOn && entities.some((e) => e.id === FACE_AXIS_H || e.id === FACE_AXIS_V)
+    ? faceCentre(sk, [...entities, ...added]) : null;
+  if (centre) {
+    const [h, v] = faceAxes(centre);
+    entities.forEach((e, i) => {
+      const n = e.id === FACE_AXIS_H ? h : e.id === FACE_AXIS_V ? v : null;
+      if (n && moved(e, n)) { entities[i] = n; anyMoved = true; }
+    });
+  }
 
   const constraints: Constraint[] = sk.constraints.filter((c) => !(c.type === 'fixed' && dropped.has(c.entityId)));
   for (const e of added) constraints.push({ id: generateId('c'), type: 'fixed', entityId: e.id });
@@ -283,8 +295,9 @@ export function brokenRefWarning(sk: Sketch): string | null {
   return `Sketch '${sk.name}': ${n} ${what}${n === 1 ? ' refers' : 's refer'} to an edge that no longer exists`;
 }
 
-/** Whether a face sketch has dimensions to its reference (face) edges. */
+/** Whether a face sketch has dimensions to its reference (face) edges, or
+ *  its face's centre lines (its origin axes don't move with the face). */
 export function dimensionedToEdges(sk: Sketch): boolean {
-  const refs = new Set(sk.entities.filter(isRef).map((e) => e.id));
+  const refs = new Set(sk.entities.filter((e) => isRef(e) && e.id !== AXIS_H && e.id !== AXIS_V).map((e) => e.id));
   return !!sk.face && sk.entities.some((e) => e.type === 'dimension' && targetsOf(e).some((id) => refs.has(id)));
 }

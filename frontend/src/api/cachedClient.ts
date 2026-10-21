@@ -2,6 +2,7 @@ import { db } from './db';
 import { api as rawApi } from './client';
 import type { DocumentListItem, DocumentFull } from './client';
 import { triggerSync } from './syncEngine';
+import { savedData, savedHistory } from '@/utils/sketchAxes';
 
 // Re-export types so consumers can import everything from cachedClient
 export type { DocumentListItem, DocumentFull } from './client';
@@ -103,6 +104,7 @@ export const api = {
   },
 
   async createDocument(name: string, data: Record<string, unknown>, projectId?: string): Promise<DocumentFull> {
+    data = savedData(data);   // sketch axes are derived on load, not saved
     // For creates, we need the server to assign the ID
     // Try server first; if offline, create with temp ID
     try {
@@ -135,6 +137,8 @@ export const api = {
   },
 
   async updateDocument(id: string, payload: { name?: string; data?: Record<string, unknown>; history?: unknown; project_id?: string; version_label?: string; snapshot?: boolean }): Promise<DocumentFull> {
+    // sketch axes are derived on load, not saved
+    payload = { ...payload, ...(payload.data ? { data: savedData(payload.data) } : {}), ...(payload.history ? { history: savedHistory(payload.history) } : {}) };
     const now = new Date().toISOString();
     const existing = await db.documents.get(id);
     const optimistic = {

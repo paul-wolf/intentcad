@@ -8,6 +8,7 @@ import { getStyles } from '@/rendering/styles';
 import { renderEntity } from '@/rendering/pipeline';
 import { getThemePalette } from '@/theme';
 import { isProjected, isRef } from '@/utils/brokenRefs';
+import { isAxis } from '@/utils/sketchAxes';
 import { sameEdgeRef } from '@/build/edgePick';
 import { edgeDistance } from '@/build/sketchRefs';
 import { pickCandidate, projectCandidates, projectEdge, type ProjectCandidate } from '@/build/projectEdges';
@@ -25,7 +26,7 @@ function activeEntities(): Entity[] {
  *  already, or (a face sketch) the face outline edge it lies on. */
 function alreadyThere(c: ProjectCandidate, ent: Entity, entities: Entity[]): 'projected' | 'outline' | null {
   for (const e of entities) {
-    if (!isRef(e)) continue;
+    if (!isRef(e) || isAxis(e)) continue;
     if (isProjected(e)) {
       const r = (e as { edgeRef?: Parameters<typeof sameEdgeRef>[0] }).edgeRef;
       if (r && c.edge.ref && sameEdgeRef(r, c.edge.ref)) return 'projected';

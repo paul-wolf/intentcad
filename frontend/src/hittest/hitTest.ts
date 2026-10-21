@@ -3,6 +3,7 @@ import type { Viewport } from '@/types/renderer';
 import { distance, pointToSegmentDist } from '@/utils/geometry';
 import { computeAngleDimensionGeom } from '@/rendering/dimensionRenderer';
 import { HIT_TOL } from '@/config';
+import { hiddenAxis, isAxis } from '@/utils/sketchAxes';
 import { getSegmentCount, getSegmentPointIndices, getSegmentBulge, getEntitySegmentEndpoints } from '@/utils/lineSegments';
 import { arcFromBulge, pointToArcDist, arcMidpoint } from '@/utils/arcGeometry';
 import { rectanglePath } from '@/utils/rectPath';
@@ -74,6 +75,7 @@ export function hitTestPoint(
   let bestDist = HIT_TOL;
 
   for (const entity of entities) {
+    if (isAxis(entity)) continue;   // a sketch axis has no points to pick (it ends far off)
     if (entity.type === 'line') {
       for (let i = 0; i < entity.points.length; i++) {
         const sp = viewport.worldToScreen(entity.points[i]!);
@@ -179,6 +181,7 @@ export function hitTestEntities(
   let bestDist = HIT_TOL;
 
   for (const entity of entities) {
+    if (hiddenAxis(entity)) continue;
     if (entity.type === 'line') {
       const segCount = getSegmentCount(entity);
       for (let i = 0; i < segCount; i++) {
@@ -436,6 +439,7 @@ export function hitTestSegment(
   let bestDist = HIT_TOL;
 
   for (const entity of entities) {
+    if (hiddenAxis(entity)) continue;
     if (entity.type === 'line') {
       const segCount = getSegmentCount(entity);
       for (let i = 0; i < segCount; i++) {
@@ -498,6 +502,7 @@ export function hitTestAllCandidates(
   const candidates: SelectionCandidate[] = [];
 
   for (const entity of entities) {
+    if (hiddenAxis(entity)) continue;
     // --- 1. Check points ---
     let bestPointDist = Infinity;
     let bestPointHit: PointHit | null = null;

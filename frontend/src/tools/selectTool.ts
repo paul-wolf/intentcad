@@ -26,6 +26,7 @@ import { SNAP_INDICATOR_RADIUS } from '@/config';
 import { traceContour } from '@/utils/contourTrace';
 import { openCopyDialog } from './openCopyDialog';
 import { applyHV, applyPointOnCurve, applySymmetric } from './selectionPoints';
+import { docWithoutAxes, isAxis } from '@/utils/sketchAxes';
 
 /** Filter entities for CAM mode: remove construction, dimension, and standalone points */
 function filterEntitiesForCam(entities: Entity[]): Entity[] {
@@ -893,7 +894,7 @@ export function createSelectTool(): Tool {
           });
         }
       } else if (e.key === 'Q' && e.shiftKey) {
-        const doc = useDocumentStore.getState().document;
+        const doc = docWithoutAxes(useDocumentStore.getState().document);
         const json = JSON.stringify(doc, null, 2);
         navigator.clipboard.writeText(json);
         const totalEntities = doc.sketches.reduce((n, sk) => n + sk.entities.length, 0);
@@ -911,7 +912,7 @@ export function createSelectTool(): Tool {
         if (ids.size > 0) {
           const activeSketch = useDocumentStore.getState().getActiveSketch();
           if (activeSketch) {
-            const selected = activeSketch.entities.filter((ent) => ids.has(ent.id));
+            const selected = activeSketch.entities.filter((ent) => ids.has(ent.id) && !isAxis(ent));
             const json = JSON.stringify(selected, null, 2);
             navigator.clipboard.writeText(json);
             useClipboardStore.getState().set({
@@ -930,6 +931,9 @@ export function createSelectTool(): Tool {
         const segs = es.selectedSegments;
         const pts = es.selectedPoints;
 
+        if ([...segs.map((s) => s.entityId), ...es.selectedEntityIds].some(isAxis)) {
+          addLog('info', "The sketch's axes can't be deleted (hide them with the axes button in the toolbar)");
+        }
         if (segs.length > 0) {
           useDocumentStore.getState().beginTransaction('Delete segment');
           for (const seg of segs) {

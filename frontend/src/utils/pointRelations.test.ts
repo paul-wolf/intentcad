@@ -3,6 +3,7 @@ import { solveConstraints, validateConstraint } from './constraintSolver';
 import { computeSketchDoF } from './dof';
 import { resolveSketch } from './resolveSketch';
 import { useDocumentStore } from '@/stores/documentStore';
+import { isAxisConstraint } from './sketchAxes';
 import type { CircleEntity, Constraint, Entity, LineEntity, RectangleEntity, Sketch } from '@/types/document';
 
 const circle = (id: string, x: number, y: number, r = 1.5): CircleEntity =>
@@ -303,7 +304,8 @@ describe('symmetric', () => {
     ds.addSketch('sym');
     for (const e of [axis(), pointAt('a', -3, 0), pointAt('b', 3, 0)]) useDocumentStore.getState().addEntity(e);
     useDocumentStore.getState().toggleSymmetric({ entityId: 'a', pointIndex: 0 }, { entityId: 'b', pointIndex: 0 }, { entityId: 'ax', segmentIndex: 0 });
-    const constraints = () => useDocumentStore.getState().getActiveSketch()!.constraints;
+    // the sketch's own axes are held by 'fixed' constraints; leave them out
+    const constraints = () => useDocumentStore.getState().getActiveSketch()!.constraints.filter((c) => !isAxisConstraint(c));
     expect(constraints().map((c) => c.type)).toEqual(['symmetric']);
     useDocumentStore.getState().removeEntities(['ax']);
     expect(constraints()).toEqual([]);

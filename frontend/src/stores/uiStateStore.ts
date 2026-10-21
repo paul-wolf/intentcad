@@ -1,9 +1,11 @@
 import { create } from 'zustand';
 import type { Point } from '@/types/document';
+import { setAxesShown } from '@/utils/sketchAxes';
 
 const STORAGE_KEY = 'intentcad-ui-state';
 const DRAWER_KEY = 'intentcad-drawer-open';
 const PROPERTIES_KEY = 'intentcad-properties-open';
+const AXES_KEY = 'intentcad-sketch-axes';
 
 export interface PerDocumentUIState {
   viewport?: { offset: Point; scale: number };
@@ -13,6 +15,11 @@ interface UIStateStore {
   states: Record<string, PerDocumentUIState>;
   drawerOpen: boolean;
   propertiesOpen: boolean;
+  /** Whether sketches show their built-in axes (utils/sketchAxes.ts): a
+   *  view setting for this user, not saved with the sketch. Hidden axes keep
+   *  the constraints on them working; they just can't be picked or snapped to. */
+  axesShown: boolean;
+  toggleAxes(): void;
   setViewport(docId: string, offset: Point, scale: number): void;
   getViewport(docId: string): { offset: Point; scale: number } | undefined;
   toggleDrawer(): void;
@@ -40,6 +47,16 @@ export const useUIStateStore = create<UIStateStore>((set, get) => ({
   states: loadStates(),
   drawerOpen: localStorage.getItem(DRAWER_KEY) === 'true',
   propertiesOpen: localStorage.getItem(PROPERTIES_KEY) === 'true',
+  axesShown: (() => { try { return localStorage.getItem(AXES_KEY) !== 'hide'; } catch { return true; } })(),
+
+  toggleAxes() {
+    set((s) => {
+      const next = !s.axesShown;
+      try { localStorage.setItem(AXES_KEY, next ? 'show' : 'hide'); } catch { /* ignore */ }
+      setAxesShown(next);
+      return { axesShown: next };
+    });
+  },
 
   toggleDrawer() {
     set((s) => {
@@ -72,3 +89,5 @@ export const useUIStateStore = create<UIStateStore>((set, get) => ({
     return get().states[docId]?.viewport;
   },
 }));
+
+setAxesShown(useUIStateStore.getState().axesShown);
