@@ -233,5 +233,6 @@ def bind(ns: dict, report: list | None = None) -> dict:
         # the axis (a curved face's "normal") the way the reference has it:
         # a tangent plane's angle turns about it (OCC may flip it on a rebuild)
         m["face"]._ref_normal = vec(ref["normal"])
+        m["face"]._ref_hint = hint     # how a message names it (an until extrude's)
         return m["face"]
     return {"face_ref": face_ref}

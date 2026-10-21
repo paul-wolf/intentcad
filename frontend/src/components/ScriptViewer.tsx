@@ -3,7 +3,7 @@ import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
 import {
   api, buildApi, errorText, ApiError, type RunResponse, type RunEdge, type FaceRefReport, type UsageResponse, type DimInfo, type ModelInfo, type ModelsResponse, type SizeFix,
-  type FaceRefSpec, type HolePresets, type EdgeOpKind, type EdgeRefSpec, type ExtrudeOp, type KeepItem, type Step,
+  type FaceRefSpec, type HolePresets, type EdgeOpKind, type EdgeRefSpec, type ExtrudeExtent, type ExtrudeOp, type KeepItem, type Step,
   type PlaneReport, type MirrorPlane, type PatternReport, type PatternSpec, type PlaneOpKind, type RunFace,
 } from '@/api/client';
 import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, persistPrintBed, persistSketches, getBackendId } from '@/api/autoSave';
@@ -42,12 +42,13 @@ import { PartVersionsPanel } from './PartVersionsPanel';
 import { PartHelpModal } from './PartHelpModal';
 import { useFaceSketch, type ExtrudeOptions, type RevolveStart } from './FaceSketchMode';
 import {
-  ShellDialog, HoleDialog, EdgeOpDialog, ExtrudeDialog, RoundDialog, TrussDialog, useOpPreview, refOf, faceOfRef, sameRef,
+  ShellDialog, HoleDialog, EdgeOpDialog, ExtrudeDialog, RoundDialog, TrussDialog, useOpPreview, refOf, faceOfRef, sameRef, faceHint,
   holesPayload, holeValuesOf, newHoleValues, placeKey, toggleEdge, addEdges, argOpPayload, OffsetPlaneDialog, EdgePlaneDialog, TangentPlaneDialog,
-  MirrorOpDialog, MirrorCopyDialog, MIRROR_COPY_COLOR, PatternOpDialog, RevolveDialog, type RevolveSketchView,
+  MirrorOpDialog, MirrorCopyDialog, MIRROR_COPY_COLOR, UNTIL_PIECE_COLOR, PatternOpDialog, RevolveDialog, type RevolveSketchView,
   type ShellValues, type HoleValues,
   type HolePlace, type EdgeOpValues, type ExtrudeValues, type ArgOpValues, type MirrorValues,
 } from './OpDialogs';
+import { untilPieceScript } from '@/build/extrudeUntil';
 import { facePlane, mirrorCopyScript, mirrorPlaneShape, mirrorSkip, nextStepSelection, shiftedMirrorShape } from '@/build/mirror';
 import { StepsList } from './StepsList';
 import {
@@ -117,7 +118,9 @@ type PlaneOp = { line: number | null; own: string | null }
   & ({ kind: 'offset'; v: OffsetPlaneValues } | { kind: 'edge'; v: EdgePlaneValues } | { kind: 'tangent'; v: TangentPlaneValues });
 /** A reopened extrude line: its values, the P key its depth is in, and
  *  whether it makes the part (New body, nothing else). */
-interface ExtrudeEdit { line: number; v: ExtrudeValues; param: string | null; firstBody: boolean }
+/** The Extrude dialog: reopened on its line, or new (`line` null: the
+ *  sketcher's Up to face / Up to next, finished here with a 3D pick and preview). */
+interface ExtrudeEdit { line: number | null; v: ExtrudeValues; param: string | null; firstBody: boolean }
 /** The Revolve dialog: `line` the line it was reopened from (null: a new
  *  revolve), `firstBody` it makes the part (New body, nothing else). */
 interface RevolveEdit { line: number | null; v: RevolveValues; firstBody: boolean }
@@ -374,6 +377,9 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // the last build, with the bed face it was built with
   const [ovBuilt, setOvBuilt] = useState<{ res: RunResponse; bed: string } | null>(null);
   const [ovTip, setOvTip] = useState<{ text: string; x: number; y: number } | null>(null);
+  // the face a click would pick (the Up to face dialog names it)
+  const [hoverPickFace, setHoverPickFace] = useState<number | null>(null);
+  const facePickingRef = useRef(false);
   // the view buttons wrap onto two rows in a narrow view: the panels above them follow
   const [viewBarH, setViewBarH] = useState(20);
   const viewBarObs = useRef<ResizeObserver | null>(null);
@@ -749,6 +755,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
           viewerRef.current = createViewer(canvasRef.current, {
             onPick, onEdgeDoubleClick, onAxes, onDims, onHandle, onHandleDrop, onHandleMove, onMarks,
             onSection, onSectionHandle, onSectionMeasure, onPlaneLabels, onOverhangHover: setOvTip,
+            onHoverPick: (p) => setHoverPickFace(p && 'face' in p && facePickingRef.current ? p.face : null),
             ...(sketchOnFace ? {
               onSketchHover: (h: { name: string; x: number; y: number } | null) => setSketchTip(h),
               onSketchOpen: (id: string) => { setSketchTip(null); faceSketchRef.current.open(id); },
@@ -1113,12 +1120,22 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       const v = ex ? {
         ...back.v, depth: ex.depth > 0 ? ex.depth : back.v.depth, through: ex.through, flip: ex.flip, both: !!ex.both,
         op: back.firstBody ? 'new' as const : ex.op === 'new' ? back.v.op : ex.op,
+        extent: back.firstBody ? 'distance' as const : ex.extent ?? (ex.through ? 'through' as const : 'distance' as const),
       } : back.v;
       setExtrudeOp({ ...back, v });
       return;
     }
     if (!ex) {
       if (referencedProfiles(code, useDocumentStore.getState().document.sketches)[name]) await build(code);
+      return;
+    }
+    if (ex.op !== 'new' && (ex.extent === 'face' || ex.extent === 'next')) {
+      // Up to face / Up to next: the dialog on the part, to pick the face and
+      // preview where it stops
+      if (code.trim()) await build(code, `Edit sketch ${name}`);
+      setExtrudeOp({ line: null, firstBody: false, param: null,
+                     v: { sketch: name, op: ex.op, extent: ex.extent, depth: ex.depth > 0 ? ex.depth : 5, through: false,
+                          flip: ex.flip, both: false, datum: !!ex.datum, face: null, offset: 0 } });
       return;
     }
     try {
@@ -1908,14 +1925,26 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const extrudeKey = extrudeOp ? JSON.stringify({ line: extrudeOp.line, v: extrudeOp.v }) : '';
   const extrudeLine = (o: ExtrudeEdit) => buildApi.addExtrude({
     code: codeRef.current, sketch: o.v.sketch, op: o.v.op, depth: o.v.depth, through: o.v.through, flip: o.v.flip,
-    both: o.v.both, datum: o.v.datum, line: o.line,
+    both: o.v.both, datum: o.v.datum, line: o.line, extent: o.v.extent, face: o.v.face,
+    offset: o.v.extent === 'face' ? o.v.offset : 0, key: o.param,
   });
-  const extrudeOk = (o: ExtrudeEdit) => (o.v.op === 'cut' && o.v.through) || o.v.depth > 0;
+  const extrudeOk = (o: ExtrudeEdit) => o.v.extent === 'next' ? o.v.op !== 'new'
+    : o.v.extent === 'face' ? o.v.op !== 'new' && !!o.v.face && amountValue(o.v.offset, paramVals) !== null
+    : (o.v.op === 'cut' && o.v.through) || o.v.depth > 0;
   const extrudePreview = useOpPreview(
     viewerRef,
     extrudeOp && extrudeOk(extrudeOp) ? () => extrudeLine(extrudeOp).then((r) => r.code) : null,
     extrudeKey,
     (src, signal) => buildApi.run(src, signal, getBackendId() ?? '', ...runArgs(src)),
+    // Up to face / next: the piece it adds or removes, seen through the part
+    // (where a set screw stops inside the hub)
+    extrudeOp && (extrudeOp.v.extent === 'next' || extrudeOp.v.extent === 'face') && extrudeOp.v.op !== 'new'
+      ? async (src, signal) => {
+        const piece = untilPieceScript(src, extrudeOp.line, extrudeOp.v.op === 'cut' ? 'cut' : 'join');
+        if (!piece) return null;
+        const r = await buildApi.run(piece, signal, getBackendId() ?? '', ...runArgs(piece));
+        return { mesh: r.mesh, color: UNTIL_PIECE_COLOR, xray: true };
+      } : undefined,
   );
   const extrudeSketch = extrudeOp ? docSketches.find((sk) => sk.name === extrudeOp.v.sketch) ?? null : null;
   const extrudeNormal = (extrudeOp && (resRef.current?.sketches?.[extrudeOp.v.sketch]?.plane?.normal
@@ -1932,7 +1961,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       const src = extrudePreview.built(extrudeKey) ?? (await extrudeLine(o)).code;
       closeOp();
       setCode(src);
-      const out = await build(src, `Edit extrude ${o.v.sketch}`);
+      const out = await build(src, o.line != null ? `Edit extrude ${o.v.sketch}`
+        : `${o.v.op === 'cut' ? 'Cut' : 'Join'} ${o.v.sketch} up to ${o.v.extent === 'next' ? 'next' : 'face'}`);
       if (out.kind === 'ok') saveDraft(src);
     } catch (err) {
       setNotice(`Extrude: ${errorText(err)}`);
@@ -2110,7 +2140,12 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // while the Shell dialog is open, clicking a face opens or closes it, and
   // the faces it opens show as selected; in the Hole dialog it says where the
   // holes go
-  opPickRef.current = revolveOp ? (p) => {
+  opPickRef.current = extrudeOp?.v.extent === 'face' ? (p) => {
+    // Up to face: the face it runs to (any face: flat, slanted, round)
+    const face = p && 'face' in p ? resRef.current?.faces.find((x) => x.index === p.face.index) : undefined;
+    const r = face ? refOf(face) : null;
+    if (r) setExtrudeOp((o) => o && ({ ...o, v: { ...o.v, face: r } }));
+  } : revolveOp ? (p) => {
     // the axis: along a straight edge, or a cylinder's centre line
     const res = resRef.current;
     if (!p || !res) return;
@@ -2210,6 +2245,18 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     setEdgeOp((o) => o && ({ ...o, v: { ...o.v, edges: addEdges(o.v.edges, refs) } }));
   } : null;
   const opFaceIndex = (r: FaceRefSpec) => faceOfRef(resRef.current?.faces ?? [], r)?.index ?? null;
+  facePickingRef.current = extrudeOp?.v.extent === 'face';
+  // Up to face: the picked face shows as selected
+  const extrudeFace = extrudeOp?.v.extent === 'face' ? extrudeOp.v.face : null;
+  const extrudeFaceKey = extrudeOp ? JSON.stringify(extrudeFace) : '';
+  useEffect(() => {
+    if (!extrudeOp) return;
+    const i = extrudeFace ? opFaceIndex(extrudeFace) : null;
+    const idx = i != null ? [i] : [];
+    selRef.current = idx;
+    setSel(idx);
+    viewerRef.current?.selectFaces(idx);
+  }, [extrudeFaceKey]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!shellOp) return;
     const idx = shellOp.v.remove.map(opFaceIndex).filter((i): i is number => i != null);
@@ -2241,7 +2288,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const opOpen = !!shellOp || !!holeOp || !!edgeOp || !!extrudeOp || !!revolveOp || !!argOp || !!planeOp || tangentAim != null || !!mirrorOp || !!copyOp || !!patternOp;
   // Shell, Hole and Round work on faces: while one is open a click picks faces
   // only; Fillet and Chamfer, edges only; Pattern takes either, as the filter says
-  const viewFilter: PickFilter = patternOp || revolveOp ? pickFilter : shellOp || holeOp || planeOp || tangentAim != null || mirrorOp || argOp?.v.op === 'auto_round' ? 'faces' : edgeOp ? 'edges'
+  const viewFilter: PickFilter = patternOp || revolveOp ? pickFilter : shellOp || holeOp || planeOp || extrudeOp?.v.extent === 'face' || tangentAim != null || mirrorOp || argOp?.v.op === 'auto_round' ? 'faces' : edgeOp ? 'edges'
     : pickFilter;
   useEffect(() => { viewerRef.current?.setPickFilter(viewFilter); }, [viewFilter]);
   // the dialogs sit at the top left of the view: draw the part beside them
@@ -2280,11 +2327,13 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         setMirrorOp({ kind: 'body', line: op.line, lines: [],
                       v: { plane: a.plane, join, gap, face: 'face' in a.plane ? a.plane.face : null } });
       } else if (op.op === 'extrude') {
-        const a = op.args as { sketch: string; op: ExtrudeOp; depth: number | null; through: boolean; flip: boolean;
-                               both: boolean; datum: boolean };
+        const a = op.args as { sketch: string; op: ExtrudeOp; extent?: ExtrudeExtent; depth: number | null; through: boolean;
+                               flip: boolean; both: boolean; datum: boolean; face?: FaceRefSpec | null; offset?: number };
         setExtrudeOp({
           line: op.line, firstBody: a.op === 'new', param: op.params.depth ?? null,
-          v: { sketch: a.sketch, op: a.op, depth: a.depth ?? 5, through: a.through, flip: a.flip, both: a.both, datum: a.datum },
+          v: { sketch: a.sketch, op: a.op, extent: a.extent ?? (a.through ? 'through' : 'distance'), depth: a.depth ?? 5,
+               through: a.through, flip: a.flip, both: a.both, datum: a.datum, face: a.face ?? null,
+               offset: op.exprs?.offset ?? a.offset ?? 0 },
         });
       } else if (op.op === 'revolve') {
         const a = op.args as { sketch: string; op: ExtrudeOp; axis: RevolveValues['axis']; angle: number; both: boolean; flip: boolean };
@@ -3388,6 +3437,10 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
             )}
             {extrudeOp && (
               <ExtrudeDialog value={extrudeOp.v} onChange={(v) => setExtrudeOp((o) => o && { ...o, v })}
+                editing={extrudeOp.line != null} params={paramVals}
+                hoverHint={extrudeOp.v.extent === 'face' && hoverPickFace != null
+                  ? (() => { const f = resRef.current?.faces.find((x) => x.index === hoverPickFace); return f ? faceHint(f) : null; })()
+                  : null}
                 firstBody={extrudeOp.firstBody} param={extrudeOp.param} preview={extrudePreview.preview}
                 direction={extrudeNormal ? extrudeDirectionText(extrudeOp.v, extrudeNormal, extrudePartAt) : ''}
                 onEditSketch={editExtrudeSketch} onApply={() => void applyExtrude()} onCancel={closeOp} />

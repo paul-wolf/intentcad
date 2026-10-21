@@ -12,7 +12,7 @@ import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { getBackendId, persistSketches } from '@/api/autoSave';
-import type { RunResponse } from '@/api/client';
+import type { ExtrudeExtent, RunResponse } from '@/api/client';
 import type { FaceRange, Viewer } from '@/build/webglViewer';
 import { dot, len, scale, sub } from '@/build/dragHandle';
 import { planeBasis, sketchCamera, fitViewport, type PlaneBasis, type Rect } from '@/build/sketchPlane';
@@ -39,6 +39,9 @@ const GHOST: Record<ExtrudeOptions['op'], [number, number, number]> = {
  *  goes each way from a base plane (symmetric). */
 export interface ExtrudeOptions {
   op: 'cut' | 'join' | 'new'; depth: number; through: boolean; flip: boolean; both?: boolean; datum?: boolean;
+  /** Up to face / Up to next: the 3D Extrude dialog opens on Done, to pick
+   *  the face and preview where it stops (default: distance, or through) */
+  extent?: ExtrudeExtent;
 }
 
 /** The sketcher's Revolve…: the axis picked here; the angle and the rest are
@@ -498,7 +501,7 @@ export function useFaceSketch(
     );
   })();
   const applyExtrude = () => {
-    if (!shapes.loops.length || !(ex.depth > 0 || (ex.op === 'cut' && ex.through))) return;
+    if (!shapes.loops.length || !(ex.depth > 0 || (ex.op === 'cut' && ex.through) || untilOf(ex))) return;
     pendingExtrude.current = shapeOf(ex, !!session?.datum);
     exit();
   };
@@ -526,7 +529,12 @@ export function useFaceSketch(
         for (const z of [m.bbox_min[2], m.bbox_max[2]]) ds.push(dot(sub([x, y, z], s.plane.origin), s.plane.normal));
       extent = [Math.min(...ds), Math.max(...ds)];
     }
-    const g = extrudeGhost(current, extrudeSpan(o, extent), { origin: s.plane.origin, normal: s.plane.normal, xAxis: s.plane.xDir });
+    // up to face / next: where it stops is previewed on the part after Done;
+    // here it runs as far as the part goes, to show the way
+    const span = untilOf(o) && extent
+      ? extrudeSpan({ ...o, through: false, both: false, depth: Math.max(Math.abs(extent[0]), Math.abs(extent[1]), 1) }, extent)
+      : extrudeSpan(o, extent);
+    const g = extrudeGhost(current, span, { origin: s.plane.origin, normal: s.plane.normal, xAxis: s.plane.xDir });
     setStrokes(false);   // the flat drawing doesn't line up once the view turns
     previewing.current = true;
     v.setExtrudePreview({ ...g, color: GHOST[ex.op] });
@@ -636,8 +644,15 @@ export function useFaceSketch(
 /** The options as the script line will take them: through is for cuts, and
  *  both ways is for base planes, not with through. */
 function shapeOf(ex: ExtrudeOptions, datum: boolean): ExtrudeOptions {
-  const through = ex.op === 'cut' && ex.through;
-  return { ...ex, through, both: datum && !through && !!ex.both, datum };
+  const until = untilOf(ex);
+  const through = ex.op === 'cut' && ex.through && !until;
+  const extent: ExtrudeExtent = until ?? (through ? 'through' : 'distance');
+  return { ...ex, through, both: datum && !through && !until && !!ex.both, datum, extent };
+}
+
+/** Up to face / Up to next, if the options are one (not for a new body). */
+function untilOf(ex: ExtrudeOptions): 'face' | 'next' | null {
+  return ex.op !== 'new' && (ex.extent === 'face' || ex.extent === 'next') ? ex.extent : null;
 }
 
 /** The sketcher's Revolve…: which line the shapes turn round. The angle,
@@ -704,9 +719,14 @@ function ExtrudeDialog({ value, onChange, shapes, open, datum, direction, onAppl
   shapes: number; open: number; datum: boolean; direction: string; onApply: () => void; onCancel: () => void;
 }) {
   const palette = useThemeStore((s) => s.palette);
-  const through = value.op === 'cut' && value.through;
-  const both = datum && !through && !!value.both;
-  const ok = shapes > 0 && (through || value.depth > 0);
+  const until = untilOf(value);
+  const through = value.op === 'cut' && value.through && !until;
+  const both = datum && !through && !until && !!value.both;
+  const ok = shapes > 0 && (through || !!until || value.depth > 0);
+  const extent: ExtrudeExtent = until ?? (through ? 'through' : 'distance');
+  const extents: [ExtrudeExtent, string][] = [['distance', 'Distance'],
+    ...(value.op === 'cut' ? [['through', `Through all${datum ? ' (both ways)' : ''}`] as [ExtrudeExtent, string]] : []),
+    ['face', 'Up to face…'], ['next', 'Up to next…']];
   const set = (p: Partial<ExtrudeOptions>) => onChange({ ...value, ...p });
   const seg = (on: boolean): CSSProperties => ({
     flex: 1, padding: '3px 0', fontSize: '12px', cursor: 'pointer', border: `1px solid ${on ? palette.accent : palette.border}`,
@@ -734,12 +754,26 @@ function ExtrudeDialog({ value, onChange, shapes, open, datum, direction, onAppl
                   onClick={() => set({ op: 'join' })} title="Add the shapes to the part (pegs, bosses)">Join</button>
         </div>
       )}
-      {value.op === 'cut' && (
+      {value.op !== 'new' && (
         <label style={row}>
-          <input type="checkbox" checked={value.through} onChange={(e) => set({ through: e.target.checked })} />
-          Through all{datum ? ' (both ways)' : ''}
+          <span style={{ width: 52 }}>Extent</span>
+          <select value={extent} aria-label="Extent"
+                  onChange={(e) => { const x = e.target.value as ExtrudeExtent; set({ extent: x, through: x === 'through' }); }}
+                  title="How far it goes: a depth, through the part, up to a face you pick, or up to the first face it meets"
+                  style={{ flex: 1, minWidth: 0, fontSize: '12px', padding: '2px 4px', background: palette.inputBg,
+                           color: palette.text, border: `1px solid ${palette.border}`, borderRadius: '3px' }}>
+            {extents.map(([x, t]) => <option key={x} value={x}>{t}</option>)}
+          </select>
         </label>
       )}
+      {until ? (
+        <div style={{ color: palette.textSecondary, lineHeight: 1.4 }}>
+          {until === 'face'
+            ? 'Continue to pick the face on the part: the extrude ends on it, shaped like it.'
+            : value.op === 'cut' ? 'It cuts until it breaks into empty space: Continue to see where it stops.'
+            : 'It grows until it meets the part: Continue to see where it stops.'}
+        </div>
+      ) : (
       <label style={{ ...row, opacity: through ? 0.45 : 1 }}>
         <span style={{ width: 52 }}>{both ? 'Each way' : value.op === 'cut' ? 'Depth' : 'Height'}</span>
         <input type="number" min={0} step={0.5} value={value.depth} disabled={through}
@@ -748,7 +782,8 @@ function ExtrudeDialog({ value, onChange, shapes, open, datum, direction, onAppl
                         color: palette.text, border: `1px solid ${palette.border}`, borderRadius: '3px' }} />
         <span style={{ color: palette.textSecondary }}>mm</span>
       </label>
-      {datum && !through && (
+      )}
+      {datum && !through && !until && (
         <label style={row} title="Extrude the depth to both sides of the plane, so the plane is the middle">
           <input type="checkbox" checked={both} onChange={(e) => set({ both: e.target.checked })} />
           Both ways (symmetric)
@@ -776,7 +811,7 @@ function ExtrudeDialog({ value, onChange, shapes, open, datum, direction, onAppl
         <button onClick={onApply} disabled={!ok}
                 style={{ fontSize: '12px', padding: '2px 10px', cursor: ok ? 'pointer' : 'default', borderRadius: '4px', opacity: ok ? 1 : 0.5,
                          background: palette.accent, color: '#fff', border: `1px solid ${palette.accent}` }}>
-          {value.op === 'cut' ? 'Cut' : value.op === 'join' ? 'Join' : 'Create'}
+          {until ? 'Continue…' : value.op === 'cut' ? 'Cut' : value.op === 'join' ? 'Join' : 'Create'}
         </button>
       </div>
     </div>

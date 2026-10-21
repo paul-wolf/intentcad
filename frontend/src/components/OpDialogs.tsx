@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { useThemeStore } from '@/theme';
 import {
-  ApiError, errorText, type ArgOpKind, type EdgeOpKind, type EdgeRefSpec, type ExtrudeOp, type FaceRefSpec, type HoleKind,
+  ApiError, errorText, type ArgOpKind, type EdgeOpKind, type EdgeRefSpec, type ExtrudeExtent, type ExtrudeOp, type FaceRefSpec, type HoleKind,
   type HolePreset, type HolePresets, type HoleSizeKey, type HolesPayload, type KeepItem, type MirrorPlane, type RunFace,
   type RunResponse, type SizeFix,
 } from '@/api/client';
@@ -27,6 +27,8 @@ import { ParamExprInput } from './ParamExprInput';
 /** Mirror body's preview: the mirror image's colour (the hue a second body
  *  is shaded toward once built). */
 export const MIRROR_COPY_COLOR: Vec3 = BODY_HUES[0]!;
+/** Up to face / next: the piece the extrude adds or removes, in the preview */
+export const UNTIL_PIECE_COLOR: Vec3 = BODY_HUES[0]!;
 
 /** The colour the candidate result is drawn in. */
 export const PREVIEW_COLOR: [number, number, number] = [0.36, 0.72, 0.86];
@@ -678,39 +680,86 @@ export function EdgeOpDialog({ op, value, onChange, editing, preview, edgeIndex,
 // ---------------------------------------------------------------- Extrude (reopened)
 
 /** An extrude line's values (op_at): the sketch it extrudes, how, and the P
- *  key its depth is in (null: through, or not one yet). */
+ *  key its depth is in (null: through, or not one yet). `extent` says how far
+ *  it goes: the depth, through the part (a cut; `through` mirrors it), up to
+ *  the next face it meets, or up to `face` (`offset` past it, negative: short
+ *  of it — a number or an expression of the parameters). */
 export interface ExtrudeValues {
   sketch: string;
   op: ExtrudeOp;
+  extent: ExtrudeExtent;
   depth: number;
   through: boolean;
   flip: boolean;
   both: boolean;
   datum: boolean;
+  face: FaceRefSpec | null;
+  offset: Amount;
 }
 
-export function ExtrudeDialog({ value, onChange, firstBody, param, direction, preview, onEditSketch, onApply, onCancel }: {
+const EXTENT_TEXT: Record<ExtrudeExtent, string> = {
+  distance: 'Distance', through: 'Through all', face: 'Up to face', next: 'Up to next',
+};
+const EXTENT_TIP: Record<ExtrudeExtent, string> = {
+  distance: 'A set depth (kept in a parameter)',
+  through: 'Cut right through the part',
+  face: 'Run until it reaches a face you pick: its end takes that face\'s shape (a slanted wall, a cylinder)',
+  next: 'Run until the first face it meets: a boss stops where it meets the part, a cut where it breaks into empty space',
+};
+
+/** What the extrude does, in words: "Cuts “Set screw” up to the next face". */
+export function extrudeSummary(v: ExtrudeValues, offset: number | null): string {
+  const what = v.op === 'cut' ? 'Cuts' : v.op === 'join' ? 'Grows' : 'Makes the part from';
+  const extent = v.op !== 'cut' && v.extent === 'through' ? 'distance' : v.extent;
+  const d = Number.isFinite(v.depth) ? v.depth : 0;
+  const both = v.datum && extent === 'distance' && v.both;
+  const how = extent === 'through' ? 'through the part'
+    : extent === 'next' ? (v.op === 'cut' ? 'until it breaks into empty space' : 'until it meets the part')
+    : extent === 'face' ? `up to the ${v.face?.hint ?? 'face'}${offset ? `, ${Math.abs(offset)} mm ${offset > 0 ? 'past it' : 'short of it'}` : ''}`
+    : `${d} mm${both ? ' each way' : ''}`;
+  return `${what} “${v.sketch}” ${how}.`;
+}
+
+export function ExtrudeDialog({ value, onChange, editing = true, firstBody, param, params, direction, hoverHint, preview,
+  onEditSketch, onApply, onCancel }: {
   value: ExtrudeValues; onChange: (v: ExtrudeValues) => void;
+  /** reopened from its line (Update) rather than new (Cut / Join) */
+  editing?: boolean;
   /** the line makes the part: New body, and nothing else */
   firstBody: boolean;
   /** the P key the depth is in */
   param: string | null;
+  params: Record<string, number>;
   /** which way it goes, in words */
   direction: string;
+  /** Up to face: the face under the pointer, in words (null: none) */
+  hoverHint?: string | null;
   preview: PreviewState;
   onEditSketch: () => void;
   onApply: () => void; onCancel: () => void;
 }) {
   const { palette, seg, row, num, note } = useStyles();
   const set = (p: Partial<ExtrudeValues>) => onChange({ ...value, ...p });
-  const through = value.op === 'cut' && value.through;
-  const both = value.datum && !through && value.both;
+  const extent: ExtrudeExtent = value.op !== 'cut' && value.extent === 'through' ? 'distance' : value.extent;
+  const through = extent === 'through';
+  const until = extent === 'next' || extent === 'face';
+  const both = value.datum && extent === 'distance' && value.both;
   const flipOff = both || (through && value.datum);
   const d = Number.isFinite(value.depth) ? value.depth : 0;
-  const ok = (through || d > 0) && preview.state !== 'running';
-  const what = value.op === 'cut' ? 'Cuts' : value.op === 'join' ? 'Grows' : 'Makes the part from';
+  const off = extent === 'face' ? amountValue(value.offset, params) : 0;
+  const bad = extent === 'face' && !value.face ? 'Click the face to extrude up to in the view'
+    : off === null ? 'The offset must be a number or an expression of the parameters'
+    : extent === 'distance' && !(d > 0) ? 'The depth must be more than 0' : null;
+  const ok = !bad && preview.state !== 'running' && preview.state !== 'error';
+  const shown: PreviewState = bad && extent === 'face' && !value.face ? { state: 'idle', message: '', fix: null }
+    : bad ? { state: 'error', message: bad, fix: null } : preview;
+  const extents: ExtrudeExtent[] = firstBody ? ['distance']
+    : value.op === 'cut' ? ['distance', 'through', 'face', 'next'] : ['distance', 'face', 'next'];
+  const pick = (e: ExtrudeExtent) => set({ extent: e, through: e === 'through', ...(e === 'distance' || e === 'through' ? {} : { both: false }) });
+  const applyLabel = editing ? 'Update' : value.op === 'cut' ? 'Cut' : value.op === 'join' ? 'Join' : 'Create';
   return (
-    <OpFrame title="Edit extrude" preview={preview} ok={ok} onCancel={onCancel} onApply={onApply} applyLabel="Update">
+    <OpFrame title={editing ? 'Edit extrude' : 'Extrude'} preview={shown} ok={ok} onCancel={onCancel} onApply={onApply}
+             applyLabel={applyLabel}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: palette.text }}>
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
               title={value.sketch}>
@@ -735,34 +784,76 @@ export function ExtrudeDialog({ value, onChange, firstBody, param, direction, pr
                   onClick={() => set({ op: 'join' })} title="Add the shapes to the part (pegs, bosses)">Join</button>
         </div>
       )}
-      {value.op === 'cut' && (
+      {extents.length > 1 && (
         <label style={row}>
-          <input type="checkbox" checked={value.through} onChange={(e) => set({ through: e.target.checked })} />
-          Through all{value.datum ? ' (both ways)' : ''}
+          <span style={{ width: 56 }}>Extent</span>
+          <select value={extent} onChange={(e) => pick(e.target.value as ExtrudeExtent)} aria-label="Extent"
+                  title={EXTENT_TIP[extent]}
+                  style={{ flex: 1, minWidth: 0, fontSize: '12px', padding: '2px 4px', background: palette.inputBg,
+                           color: palette.text, border: `1px solid ${palette.border}`, borderRadius: '3px' }}>
+            {extents.map((e) => (
+              <option key={e} value={e} title={EXTENT_TIP[e]}>
+                {EXTENT_TEXT[e]}{e === 'through' && value.datum ? ' (both ways)' : ''}
+              </option>
+            ))}
+          </select>
         </label>
       )}
-      <label style={{ ...row, opacity: through ? 0.45 : 1 }}>
-        <span style={{ width: 56 }}>{both ? 'Each way' : value.op === 'cut' ? 'Depth' : 'Height'}</span>
-        <input type="number" min={0} step={0.5} value={value.depth} disabled={through} autoFocus
-               onChange={(e) => set({ depth: parseFloat(e.target.value) })} style={num} />
-        <span style={{ color: palette.textSecondary, flex: 1 }}>mm</span>
-        {param && !through && <ParamChip name={param} />}
-      </label>
-      {value.datum && !through && (
+      {!until && (
+        <label style={{ ...row, opacity: through ? 0.45 : 1 }}>
+          <span style={{ width: 56 }}>{both ? 'Each way' : value.op === 'cut' ? 'Depth' : 'Height'}</span>
+          <input type="number" min={0} step={0.5} value={value.depth} disabled={through} autoFocus
+                 onChange={(e) => set({ depth: parseFloat(e.target.value) })} style={num} />
+          <span style={{ color: palette.textSecondary, flex: 1 }}>mm</span>
+          {param && !through && <ParamChip name={param} />}
+        </label>
+      )}
+      {until && param && (
+        <div style={{ color: palette.textSecondary, lineHeight: 1.35 }}>
+          The depth stays in <ParamChip name={param} /> for switching back to Distance.
+        </div>
+      )}
+      {extent === 'face' && (
+        <>
+          <div style={{ ...row, alignItems: 'flex-start' }}>
+            <span style={{ width: 56 }}>Face</span>
+            <span style={{ flex: 1, minWidth: 0, lineHeight: 1.35 }}>
+              {value.face ? <b>{value.face.hint ?? 'face'}</b>
+                : <span style={{ color: palette.textSecondary }}>Click a face in the view</span>}
+              {hoverHint && (
+                <div style={{ color: palette.textSecondary }}>pointer on: {hoverHint}</div>
+              )}
+            </span>
+          </div>
+          <div style={{ ...row, alignItems: 'flex-start' }}>
+            <span style={{ width: 56, paddingTop: 3 }}>Offset</span>
+            <ParamExprInput value={amountText(value.offset)} onChange={(t) => set({ offset: t })} params={params} unit="mm"
+                            width={80} title="Past the face (positive: overlap into it) or short of it (negative: a gap)" />
+            <span style={{ color: palette.textSecondary, paddingTop: 3 }}>mm</span>
+          </div>
+        </>
+      )}
+      {value.datum && extent === 'distance' && (
         <label style={row} title="Extrude the depth to both sides of the plane, so the plane is the middle">
           <input type="checkbox" checked={both} onChange={(e) => set({ both: e.target.checked })} />
           Both ways (symmetric)
         </label>
       )}
       <label style={{ ...row, opacity: flipOff ? 0.45 : 1 }}
-             title="Send it the other way along the face's normal — the preview shows where it goes">
+             title={extent === 'face' ? 'Which way to look for the face first (the other way is tried if it is not that way)'
+               : 'Send it the other way along the face\'s normal — the preview shows where it goes'}>
         <input type="checkbox" checked={value.flip && !flipOff} disabled={flipOff}
                onChange={(e) => set({ flip: e.target.checked })} />
         Flip direction
       </label>
       <div style={note}>
-        {what} “{value.sketch}” {through ? 'through the part' : `${d} mm${both ? ' each way' : ''}`}.
-        <div><b>{direction}</b></div>
+        {extrudeSummary({ ...value, extent }, off)}
+        {extent !== 'face' && <div><b>{direction}</b></div>}
+        {extent === 'next' && (
+          <div style={{ color: palette.textSecondary, marginTop: 2 }}>
+            The preview shows where it stops.
+          </div>
+        )}
       </div>
     </OpFrame>
   );

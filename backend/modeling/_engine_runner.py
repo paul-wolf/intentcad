@@ -381,6 +381,19 @@ def _stage_assets(assets: dict | None, refs: list | None) -> dict[str, str]:
     return paths
 
 
+def _keep_editor_ops(tree: ast.Module) -> ast.Module:
+    """The script with the editor's functions put back after each of its
+    own build123d imports (`from build123d import *` would replace fillet(),
+    revolve() and extrude() with build123d's)."""
+    body = []
+    for node in tree.body:
+        body.append(node)
+        if isinstance(node, ast.ImportFrom) and node.module == "build123d":
+            body.append(ast.parse("globals().update(__editor_ops__)").body[0])
+    tree.body = body
+    return ast.fix_missing_locations(tree)
+
+
 def _run(code: str, export: list | None = None,
          assets: dict | None = None, asset_refs: list | None = None,
          sketches: dict | None = None, bed: dict | None = None) -> dict:
@@ -474,7 +487,11 @@ def _run(code: str, export: list | None = None,
     from modeling import revolve
 
     revolve_report: list[dict] = []
-    ns["__editor_ops__"] = {**edge_ops.bind(), **revolve.bind(revolve_report)}
+    # extrude() — build123d's, plus the editor's Up to face / Up to next
+    # (modeling/until.py), put back the same way
+    from modeling import until
+
+    ns["__editor_ops__"] = {**edge_ops.bind(), **revolve.bind(revolve_report), **until.bind(ns)}
     # Run the script. If an operation fails partway (e.g. a chamfer too big),
     # `part` still holds the model built up to that line — render THAT plus the
     # error as a warning, instead of blanking the whole model.
@@ -482,7 +499,7 @@ def _run(code: str, export: list | None = None,
     fix = None
     try:
         src = f"from build123d import *; globals().update(__editor_ops__)\n{code}"
-        tree = mirror.defer_refs(ast.parse(src, "<script>"))
+        tree = _keep_editor_ops(until.tag_cuts(mirror.defer_refs(ast.parse(src, "<script>"))))
         exec(compile(tree, "<script>", "exec"), ns)  # noqa: S102 - sandboxed subprocess
     except Exception as exc:
         warning = _describe_error(exc, code)

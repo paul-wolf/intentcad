@@ -264,7 +264,9 @@ def bind(profiles: dict, ns: dict | None = None, report: dict | None = None) -> 
         if where["plane"]:
             profile = {**profile, "plane": where["plane"]}
         faces = profile_faces(profile, name)
-        return faces[0] if len(faces) == 1 else Compound(faces)
+        out = faces[0] if len(faces) == 1 else Compound(faces)
+        out._sketch_name = name        # how an until extrude's message names it
+        return out
 
     def sketch_points(name: str) -> Points:
         """The face sketch `name`'s points and circle centres, on its plane
