@@ -9,7 +9,7 @@ import { VIEW_KEYS } from './viewOrient';
 const MODEL: OpModel = {
   status: 'done', hasCode: true, dialogOpen: false, sketching: false, canSketch: true, asking: false,
   holeSketches: 0, holeAt: 'at the centre of the top face', autoRound: false, exporting: false, importing: false,
-  hasParams: true, showParams: true, ortho: false, measure: '60.0 × 40.0 mm', section: false,
+  hasParams: true, showParams: true, ortho: false, measure: '60.0 × 40.0 mm', section: false, mirrorSteps: 0,
 };
 const faces = (...kinds: string[]): OpSelection => ({ faces: kinds.map((kind) => ({ kind })), edges: [] });
 const NONE = faces();
@@ -77,7 +77,7 @@ describe('the operation registry', () => {
     const ctx = Object.fromEntries(
       ['sketchOnSelection', 'sketchOnPlane', 'shell', 'hole', 'fillet', 'chamfer', 'ask', 'build', 'importStep', 'exportAs', 'versions',
        'process', 'addContextFile', 'toggleParams', 'setView', 'lookAtSelection', 'toggleOrtho', 'copyMeasure',
-       'section', 'offsetPlane', 'edgePlane'].map((k) => [k, vi.fn()]),
+       'section', 'offsetPlane', 'edgePlane', 'mirrorBody', 'mirrorSteps'].map((k) => [k, vi.fn()]),
     ) as unknown as Record<keyof OpContext, ReturnType<typeof vi.fn>>;
     for (const op of OPERATIONS) op.run(ctx as unknown as OpContext);
     expect(ctx.shell).toHaveBeenCalledTimes(1);
@@ -91,6 +91,26 @@ describe('the operation registry', () => {
     expect(ctx.section).toHaveBeenCalledTimes(1);
     expect(ctx.offsetPlane).toHaveBeenCalledTimes(1);
     expect(ctx.edgePlane).toHaveBeenCalledTimes(1);
+    expect(ctx.mirrorBody).toHaveBeenCalledTimes(1);
+    expect(ctx.mirrorSteps).toHaveBeenCalledTimes(1);
+  });
+
+  it('mirrors the body or the chosen steps across one flat face, one plane, or one picked in the dialog', () => {
+    const plane = (name: string): OpSelection => ({ faces: [], edges: [], planes: [{ name }] });
+    expect(opById('mirror-body')!.group).toBe('Pattern');
+    expect(ok('mirror-body', NONE).ok).toBe(true);
+    expect(ok('mirror-body', FLOOR).ok).toBe(true);
+    expect(ok('mirror-body', plane('Mid')).ok).toBe(true);
+    expect(reason('mirror-body', CURVED)).toBe('Select a flat face, not a curved one');
+    expect(reason('mirror-body', TWO)).toBe('Select one flat face or plane, or nothing');
+    expect(reason('mirror-body', { faces: [], edges: [{ kind: 'line' }] })).toBe('Select one flat face or plane, or nothing');
+    expect(reason('mirror-body', NONE, { ...MODEL, status: 'idle' })).toBe('Build the part first');
+    expect(opById('mirror-body')!.detail!(plane('Mid'), MODEL)).toBe('across Mid');
+    expect(reason('mirror-steps', NONE)).toBe('Choose steps in the steps list (Ctrl-click for more)');
+    const two = { ...MODEL, mirrorSteps: 2 };
+    expect(ok('mirror-steps', plane('Mid'), two).ok).toBe(true);
+    expect(opById('mirror-steps')!.detail!(plane('Mid'), two)).toBe('2 steps chosen');
+    expect(reason('mirror-steps', NONE, { ...two, dialogOpen: true })).toBe('Close the open dialog first');
   });
 
   it('gives Section a key nothing else uses, here or in the sketcher', () => {

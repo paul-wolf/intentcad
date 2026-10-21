@@ -8,6 +8,7 @@ span, so comments, formatting, and everything else are untouched.
 from __future__ import annotations
 
 import ast
+import functools
 import json
 import re
 
@@ -269,7 +270,7 @@ def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
 # line). Editing rewrites that line in place and sets the values of the P keys
 # it uses; nothing else changes.
 
-OPS = ("extrude", "shell", "holes", "fillet", "chamfer", "auto_round", "truss_windows")
+OPS = ("extrude", "shell", "holes", "fillet", "chamfer", "auto_round", "truss_windows", "mirror_body")
 # construction planes: PLANES["name"] = offset_plane(...) / edge_plane(...)
 PLANE_OPS = ("offset_plane", "edge_plane")
 # the P key base of each edge operation's size, and its argument
@@ -335,8 +336,9 @@ def _p_key(node) -> str | None:
 
 def _recognise(node):
     """(call, op) of an operation statement: `part = shell(...)` (holes,
-    fillet, chamfer, auto_round, truss_windows, extrude: a new body),
-    `part -= / += extrude(...)` or a construction plane,
+    fillet, chamfer, auto_round, truss_windows, mirror_body, extrude: a new
+    body), `part -= / += extrude(...)` (or its mirrored copy, `part -=
+    mirrored(extrude(...), PLANE)`: the call is the extrude) or a construction plane,
     `PLANES["name"] = offset_plane(...) / edge_plane(...)`. Else None."""
     if _plane_name(node) is not None and isinstance(node.value, ast.Call) \
             and isinstance(node.value.func, ast.Name) and node.value.func.id in PLANE_OPS:
@@ -346,9 +348,10 @@ def _recognise(node):
             and isinstance(node.value.func, ast.Name) and node.value.func.id in OPS):
         return node.value, node.value.func.id
     if (isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name) and node.target.id == "part"
-            and isinstance(node.op, (ast.Sub, ast.Add)) and isinstance(node.value, ast.Call)
-            and isinstance(node.value.func, ast.Name) and node.value.func.id == "extrude"):
-        return node.value, "extrude"
+            and isinstance(node.op, (ast.Sub, ast.Add)) and isinstance(node.value, ast.Call)):
+        value = node.value.args[0] if _is_mirrored(node.value) else node.value    # a mirrored copy
+        if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "extrude":
+            return value, "extrude"
     return None
 
 
@@ -401,7 +404,10 @@ def _face_refs(node) -> list[dict]:
 
 
 def _edge_refs(node) -> list[dict]:
-    """fillet()/chamfer()'s edges: edges_ref([...]) (or edge_ref({...}))."""
+    """fillet()/chamfer()'s edges: edges_ref([...]) (or edge_ref({...})), or
+    a mirrored copy's mirrored(edges_ref([...]), PLANE)."""
+    if _is_mirrored(node):
+        node = node.args[0]
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.args:
         if node.func.id == "edges_ref":
             refs = ast.literal_eval(node.args[0])
@@ -420,7 +426,10 @@ HOLE_SIZES = {"d": "hole_d", "cbore_d": "cbore_d", "cbore_depth": "cbore_depth",
 
 
 def _at(node) -> dict:
-    """holes(at=...): {"sketch": name} or {"face": ref}."""
+    """holes(at=...): {"sketch": name} or {"face": ref} (of a mirrored
+    copy's mirrored(..., PLANE) too)."""
+    if _is_mirrored(node):
+        node = node.args[0]
     if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.args
             and node.func.id == "sketch_points" and isinstance(node.args[0], ast.Constant)):
         return {"sketch": node.args[0].value}
@@ -443,8 +452,10 @@ def op_at(code: str, line: int, datum=()) -> dict:
     "end_line", "args", "params", "exprs"} where args holds the values (P keys
     resolved), params which P key holds each ("standoff.h" for a standoff's)
     and exprs the source of each value written as an expression (shown, not
-    edited). `datum`: the names of the sketches on a base plane. A line not
-    in the form the editor writes raises ParamError."""
+    edited). `datum`: the names of the sketches on a base plane. A mirrored
+    copy also has "mirror": {"plane", "label", "of": the line of the step it
+    is linked to, None when unlinked}. A line not in the form the editor
+    writes raises ParamError."""
     tree = ast.parse(code)
     hit = _op_stmt(tree, line)
     if hit is None:
@@ -452,8 +463,14 @@ def op_at(code: str, line: int, datum=()) -> dict:
     stmt, call, op = hit
     pv = _p_values(code)
     args, params, exprs = _read_op(code, stmt, call, op, pv, datum)
-    return {"op": op, "line": stmt.lineno, "end_line": stmt.end_lineno or stmt.lineno,
-            "args": args, "params": {k: v for k, v in params.items() if v}, "exprs": exprs}
+    out = {"op": op, "line": stmt.lineno, "end_line": stmt.end_lineno or stmt.lineno,
+           "args": args, "params": {k: v for k, v in params.items() if v}, "exprs": exprs}
+    wrap = _mirror_node(stmt, call, op)
+    if wrap is not None:
+        plane = _mirror_plane_arg(wrap.args[1])
+        link = _links(code).get(stmt.lineno)
+        out["mirror"] = {"plane": plane, "label": plane_label(plane), "of": link["of"] if link else None}
+    return out
 
 
 def _read_op(code: str, stmt, call, op: str, pv: dict, datum=()) -> tuple[dict, dict, dict]:
@@ -466,6 +483,13 @@ def _read_op(code: str, stmt, call, op: str, pv: dict, datum=()) -> tuple[dict, 
         args, params["depth"] = _read_extrude(stmt, call, pv, set(datum))
     elif op in PLANE_OPS:
         args, exprs = _read_plane(stmt, call, op, pv)
+    elif op == "mirror_body":
+        plane = call.args[1] if len(call.args) > 1 else kw.get("plane")
+        if plane is None:
+            raise ParamError(f"line {stmt.lineno}: mirror_body() without a plane: edit this line in the code")
+        args["plane"] = _mirror_plane_arg(plane)
+        join = call.args[2] if len(call.args) > 2 else kw.get("join")
+        args["join"] = True if join is None else bool(_value(join, pv)[0])
     elif op in ARG_OPS:
         args, params, exprs = _read_args(code, op, call, pv)
     elif op in EDGE_OPS:
@@ -503,18 +527,29 @@ def _read_op(code: str, stmt, call, op: str, pv: dict, datum=()) -> tuple[dict, 
 
 def _write_op(code: str, text: str, line: int | None, op: str) -> str:
     """Append the statement `text`, or put it in place of the `op` statement
-    on `line`."""
+    on `line`. A mirrored copy written there stays mirrored; the copies
+    linked to the step there are written again from it (_copy_text)."""
     if line is None:
         return code.rstrip("\n") + "\n" + text + "\n"
     hit = _op_stmt(ast.parse(code), line)
     if hit is None or hit[2] != op:
         raise ParamError(f"line {line} is not a {op}() line any more")
-    stmt = hit[0]
+    stmt, call, _ = hit
+    wrap = _mirror_node(stmt, call, op)
+    copies: list[int] = []
+    if wrap is not None:
+        text = _copy_text(text, op, ast.get_source_segment(code, wrap.args[1]))
+    elif op in MIRROR_OPS:
+        copies = sorted((c for c, link in _links(code).items() if link["of"] == stmt.lineno), reverse=True)
     lines = code.split("\n")
     tail = _chars(lines[stmt.end_lineno - 1], stmt.end_col_offset)      # a comment after it stays
     lines[stmt.lineno - 1:stmt.end_lineno] = [lines[stmt.lineno - 1][:stmt.col_offset] + text
                                               + lines[stmt.end_lineno - 1][tail:]]
-    return "\n".join(lines)
+    code = "\n".join(lines)
+    shift = text.count("\n") - (stmt.end_lineno - stmt.lineno)
+    for c in copies:
+        code = _rewrite_copy(code, c + shift, text, op)
+    return code
 
 
 def _chars(row: str, col: int) -> int:
@@ -1138,7 +1173,7 @@ def _plural(n: int, word: str) -> str:
 
 TITLES = {"extrude": "Extrude", "shell": "Shell", "holes": "Holes", "fillet": "Fillet", "chamfer": "Chamfer",
           "auto_round": "Round", "truss_windows": "Lighten", "offset_plane": "Offset plane",
-          "edge_plane": "Plane on edge"}
+          "edge_plane": "Plane on edge", "mirror_body": "Mirror body"}
 _EXTRUDE_TITLES = {"cut": "Cut", "join": "Join", "new": "New body"}
 
 
@@ -1150,6 +1185,8 @@ def _deg(v) -> str:
 
 
 def _summary(op: str, a: dict, points: dict) -> str:
+    if op == "mirror_body":
+        return f"Mirror body across {plane_label(a['plane'])} · {'joined' if a['join'] else 'separate body'}"
     if op == "offset_plane":
         base = a["base"]
         where = f"{base} plane" if isinstance(base, str) else str(base["face"].get("hint") or "face")
@@ -1192,7 +1229,14 @@ def _variant(stmt) -> str | None:
 def _op_step(code: str, stmt, call, op: str, pv: dict, datum, points: dict, shift: int, off: bool) -> dict:
     step = {"kind": "op", "op": op, "variant": _variant(stmt), "line": stmt.lineno + shift,
             "end_line": (stmt.end_lineno or stmt.lineno) + shift, "off": off, "reopenable": False,
-            "sketch": None, "faces": [], "edges": [], "plane": _plane_name(stmt)}
+            "sketch": None, "faces": [], "edges": [], "plane": _plane_name(stmt),
+            "mirror_of": None, "mirror_plane": None}
+    wrap = _mirror_node(stmt, call, op)
+    if wrap is not None:
+        try:
+            step["mirror_plane"] = plane_label(_mirror_plane_arg(wrap.args[1]))
+        except (ParamError, ValueError, SyntaxError):
+            step["mirror_plane"] = "?"
     try:
         a, _, _ = _read_op(code, stmt, call, op, pv, datum)
     except (ValueError, KeyError, TypeError, SyntaxError):
@@ -1201,7 +1245,9 @@ def _op_step(code: str, stmt, call, op: str, pv: dict, datum, points: dict, shif
         return step
     step["summary"] = _summary(op, a, points)
     step["reopenable"] = not off
-    if op == "extrude":
+    if wrap is not None:            # it works on the other side: nothing of its own to show
+        step["summary"] += f" · mirrored across {step['mirror_plane']}"
+    elif op == "extrude":
         step["sketch"] = a["sketch"]
     elif op == "shell":
         step["faces"] = a["remove"]
@@ -1225,7 +1271,9 @@ def steps(code: str, datum=(), points: dict | None = None) -> list[dict]:
     """The steps list: every operation of the script in order, switched off
     or not, as {"kind": "op", "op", "variant" (an extrude's cut / join /
     new), "line", "end_line", "summary", "reopenable", "off", "sketch",
-    "faces", "edges" (what it works on, to show)}, and each run of other
+    "faces", "edges" (what it works on, to show), "mirror_plane" (a mirrored
+    copy's plane, else None), "mirror_of" (the line of the step a copy is
+    linked to, else None)}, and each run of other
     statements as {"kind": "script", "line", "end_line", "count"} (the
     imports and P left out). `datum`: the sketches on a base plane; `points`:
     each sketch's number of hole points."""
@@ -1258,7 +1306,10 @@ def steps(code: str, datum=(), points: dict | None = None) -> list[dict]:
         else:
             raw.append({"kind": "op", "op": "script", "variant": None, "line": a, "end_line": b, "off": True,
                         "reopenable": False, "summary": "Script", "sketch": None, "faces": [], "edges": [],
-                        "plane": None})
+                        "plane": None, "mirror_of": None, "mirror_plane": None})
+    for st in raw:
+        if st["kind"] == "op" and st.get("mirror_plane"):
+            st["mirror_of"] = (_links(code).get(st["line"]) or {}).get("of")
     raw.sort(key=lambda st: st["line"])
     out: list[dict] = []
     for st in raw:
@@ -1273,9 +1324,18 @@ def steps(code: str, datum=(), points: dict | None = None) -> list[dict]:
     return out
 
 
-def suppress(code: str, line: int, off: bool = True) -> str:
+def suppress(code: str, line: int, off: bool = True, copies: bool = False) -> str:
     """Switch the step on `line` off (each of its lines behind OFF) or back
-    on (exactly as it was)."""
+    on (exactly as it was); with `copies`, its mirrored copies too."""
+    if copies:
+        start = _step_start(code, line)
+        for c, link in sorted(_links(code).items(), reverse=True):
+            if link["of"] == start and link["off"] != off:
+                code = _suppress(code, c, off)
+    return _suppress(code, line, off)
+
+
+def _suppress(code: str, line: int, off: bool) -> str:
     rows = code.split("\n")
     if off:
         node = next((n for n in ast.parse(code).body if n.lineno <= line <= (n.end_lineno or n.lineno)), None)
@@ -1292,9 +1352,20 @@ def suppress(code: str, line: int, off: bool = True) -> str:
     return "\n".join(rows)
 
 
-def delete_step(code: str, line: int) -> str:
+def delete_step(code: str, line: int, copies: str | None = None) -> str:
     """The script without the step on `line` (switched off or not), and
-    without the P keys only it used."""
+    without the P keys only it used. Its mirrored copies are deleted with it
+    (copies="delete") or kept, unlinked (copies="keep", the default)."""
+    if copies not in (None, "keep", "delete"):
+        raise ParamError(f"copies must be 'keep' or 'delete', not {copies!r}")
+    start = _step_start(code, line)
+    for c, link in sorted(_links(code).items(), reverse=True):     # they come after it
+        if link["of"] == start:
+            code = _delete(code, c) if copies == "delete" else unlink(code, c)
+    return _delete(code, line)
+
+
+def _delete(code: str, line: int) -> str:
     rows = code.split("\n")
     block = next(((a, b, text) for a, b, text in _off_blocks(code) if a <= line <= b), None)
     if block is not None:
@@ -1311,3 +1382,325 @@ def delete_step(code: str, line: int) -> str:
     for k in sorted(keys):
         code = drop_param(code, k)
     return code
+
+
+# --- Mirror (modeling/mirror.py). A whole body: `part = mirror_body(part,
+# PLANE, join=True)`. A step's copy on the other side of a plane is the same
+# operation with its input wrapped in mirrored(..., PLANE), on a line after
+# it, with a link comment naming it:
+#     part -= mirrored(extrude(sketch("USB"), amount=-P["usb_depth"]), PLANES["Mid"])  # mirror of line 7 across Mid
+#     part = holes(part, at=mirrored(sketch_points("Posts"), "YZ"), ...)  # mirror of line 8 across YZ
+#     part = fillet(part, mirrored(edges_ref([...]), PLANES["Mid"]), radius=P["fillet_r"])  # mirror of line 9 across Mid
+# A linked copy is written again whenever its step is (_write_op), and every
+# writer keeps the comments' line numbers right (relink). The PLANE is a flat
+# face (face_ref), "XY" / "XZ" / "YZ" or PLANES["name"]; the API passes it as
+# {"face": ref}, {"base": "XY"} or {"plane": "name"}.
+
+MIRROR_OPS = ("extrude", "holes", "fillet", "chamfer")
+_LINK = re.compile(r"\s*#\s*mirror of line (\d+)(?: across (.+?))?\s*$")
+
+
+def _is_mirrored(node) -> bool:
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "mirrored"
+            and len(node.args) == 2 and not node.keywords)
+
+
+def _mirror_node(stmt, call, op: str):
+    """The mirrored(..., PLANE) call of a mirrored copy, else None."""
+    if op == "extrude":
+        return stmt.value if isinstance(stmt, ast.AugAssign) and _is_mirrored(stmt.value) else None
+    if op == "holes":
+        node = next((k.value for k in call.keywords if k.arg == "at"), None)
+    elif op in EDGE_OPS:
+        node = call.args[1] if len(call.args) > 1 else next((k.value for k in call.keywords if k.arg == "edges"), None)
+    else:
+        return None
+    return node if _is_mirrored(node) else None
+
+
+def _mirror_plane_arg(node) -> dict:
+    """A plane argument as the API has it: {"base"}, {"plane"} or {"face"}."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value.upper() in ("XY", "XZ", "YZ"):
+        return {"base": node.value.upper()}
+    if (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and node.value.id == "PLANES"
+            and isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str)):
+        return {"plane": node.slice.value}
+    return {"face": _ref_arg(node, "face_ref", "plane to mirror across")}
+
+
+def plane_label(plane: dict) -> str:
+    """A plane argument in a few words: "XY", the plane's name, the face's hint."""
+    if plane.get("base"):
+        return plane["base"]
+    if plane.get("plane"):
+        return plane["plane"]
+    return str((plane.get("face") or {}).get("hint") or "face")
+
+
+def _plane_src(code: str, plane) -> tuple[str, dict]:
+    """(the line's text, the API form) of a plane argument: {"base": "XY"}
+    (or "XY"), {"plane": name} (one the script defines) or {"face": ref}."""
+    if isinstance(plane, str):
+        plane = {"base": plane}
+    if not isinstance(plane, dict):
+        raise ParamError("pick a flat face, a construction plane or XY, XZ, YZ to mirror across")
+    if plane.get("base"):
+        base = str(plane["base"]).upper()
+        if base not in ("XY", "XZ", "YZ"):
+            raise ParamError(f"mirror across XY, XZ or YZ, not {plane['base']!r}")
+        return _lit(base), {"base": base}
+    if plane.get("plane"):
+        name = str(plane["plane"])
+        if name not in plane_names(code):
+            raise ParamError(f"there is no plane named {name!r}")
+        return f"PLANES[{_lit(name)}]", {"plane": name}
+    if isinstance(plane.get("face"), dict) and plane["face"]:
+        return f"face_ref({_lit(plane['face'])})", {"face": plane["face"]}
+    raise ParamError("pick a flat face, a construction plane or XY, XZ, YZ to mirror across")
+
+
+def _span(text: str, node) -> tuple[int, int]:
+    """`node`'s (start, end) character offsets in `text`."""
+    rows = text.split("\n")
+    starts = [0]
+    for row in rows:
+        starts.append(starts[-1] + len(row) + 1)
+    return (starts[node.lineno - 1] + _chars(rows[node.lineno - 1], node.col_offset),
+            starts[node.end_lineno - 1] + _chars(rows[node.end_lineno - 1], node.end_col_offset))
+
+
+def _copy_text(text: str, op: str, plane_src: str) -> str:
+    """The statement `text` of an `op` step, mirrored across `plane_src`: the
+    same operation with its input (the extruded solid, where the holes go,
+    the edges) reflected."""
+    body = ast.parse(text).body
+    hit = _recognise(body[0]) if len(body) == 1 else None
+    if hit is None or hit[1] != op:
+        raise ParamError(f"can't mirror {text[:60]!r}")
+    stmt, (call, _) = body[0], hit
+    if _mirror_node(stmt, call, op) is not None:
+        raise ParamError("it is a mirrored copy already: mirror its original")
+    if op == "extrude":
+        sym = "-=" if isinstance(stmt, ast.AugAssign) and isinstance(stmt.op, ast.Sub) else "+="
+        a, b = _span(text, call)
+        return f"part {sym} mirrored({text[a:b]}, {plane_src})"
+    if op == "holes":
+        node = next((k.value for k in call.keywords if k.arg == "at"), None)
+    else:
+        node = call.args[1] if len(call.args) > 1 else next((k.value for k in call.keywords if k.arg == "edges"), None)
+    if node is None:
+        raise ParamError(f"can't tell what to mirror in {text[:60]!r}")
+    a, b = _span(text, node)
+    return f"{text[:a]}mirrored({text[a:b]}, {plane_src}){text[b:]}"
+
+
+class _Unwrap(ast.NodeTransformer):
+    def visit_Call(self, node):
+        self.generic_visit(node)
+        return node.args[0] if _is_mirrored(node) else node
+
+
+def _link_key(stmt, op: str):
+    """What a step and its mirrored copy have in common: the statement with
+    mirrored() taken off (an extrude: whether it adds or cuts, and the
+    extrude)."""
+    bare = _Unwrap().visit(ast.parse(ast.unparse(stmt)).body[0])
+    if op == "extrude":
+        cut = isinstance(bare, ast.AugAssign) and isinstance(bare.op, ast.Sub)
+        return ("extrude", cut, ast.dump(bare.value))
+    return (op, ast.dump(bare))
+
+
+def _stmts(code: str) -> list[dict]:
+    """Every operation statement, switched off or not: [{"line", "end",
+    "stmt", "call", "op", "off", "tail" (the comment after it)}], in order."""
+    tree = ast.parse(code)
+    found = [(n, 0, code, False) for n in tree.body]
+    for a, _, text in _off_blocks(code):
+        try:
+            found += [(n, a - 1, text, True) for n in ast.parse(text).body[:1]]
+        except SyntaxError:
+            pass
+    out = []
+    for node, shift, src, off in found:
+        hit = _recognise(node)
+        if hit is None:
+            continue
+        row = src.split("\n")[node.end_lineno - 1]
+        out.append({"line": node.lineno + shift, "end": node.end_lineno + shift, "stmt": node, "call": hit[0],
+                    "op": hit[1], "off": off, "tail": row[_chars(row, node.end_col_offset):]})
+    return sorted(out, key=lambda s: s["line"])
+
+
+def _links(code: str) -> dict[int, dict]:
+    """The mirrored copies with a link comment: {copy's line: {"of" (its
+    step's line), "stated" (the comment's line number), "label" (the
+    comment's plane), "plane" (the copy's plane, in a few words), "end",
+    "off"}}. A copy belongs to the nearest step before it that it copies
+    (so the link survives lines moving), else to the step its comment names
+    when that is the same operation."""
+    try:
+        ss = _stmts(code)
+    except SyntaxError:
+        return {}
+    keys = {}
+    for s in ss:
+        try:
+            keys[s["line"]] = _link_key(s["stmt"], s["op"])
+        except (SyntaxError, ValueError):
+            keys[s["line"]] = None
+    out = {}
+    for s in ss:
+        m = _LINK.search(s["tail"])
+        wrap = _mirror_node(s["stmt"], s["call"], s["op"]) if m else None
+        if wrap is None:
+            continue
+        stated = int(m.group(1))
+        origs = [o for o in ss if o["line"] < s["line"] and o["op"] == s["op"]
+                 and _mirror_node(o["stmt"], o["call"], o["op"]) is None]
+        same = [o["line"] for o in origs if keys[o["line"]] is not None and keys[o["line"]] == keys[s["line"]]]
+        of = stated if stated in same else same[-1] if same else \
+            stated if any(o["line"] == stated for o in origs) else None
+        if of is None:
+            continue
+        try:
+            label = plane_label(_mirror_plane_arg(wrap.args[1]))
+        except (ParamError, ValueError, SyntaxError):
+            label = m.group(2) or ""
+        out[s["line"]] = {"of": of, "stated": stated, "label": m.group(2), "plane": label,
+                          "end": s["end"], "off": s["off"]}
+    return out
+
+
+def _link_comment(of: int, label: str) -> str:
+    return f"  # mirror of line {of} across {label}"
+
+
+def relink(code: str) -> str:
+    """`code` with each link comment naming its step's line (and the copy's
+    plane) as they are now."""
+    links = _links(code)
+    if not links:
+        return code
+    rows = code.split("\n")
+    for link in links.values():
+        if link["stated"] != link["of"] or link["label"] != link["plane"]:
+            i = link["end"] - 1
+            text = _link_comment(link["of"], link["plane"])
+            rows[i] = _LINK.sub(lambda _m, t=text: t, rows[i], count=1)
+    return "\n".join(rows)
+
+
+def _rewrite_copy(code: str, line: int, text: str, op: str) -> str:
+    """The mirrored copy on `line` written again from its step's new
+    statement `text` (across the same plane; its comment and whether it is
+    switched off stay)."""
+    s = next((s for s in _stmts(code) if s["line"] == line), None)
+    if s is None or s["op"] != op:
+        return code
+    wrap = _mirror_node(s["stmt"], s["call"], op)
+    if wrap is None:
+        return code
+    rows = code.split("\n")
+    src = "\n".join(_off_text(r) for r in rows[s["line"] - 1:s["end"]]) if s["off"] else \
+        "\n".join(rows[s["line"] - 1:s["end"]])
+    sub = ast.parse(src).body[0]
+    plane = ast.get_source_segment(src, _mirror_node(sub, _recognise(sub)[0], op).args[1])
+    new = (_copy_text(text, op, plane) + s["tail"]).split("\n")
+    if s["off"]:
+        new = [OFF + r for r in new]
+    rows[s["line"] - 1:s["end"]] = new
+    return "\n".join(rows)
+
+
+def _step_start(code: str, line: int) -> int:
+    """The first line of the step on `line` (switched off or not)."""
+    block = next((a for a, b, _ in _off_blocks(code) if a <= line <= b), None)
+    if block is not None:
+        return block
+    node = next((n for n in ast.parse(code).body if n.lineno <= line <= (n.end_lineno or n.lineno)), None)
+    return node.lineno if node is not None else line
+
+
+def mirror_steps(code: str, lines: list[int], plane) -> tuple[str, list[dict], list[dict]]:
+    """A mirrored copy across `plane` of each step on `lines` (extrudes,
+    holes, fillets and chamfers), one line each after the last of them (and
+    after the plane's own line), each with its link comment. Returns (code,
+    the copies [{"of", "line"}], the steps left out [{"line", "reason"}])."""
+    plane_src, plane = _plane_src(code, plane)
+    label = plane_label(plane)
+    tree = ast.parse(code)
+    offs = _off_blocks(code)
+    todo, skipped = [], []
+    for ln in sorted(set(int(x) for x in lines)):
+        if any(a <= ln <= b for a, b, _ in offs):
+            skipped.append({"line": ln, "reason": "it is switched off"})
+            continue
+        hit = _op_stmt(tree, ln)
+        if hit is None:
+            skipped.append({"line": ln, "reason": "it isn't a step the editor can mirror"})
+            continue
+        stmt, call, op = hit
+        if op not in MIRROR_OPS:
+            skipped.append({"line": ln, "reason": f"{TITLES.get(op, op)} can't be mirrored"})
+            continue
+        if _mirror_node(stmt, call, op) is not None:
+            skipped.append({"line": ln, "reason": "it is a mirrored copy already: mirror its original"})
+            continue
+        try:
+            todo.append((stmt, _copy_text(ast.get_source_segment(code, stmt), op, plane_src)))
+        except ParamError as exc:
+            skipped.append({"line": ln, "reason": str(exc)})
+    if not todo:
+        return code, [], skipped
+    after = max(stmt.end_lineno for stmt, _ in todo)
+    if "plane" in plane:
+        pdef = next(n for n in tree.body if _plane_name(n) == plane["plane"])
+        after = max(after, pdef.end_lineno)
+    rows = code.split("\n")
+    new, made = [], []
+    for stmt, text in todo:
+        made.append({"of": stmt.lineno, "line": after + len(new) + 1})
+        new += (text + _link_comment(stmt.lineno, label)).split("\n")
+    rows[after:after] = new
+    return "\n".join(rows), made, skipped
+
+
+def add_mirror_body(code: str, plane, join: bool = True, line: int | None = None) -> str:
+    """Append `part = mirror_body(part, PLANE, join=True)` — or, with `line`,
+    rewrite the mirror_body() line there. join=False keeps the mirror image
+    as a separate body."""
+    if not _assigns_part(ast.parse(code)):
+        raise ParamError("there is no part to mirror yet")
+    plane_src, _ = _plane_src(code, plane)
+    return _write_op(code, f"part = mirror_body(part, {plane_src}, join={bool(join)})", line, "mirror_body")
+
+
+def unlink(code: str, line: int) -> str:
+    """The mirrored copy on `line` without its link comment: a step of its
+    own, no longer written again from the one it copied."""
+    s = next((s for s in _stmts(code) if s["line"] <= line <= s["end"]), None)
+    if s is None or _mirror_node(s["stmt"], s["call"], s["op"]) is None or not _LINK.search(s["tail"]):
+        raise ParamError(f"line {line} is not a linked mirrored copy")
+    rows = code.split("\n")
+    rows[s["end"] - 1] = _LINK.sub("", rows[s["end"] - 1], count=1)
+    return "\n".join(rows)
+
+
+def _relinked(fn):
+    @functools.wraps(fn)
+    def run(*args, **kwargs):
+        out = fn(*args, **kwargs)
+        if isinstance(out, str):
+            return relink(out)
+        if isinstance(out, tuple) and out and isinstance(out[0], str):
+            return (relink(out[0]), *out[1:])
+        return out
+    return run
+
+
+# every writer leaves the link comments naming the right lines
+for _fn in (set_params, add_param, drop_param, add_extrude, add_shell, add_edge_op, add_holes, edit_args,
+            add_plane, rename_plane, suppress, delete_step, mirror_steps, add_mirror_body, unlink):
+    globals()[_fn.__name__] = _relinked(_fn)
+del _fn

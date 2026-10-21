@@ -10,10 +10,13 @@ import type { OpIcon } from './operations';
 const ICONS: Record<string, OpIcon> = {
   extrude: 'extrude', shell: 'shell', holes: 'hole', fillet: 'fillet', chamfer: 'chamfer',
   auto_round: 'round', truss_windows: 'lighten', offset_plane: 'plane-offset', edge_plane: 'plane-edge',
+  mirror_body: 'mirror',
 };
 
-/** The registry icon of a step's operation (none for a run of script). */
+/** The registry icon of a step's operation (none for a run of script); a
+ *  linked mirrored copy shows the mirror. */
 export function stepIcon(s: Step): OpIcon | null {
+  if (s.kind === 'op' && s.mirror_of != null) return 'mirror';
   return s.kind === 'op' && s.op ? ICONS[s.op] ?? null : null;
 }
 

@@ -381,12 +381,13 @@ class OpAtRequest(Schema):
 
 class OpAtResponse(Schema):
     """An operation line read back for its dialog (paramedit.op_at)."""
-    op: str                         # extrude | shell | holes | fillet | chamfer | auto_round | truss_windows
+    op: str                         # extrude | shell | holes | fillet | chamfer | auto_round | truss_windows | mirror_body
     line: int
     end_line: int
     args: dict                      # its values, P keys resolved
     params: dict[str, str] = {}     # argument -> the P key holding it
     exprs: dict[str, str] = {}      # argument -> its source, when written as an expression
+    mirror: dict | None = None      # a mirrored copy: {"plane", "label", "of": its step's line, None unlinked}
 
 
 class EditArgsRequest(Schema):
@@ -424,6 +425,8 @@ class Step(Schema):
     faces: list[dict] = []
     edges: list[dict] = []
     plane: str | None = None        # a construction plane's name
+    mirror_of: int | None = None    # a mirrored copy: the line of the step it is linked to
+    mirror_plane: str | None = None  # a mirrored copy: its plane, in a few words
 
 
 class StepsResponse(Schema):
@@ -434,10 +437,32 @@ class StepLineRequest(Schema):
     code: str
     line: int                       # any line of the step
     off: bool = True                # suppress: off, or back on
+    copies: str | None = None       # its mirrored copies: delete: 'keep' (unlinked) | 'delete';
+                                    # suppress: 'with' switches them too
 
 
 class CodeResponse(Schema):
     code: str
+
+
+# a plane to mirror across: {"face": face ref}, {"base": "XY" | "XZ" | "YZ"} or {"plane": name}
+class AddMirrorBodyRequest(Schema):
+    code: str
+    plane: dict | str
+    join: bool = True               # fuse with the part / keep as a separate body
+    line: int | None = None         # rewrite the mirror_body() line there instead of appending
+
+
+class MirrorStepsRequest(Schema):
+    code: str
+    lines: list[int]                # a line of each step to mirror
+    plane: dict | str
+
+
+class MirrorStepsResponse(Schema):
+    code: str
+    made: list[dict] = []           # [{"of": the step's line, "line": its copy's}]
+    skipped: list[dict] = []        # [{"line", "reason"}]: steps that can't be mirrored
 
 
 class AddShellRequest(Schema):

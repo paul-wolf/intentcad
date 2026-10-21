@@ -13,14 +13,12 @@ import type { BasePlane } from './faceSketch';
 import { FILTER_KEY } from './edgePick';
 
 export type OpGroup = 'Sketch' | 'Create' | 'Construct' | 'Modify' | 'Pattern' | 'Inspect' | 'View' | 'File';
-/** The order the groups are shown in (an empty one isn't shown: the part
- *  editor has no pattern operations yet — grid and circular copy are the 2D
- *  sketcher's). */
+/** The order the groups are shown in (an empty one isn't shown). */
 export const OP_GROUPS: OpGroup[] = ['Sketch', 'Create', 'Construct', 'Modify', 'Pattern', 'Inspect', 'View', 'File'];
 
 export type OpIcon =
   | 'sketch-face' | 'plane-top' | 'plane-front' | 'plane-right' | 'extrude' | 'hole' | 'shell' | 'fillet' | 'chamfer' | 'round'
-  | 'plane-offset' | 'plane-edge'
+  | 'plane-offset' | 'plane-edge' | 'mirror' | 'mirror-steps'
   | 'lighten' | 'protect' | 'fix' | 'measure' | 'section' | 'normal' | 'ortho' | 'params' | 'build' | 'import'
   | 'export' | 'stl' | 'parts' | 'dxf' | 'views3' | 'versions' | 'process' | 'context'
   | `view-${StandardView}`;
@@ -61,6 +59,8 @@ export interface OpModel {
   measure: string | null;
   /** the section view is on */
   section: boolean;
+  /** the steps chosen in the steps list that Mirror steps can copy */
+  mirrorSteps: number;
 }
 
 export type ExportFormat = 'stl' | 'step' | 'stl-parts' | 'dxf' | 'dxf-views';
@@ -96,6 +96,10 @@ export interface OpContext {
   copyMeasure(): void;
   /** Z: the section view on (or off) */
   section(): void;
+  /** the Mirror body dialog, across the selected flat face or plane (or one picked in it) */
+  mirrorBody(): void;
+  /** the Mirror steps dialog, for the steps chosen in the steps list */
+  mirrorSteps(): void;
 }
 
 export type Need = { ok: true } | { ok: false; reason: string };
@@ -172,6 +176,14 @@ const aiFree = (m: OpModel): [boolean, string][] => [
   [m.asking, 'The AI is working on a change'],
   [m.status === 'building', 'Wait for the build'],
 ];
+
+/** A plane to mirror across: one flat face, one construction plane, or nothing (picked in the dialog). */
+const planeChoice = (sel: OpSelection): [boolean, string][] => [
+  [sel.edges.length > 0 || sel.faces.length + planeCount(sel) > 1, 'Select one flat face or plane, or nothing'],
+  ...(sel.faces.length ? oneFlatFace(sel) : []),
+];
+const planeDetail = (sel: OpSelection) => (sel.faces.length ? 'across the selected face'
+  : planeCount(sel) ? `across ${sel.planes![0]!.name}` : 'across a plane picked in the dialog');
 
 const EDGES_REASON = 'Select edges (double-click for a whole loop)';
 
@@ -362,6 +374,32 @@ export const OPERATIONS: Operation[] = [
     needs: (_sel, m) => first([m.status !== 'error', 'Only when a build fails'],
                               [m.asking, 'The AI is working on a change']),
     run: (ctx) => ctx.ask(FIX_INSTRUCTION),
+  },
+  // Pattern
+  {
+    id: 'mirror-body', name: 'Mirror body', group: 'Pattern', icon: 'mirror',
+    help: 'Mirror the whole part across a face or plane, joined to it or as a separate body',
+    longHelp: 'Mirrors the whole part across the selected flat face or construction plane (with nothing selected, '
+      + 'pick XY, XZ, YZ or a construction plane in the dialog). Join fuses the mirror image with the part: model '
+      + 'one half up to the plane and this makes the whole. Separate body keeps it beside the part, for left and '
+      + 'right versions.',
+    example: 'mirror the bracket across its cut face to make the other half',
+    needs: (sel, m) => first(...notWhile(m), ...built(m), ...planeChoice(sel)),
+    detail: (sel) => planeDetail(sel),
+    run: (ctx) => ctx.mirrorBody(),
+  },
+  {
+    id: 'mirror-steps', name: 'Mirror steps', group: 'Pattern', icon: 'mirror-steps',
+    help: 'Copy the steps chosen in the steps list to the other side of a plane',
+    longHelp: 'Choose extrudes, holes, fillets or chamfers in the steps list (Ctrl-click or Shift-click for more), '
+      + 'then this adds each again reflected across a face, base plane or construction plane. Each copy stays '
+      + 'linked to its original: change the original and the copy follows, until you unlink it.',
+    example: 'mirror the USB cutout and the two standoffs across the midplane',
+    // the plane is picked in the dialog (the chosen steps light their own faces and edges)
+    needs: (_sel, m) => first(...notWhile(m), ...built(m),
+                              [m.mirrorSteps === 0, 'Choose steps in the steps list (Ctrl-click for more)']),
+    detail: (_sel, m) => `${plural(m.mirrorSteps, 'step')} chosen`,
+    run: (ctx) => ctx.mirrorSteps(),
   },
   // Inspect
   {
