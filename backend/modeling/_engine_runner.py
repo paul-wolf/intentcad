@@ -446,7 +446,7 @@ def _run(code: str, export: list | None = None,
     ns.update(face_ref.bind(ns, face_report))
     ns.update(edge_ref.bind(ns, edge_report))
     ns.update(shell_hole.bind(ns))
-    # PLANES["name"] = offset_plane(...) / edge_plane(...) — construction
+    # PLANES["name"] = offset_plane(...) / edge_plane(...) / tangent_plane(...) — construction
     # planes that follow the part (modeling/planes.py); each → result["planes"]
     from modeling import planes
 

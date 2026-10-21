@@ -4,7 +4,7 @@ import { useDocumentStore } from '@/stores/documentStore';
 import {
   api, buildApi, errorText, ApiError, type RunResponse, type RunEdge, type FaceRefReport, type UsageResponse, type DimInfo, type ModelInfo, type ModelsResponse, type SizeFix,
   type FaceRefSpec, type HolePresets, type EdgeOpKind, type EdgeRefSpec, type ExtrudeOp, type KeepItem, type Step,
-  type PlaneReport, type MirrorPlane, type PatternReport, type PatternSpec,
+  type PlaneReport, type MirrorPlane, type PatternReport, type PatternSpec, type PlaneOpKind, type RunFace,
 } from '@/api/client';
 import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, persistSketches, getBackendId } from '@/api/autoSave';
 import { DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
@@ -14,7 +14,8 @@ import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim
 import {
   amountOut, amountValue, edgePayload, edgePlaneShape, faceBesideEdge, loadHiddenPlanes, newPlaneName, offsetBasePoint, offsetPayload,
   offsetPlaneShape, renameHidden, reopenedFromFace, saveHiddenPlanes, shownPlanes, type BaseName, type EdgePlaneValues,
-  type Amount, type OffsetPlaneValues, type PlaneShape,
+  type Amount, type OffsetPlaneValues, type PlaneShape, clickAngle, cylinderOfFace, insideCylinder, tangentPayload, tangentPlaneShape,
+  tangentZero, type Cylinder, type TangentPlaneValues,
 } from '@/build/constructionPlanes';
 import {
   atPosition, axisSection, cutNormal, flipSection, loadSection, saveSection, sectionAxis, sectionForView, sectionOnFace,
@@ -36,7 +37,7 @@ import { PartHelpModal } from './PartHelpModal';
 import { useFaceSketch, type ExtrudeOptions } from './FaceSketchMode';
 import {
   ShellDialog, HoleDialog, EdgeOpDialog, ExtrudeDialog, RoundDialog, TrussDialog, useOpPreview, refOf, faceOfRef, sameRef,
-  holesPayload, holeValuesOf, newHoleValues, placeKey, toggleEdge, addEdges, argOpPayload, OffsetPlaneDialog, EdgePlaneDialog,
+  holesPayload, holeValuesOf, newHoleValues, placeKey, toggleEdge, addEdges, argOpPayload, OffsetPlaneDialog, EdgePlaneDialog, TangentPlaneDialog,
   MirrorOpDialog, MirrorCopyDialog, MIRROR_COPY_COLOR, PatternOpDialog,
   type ShellValues, type HoleValues,
   type HolePlace, type EdgeOpValues, type ExtrudeValues, type ArgOpValues, type MirrorValues,
@@ -50,7 +51,7 @@ import {
 import { messageLine, reopenableAt, stepIcon, stepInputs, stepLabel, stepProblems, suppressedNote } from '@/build/steps';
 import {
   BASE_PLANES, boundPlane, extrudeDirectionText, faceLabel, findFaceSketch, partSide, referencedProfiles, referencedSketchNames,
-  planeSketches, renamePlaneRefs, sketchBasePlane, sketchBindNotes, sketchHolePoints, sketchSegments, type BasePlane,
+  onTangentPlane, planeSketches, renamePlaneRefs, sketchBasePlane, sketchBindNotes, sketchHolePoints, sketchSegments, type BasePlane,
   type SketchBindings,
 } from '@/build/faceSketch';
 import {
@@ -95,13 +96,14 @@ const NO_CHAT: ChatMessage[] = [];
 /** What the code view's Edit button calls a line's dialog. */
 const OP_NAMES = {
   shell: 'Shell', holes: 'Hole', fillet: 'Fillet', chamfer: 'Chamfer', extrude: 'Extrude', auto_round: 'Round',
-  truss_windows: 'Lighten', offset_plane: 'Offset plane', edge_plane: 'Plane on edge', mirror_body: 'Mirror body',
+  truss_windows: 'Lighten', offset_plane: 'Offset plane', edge_plane: 'Plane on edge', tangent_plane: 'Tangent plane', mirror_body: 'Mirror body',
   pattern_body: 'Pattern body',
 } as const;
-/** An Offset plane or Plane on edge dialog: `line` the line it was reopened
- *  from (null: a new plane), `own` the plane's name in the script then. */
+/** An Offset plane, Plane on edge or Tangent plane dialog: `line` the line
+ *  it was reopened from (null: a new plane), `own` the plane's name in the
+ *  script then. */
 type PlaneOp = { line: number | null; own: string | null }
-  & ({ kind: 'offset'; v: OffsetPlaneValues } | { kind: 'edge'; v: EdgePlaneValues });
+  & ({ kind: 'offset'; v: OffsetPlaneValues } | { kind: 'edge'; v: EdgePlaneValues } | { kind: 'tangent'; v: TangentPlaneValues });
 /** A reopened extrude line: its values, the P key its depth is in, and
  *  whether it makes the part (New body, nothing else). */
 interface ExtrudeEdit { line: number; v: ExtrudeValues; param: string | null; firstBody: boolean }
@@ -1069,6 +1071,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     setExtrudeOp(null);
     setArgOp(null);
     setPlaneOp(null);
+    setTangentAim((a) => { if (a != null) setNotice(''); return null; });
     setMirrorOp(null);
     setCopyOp(null);
     setPatternOp(null);
@@ -1119,7 +1122,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // The steps list: the script's operations, as the backend reads them (the
   // sketches on a base plane, and each one's hole points, tell it how)
   const stepInKey = JSON.stringify(stepInputs(docSketches.map((sk) => ({
-    name: sk.name, basePlane: !!sketchBasePlane(sk) || !!sk.planeRef, points: sketchHolePoints(sk).length,
+    name: sk.name, basePlane: !!sketchBasePlane(sk) || (!!sk.planeRef && !onTangentPlane(sk, resRef.current?.planes)), points: sketchHolePoints(sk).length,
   }))));
   const stepIn = useMemo(() => JSON.parse(stepInKey) as ReturnType<typeof stepInputs>, [stepInKey]);
   const [steps, setSteps] = useState<Step[]>([]);
@@ -1245,6 +1248,9 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   useEffect(() => { setHiddenState(docId ? loadHiddenPlanes(docId) : []); }, [docId]);
   const setHiddenPlanes = (names: string[]) => { setHiddenState(names); if (docId) saveHiddenPlanes(docId, names); };
   const [planeOp, setPlaneOp] = useState<PlaneOp | null>(null);
+  // Tangent plane, before its dialog: the cylindrical face waiting for a
+  // click where the plane should touch it (the angle comes from the click)
+  const [tangentAim, setTangentAim] = useState<number | null>(null);
   const planeNames = [...new Set([...steps.flatMap((s) => (s.plane ? [s.plane] : [])), ...Object.keys(builtPlanes)])];
   // the one plane selected (and nothing else): K sketches on it, N looks at it, Z cuts along it
   const selectedPlane = () => {
@@ -1293,12 +1299,53 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       name: newPlaneName(planeNames), edge: e.ref, faces, from: 0, angle: 30, a: ends[0], b: ends[1],
     } });
   };
-  // a plane line reopened: its dialog's values (null: its edge isn't found)
-  const planeValuesOf = (op: 'offset_plane' | 'edge_plane', args: Record<string, unknown>,
-                         exprs: Record<string, string>):
-    ({ kind: 'offset'; v: OffsetPlaneValues } | { kind: 'edge'; v: EdgePlaneValues }) | null => {
+  // a cylindrical face of the build as a tangent plane sees it (null: not a cylinder)
+  const cylOf = (f: RunFace): Cylinder | null => {
+    const res = resRef.current;
+    if (!res || f.kind !== 'cylinder' || !f.axis || !f.axis_point || !f.radius) return null;
+    return cylinderOfFace(res.mesh.positions, res.mesh.normals,
+                          { start: f.start, count: f.count, axis: f.axis, axis_point: f.axis_point, radius: f.radius },
+                          f.ref?.normal);
+  };
+  const startTangentPlane = () => {
+    const res = resRef.current;
+    const f = selRef.current.length === 1 ? res?.faces.find((x) => x.index === selRef.current[0]) : undefined;
+    if (!res || !f) return;
+    if (!cylOf(f) || !f.ref) { planeNotice('A tangent plane touches a cylindrical face: pick one'); return; }
+    setTangentAim(f.index);
+    setNotice('Click the cylinder where the plane should touch it · Esc cancels');
+  };
+  // a flat face as a tangent plane's 0°
+  // a flat inside the cylinder (a shaft's flat) is "the flat face": "the left
+  // face" would name the way it faces, not the side it is on
+  const tangentRefFace = (f: RunFace, cyl: Cylinder): TangentPlaneValues['refFace'] => {
+    const found = f.kind === 'plane' ? refOf(f) : null;
+    if (!found) return null;
+    const hint = insideCylinder(f.center as Vec3, cyl) ? 'flat face' : found.hint ?? faceLabel(f.normal);
+    return { ref: { ...found, hint }, center: f.center as Vec3, normal: f.normal as Vec3, hint };
+  };
+  // a plane line reopened: its dialog's values (null: its edge or cylinder isn't found)
+  const planeValuesOf = (op: PlaneOpKind, args: Record<string, unknown>, exprs: Record<string, string>):
+    ({ kind: 'offset'; v: OffsetPlaneValues } | { kind: 'edge'; v: EdgePlaneValues }
+     | { kind: 'tangent'; v: TangentPlaneValues }) | null => {
     const res = resRef.current;
     const name = String(args.name ?? '');
+    if (op === 'tangent_plane') {
+      const a = args as { face: FaceRefSpec; angle: number; ref: null | 'X' | 'Y' | 'Z' | { face: FaceRefSpec } };
+      // the cylinder as the build found it for this plane, else the face if it is there as it was
+      const c = res?.planes?.[name]?.cylinder, f = res && !c ? faceOfRef(res.faces, a.face) : null;
+      const cyl: Cylinder | null = c ? { start: c.center, axis: c.axis, radius: c.radius, length: c.length, inward: c.inward }
+        : f ? cylOf(f) : null;
+      if (!cyl) return null;
+      let refFace: TangentPlaneValues['refFace'] = null;
+      if (a.ref && typeof a.ref === 'object') {
+        const rf = res ? faceOfRef(res.faces, a.ref.face) : null, r = a.ref.face;
+        refFace = { ref: r, center: (rf?.center ?? r.center) as Vec3, normal: (rf?.normal ?? r.normal) as Vec3,
+                    hint: r.hint ?? faceLabel(rf?.normal ?? r.normal) };
+      }
+      return { kind: 'tangent', v: { name, face: a.face, cyl, ref: !a.ref ? 'auto' : typeof a.ref === 'string' ? a.ref : 'face',
+                                     refFace, angle: exprs.angle ?? a.angle } };
+    }
     if (op === 'offset_plane') {
       const a = args as { base: BaseName | { face: FaceRefSpec }; distance: number };
       const distance = exprs.distance ?? a.distance;
@@ -1328,6 +1375,10 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       const base = v.base === 'face' ? v.face : v.base;
       return d === null || !base ? null : { name, ...offsetPlaneShape(base, d) };
     }
+    if (planeOp.kind === 'tangent') {
+      const v = planeOp.v, a = amountValue(v.angle, paramVals), z = tangentZero(v.cyl, v.ref, v.refFace);
+      return a === null || !z ? null : { name, ...tangentPlaneShape(v.cyl, z, a) };
+    }
     const v = planeOp.v, a = amountValue(v.angle, paramVals), f = v.faces[v.from];
     return a === null || !f ? null : { name, ...edgePlaneShape(v.a, v.b, f, a) };
   })();
@@ -1337,6 +1388,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       const { mid, w, n } = planePreview;
       const value = amountValue(planeOp.v.angle, paramVals);
       return mid && w && n && value !== null ? { face: -1, at: mid, shift: n, turn: { w, n }, dr: 0, value, moves: [] } : null;
+    }
+    if (planeOp.kind === 'tangent') {
+      // a ring round the cylinder's axis, its knob just outside the cylinder where the plane touches
+      const { mid, w, n } = planePreview;
+      const value = amountValue(planeOp.v.angle, paramVals);
+      return mid && w && n && value !== null
+        ? { face: -1, at: mid, shift: n, dr: 0, value, moves: [],
+            turn: { w, n, step: 5, fine: 1, stick: 90, arm: planeOp.v.cyl.radius * 1.4 } } : null;
     }
     const m = resRef.current?.metrics;
     const base = planeOp.v.base === 'face' ? planeOp.v.face : planeOp.v.base;
@@ -1349,15 +1408,16 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   if (planeOp) {
     setEdgeSizeRef.current = (value: number) => setPlaneOp((o) => o && (o.kind === 'offset'
       ? { ...o, v: { ...o.v, distance: Math.round(value * 1000) / 1000 } }
-      : { ...o, v: { ...o.v, angle: Math.round(value * 1000) / 1000 } }));
+      : o.kind === 'edge' ? { ...o, v: { ...o.v, angle: Math.round(value * 1000) / 1000 } }
+      : { ...o, v: { ...o.v, angle: Math.round(value * 2) / 2 } }));
   }
   const applyPlaneOp = async () => {
     const o = planeOp;
     if (!o) return;
-    const label = o.kind === 'offset' ? 'Offset plane' : 'Plane on edge';
+    const label = o.kind === 'offset' ? 'Offset plane' : o.kind === 'edge' ? 'Plane on edge' : 'Tangent plane';
     if (amountValue(o.kind === 'offset' ? o.v.distance : o.v.angle, paramVals) === null) return;
     try {
-      const payload = o.kind === 'offset' ? offsetPayload(o.v) : edgePayload(o.v);
+      const payload = o.kind === 'offset' ? offsetPayload(o.v) : o.kind === 'edge' ? edgePayload(o.v) : tangentPayload(o.v);
       const r = await buildApi.addPlane({ ...payload, code: codeRef.current, line: o.line });
       closeOp();
       if (r.renamed && r.renamed !== payload.name) {
@@ -1648,14 +1708,21 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     viewerRef.current?.setPlanes(shownPlaneList);
   }, [shownPlanesKey]);   // eslint-disable-line react-hooks/exhaustive-deps
   // with a plane dialog open, the face it goes from (and the edge) show as selected
-  const planeSelKey = planeOp ? JSON.stringify(planeOp.kind === 'offset'
-    ? [planeOp.v.base, planeOp.v.face?.ref.center] : [planeOp.v.from, planeOp.v.edge.midpoint]) : '';
+  const planeSelKey = planeOp ? JSON.stringify(planeOp.kind === 'offset' ? [planeOp.v.base, planeOp.v.face?.ref.center]
+    : planeOp.kind === 'tangent' ? [planeOp.v.face.center, planeOp.v.ref, planeOp.v.refFace?.ref.center]
+    : [planeOp.v.from, planeOp.v.edge.midpoint]) : '';
   useEffect(() => {
     const v = viewerRef.current, res = resRef.current;
     if (!planeOp || !v || !res) return;
     if (planeOp.kind === 'offset') {
       const f = planeOp.v.base === 'face' && planeOp.v.face ? faceOfRef(res.faces, planeOp.v.face.ref) : null;
       v.selectFaces(f ? [f.index] : []);
+      v.selectEdges([]);
+    } else if (planeOp.kind === 'tangent') {
+      // the cylinder, and the flat face 0° is measured from
+      const c = faceOfRef(res.faces, planeOp.v.face) ?? res.faces.find((x) => x.index === selRef.current[0]);
+      const r = planeOp.v.ref === 'face' && planeOp.v.refFace ? faceOfRef(res.faces, planeOp.v.refFace.ref) : null;
+      v.selectFaces([...(c?.kind === 'cylinder' ? [c.index] : []), ...(r ? [r.index] : [])]);
       v.selectEdges([]);
     } else {
       const f = planeOp.v.faces[planeOp.v.from];
@@ -1855,9 +1922,39 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     if (!ref) { planeNotice('Mirror across a flat face: pick a flat one'); return; }
     const pl = facePlane(ref, face.normal);
     setMirrorOp((o) => o && ({ ...o, v: { ...o.v, plane: pl, face: 'face' in pl ? pl.face : null } }));
+  } : tangentAim != null ? (p) => {
+    // Tangent plane: the click on the cylinder says where it touches
+    const f = resRef.current?.faces.find((x) => x.index === tangentAim);
+    const cyl = f ? cylOf(f) : null, ref = f ? refOf(f) : null;
+    if (!p || !('face' in p) || p.face.index !== tangentAim || !p.point || !cyl || !ref) {
+      setNotice('Click on the selected cylinder, where the plane should touch it · Esc cancels');
+      return;
+    }
+    setTangentAim(null);
+    setNotice('');
+    setPlaneOp({ line: null, own: null, kind: 'tangent', v: {
+      name: newPlaneName(planeNames), face: ref, cyl, ref: 'auto', refFace: null,
+      angle: clickAngle(p.point, cyl, tangentZero(cyl, 'auto') ?? [1, 0, 0]),
+    } });
   } : planeOp ? (p) => {
     const face = p && 'face' in p ? resRef.current?.faces.find((x) => x.index === p.face.index) : undefined;
     if (!face) return;
+    if (planeOp.kind === 'tangent') {
+      const v = planeOp.v;
+      if (face.kind === 'plane') {
+        // a flat face: 0° is toward it
+        const refFace = tangentRefFace(face, v.cyl);
+        if (refFace) setPlaneOp((o) => o && o.kind === 'tangent' ? { ...o, v: { ...o.v, ref: 'face', refFace } } : o);
+        return;
+      }
+      // the cylinder itself: the plane touches it there
+      const z = tangentZero(v.cyl, v.ref, v.refFace), own = faceOfRef(resRef.current?.faces ?? [], v.face);
+      if (z && p && 'face' in p && p.point && (own ? own.index === face.index : face.kind === 'cylinder')) {
+        const angle = clickAngle(p.point, v.cyl, z);
+        setPlaneOp((o) => o && o.kind === 'tangent' ? { ...o, v: { ...o.v, angle } } : o);
+      } else planeNotice('Click the cylinder to move the plane there, or a flat face to measure from it');
+      return;
+    }
     if (planeOp.kind === 'edge') {
       // one of the edge's two faces: it is 0°
       const i = planeOp.v.faces.findIndex((f) => f.index === face.index);
@@ -1924,10 +2021,10 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     viewerRef.current?.selectFaces([]);
     viewerRef.current?.selectEdges(idx);
   }, [edgeKey]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const opOpen = !!shellOp || !!holeOp || !!edgeOp || !!extrudeOp || !!argOp || !!planeOp || !!mirrorOp || !!copyOp || !!patternOp;
+  const opOpen = !!shellOp || !!holeOp || !!edgeOp || !!extrudeOp || !!argOp || !!planeOp || tangentAim != null || !!mirrorOp || !!copyOp || !!patternOp;
   // Shell, Hole and Round work on faces: while one is open a click picks faces
   // only; Fillet and Chamfer, edges only; Pattern takes either, as the filter says
-  const viewFilter: PickFilter = patternOp ? pickFilter : shellOp || holeOp || planeOp || mirrorOp || argOp?.v.op === 'auto_round' ? 'faces' : edgeOp ? 'edges'
+  const viewFilter: PickFilter = patternOp ? pickFilter : shellOp || holeOp || planeOp || tangentAim != null || mirrorOp || argOp?.v.op === 'auto_round' ? 'faces' : edgeOp ? 'edges'
     : pickFilter;
   useEffect(() => { viewerRef.current?.setPickFilter(viewFilter); }, [viewFilter]);
   // the dialogs sit at the top left of the view: draw the part beside them
@@ -1982,9 +2079,9 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         };
         if (op.op === 'auto_round') applySelection([]);
         setArgOp({ line: op.line, end: op.end_line, v, orig: v });
-      } else if (op.op === 'offset_plane' || op.op === 'edge_plane') {
+      } else if (op.op === 'offset_plane' || op.op === 'edge_plane' || op.op === 'tangent_plane') {
         const p = planeValuesOf(op.op, op.args, op.exprs ?? {});
-        if (!p) throw new Error('the edge this plane is on isn\'t on the part as built');
+        if (!p) throw new Error(`the ${op.op === 'edge_plane' ? 'edge' : 'cylinder'} this plane is on isn't on the part as built`);
         setPlaneOp({ line: op.line, own: (op.args as { name: string }).name, ...p });
       } else if (op.op === 'shell') {
         const a = op.args as { remove?: FaceRefSpec[]; thickness?: number; inside?: boolean };
@@ -2143,10 +2240,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     : faceHandle;
   handleRef.current = handle;
   edgeHandleOnRef.current = !!edgeOp || !!planeOp || !!patternOp;
-  handleUnitRef.current = planeOp?.kind === 'edge' || patH?.name === 'angle' ? '°' : '';
+  handleUnitRef.current = planeOp?.kind === 'edge' || planeOp?.kind === 'tangent' || patH?.name === 'angle' ? '°' : '';
   dialogDragNoteRef.current = patH?.name === 'count' ? 'drag to add or remove copies · Esc cancels'
     : patH?.name === 'angle' ? 'Shift: 0.1° · Esc cancels' : patternOp ? 'Shift: 0.1 mm · Esc cancels'
     : planeOp?.kind === 'offset' ? 'Shift: 0.1 mm · snaps to faces · Esc cancels'
+    : planeOp?.kind === 'tangent' ? 'Shift: 1° · holds at 90° steps · Esc cancels'
     : planeOp ? 'Shift: 0.1° · Esc cancels' : '0.1 mm steps · Esc cancels';
   handleHintRef.current = nHandles > 1 ? `Tab ⇄ ${hi + 1}/${nHandles}` : '';
   const handleKeyRef = useRef(handleKey);
@@ -2511,6 +2609,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     sketchOnSelection, sketchOnPlane,
     offsetPlane: startOffsetPlane,
     edgePlane: startEdgePlane,
+    tangentPlane: startTangentPlane,
     shell: startShell,
     hole: () => void startHole(),
     fillet: () => startEdgeOp('fillet'),
@@ -3021,6 +3120,12 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
               <OffsetPlaneDialog value={planeOp.v} editing={planeOp.line != null} params={paramVals}
                 used={planeNames} own={planeOp.own ?? undefined}
                 onChange={(v) => setPlaneOp((o) => o && o.kind === 'offset' ? { ...o, v } : o)}
+                onApply={() => void applyPlaneOp()} onCancel={closeOp} />
+            )}
+            {planeOp?.kind === 'tangent' && (
+              <TangentPlaneDialog value={planeOp.v} editing={planeOp.line != null} params={paramVals}
+                used={planeNames} own={planeOp.own ?? undefined}
+                onChange={(v) => setPlaneOp((o) => o && o.kind === 'tangent' ? { ...o, v } : o)}
                 onApply={() => void applyPlaneOp()} onCancel={closeOp} />
             )}
             {planeOp?.kind === 'edge' && (

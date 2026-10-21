@@ -102,7 +102,7 @@ export function patternSkip(s: Step): string | null {
 }
 const STEP_NAMES: Record<string, string> = {
   shell: 'Shell', auto_round: 'Round', truss_windows: 'Lighten', offset_plane: 'Offset plane',
-  edge_plane: 'Plane on edge', mirror_body: 'Mirror body', pattern_body: 'Pattern body',
+  edge_plane: 'Plane on edge', tangent_plane: 'Tangent plane', mirror_body: 'Mirror body', pattern_body: 'Pattern body',
 };
 
 /** The direction a picked face gives: a flat face's normal, a cylinder's

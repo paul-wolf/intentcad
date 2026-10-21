@@ -38,6 +38,9 @@ const ICONS: Record<OpIconName, ReactNode> = {
                     <path d="M12 17.5v-7M10 12.5l2-2 2 2" /></>,
   'plane-edge': <><path d="M2 20h14l6-6H8z" opacity={0.5} /><path d="M2 20l6-6" strokeWidth={2.4} />
                   <path d="M2 20l4-14h13l-11 8" strokeDasharray="2 1.5" /></>,
+  // a round end and a plane touching its rim
+  'plane-tangent': <><circle cx="9" cy="14" r="6" opacity={0.6} /><path d="M15 3v20" strokeDasharray="2 1.5" />
+                     <circle cx="15" cy="14" r="1" fill="currentColor" /></>,
   // a block and its mirror image either side of a dashed plane
   mirror: <><path d="M12 2v20" strokeDasharray="2 1.5" /><path d="M9.5 6H4v12h5.5z" /><path d="M14.5 6H20v12h-5.5z" opacity={0.5} /></>,
   // a hole and its mirror image either side of a dashed plane

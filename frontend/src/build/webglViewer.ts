@@ -324,8 +324,10 @@ export interface DragHandle {
   snapFaces?: boolean;
   /** a rotation handle about an axis through `at`: the value is an angle in
    *  degrees, the handle sits at at + arm·(w cos a + n sin a) (w, n unit and
-   *  square to the axis); it snaps to 1° (Shift 0.1°) */
-  turn?: { w: Vec3; n: Vec3 };
+   *  square to the axis); it snaps to `step`° (default 1; Shift `fine`,
+   *  default 0.1), and within 2° of a multiple of `stick` onto it. `arm`:
+   *  the knob at least this far out (clear of a cylinder it turns round). */
+  turn?: { w: Vec3; n: Vec3; step?: number; fine?: number; stick?: number; arm?: number };
 }
 
 /** The handle projected into the current view, for the HTML overlay. */
@@ -452,7 +454,8 @@ export interface AxisDir { name: string; x: number; y: number; z: number; color:
 
 /** What a click picked: a face, an edge (build-result index), a
  *  construction plane (by name, on its outline), or nothing. */
-export type ViewerPick = { face: FaceRange } | { edge: number } | { plane: string } | null;
+/** A face pick carries the point clicked on it (world). */
+export type ViewerPick = { face: FaceRange; point?: Vec3 } | { edge: number } | { plane: string } | null;
 
 /** A construction plane's name, projected for the HTML overlay (CSS px). */
 export interface PlacedPlaneLabel { name: string; x: number; y: number; visible: boolean; preview: boolean }
@@ -969,7 +972,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
 
   // the frontmost face under (px, py) CSS px, and its NDC depth there. With
   // a section, what is cut away isn't there, and the cap (face null) is
-  function hitAt(px: number, py: number): { face: FaceRange | null; depth: number } | null {
+  function hitAt(px: number, py: number): { face: FaceRange | null; depth: number; point?: Vec3 } | null {
     if (!vertexCount || faces.length === 0) return null;
     const sec = activeSection();
     const w = canvas.width, h = canvas.height;
@@ -989,6 +992,8 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     const depthIn = (i: number) => (sec
       ? cutDepth(sec, [meshPositions[i * 3]!, meshPositions[i * 3 + 1]!, meshPositions[i * 3 + 2]!]) : 0);
     let bestDepth = Infinity, bestFace: FaceRange | null = null;
+    // the hit triangle's first vertex and perspective-correct weights of its three
+    let bestAt: { v: number; k: [number, number, number] } | null = null;
     for (const f of faces) {
       for (let v = f.start; v < f.start + f.count; v += 3) {
         const a = project(v), b = project(v + 1), c = project(v + 2);
@@ -1009,6 +1014,8 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
           if (s > 1e-4) continue;
         }
         bestDepth = depth; bestFace = f;
+        const k = u / a[3] + w2 / b[3] + t / c[3];
+        bestAt = { v, k: [u / a[3] / k, w2 / b[3] / k, t / c[3] / k] };
       }
     }
     if (sec) {
@@ -1021,7 +1028,9 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
         if (cw > 0 && cz / cw < bestDepth && insideOutline(o, toPlane(o, P))) return { face: null, depth: cz / cw };
       }
     }
-    return bestFace ? { face: bestFace, depth: bestDepth } : null;
+    if (!bestFace) return null;
+    const at = (j: number) => [0, 1, 2].reduce((sum, i) => sum + bestAt!.k[i]! * meshPositions[(bestAt!.v + i) * 3 + j]!, 0);
+    return { face: bestFace, depth: bestDepth, point: bestAt ? [at(0), at(1), at(2)] : undefined };
   }
 
   // world → [CSS x, CSS y, NDC depth] (null: behind the camera)
@@ -1082,11 +1091,12 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       }));
       near = edgesNear(screen, px, py);
     }
-    const face = filter !== 'edges' ? pick(px, py) : null;
+    const hit = filter !== 'edges' ? hitAt(px, py) : null;
+    const face = hit?.face ?? null;
     const p = choosePick(near, face?.index ?? null, filter, (c) => edgeVisible(c, P), new Set(selEdges));
     if (!p) return null;
     if ('edge' in p) return p;
-    return face ? { face } : null;
+    return face ? { face, ...(hit?.point ? { point: hit.point } : {}) } : null;
   }
 
   // world → CSS px in the canvas, for the HTML overlays and handle hit-testing
@@ -1116,7 +1126,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     let tip = add(p, scale(handle.shift, handleArm() / Math.hypot(...handle.shift)));
     if (handle.turn) {
       // round the axis: the knob on the arm at the angle, the arrow the way + turns
-      const r = (off * Math.PI) / 180, { w, n } = handle.turn, arm = handleArm();
+      const r = (off * Math.PI) / 180, { w, n } = handle.turn, arm = Math.max(handleArm(), handle.turn.arm ?? 0);
       p = add(base, add(scale(w, arm * Math.cos(r)), scale(n, arm * Math.sin(r))));
       tip = add(p, add(scale(w, -0.6 * arm * Math.sin(r)), scale(n, 0.6 * arm * Math.cos(r))));
     }
@@ -1829,11 +1839,11 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   // a rotation handle: the pointer's turn about the axis since pointer-down
   // (seen square-on where the view allows, else along the knob's way round),
   // snapped to 1° (Shift 0.1°), kept within ±180°
-  function turnTo(e: PointerEvent, at: Vec3, turn: { w: Vec3; n: Vec3 },
+  function turnTo(e: PointerEvent, at: Vec3, turn: NonNullable<DragHandle["turn"]>,
                   toCss: (p: Vec3) => [number, number, boolean]) {
     if (!drag || !handle) return;
     const rect = canvas.getBoundingClientRect();
-    const arm = handleArm();
+    const arm = Math.max(handleArm(), turn.arm ?? 0);
     const [cx, cy] = toCss(at);
     const [wx, wy] = toCss(add(at, scale(turn.w, arm)));
     const [nx, ny] = toCss(add(at, scale(turn.n, arm)));
@@ -1860,7 +1870,9 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     if (da === null) return;
     let value = handle.value;
     if (Math.hypot(mx, my) >= 3) {
-      value = snapToStep(handle.value + (da * 180) / Math.PI, handle.step ?? (e.shiftKey ? 0.1 : 1));
+      const raw = handle.value + (da * 180) / Math.PI;
+      value = snapToStep(raw, handle.step ?? (e.shiftKey ? turn.fine ?? 0.1 : turn.step ?? 1));
+      if (turn.stick && Math.abs(raw - Math.round(raw / turn.stick) * turn.stick) < 2) value = Math.round(raw / turn.stick) * turn.stick;
       value = ((value + 180) % 360 + 360) % 360 - 180;
       if (value === -180) value = 180;
     }

@@ -308,14 +308,25 @@ class KeptFaces(Schema):
     faces: list[dict] = []
 
 
+class TangentCylinder(Schema):
+    """The cylinder a tangent plane touches, as the build found it."""
+    center: list[float]             # on the axis, at the face's start
+    axis: list[float]               # as the face_ref stores it
+    radius: float
+    zero: list[float]               # the direction across the axis that is 0°
+    length: float
+    inward: bool                    # a bore: the plane faces the axis
+
+
 class PlaneReport(Schema):
     """A construction plane as the build put it (modeling/planes.py)."""
-    kind: str = "script"            # offset | edge | script (a Plane the script made itself)
+    kind: str = "script"            # offset | edge | tangent | script (a Plane the script made itself)
     status: str = "same"            # same | moved | ambiguous (from its face_ref / edge_ref)
     line: int | None = None
     origin: list[float]
     normal: list[float]
     xAxis: list[float]
+    cylinder: TangentCylinder | None = None  # tangent planes
 
 
 class RunResponse(Schema):
@@ -530,13 +541,15 @@ class AddEdgeOpRequest(Schema):
 
 class AddPlaneRequest(Schema):
     code: str
-    op: str                         # 'offset_plane' | 'edge_plane'
+    op: str                         # 'offset_plane' | 'edge_plane' | 'tangent_plane'
     name: str
     base: dict | str | None = None  # offset_plane: {"face": face ref} or "XY" | "XZ" | "YZ"
     distance: float | str = 0.0     # a number, or an expression of P names ("-width / 2")
     edge: dict | None = None        # edge_plane: the straight edge's ref
     angle: float | str = 0.0        # degrees, positive away from the material; or an expression
     from_face: dict | None = None   # edge_plane: the face that is 0° (default the edge's first)
+    face: dict | None = None        # tangent_plane: the cylindrical face's ref
+    ref: dict | str | None = None   # tangent_plane: 0° from "X" | "Y" | "Z" or {"face": a flat face's ref}; None auto
     line: int | None = None         # rewrite the plane line there instead of appending
 
 

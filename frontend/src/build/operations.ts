@@ -18,7 +18,7 @@ export const OP_GROUPS: OpGroup[] = ['Sketch', 'Create', 'Construct', 'Modify', 
 
 export type OpIcon =
   | 'sketch-face' | 'plane-top' | 'plane-front' | 'plane-right' | 'extrude' | 'hole' | 'shell' | 'fillet' | 'chamfer' | 'round'
-  | 'plane-offset' | 'plane-edge' | 'mirror' | 'mirror-steps' | 'pattern' | 'pattern-circular' | 'pattern-steps'
+  | 'plane-offset' | 'plane-edge' | 'plane-tangent' | 'mirror' | 'mirror-steps' | 'pattern' | 'pattern-circular' | 'pattern-steps'
   | 'lighten' | 'protect' | 'fix' | 'measure' | 'section' | 'normal' | 'ortho' | 'params' | 'build' | 'import'
   | 'export' | 'stl' | 'parts' | 'dxf' | 'views3' | 'versions' | 'process' | 'context'
   | `view-${StandardView}`;
@@ -76,6 +76,8 @@ export interface OpContext {
   offsetPlane(): void;
   /** the Plane on edge dialog, on the selected straight edge */
   edgePlane(): void;
+  /** the Tangent plane dialog, on the selected cylindrical face (after a click on it for the angle) */
+  tangentPlane(): void;
   shell(): void;
   hole(): void;
   /** the Fillet / Chamfer dialog, on the selected edges */
@@ -305,6 +307,19 @@ export const OPERATIONS: Operation[] = [
                               'Select one straight edge'],
                              [sel.edges[0]?.kind !== 'line', 'Select a straight edge, not a curved one']),
     run: (ctx) => ctx.edgePlane(),
+  },
+  {
+    id: 'plane-tangent', name: 'Tangent plane', group: 'Construct', icon: 'plane-tangent',
+    help: 'A named plane touching a cylindrical face, for radial holes and cuts',
+    longHelp: 'Adds a construction plane touching the selected cylindrical face (a hub, a knob, a bore) along a '
+      + 'line round it: click the face where it should touch. It faces away from the material, so a cut sketched '
+      + 'on it goes in, radially. The angle is measured from X, Y, Z or a flat face (a shaft\'s flat); drag the '
+      + 'ring to turn it. Sketch x runs along the cylinder; it adds one script line.',
+    example: 'a set screw hole into this hub, 5 mm from its end, square to the shaft flat',
+    needs: (sel, m) => first(...notWhile(m), ...built(m),
+                             [sel.faces.length !== 1 || sel.edges.length > 0 || planeCount(sel) > 0
+                              || sel.faces[0]!.kind !== 'cylinder', 'Select a cylindrical face']),
+    run: (ctx) => ctx.tangentPlane(),
   },
   // Modify
   {

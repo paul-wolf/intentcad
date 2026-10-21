@@ -230,5 +230,8 @@ def bind(ns: dict, report: list | None = None) -> dict:
                                "reopen the step and pick the face again")
         # what a construction plane on it reports (modeling/planes.py)
         m["face"]._ref_status = _moved_status(m["status"], entry["moved_by"])
+        # the axis (a curved face's "normal") the way the reference has it:
+        # a tangent plane's angle turns about it (OCC may flip it on a rebuild)
+        m["face"]._ref_normal = vec(ref["normal"])
         return m["face"]
     return {"face_ref": face_ref}

@@ -214,7 +214,8 @@ def add_plane_endpoint(request, payload: AddPlaneRequest):
     try:
         code, renamed = add_plane(payload.code, payload.op, payload.name, base=payload.base,
                                   distance=payload.distance, edge=payload.edge, angle=payload.angle,
-                                  from_face=payload.from_face, line=payload.line)
+                                  from_face=payload.from_face, face=payload.face, ref=payload.ref,
+                                  line=payload.line)
     except (ParamError, SyntaxError, KeyError, TypeError, ValueError) as exc:
         return JsonResponse({"message": str(exc)}, status=422)
     return AddPlaneResponse(code=code, renamed=renamed)
