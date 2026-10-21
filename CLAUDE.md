@@ -7,8 +7,8 @@ A branch that adds or changes a user-visible feature also, in the same branch:
 1. Updates `docs/guide/README.md`: the right section, in the same plain style (what it's
    for, how to invoke it from the UI, short sentences).
 2. Retakes or adds its screenshot in `docs/guide/images/`, from a part in the
-   "Guide examples" project (1600×1000 viewport, light theme, no dev overlays, the
-   relevant panel open, PNG of at most ~300 KB).
+   "Guide examples" project (the same viewport as the others, 1656×884 so far; light
+   theme, no dev overlays, the relevant panel open, PNG of at most ~300 KB).
 3. Ticks the item in `docs/feature-plan.md` (the Done list, the tier table, the Order line).
 
 ## Conventions

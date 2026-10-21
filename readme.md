@@ -7,7 +7,7 @@ mounts, knobs, adapters. You describe what you want, the AI builds it as an exac
 parametric model, and you refine it with the same tools you'd find in Fusion or Onshape
 (sketches, extrudes, fillets, holes, patterns) whenever pointing is easier than describing.
 
-![The part editor: a board case with the AI chat, the steps list and the parameters](docs/guide/images/overview.png)
+![The part editor: a board case with the parameters, the AI chat and the 3D view](docs/guide/images/overview.png)
 
 - [User guide](docs/guide/README.md): how to use the app, feature by feature
 - [Feature plan](docs/feature-plan.md): what's done and what's next

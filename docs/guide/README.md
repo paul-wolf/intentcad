@@ -75,12 +75,12 @@ check before printing.
    board size and hole pattern into the parameters with their source, and builds the
    case.
 
-   ![The parameters, each citing where it came from](images/provenance.png)
+   ![The script's parameters, each citing where it came from](images/provenance.png)
 
 3. **Refine by pointing.** Select the side wall, sketch the USB opening on it, cut it.
    Drag a parameter's arrow on the model to change it directly.
 
-   ![Sketching on a face of the part](images/sketch-on-face.png)
+   ![Sketching on a face of a part (here a bracket's upright)](images/sketch-on-face.png)
 
 4. **Check it's printable.** Cut the part open with the section view to see wall
    thickness and insert depth; switch on the overhang check.
@@ -122,8 +122,9 @@ faces of a part:
 
 ### Sketch on the part
 
-- Sketch on any flat face, on a base plane, or on a construction plane, without
-  leaving the 3D view.
+- Select a flat face or a construction plane and press K: the full sketcher opens on it.
+  With nothing selected, K offers the Top, Front and Right planes. Done or Esc takes
+  you back to the part, with the sketch drawn on it.
 - The face's outline comes into the sketch as reference geometry; click other edges of
   the part to bring them in too, and dimension to them.
 - Sketches **follow the part**: if the face moves or its edges change, the sketch moves
@@ -155,8 +156,8 @@ faces of a part:
 
 - **Mirror** a whole body (model half, mirror to complete it), or mirror chosen steps
   as linked copies that follow their original.
-- **Pattern** in a line, a grid or a circle (vents, ribs, bolt circles), skipping any
-  copy that would hit something.
+- **Pattern** in a line, a grid or a circle (vents, ribs, bolt circles), leaving out
+  any copy you click.
 
 ![A vent grid as a linear pattern](images/pattern.png)
 
@@ -170,7 +171,7 @@ faces of a part:
 
 - All key dimensions live in one parameters list. Type a value, or **drag the arrow**
   on the model and watch the part follow.
-- Hold Alt to see every parameter drawn as a dimension on the geometry it controls.
+- Hold Alt (⌥) to see every parameter drawn as a dimension on the geometry it controls.
 - Every operation is a step you can **reopen**, **switch off** or **delete** from the
   steps list.
 
