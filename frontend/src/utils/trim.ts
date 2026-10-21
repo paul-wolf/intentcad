@@ -28,7 +28,7 @@ export type Prim =
   /** sweep is signed: positive runs the angle up; a whole circle is 2π */
   | { kind: 'arc'; c: Point; r: number; start: number; sweep: number };
 
-function segPrim(p1: Point, p2: Point, bulge: number): Prim {
+export function segPrim(p1: Point, p2: Point, bulge: number): Prim {
   if (!bulge) return { kind: 'seg', a: p1, b: p2 };
   const arc = arcFromBulge(p1, p2, bulge);
   return { kind: 'arc', c: arc.center, r: arc.radius, start: arc.startAngle, sweep: 4 * Math.atan(bulge) };
@@ -138,7 +138,7 @@ export function nearestOn(prim: Prim, p: Point): { t: number; point: Point; dist
 
 /** Points where the lines / circles under two primitives meet (overlaps: the
  *  primitives' ends instead). Filtered onto both by the caller. */
-function candidates(p: Prim, q: Prim): Point[] {
+export function candidates(p: Prim, q: Prim): Point[] {
   const ends = (x: Prim) => [primPoint(x, 0), primPoint(x, 1)];
   if (p.kind === 'seg' && q.kind === 'seg') {
     const rx = p.b.x - p.a.x, ry = p.b.y - p.a.y;

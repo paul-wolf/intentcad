@@ -251,8 +251,8 @@ export function hitTestEntities(
         continue;
       }
 
-      // Point-to-point dimension (vertex-based)
-      if (entity.pointIndex != null) {
+      // Point-to-point dimension (vertex-based), or an offset's distance
+      if (entity.pointIndex != null || entity.offsetDistance) {
         const endpoints = resolveDimensionEndpoints(entity, allEntities);
         if (!endpoints) continue;
         const perp2 = perpDir(endpoints.a, endpoints.b);

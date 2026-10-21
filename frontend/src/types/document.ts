@@ -6,7 +6,13 @@ export interface Point {
 export type SourceTransform =
   | { type: 'mirror'; lineA: Point; lineB: Point }
   | { type: 'rotate'; center: Point; angle: number }
-  | { type: 'translate'; dx: number; dy: number };
+  | { type: 'translate'; dx: number; dy: number }
+  /** a curve moved `distance` to one side: `side` 1 is outside a closed
+   *  shape (the left of an open chain), -1 inside (the right). Corners
+   *  that open up are joined with arcs or miters. `chain`: the polylines
+   *  followed when there are several, joined end to end (sourceId is the
+   *  first). */
+  | { type: 'offset'; distance: number; side: 1 | -1; join: 'arc' | 'miter'; chain?: string[] };
 
 export interface LineEntity {
   id: string;
@@ -99,6 +105,8 @@ export interface DimensionEntity {
   // Radius of an arc: arc segment `segmentIndex` of a line (a fillet), or a
   // rectangle's corner radius (drawn at corner `segmentIndex`, 0=TL…3=BL):
   radius?: boolean;
+  // The distance of an offset (the target is the offset entity):
+  offsetDistance?: boolean;
   // Expression that drives this dimension's value (e.g. "bolt_hole / 2"):
   expression?: string;
 }

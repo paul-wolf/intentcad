@@ -8,11 +8,13 @@ import { useMouseHandlers } from './useMouseHandlers';
 import { getDimensionTextScreenPos, getDiameterTextScreenPos, computeAngleDimensionGeom, getAngleDimensionTextScreenPos } from '@/rendering/dimensionRenderer';
 import { MirrorDialog } from '@/components/MirrorDialog';
 import { FilletPanel } from '@/components/FilletPanel';
+import { OffsetPanel } from '@/components/OffsetPanel';
 import { CircularCopyDialog } from '@/components/CircularCopyDialog';
 import { GridCopyDialog } from '@/components/GridCopyDialog';
 import { DxfImportDialog } from '@/components/DxfImportDialog';
 import type { DimensionGeom } from '@/rendering/dimensionRenderer';
-import { resolveRadiusDimension } from '@/utils/dimensionGeom';
+import { resolveRadiusDimension, resolveDimensionEndpoints } from '@/utils/dimensionGeom';
+import { measureDimension } from '@/utils/resolveSketch';
 import type { Tool } from '@/tools/types';
 import type { ViewportImpl } from '@/rendering/viewport';
 import type { Point, LineEntity } from '@/types/document';
@@ -519,6 +521,13 @@ export function CanvasContainer({ activeTool, docId, transparent, grid, soloActi
       return g && { pos: vp.worldToScreen(g.end), value: g.radius, expression: dim.expression };
     }
 
+    if (dim.offsetDistance) {
+      const ends = resolveDimensionEndpoints(dim, sketch.entities);
+      const value = measureDimension(dim, sketch.entities);
+      if (!ends || value == null) return null;
+      return { pos: getDimensionTextScreenPos(vp, { a: ends.a, b: ends.b, offset: dim.offset }), value, expression: dim.expression };
+    }
+
     // Point-to-segment dimension
     if (dim.pointIndex != null && dim.pointIndex2 == null && dim.targetEntityId2 != null) {
       const a = getEntityPoint(target, dim.pointIndex);
@@ -656,6 +665,7 @@ export function CanvasContainer({ activeTool, docId, transparent, grid, soloActi
       )}
       <MirrorDialog />
       <FilletPanel />
+      <OffsetPanel />
       <CircularCopyDialog />
       <GridCopyDialog />
       <DxfImportDialog />

@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { patternCopies, prunePatterns } from '@/utils/copyPattern';
 import type { CopyPatternParams, Document, DocumentMetadata, Entity, OriginAlignMode, Point, Sketch, Constraint, HorizontalConstraint, VerticalConstraint } from '@/types/document';
 import { createEmptyDocument, createEmptySketch } from '@/utils/document';
-import { createMirroredEntity, propagateDerived } from '@/utils/propagate';
+import { createMirroredEntity, dependentsOf, propagateDerived } from '@/utils/propagate';
 import { rotatePoint } from '@/utils/geometry';
 import { getEntityPoints } from '@/utils/entityPoints';
 import { solveConstraints, validateConstraint } from '@/utils/constraintSolver';
@@ -16,6 +16,7 @@ import { evaluateExpression } from '@/utils/expression';
 import { dimensionEntities, resolveSketch } from '@/utils/resolveSketch';
 import { filletSketch, type Corner, type FilletOutcome } from '@/utils/fillet';
 import { trimSketch, type TrimOutcome } from '@/utils/trim';
+import { addOffset as addOffsetTo, unlinkOffset as unlinkOffsetIn } from '@/utils/offset';
 
 const UNDO_STACK_LIMIT = 100;
 
@@ -90,6 +91,13 @@ interface DocumentStore {
 
   // Remove the piece of a curve around parameter s (see utils/trim.ts).
   trimPiece(entityId: string, s: number): TrimOutcome | null;
+
+  // An offset of sourceIds that follows them, with its distance as a
+  // dimension (expression: a P / parameter expression on it). Null when it
+  // can't be made; else the new offset's id.
+  addOffset(sourceIds: string[], t: { distance: number; side: 1 | -1; join: 'arc' | 'miter' }, expression?: string): string | null;
+  // The offset stops following its source (its distance dimension goes).
+  unlinkOffset(id: string): boolean;
 
   // Grid or circular copy: makes the copies and keeps the pattern; given a
   // patternId, replaces that pattern's copies instead. Returns the new ids.
@@ -387,17 +395,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     // Build the full set of IDs to remove, cascading through derived entities
     const idSet = new Set(entityIds);
     if (sketch) {
-      let changed = true;
-      while (changed) {
-        changed = false;
-        for (const e of sketch.entities) {
-          if (idSet.has(e.id)) continue;
-          if ('sourceId' in e && e.sourceId && idSet.has(e.sourceId)) {
-            idSet.add(e.id);
-            changed = true;
-          }
-        }
-      }
+      for (const id of dependentsOf(sketch.entities, idSet)) idSet.add(id);
     }
     set({
       document: {
@@ -867,6 +865,25 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     if (!out) return null;
     set({ document: updateActiveSketch(document, () => ({ entities: propagateDerived(out.entities), constraints: out.constraints })) });
     return out;
+  },
+
+  addOffset(sourceIds, t, expression) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return null;
+    const out = addOffsetTo(sketch.entities, sourceIds, t, () => generateId('off'), expression);
+    if (!out) return null;
+    set({ document: updateActiveSketch(document, (sk) => ({ entities: propagateDerived(out.entities), constraints: sk.constraints })) });
+    return out.offsetId;
+  },
+
+  unlinkOffset(id) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    const entities = sketch && unlinkOffsetIn(sketch.entities, id);
+    if (!entities) return false;
+    set({ document: updateActiveSketch(document, (sk) => ({ entities, constraints: sk.constraints })) });
+    return true;
   },
 
   copyPattern(sourceIds, params, patternId = null) {
@@ -1983,17 +2000,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     // Remove old entities and their constraints/dimensions, add joined one
     const removeSet = new Set(lineEntities.map((e) => e.id));
     // Also remove derived entities whose source is being removed
-    let changed = true;
-    while (changed) {
-      changed = false;
-      for (const e of sketch.entities) {
-        if (removeSet.has(e.id)) continue;
-        if ('sourceId' in e && e.sourceId && removeSet.has(e.sourceId)) {
-          removeSet.add(e.id);
-          changed = true;
-        }
-      }
-    }
+    for (const id of dependentsOf(sketch.entities, removeSet)) removeSet.add(id);
 
     set({
       document: {

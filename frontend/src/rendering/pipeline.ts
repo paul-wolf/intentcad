@@ -411,8 +411,8 @@ function renderActiveSketch(ctx: RenderContext) {
           break;
         }
 
-        // Point-to-point dimension (vertex-based)
-        if (entity.pointIndex != null) {
+        // Point-to-point dimension (vertex-based), or an offset's distance
+        if (entity.pointIndex != null || entity.offsetDistance) {
           const endpoints = resolveDimensionEndpoints(entity, activeSketch.entities);
           if (endpoints) {
             drawDimension(renderer, viewport, { a: endpoints.a, b: endpoints.b, offset: entity.offset }, lineStyle, textStyle, ctx.palette.background, isDerived, dimLabel, ws);

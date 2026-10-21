@@ -204,6 +204,7 @@ export function computeDerivedDimensionIds(entities: Entity[], constraints: Cons
   const derived = new Set<string>();
   for (const e of entities) {
     if (e.type !== 'dimension') continue;
+    if (e.offsetDistance) continue; // drives its offset, never driven
     if (e.targetEntityId2 != null) {
       // Two-segment: derived if BOTH targets have 0 constraint-only DOF
       const dof1 = constraintDof.get(e.targetEntityId) ?? 0;

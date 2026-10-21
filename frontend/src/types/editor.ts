@@ -1,6 +1,6 @@
 import type { Point } from './document';
 
-export type ToolType = 'select' | 'line' | 'point' | 'circle' | 'rectangle' | 'rect2pt' | 'axisrect' | 'polygon' | 'dimension' | 'bezier' | 'fillet' | 'trim';
+export type ToolType = 'select' | 'line' | 'point' | 'circle' | 'rectangle' | 'rect2pt' | 'axisrect' | 'polygon' | 'dimension' | 'bezier' | 'fillet' | 'trim' | 'offset';
 
 export interface LineToolState {
   type: 'line';
@@ -66,7 +66,17 @@ export interface TrimToolState {
   type: 'trim';
 }
 
-export type ToolState = LineToolState | SelectToolState | PointToolState | CircleToolState | RectangleToolState | Rect2ptToolState | AxisRectToolState | PolygonToolState | DimensionToolState | BezierToolState | FilletToolState | TrimToolState;
+export interface OffsetToolState {
+  type: 'offset';
+  /** what is offset: one closed shape or circle, or lines that chain end to end */
+  sourceIds: string[];
+  distance: number;
+  /** 1 = outside a closed shape / left of an open chain */
+  side: 1 | -1;
+  join: 'arc' | 'miter';
+}
+
+export type ToolState = LineToolState | SelectToolState | PointToolState | CircleToolState | RectangleToolState | Rect2ptToolState | AxisRectToolState | PolygonToolState | DimensionToolState | BezierToolState | FilletToolState | TrimToolState | OffsetToolState;
 
 export interface EditorState {
   activeTool: ToolType;

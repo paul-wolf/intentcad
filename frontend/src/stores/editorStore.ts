@@ -82,6 +82,10 @@ interface EditorStore {
 let lastFilletRadius = 2;
 export function rememberFilletRadius(r: number) { lastFilletRadius = r; }
 
+/** The offset tool starts with the distance and corner joins used last. */
+let lastOffset: { distance: number; join: 'arc' | 'miter' } = { distance: 1, join: 'arc' };
+export function rememberOffset(distance: number, join: 'arc' | 'miter') { lastOffset = { distance, join }; }
+
 function defaultToolState(tool: ToolType): ToolState {
   switch (tool) {
     case 'line':
@@ -108,6 +112,8 @@ function defaultToolState(tool: ToolType): ToolState {
       return { type: 'fillet', corners: [], radius: lastFilletRadius };
     case 'trim':
       return { type: 'trim' };
+    case 'offset':
+      return { type: 'offset', sourceIds: [], distance: lastOffset.distance, side: 1, join: lastOffset.join };
   }
 }
 
@@ -142,7 +148,12 @@ export const useEditorStore = create<EditorStore>((set) => ({
 
   setActiveTool(tool) {
     addLog('info', `Tool: ${tool}`);
-    set({ activeTool: tool, toolState: defaultToolState(tool), selectedEntityIds: new Set(), selectedPoints: [], selectedSegments: [] });
+    set((s) => {
+      const toolState = defaultToolState(tool);
+      // offset what was selected, if anything
+      if (toolState.type === 'offset') toolState.sourceIds = [...s.selectedEntityIds];
+      return { activeTool: tool, toolState, selectedEntityIds: new Set(), selectedPoints: [], selectedSegments: [] };
+    });
   },
 
   setSelectedEntityIds(ids) {

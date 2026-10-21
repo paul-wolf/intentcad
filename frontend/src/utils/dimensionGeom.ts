@@ -4,6 +4,7 @@ import { lineLineIntersection } from '@/utils/geometry';
 import { getEntityPoint } from '@/utils/entityPoints';
 import { arcFromBulge, arcMidpoint } from '@/utils/arcGeometry';
 import { rectangleCorners, effectiveCornerRadius } from '@/utils/rectPath';
+import { offsetMeasure } from '@/utils/offset';
 
 /** A radius dimension's layout: a leader from the arc's centre through the
  *  middle of the arc (`arcPoint`), on past it by the dimension's offset to
@@ -59,6 +60,9 @@ export function resolveDimensionEndpoints(
 
   const target = allEntities.find((e) => e.id === dim.targetEntityId);
   if (!target) return null;
+
+  // An offset's distance: from the source across to the offset
+  if (dim.offsetDistance) return offsetMeasure(target, (id) => allEntities.find((e) => e.id === id));
 
   // Point-to-point dimension (vertex-based)
   if (dim.pointIndex != null) {
