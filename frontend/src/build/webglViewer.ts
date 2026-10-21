@@ -437,8 +437,10 @@ export interface Viewer {
   /** Show what an operation would make (Shell, Hole: a candidate build) in
    *  place of the part, tinted `color`; the selected faces of the part show
    *  through it. `extra`: a second mesh drawn over it in its own colour
-   *  (Mirror body: the mirror image). null shows the part again. */
-  setPreviewMesh(p: { mesh: ViewerMesh; color: Vec3; extra?: { mesh: ViewerMesh; color: Vec3 } | null } | null): void;
+   *  (Mirror body: the mirror image), through the candidate when `xray`
+   *  (Up to next: the piece a cut removes inside the part). null shows the
+   *  part again. */
+  setPreviewMesh(p: { mesh: ViewerMesh; color: Vec3; extra?: { mesh: ViewerMesh; color: Vec3; xray?: boolean } | null } | null): void;
   /** Light one face of the part brightly, through anything in front (a
    *  dialog row being hovered); null for none. */
   hoverFace(index: number | null): void;
@@ -528,6 +530,8 @@ export interface ViewerOpts {
   /** The pointer is over a highlighted overhang (setOverhangs): its angle in
    *  words ("62° overhang"), at CSS px in the canvas; null when it left. */
   onOverhangHover?: (h: { text: string; kind: OverhangKind; x: number; y: number } | null) => void;
+  /** What a click at the pointer would pick changed (null: nothing). */
+  onHoverPick?: (p: { edge: number } | { face: number } | { plane: string } | null) => void;
 }
 
 export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): Viewer {
@@ -573,7 +577,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   // drawn over the candidate in its own colour (setPreviewMesh's extra)
   const extraPosBuf = gl.createBuffer()!;
   const extraNormBuf = gl.createBuffer()!;
-  let candExtra: { count: number; color: Vec3 } | null = null;
+  let candExtra: { count: number; color: Vec3; xray: boolean } | null = null;
   let hovered: number | null = null;
   const HOVER: [number, number, number] = [1.0, 0.85, 0.3];
 
@@ -1283,6 +1287,17 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
         gl!.polygonOffset(-1, -2);
         gl!.drawArrays(gl!.TRIANGLES, 0, candExtra.count);
         gl!.disable(gl!.POLYGON_OFFSET_FILL);
+        if (candExtra.xray) {
+          // and faintly through the candidate, where it is hidden inside
+          gl!.disable(gl!.DEPTH_TEST);
+          gl!.enable(gl!.BLEND);
+          gl!.blendFuncSeparate(gl!.SRC_ALPHA, gl!.ONE_MINUS_SRC_ALPHA, gl!.ZERO, gl!.ONE);  // keep canvas alpha
+          gl!.uniform1f(uAlpha, 0.45);
+          gl!.drawArrays(gl!.TRIANGLES, 0, candExtra.count);
+          gl!.uniform1f(uAlpha, 1);
+          gl!.disable(gl!.BLEND);
+          gl!.enable(gl!.DEPTH_TEST);
+        }
       }
       gl!.uniform3fv(uColor, color);
       // the part's selected / hovered faces show through it (x-ray)
@@ -2094,6 +2109,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     const key = (x: typeof p) => (x ? ('edge' in x ? `e${x.edge}` : 'plane' in x ? `p${x.plane}` : `f${x.face}`) : '');
     if (key(p) === key(hoverPick)) return;
     hoverPick = p;
+    opts.onHoverPick?.(p);
     scheduleRender();
   }
 
@@ -2258,7 +2274,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
         gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array(p.extra.mesh.positions), gl!.STATIC_DRAW);
         gl!.bindBuffer(gl!.ARRAY_BUFFER, extraNormBuf);
         gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array(p.extra.mesh.normals), gl!.STATIC_DRAW);
-        candExtra = { count: p.extra.mesh.positions.length / 3, color: p.extra.color };
+        candExtra = { count: p.extra.mesh.positions.length / 3, color: p.extra.color, xray: !!p.extra.xray };
       } else {
         candExtra = null;
       }

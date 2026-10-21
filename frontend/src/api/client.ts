@@ -344,7 +344,8 @@ export const buildApi = {
   /** Append an extrude of a face sketch (its depth a new P key), or rewrite
    *  the one on `line`: an op change rewrites the operator and sign. */
   addExtrude(payload: { code: string; sketch: string; op: ExtrudeOp; depth: number; through: boolean; flip: boolean;
-                        datum?: boolean; both?: boolean; line?: number | null }):
+                        datum?: boolean; both?: boolean; line?: number | null;
+                        extent?: ExtrudeExtent; face?: FaceRefSpec | null; offset?: number | string; key?: string | null }):
     Promise<{ code: string; param: string | null }> {
     return request('/build/add_extrude', { method: 'POST', body: JSON.stringify(payload) });
   },
@@ -579,7 +580,8 @@ export interface FaceRefReport {
 
 /** An operation line read back (backend paramedit.op_at). Fillet and chamfer:
  *  args {edges: EdgeRefSpec[], size}, params {size: key}. Extrude: args
- *  {sketch, op, depth, through, flip, both, datum}, params {depth: key}. */
+ *  {sketch, op, extent, depth, through, flip, both, datum, face, offset},
+ *  params {depth: key}, exprs {offset} when it is an expression. */
 export interface OpAt {
   op: OpKind; line: number; end_line: number;
   args: Record<string, unknown>;
@@ -631,6 +633,9 @@ export interface PatternReport {
 export type MirrorPlane = { base: 'XY' | 'XZ' | 'YZ' } | { plane: string } | { face: FaceRefSpec };
 
 export type ExtrudeOp = 'cut' | 'join' | 'new';
+/** How far an extrude goes: a depth, through the part (cut), up to the next
+ *  face it meets (until="next") or up to a chosen face (until=face_ref). */
+export type ExtrudeExtent = 'distance' | 'through' | 'next' | 'face';
 export type ArgOpKind = 'auto_round' | 'truss_windows';
 export type PlaneOpKind = 'offset_plane' | 'edge_plane' | 'tangent_plane';
 export type OpKind = 'extrude' | 'revolve' | 'shell' | 'holes' | EdgeOpKind | ArgOpKind | PlaneOpKind | 'mirror_body' | 'pattern_body';

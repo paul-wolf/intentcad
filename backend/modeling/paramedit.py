@@ -134,29 +134,43 @@ _THROUGH = f"{_BB}.diagonal"                                  # a through cut, o
 _THROUGH_BOTH = f"{_BB}.diagonal + {_BB}.center().length"     # a base-plane sketch's, both ways
 
 
+EXTENTS = ("distance", "through", "next", "face")
+
+
 def _extrude_text(sketch: str, op: str, key: str | None, through: bool, flip: bool,
-                  datum: bool, both: bool) -> str:
+                  datum: bool, both: bool, until: str | None = None, offset_src: str | None = None) -> str:
     """The script line of an extrude (add_extrude's doc says what each option
-    does); `key` is the P key of its depth (None for a through cut)."""
+    does); `key` is the P key of its depth (None for a through cut or an
+    until extrude). `until`: the source of its end, '"next"' or
+    'face_ref({...})', with `offset_src` the offset's source (None: none)."""
     into = op == "cut" and not datum      # negative amount: into the part
     sign = "-" if into != flip else ""
+    head = f"part {_EXTRUDE_SYM[op]} extrude(sketch({json.dumps(sketch)}), "
+    if until is not None:
+        offset = f", offset={offset_src}" if offset_src else ""
+        return head + f"until={until}{offset}" + (", dir=-1" if sign else "") + ")"
     if op == "cut" and through:
         amount = f"{_THROUGH_BOTH}, both=True" if datum else f"{sign}{_THROUGH}"
     else:
         amount = f'P["{key}"], both=True' if both and datum else f'{sign}P["{key}"]'
-    return f"part {_EXTRUDE_SYM[op]} extrude(sketch({json.dumps(sketch)}), amount={amount})"
+    return head + f"amount={amount})"
 
 
-def _read_extrude(stmt, call, pv: dict, datum_sketches) -> tuple[dict, str | None]:
+def _read_extrude(stmt, call, pv: dict, datum_sketches) -> tuple[dict, str | None, dict]:
     """An extrude line written as _extrude_text writes it, back into its
-    options: ({"sketch", "op", "depth", "through", "flip", "both", "datum"},
-    the depth's P key). A line in any other form raises ParamError.
+    options: ({"sketch", "op", "extent", "depth", "through", "flip", "both",
+    "datum", "face", "offset"}, the depth's P key, exprs). "extent" is
+    "distance", "through", "next" (until="next") or "face" (until=face_ref:
+    "face" is its ref); "offset" the until offset (exprs["offset"] when it
+    is an expression). A line in any other form raises ParamError.
     `datum_sketches`: the names of the sketches on a base plane (a cut's sign
     means the opposite on a face sketch and on a base plane)."""
     op = ("cut" if isinstance(stmt.op, ast.Sub) else "join") if isinstance(stmt, ast.AugAssign) else "new"
     bad = ParamError("this extrude isn't written the way the editor writes them: edit it in the code")
     kws = [k.arg for k in call.keywords]
-    if len(call.args) != 1 or kws not in (["amount"], ["amount", "both"]):
+    until = "until" in kws
+    if len(call.args) != 1 or len(set(kws)) != len(kws) or not (
+            set(kws) <= {"until", "offset", "dir"} if until else kws in (["amount"], ["amount", "both"])):
         raise bad
     s = call.args[0]
     if not (isinstance(s, ast.Call) and isinstance(s.func, ast.Name) and s.func.id == "sketch"
@@ -165,6 +179,36 @@ def _read_extrude(stmt, call, pv: dict, datum_sketches) -> tuple[dict, str | Non
         raise bad
     sketch = s.args[0].value
     kw = {k.arg: k.value for k in call.keywords}
+    datum = sketch in datum_sketches
+    exprs: dict = {}
+    if until:
+        u = kw["until"]
+        face = None
+        if isinstance(u, ast.Constant) and u.value == "next":
+            extent = "next"
+        elif isinstance(u, ast.Call) and isinstance(u.func, ast.Name) and u.func.id == "face_ref":
+            extent, face = "face", _ref_arg(u, "face_ref", "face to extrude up to")
+        else:
+            raise bad
+        offset = 0.0
+        if "offset" in kw:
+            offset, e = _read_amount(kw["offset"], pv)
+            if e is not None:
+                exprs["offset"] = e
+        d = kw.get("dir")
+        neg = False
+        if d is not None:
+            try:
+                dv = ast.literal_eval(d)
+            except ValueError:
+                raise bad from None
+            if dv not in (1, -1) or isinstance(dv, bool):
+                raise bad
+            neg = dv == -1
+        into = op == "cut" and not datum
+        return ({"sketch": sketch, "op": op, "extent": extent, "depth": None, "through": False,
+                 "flip": neg != into, "both": False, "datum": datum, "face": face, "offset": offset},
+                None, exprs)
     both = "both" in kw
     if both and not (isinstance(kw["both"], ast.Constant) and kw["both"].value is True):
         raise bad
@@ -172,7 +216,7 @@ def _read_extrude(stmt, call, pv: dict, datum_sketches) -> tuple[dict, str | Non
     neg = isinstance(amt, ast.UnaryOp) and isinstance(amt.op, ast.USub)
     inner = amt.operand if neg else amt
     key = _p_key(inner)
-    datum = both or sketch in datum_sketches
+    datum = both or datum
     through = False
     if key is not None:
         if both and neg:
@@ -186,8 +230,9 @@ def _read_extrude(stmt, call, pv: dict, datum_sketches) -> tuple[dict, str | Non
     into = op == "cut" and not datum
     flip = False if both or (through and datum) else neg != into
     depth = pv.get(key) if key else None
-    return ({"sketch": sketch, "op": op, "depth": depth, "through": through, "flip": flip,
-             "both": both, "datum": datum}, key)
+    return ({"sketch": sketch, "op": op, "extent": "through" if through else "distance", "depth": depth,
+             "through": through, "flip": flip, "both": both, "datum": datum, "face": None, "offset": 0.0},
+            key, exprs)
 
 
 def _part_before(tree: ast.Module, line: int) -> bool:
@@ -200,7 +245,8 @@ def _part_before(tree: ast.Module, line: int) -> bool:
 
 def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
                 through: bool = False, flip: bool = False, datum: bool = False,
-                both: bool = False, line: int | None = None) -> tuple[str, str | None]:
+                both: bool = False, line: int | None = None, extent: str | None = None,
+                face: dict | None = None, offset=0.0, key: str | None = None) -> tuple[str, str | None]:
     """Append an extrude of sketch `sketch` to the script: op "cut" removes
     it from `part`, "join" adds it, "new" makes it the part (a script with no
     `part` yet). The depth becomes a new P key (unless `through`: a cut
@@ -212,56 +258,89 @@ def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
     through cut goes both ways. `flip` reverses the direction; `both` extrudes
     the depth to each side of a base plane (symmetric) instead.
 
+    `extent` (default: "through" when `through`, else "distance") may also be
+    "next" (until="next": up to the first face it meets, modeling/until.py)
+    or "face" (until=face_ref(`face`): up to that face's surface, `offset`
+    past it — a number or an expression of P names, negative: short of it).
+    Neither goes both ways or makes the first body; their direction follows
+    the same sign logic as a depth's (written as dir=-1).
+
     With `line`, rewrite the extrude line there instead (its sketch stays):
     the depth goes in the line's own P key, a new one when it had none, and
-    a key the line no longer uses is dropped. New is only for the line that
-    makes the part first.
+    a key the line no longer uses is dropped — except when it becomes an
+    until extrude: the depth stays in P, and `key` (the depth key the dialog
+    remembers) takes it back when it is switched back to a distance. New is
+    only for the line that makes the part first.
 
-    Returns (code, the depth's param name or None)."""
+    Returns (code, the depth's param name or None; for an until extrude the
+    depth key kept in P, if any)."""
     if op not in _EXTRUDE_SYM:
         raise ParamError(f"unknown extrude operation {op!r}")
-    through = bool(through) and op == "cut"
-    if not through and not float(depth) > 0:
+    extent = extent or ("through" if through else "distance")
+    if extent not in EXTENTS:
+        raise ParamError(f"unknown extrude extent {extent!r}")
+    if extent == "through" and op != "cut":
+        extent = "distance"
+    through = extent == "through"
+    until = None
+    if extent in ("next", "face"):
+        if op == "new":
+            raise ParamError("Up to next / Up to face needs a part to reach: Cut or Join this sketch instead")
+        if extent == "face" and not (isinstance(face, dict) and face):
+            raise ParamError("pick the face to extrude up to")
+        until = '"next"' if extent == "next" else f"face_ref({_lit(face)})"
+        both = False
+    elif not through and not float(depth) > 0:
         raise ParamError("the depth must be more than 0")
+    names = param_names(code)
+    offset_src = None
+    if extent == "face" and offset not in (None, "", 0, 0.0):
+        offset_src = _write_amount(offset, names, "offset")
+        if offset_src in ("0.0", "-0.0"):
+            offset_src = None
     tree = ast.parse(code)
     if line is None:
         if op == "new" and _assigns_part(tree):
             raise ParamError("the script already makes a part: Cut or Join this sketch instead")
         blank = not code.strip()
-        key = None
-        if not through:
-            key = _unique(param_names(code), *_EXTRUDE_KEY[op])
-            code = add_param(code, key, float(depth))
-        text = _extrude_text(sketch, op, key, through, flip, datum, both)
+        new_key = None
+        if extent == "distance":
+            new_key = _unique(names, *_EXTRUDE_KEY[op])
+            code = add_param(code, new_key, float(depth))
+        text = _extrude_text(sketch, op, new_key, through, flip, datum, both, until, offset_src)
         code = code.strip() if blank else code.rstrip("\n")
         gap = "\n\n" if op == "new" else "\n"
-        return code + gap + text + "\n", key
+        return code + gap + text + "\n", new_key
 
     hit = _op_stmt(tree, line)
     if hit is None or hit[2] != "extrude":
         raise ParamError(f"line {line} is not an extrude line any more")
     stmt, call, _ = hit
-    old, old_key = _read_extrude(stmt, call, _p_values(code), {sketch} if datum else set())
+    old, old_key, _ = _read_extrude(stmt, call, _p_values(code), {sketch} if datum else set())
     before = _part_before(tree, stmt.lineno)
     if op == "new" and before:
         raise ParamError("New body is only for the first body: the part is made before this line")
     if op != "new" and not before:
         raise ParamError(f"there is no part before this line to {op} with: it can only be a New body")
-    names = param_names(code)
-    key = None
+    old_key = old_key or (key if key in names else None)     # a depth kept while it was an until extrude
+    if until is not None:          # the old depth stays in P, for switching back
+        code = _write_op(code, _extrude_text(old["sketch"], op, None, False, flip, datum, False, until, offset_src),
+                         line, "extrude")
+        return code, old_key
+    new_key = None
     if not through:
-        key = old_key if old_key in names else None
+        new_key = old_key if old_key in names else None
         # an editor-named key follows the operation: cut1_depth → join1_height
-        if key and old["op"] != op and re.fullmatch(r"{}\d+_{}".format(*_EXTRUDE_KEY[old["op"]]), key):
-            key = None
-        if key is None:
-            key = _unique(names, *_EXTRUDE_KEY[op])
-    code = _write_op(code, _extrude_text(old["sketch"], op, key, through, flip, datum, both), line, "extrude")
-    if key:
-        code = set_params(code, {key: float(depth)}) if key in names else add_param(code, key, float(depth))
-    if old_key and old_key != key:
+        if new_key and old["op"] != op and re.fullmatch(r"{}\d+_{}".format(*_EXTRUDE_KEY[old["op"]]), new_key):
+            new_key = None
+        if new_key is None:
+            new_key = _unique(names, *_EXTRUDE_KEY[op])
+    code = _write_op(code, _extrude_text(old["sketch"], op, new_key, through, flip, datum, both), line, "extrude")
+    if new_key:
+        code = set_params(code, {new_key: float(depth)}) if new_key in names else add_param(code, new_key, float(depth))
+    if old_key and old_key != new_key:
         code = drop_param(code, old_key)
-    return code, key
+    return code, new_key
 
 
 # --- Revolve: a sketch's closed shapes turned around an axis (modeling/revolve.py)
@@ -594,7 +673,7 @@ def _read_op(code: str, stmt, call, op: str, pv: dict, datum=()) -> tuple[dict, 
     params: dict = {}
     exprs: dict = {}
     if op == "extrude":
-        args, params["depth"] = _read_extrude(stmt, call, pv, set(datum))
+        args, params["depth"], exprs = _read_extrude(stmt, call, pv, set(datum))
     elif op == "revolve":
         args, exprs = _read_revolve(stmt, call, pv)
     elif op in PLANE_OPS:
@@ -1385,6 +1464,13 @@ def _summary(op: str, a: dict, points: dict) -> str:
         return f"Plane {a['name']!r} · tangent at {_deg(a['angle'])}{frm} on {face}"
     if op == "extrude":
         how = "through all" if a["through"] else _mm(a["depth"])
+        if a.get("extent") == "next":
+            how = "up to next"
+        elif a.get("extent") == "face":
+            how = f"up to {(a['face'] or {}).get('hint') or 'face'}"
+            off = a.get("offset") or 0
+            if off:
+                how += f" {_mm(abs(off))} {'past' if off > 0 else 'short'}"
         return (f"{_EXTRUDE_TITLES[a['op']]} {a['sketch']!r} {how}" + (" both ways" if a["both"] else "")
                 + (" · flipped" if a["flip"] else ""))
     if op == "revolve":
@@ -1453,6 +1539,7 @@ def _op_step(code: str, stmt, call, op: str, pv: dict, datum, points: dict, shif
         step["summary"] += f" · mirrored across {step['mirror_plane']}"
     elif op == "extrude":
         step["sketch"] = a["sketch"]
+        step["faces"] = [a["face"]] if a.get("face") else []
     elif op == "revolve":
         step["sketch"] = a["sketch"]
         step["edges"] = [a["axis"]["edge"]] if a["axis"].get("edge") else []

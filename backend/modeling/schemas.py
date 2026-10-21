@@ -383,6 +383,10 @@ class AddExtrudeRequest(Schema):
     datum: bool = False             # sketched on a base plane, not a part face
     both: bool = False              # the depth to each side of a base plane
     line: int | None = None         # rewrite the extrude line there instead of appending
+    extent: str | None = None       # 'distance' | 'through' | 'next' | 'face' (default from `through`)
+    face: dict | None = None        # the face ref to extrude up to (extent 'face')
+    offset: float | str = 0.0       # past the face (negative: short of it): a number or an expression of P names
+    key: str | None = None          # the depth key kept in P while it was an until extrude
 
 
 class AddRevolveRequest(Schema):

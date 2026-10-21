@@ -33,6 +33,7 @@ from modeling import edge_ref as edge_ref_mod
 from modeling import face_ref as face_ref_mod
 from modeling.planes import BASES, _adjacent
 from modeling.sketch_profile import Points
+from modeling.until import UntilExtrude
 
 
 class MirrorError(ValueError):
@@ -114,15 +115,32 @@ class Refs:
 COPY_FNS = ("mirrored", "patterned")
 
 
+def _deferred(a: ast.Call) -> ast.Call:
+    return ast.copy_location(
+        ast.Call(func=ast.Name(id="_mirror_refs", ctx=ast.Load()),
+                 args=[ast.Constant(REF_FNS[a.func.id]), a.args[0]], keywords=a.keywords), a)
+
+
+def _is_ref(a) -> bool:
+    return isinstance(a, ast.Call) and isinstance(a.func, ast.Name) and a.func.id in REF_FNS and len(a.args) == 1
+
+
 class _Defer(ast.NodeTransformer):
     def visit_Call(self, node):
         self.generic_visit(node)
-        if (isinstance(node.func, ast.Name) and node.func.id in COPY_FNS and node.args
-                and isinstance(a := node.args[0], ast.Call) and isinstance(a.func, ast.Name)
-                and a.func.id in REF_FNS and len(a.args) == 1):
-            node.args[0] = ast.copy_location(
-                ast.Call(func=ast.Name(id="_mirror_refs", ctx=ast.Load()),
-                         args=[ast.Constant(REF_FNS[a.func.id]), a.args[0]], keywords=a.keywords), a)
+        if not (isinstance(node.func, ast.Name) and node.func.id in COPY_FNS and node.args):
+            return node
+        a = node.args[0]
+        if _is_ref(a):
+            node.args[0] = _deferred(a)
+        elif (isinstance(a, ast.Call) and isinstance(a.func, ast.Name) and a.func.id == "extrude"
+                and any(k.arg == "until" for k in a.keywords)):
+            # an until extrude (modeling/until.py) is run again for the copy:
+            # its arguments, not built, and its until face not yet looked up
+            a.func = ast.copy_location(ast.Name(id="_extrude_recipe", ctx=ast.Load()), a.func)
+            for k in a.keywords:
+                if k.arg == "until" and _is_ref(k.value):
+                    k.value = _deferred(k.value)
         return node
 
 
@@ -222,6 +240,16 @@ def bind(ns: dict) -> dict:
             if obj.kind == "edge":
                 return ns["edge_ref"](reflect_edge(obj.data, pl), **on)
             return ns["edges_ref"]([reflect_edge(r, pl) for r in obj.data or []], **on)
+        if isinstance(obj, UntilExtrude):
+            # the sketch and its way reflected, and run again: "next" is the copy's own
+            target = obj.target
+            if isinstance(target, Refs):
+                ref = reflect_face(target.data, pl)
+                ref["hint"] = f"mirrored {edge_ref_mod.face_hint(ref)}"
+                target = ns["face_ref"](ref, **({"on": target.on} if target.on is not None else {}))
+            elif isinstance(target, Face):
+                target = find_face(target, pl) if hasattr(target, "_ref_status") else target.mirror(pl)
+            return obj.copy([(f.mirror(pl), _direction(pl, d)) for f, d in obj.pieces], target).build(ns.get("part"))
         if isinstance(obj, Points):
             return Points([_point(pl, Vector(p)) for p in obj], _direction(pl, Vector(obj.normal)), obj.name)
         if isinstance(obj, Face) and hasattr(obj, "_ref_status"):

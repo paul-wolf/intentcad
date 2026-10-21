@@ -55,6 +55,7 @@ from modeling.edge_ref import _script_line
 from modeling.mirror import Refs, _r, _vec, map_edge, map_face
 from modeling.planes import _adjacent
 from modeling.sketch_profile import Points
+from modeling.until import UntilExtrude
 
 # the most instances a pattern makes (a typo'd count shouldn't hang the build)
 MAX_INSTANCES = 1000
@@ -337,6 +338,11 @@ def bind(ns: dict, report: list | None = None) -> dict:
         ref["hint"] = f"copy {i} of the {ref['hint']}"
         return ns["edge_ref"](ref)
 
+    def find_face(face: Face, t: gp_Trsf, i: int) -> Face:
+        ref = face_ref_mod.describe(face.moved(Location(t)))
+        ref["hint"] = f"copy {i} of the {edge_ref_mod.face_hint(ref)}"
+        return ns["face_ref"](ref)
+
     def pattern_body(part, pattern, join: bool = True):
         """`part` and its copies: fused into one (join=True, one boolean) or
         each a separate body (join=False)."""
@@ -375,6 +381,21 @@ def bind(ns: dict, report: list | None = None) -> dict:
                     m["hint"] = f"copy {i} of the {m['hint']}"
                     moved.append(m)
             return ns["edges_ref"](moved, **on)
+        if isinstance(obj, UntilExtrude):
+            # each copy's sketch and way, run again: "next" is each copy's own
+            _report(report, pat, _seed_box(Compound([f for f, _ in obj.pieces]), None), "solid")
+            out = []
+            for i, t in copies:
+                target = obj.target
+                if isinstance(target, Refs):
+                    m = map_face(target.data, lambda p, t=t: _p(t, p), lambda d, t=t: _d(t, d))
+                    m["hint"] = f"copy {i} of the {edge_ref_mod.face_hint(m)}"
+                    target = ns["face_ref"](m, **({"on": target.on} if target.on is not None else {}))
+                elif isinstance(target, Face):
+                    target = find_face(target, t, i) if hasattr(target, "_ref_status") else target.moved(Location(t))
+                loc = Location(t)
+                out.append(obj.copy([(f.moved(loc), _d(t, d)) for f, d in obj.pieces], target).build(ns.get("part")))
+            return out
         if isinstance(obj, Points):
             _report(report, pat, _seed_box(obj, None), "points")
             n0 = Vector(obj.normal)
