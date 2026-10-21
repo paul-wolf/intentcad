@@ -110,10 +110,14 @@ class Refs:
         self.kind, self.data, self.on = kind, data, on
 
 
+# the copies whose references are left unresolved (pattern.py's patterned() too)
+COPY_FNS = ("mirrored", "patterned")
+
+
 class _Defer(ast.NodeTransformer):
     def visit_Call(self, node):
         self.generic_visit(node)
-        if (isinstance(node.func, ast.Name) and node.func.id == "mirrored" and node.args
+        if (isinstance(node.func, ast.Name) and node.func.id in COPY_FNS and node.args
                 and isinstance(a := node.args[0], ast.Call) and isinstance(a.func, ast.Name)
                 and a.func.id in REF_FNS and len(a.args) == 1):
             node.args[0] = ast.copy_location(
@@ -124,7 +128,8 @@ class _Defer(ast.NodeTransformer):
 
 def defer_refs(tree: ast.Module) -> ast.Module:
     """The script with each face_ref / edge_ref / edges_ref written straight
-    into mirrored() left unresolved (a Refs) for mirrored() to reflect."""
+    into mirrored() (or patterned()) left unresolved (a Refs) for it to
+    reflect (or move)."""
     return ast.fix_missing_locations(_Defer().visit(tree))
 
 
@@ -136,41 +141,53 @@ def _r(v: Vector, n: int = 3) -> list[float]:
     return [round(v.X, n) + 0.0, round(v.Y, n) + 0.0, round(v.Z, n) + 0.0]
 
 
-def reflect_face(ref: dict, pl: Plane) -> dict:
-    """A face reference (face_ref.describe) reflected across `pl`."""
+def map_face(ref: dict, point, direction) -> dict:
+    """A face reference (face_ref.describe) moved by a rigid motion (or a
+    reflection): `point` and `direction` map a Vector."""
     n0 = _vec(ref["normal"]).normalized()
     c0 = _vec(ref["center"])
-    n1 = _direction(pl, n0)
-    out = {**ref, "center": _r(_point(pl, c0)), "normal": _r(n1, 4)}
+    n1 = direction(n0).normalized()
+    out = {**ref, "center": _r(point(c0)), "normal": _r(n1, 4)}
     out.pop("hint", None)
     box = ref.get("box")
     if box:
-        # its outline's corners, on the face's plane, reflected and measured in the new basis
+        # its outline's corners, on the face's plane, moved and measured in the new basis
         b0, b1 = face_ref_mod.basis(n0), face_ref_mod.basis(n1)
         along = c0.dot(n0)
-        pts = [b1.to_local_coords(_point(pl, b0.from_local_coords((u, v, along))))
+        pts = [b1.to_local_coords(point(b0.from_local_coords((u, v, along))))
                for u in (box[0], box[2]) for v in (box[1], box[3])]
         out["box"] = [round(min(p.X for p in pts), 3), round(min(p.Y for p in pts), 3),
                       round(max(p.X for p in pts), 3), round(max(p.Y for p in pts), 3)]
     return out
 
 
-def reflect_edge(ref: dict, pl: Plane) -> dict:
-    """An edge reference (edge_ref.describe) reflected across `pl`, its hint
+def map_edge(ref: dict, point, direction) -> dict:
+    """An edge reference (edge_ref.describe) moved like map_face(), its hint
     worded for where it is now ("top-left edge")."""
     out = {**ref}
-    frefs = [reflect_face(f, pl) for f in ref.get("faces") or []]
+    frefs = [map_face(f, point, direction) for f in ref.get("faces") or []]
     out["faces"] = [{**f, "hint": edge_ref_mod.face_hint(f)} for f in frefs]
-    out["midpoint"] = _r(_point(pl, _vec(ref["midpoint"])))
+    out["midpoint"] = _r(point(_vec(ref["midpoint"])))
     if ref.get("direction"):
-        out["direction"] = _r(_direction(pl, _vec(ref["direction"])), 4)
+        out["direction"] = _r(direction(_vec(ref["direction"])), 4)
     if ref.get("center"):
-        out["center"] = _r(_point(pl, _vec(ref["center"])))
+        out["center"] = _r(point(_vec(ref["center"])))
     if ref.get("axis"):
-        out["axis"] = _r(_direction(pl, _vec(ref["axis"])), 4)
+        out["axis"] = _r(direction(_vec(ref["axis"])), 4)
     closed = str(ref.get("hint") or "").startswith("Ø")
     out["hint"] = edge_ref_mod.hint(ref.get("kind") or "edge", frefs, ref.get("radius"), closed)
     return out
+
+
+def reflect_face(ref: dict, pl: Plane) -> dict:
+    """A face reference (face_ref.describe) reflected across `pl`."""
+    return map_face(ref, lambda p: _point(pl, p), lambda d: _direction(pl, d))
+
+
+def reflect_edge(ref: dict, pl: Plane) -> dict:
+    """An edge reference (edge_ref.describe) reflected across `pl`, its hint
+    worded for where it is now ("top-left edge")."""
+    return map_edge(ref, lambda p: _point(pl, p), lambda d: _direction(pl, d))
 
 
 def bind(ns: dict) -> dict:

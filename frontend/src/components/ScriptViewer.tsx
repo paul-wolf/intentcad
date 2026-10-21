@@ -4,13 +4,13 @@ import { useDocumentStore } from '@/stores/documentStore';
 import {
   api, buildApi, errorText, ApiError, type RunResponse, type RunEdge, type FaceRefReport, type UsageResponse, type DimInfo, type ModelInfo, type ModelsResponse, type SizeFix,
   type FaceRefSpec, type HolePresets, type EdgeOpKind, type EdgeRefSpec, type ExtrudeOp, type KeepItem, type Step,
-  type PlaneReport, type MirrorPlane,
+  type PlaneReport, type MirrorPlane, type PatternReport, type PatternSpec,
 } from '@/api/client';
 import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, persistSketches, getBackendId } from '@/api/autoSave';
 import { DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
 import type { ChatMessage } from '@/types/document';
 import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim, type PlacedHandle, type ViewerPick,
-         type SectionMeasure, type PlacedPlaneLabel, type DragHandle } from '@/build/webglViewer';
+         type SectionMeasure, type PlacedPlaneLabel, type DragHandle, type MarkLines } from '@/build/webglViewer';
 import {
   amountOut, amountValue, edgePayload, edgePlaneShape, faceBesideEdge, loadHiddenPlanes, newPlaneName, offsetBasePoint, offsetPayload,
   offsetPlaneShape, renameHidden, reopenedFromFace, saveHiddenPlanes, shownPlanes, type BaseName, type EdgePlaneValues,
@@ -37,12 +37,16 @@ import { useFaceSketch, type ExtrudeOptions } from './FaceSketchMode';
 import {
   ShellDialog, HoleDialog, EdgeOpDialog, ExtrudeDialog, RoundDialog, TrussDialog, useOpPreview, refOf, faceOfRef, sameRef,
   holesPayload, holeValuesOf, newHoleValues, placeKey, toggleEdge, addEdges, argOpPayload, OffsetPlaneDialog, EdgePlaneDialog,
-  MirrorOpDialog, MirrorCopyDialog, MIRROR_COPY_COLOR,
+  MirrorOpDialog, MirrorCopyDialog, MIRROR_COPY_COLOR, PatternOpDialog,
   type ShellValues, type HoleValues,
   type HolePlace, type EdgeOpValues, type ExtrudeValues, type ArgOpValues, type MirrorValues,
 } from './OpDialogs';
 import { facePlane, mirrorCopyScript, mirrorPlaneShape, mirrorSkip, nextStepSelection, shiftedMirrorShape } from '@/build/mirror';
 import { StepsList } from './StepsList';
+import {
+  axisWords, boxSegments, chipPoints, defaultPattern, dirOfEdge, dirOfFace, instanceCount, patternBodyLine, patternHandles,
+  patternSkip, patternSpec, patternValues, placeInstances, remapSkip, reportsOn, toggleSkip, wayWords, type PatternValues,
+} from '@/build/pattern';
 import { messageLine, reopenableAt, stepIcon, stepInputs, stepLabel, stepProblems, suppressedNote } from '@/build/steps';
 import {
   BASE_PLANES, boundPlane, extrudeDirectionText, faceLabel, findFaceSketch, partSide, referencedProfiles, referencedSketchNames,
@@ -92,6 +96,7 @@ const NO_CHAT: ChatMessage[] = [];
 const OP_NAMES = {
   shell: 'Shell', holes: 'Hole', fillet: 'Fillet', chamfer: 'Chamfer', extrude: 'Extrude', auto_round: 'Round',
   truss_windows: 'Lighten', offset_plane: 'Offset plane', edge_plane: 'Plane on edge', mirror_body: 'Mirror body',
+  pattern_body: 'Pattern body',
 } as const;
 /** An Offset plane or Plane on edge dialog: `line` the line it was reopened
  *  from (null: a new plane), `own` the plane's name in the script then. */
@@ -270,6 +275,17 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       : "The drag preview doesn't move sketch points dimensioned to their face's edges; they follow when you let go");
     window.setTimeout(() => setNotice(''), 10000);
   };
+  // a pattern's instance numbers (buttons: a click leaves that copy out),
+  // positioned every frame like the handle
+  const chipEls = useRef(new Map<string, HTMLButtonElement>());
+  const onMarks = (pts: PlacedDim[]) => {
+    for (const p of pts) {
+      const el = chipEls.current.get(p.key);
+      if (!el) continue;
+      el.style.visibility = p.visible ? 'visible' : 'hidden';
+      el.style.transform = `translate(${p.x}px, ${p.y}px) translate(-50%, -50%)`;
+    }
+  };
   const onHandle = (p: PlacedHandle | null) => {
     const { line, knob, label, sub: subEl } = hEls.current;
     const h = handleRef.current;
@@ -297,7 +313,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       subEl.setAttribute('fill', snapped ? '#2dd4bf' : '#cfd6df');
       subEl.textContent = snapped ? `snap → face #${p.snapFace}`
         : p.dragging ? (edge ? dialogDragNoteRef.current : 'Shift: 0.1 steps · Esc cancels')
-        : edge ? 'drag to change' : handleHintRef.current;
+        : edge ? (handleHintRef.current ? `drag to change · ${handleHintRef.current}` : 'drag to change') : handleHintRef.current;
     }
   };
 
@@ -684,7 +700,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       if (canvasRef.current && !viewerRef.current) {
         try {
           viewerRef.current = createViewer(canvasRef.current, {
-            onPick, onEdgeDoubleClick, onAxes, onDims, onHandle, onHandleDrop, onHandleMove,
+            onPick, onEdgeDoubleClick, onAxes, onDims, onHandle, onHandleDrop, onHandleMove, onMarks,
             onSection, onSectionHandle, onSectionMeasure, onPlaneLabels,
             ...(sketchOnFace ? {
               onSketchHover: (h: { name: string; x: number; y: number } | null) => setSketchTip(h),
@@ -1055,6 +1071,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     setPlaneOp(null);
     setMirrorOp(null);
     setCopyOp(null);
+    setPatternOp(null);
+    setPatternShown(null);
     viewerRef.current?.hoverFace(null);
     viewerRef.current?.hoverEdge(null);
     applySelection([]);
@@ -1448,12 +1466,12 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       setNotice(`${label}: ${errorText(err)}`);
     }
   };
-  const unlinkCopy = async (line: number) => {
+  const unlinkCopy = async (line: number, label = 'Unlink mirrored copy') => {
     try {
       const r = await buildApi.unlinkStep(codeRef.current, line);
       closeOp();
       setCode(r.code);
-      const out = await build(r.code, 'Unlink mirrored copy');
+      const out = await build(r.code, label);
       if (out.kind === 'ok') saveDraft(r.code);
     } catch (err) {
       setNotice(`Unlink: ${errorText(err)}`);
@@ -1485,6 +1503,143 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     v.selectEdges([]);
     v.selectPlanes(p && 'plane' in p ? [p.plane] : []);
   }, [mirrorFaceKey]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // ── Pattern: Pattern body writes `part = pattern_body(part, linear(…) | circular(…),
+  // join=…)`, Pattern steps one linked `patterned(...)` copy of each chosen
+  // step, and a pattern copy reopened rewrites its group's pattern. The result
+  // is the ghost; each instance is drawn as a box and numbered (a number
+  // clicked leaves that copy out), with handles for the spacing, the count or
+  // the angle. `line`: the line reopened.
+  type PatternOp = { kind: 'body' | 'steps' | 'copy'; line: number | null; lines: number[]; v: PatternValues; join: boolean;
+                     of?: number; original?: string };
+  const [patternOp, setPatternOp] = useState<PatternOp | null>(null);
+  // the directions an instance layout was built with: the boxes and handles
+  // follow a count or spacing typed at once, a direction changed only once built
+  const patternDirKey = (v: PatternValues) => JSON.stringify([v.type, v.dir, v.flip, v.two && v.dir2, v.two && v.flip2, v.axis]);
+  // the candidate's pattern lines (its report is filtered to them)
+  const patternMade = useRef<{ code: string; lines: number[]; dirs: string } | null>(null);
+  const [patternShown, setPatternShown] = useState<{ reports: PatternReport[]; dirs: string } | null>(null);
+  const patternKey = patternOp ? JSON.stringify([patternOp.kind, patternOp.line, patternOp.lines, patternSpec(patternOp.v),
+                                                  patternOp.join]) : '';
+  const patternReady = (v: PatternValues) => instanceCount(v, paramVals) !== null
+    && (v.type === 'linear' ? !!v.dir && (!v.two || !!v.dir2) : !!v.axis);
+  const patternLine = async (o: PatternOp) => {
+    const before = codeRef.current, pattern = patternSpec(o.v);
+    let code: string, lines: number[];
+    if (o.kind === 'body') {
+      code = (await buildApi.addPatternBody({ code: before, pattern, join: o.join, line: o.line })).code;
+      const l = patternBodyLine(code, o.line, before);
+      lines = l != null ? [l] : [];
+    } else if (o.kind === 'steps') {
+      const r = await buildApi.patternSteps(before, o.lines, pattern);
+      if (!r.made.length) throw new Error(r.skipped[0] ? `Line ${r.skipped[0].line}: ${r.skipped[0].reason}` : 'Nothing to pattern');
+      code = r.code;
+      lines = r.made.map((m) => m.line);
+    } else {
+      code = (await buildApi.setPattern(before, o.line!, pattern)).code;
+      const grown = code.split('\n').length - before.split('\n').length;   // P keys added above
+      lines = o.lines.map((l) => l + grown);
+    }
+    patternMade.current = { code, lines, dirs: patternDirKey(o.v) };
+    return code;
+  };
+  const patternPreview = useOpPreview(
+    viewerRef,
+    patternOp && patternReady(patternOp.v) ? () => patternLine(patternOp) : null,
+    patternKey,
+    async (src, signal) => {
+      const r = await buildApi.run(src, signal, getBackendId() ?? '', buildInputs(src).sketches);
+      const made = patternMade.current;
+      if (made?.code === src) setPatternShown({ reports: reportsOn(r.patterns, made.lines), dirs: made.dirs });
+      return r;
+    },
+  );
+  // a body's pattern from the selection: a hole (its cylinder) or a round
+  // edge turns round its axis; a straight edge or a flat face goes along it
+  const patternOfSelection = (): PatternValues => {
+    const res = resRef.current;
+    const f = selRef.current.length === 1 && !selERef.current.length ? res?.faces.find((x) => x.index === selRef.current[0]) : undefined;
+    const e = selERef.current.length === 1 && !selRef.current.length ? res?.edges.find((x) => x.index === selERef.current[0]) : undefined;
+    const d = f ? dirOfFace(f) : e ? dirOfEdge(e) : null;
+    const round = f?.kind === 'cylinder' || f?.kind === 'cone' || e?.ref?.kind === 'circle';
+    return d && round ? defaultPattern('circular', d) : defaultPattern('linear', d);
+  };
+  const startPatternBody = () => {
+    if (!resRef.current) return;
+    setPatternShown(null);
+    setPatternOp({ kind: 'body', line: null, lines: [], v: patternOfSelection(), join: true });
+  };
+  const startPatternSteps = () => {
+    if (!resRef.current) return;
+    const lines = stepSel.filter((l) => steps.some((s) => s.line === l && !patternSkip(s)));
+    if (!lines.length) { planeNotice('Choose extrudes, holes, fillets or chamfers in the steps list first (Ctrl-click for more)'); return; }
+    setPatternShown(null);
+    setPatternOp({ kind: 'steps', line: null, lines: [...stepSel].sort((a, b) => a - b), v: defaultPattern('linear'), join: true });
+  };
+  const patternRows = patternOp?.kind === 'steps'
+    ? patternOp.lines.flatMap((l) => {
+      const st = steps.find((s) => s.line === l);
+      return st ? [{ line: l, label: stepLabel(st), reason: patternSkip(st) }] : [];
+    }) : [];
+  const patternAfter = patternOp?.kind === 'steps'
+    ? Math.max(0, ...patternRows.filter((r) => !r.reason).map((r) => steps.find((s) => s.line === r.line)?.end_line ?? r.line)) || null
+    : null;
+  const applyPattern = async () => {
+    const o = patternOp;
+    if (!o || !patternReady(o.v)) return;
+    const label = o.kind === 'body' ? (o.line != null ? 'Edit pattern body' : 'Pattern body')
+      : o.kind === 'steps' ? 'Pattern steps' : 'Edit pattern';
+    try {
+      const src = patternPreview.built(patternKey) ?? (await patternLine(o));
+      closeOp();
+      setStepSel([]);
+      setCode(src);
+      const out = await build(src, label);
+      if (out.kind === 'ok') saveDraft(src);
+    } catch (err) {
+      setNotice(`${label}: ${errorText(err)}`);
+    }
+  };
+  // the instances as the values say now (the build's layout, moved)
+  const patternSame = !!patternOp && !!patternShown && patternShown.dirs === patternDirKey(patternOp.v);
+  const patternPlaced = patternOp && patternShown
+    ? patternShown.reports.map((r) => placeInstances(r, patternOp.v, paramVals, patternSame)) : [];
+  const patternChips = chipPoints(patternPlaced);
+  const patternFirst = patternSame ? patternShown!.reports[0] ?? null : null;
+  const patternWays = { dir: wayWords(patternFirst?.dir), dir2: wayWords(patternFirst?.dir2), axis: axisWords(patternFirst) };
+  const patternMarksKey = JSON.stringify(patternPlaced);
+  useEffect(() => {
+    const v = viewerRef.current;
+    if (!v) return;
+    if (!patternPlaced.length) { v.setMarks(null); return; }
+    const segs = { original: [] as number[], copy: [] as number[], skipped: [] as number[] };
+    for (const list of patternPlaced) {
+      for (const i of list) {
+        const into = i.index === 0 ? segs.original : i.skip ? segs.skipped : segs.copy;
+        into.push(...boxSegments(i.corners, i.skip && i.index !== 0));
+      }
+    }
+    const lines: MarkLines[] = [
+      { segments: segs.skipped, color: [0.55, 0.57, 0.62], width: 1.3 },
+      { segments: segs.copy, color: [0.3, 0.85, 0.45], width: 1.6 },
+      { segments: segs.original, color: [1, 0.62, 0.2], width: 2.4 },
+    ];
+    v.setMarks({ lines, points: patternChips.map((c) => ({ key: String(c.index), label: String(c.index), point: c.point })) });
+  }, [patternMarksKey]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // the edge or face a direction was picked from shows as selected
+  const patternPicked = patternOp ? (patternOp.v.type === 'circular' ? patternOp.v.axis : patternOp.v[patternOp.v.target]) : null;
+  const patternPickKey = patternOp ? JSON.stringify(patternPicked) : '';
+  useEffect(() => {
+    const v = viewerRef.current, d = patternPicked;
+    if (!patternOp || !v) return;
+    const f = d && 'face' in d ? faceOfRef(resRef.current?.faces ?? [], d.face) : null;
+    const e = d && 'edge' in d ? opEdgeIndex(d.edge) : null;
+    selRef.current = f ? [f.index] : [];
+    selERef.current = e != null ? [e] : [];
+    setSel(selRef.current);
+    setSelE(selERef.current);
+    v.selectFaces(selRef.current);
+    v.selectEdges(selERef.current);
+  }, [patternPickKey]);   // eslint-disable-line react-hooks/exhaustive-deps
   // the plane being edited is drawn as the preview, not as built
   const shownPlaneList = shownPlanes(builtPlanes, planeOp?.own ? [...hiddenPlanes, planeOp.own] : hiddenPlanes,
                                      planePreview ?? mirrorShape);
@@ -1681,7 +1836,19 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // while the Shell dialog is open, clicking a face opens or closes it, and
   // the faces it opens show as selected; in the Hole dialog it says where the
   // holes go
-  opPickRef.current = mirrorOp ? (p) => {
+  opPickRef.current = patternOp ? (p) => {
+    // a direction (or the axis): a straight edge, a flat face's normal, a hole's or round edge's axis
+    const res = resRef.current;
+    if (!p || !res) return;
+    const face = 'face' in p ? res.faces.find((x) => x.index === p.face.index) : undefined;
+    const edge = 'edge' in p ? res.edges.find((x) => x.index === p.edge) : undefined;
+    const d = face ? dirOfFace(face) : edge ? dirOfEdge(edge) : null;
+    if (!d) {
+      if (face || edge) planeNotice('Pick a straight or round edge, a flat face (its normal) or a hole (its axis)');
+      return;
+    }
+    setPatternOp((o) => o && ({ ...o, v: o.v.type === 'circular' ? { ...o.v, axis: d } : { ...o.v, [o.v.target]: d } }));
+  } : mirrorOp ? (p) => {
     const face = p && 'face' in p ? resRef.current?.faces.find((x) => x.index === p.face.index) : undefined;
     if (!face) return;
     const ref = face.kind === 'plane' ? refOf(face) : null;
@@ -1757,14 +1924,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     viewerRef.current?.selectFaces([]);
     viewerRef.current?.selectEdges(idx);
   }, [edgeKey]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const opOpen = !!shellOp || !!holeOp || !!edgeOp || !!extrudeOp || !!argOp || !!planeOp || !!mirrorOp || !!copyOp;
+  const opOpen = !!shellOp || !!holeOp || !!edgeOp || !!extrudeOp || !!argOp || !!planeOp || !!mirrorOp || !!copyOp || !!patternOp;
   // Shell, Hole and Round work on faces: while one is open a click picks faces
-  // only; Fillet and Chamfer, edges only
-  const viewFilter: PickFilter = shellOp || holeOp || planeOp || mirrorOp || argOp?.v.op === 'auto_round' ? 'faces' : edgeOp ? 'edges'
+  // only; Fillet and Chamfer, edges only; Pattern takes either, as the filter says
+  const viewFilter: PickFilter = patternOp ? pickFilter : shellOp || holeOp || planeOp || mirrorOp || argOp?.v.op === 'auto_round' ? 'faces' : edgeOp ? 'edges'
     : pickFilter;
   useEffect(() => { viewerRef.current?.setPickFilter(viewFilter); }, [viewFilter]);
   // the dialogs sit at the top left of the view: draw the part beside them
-  const opWidth = holeOp || argOp || planeOp || mirrorOp ? 300 : shellOp || edgeOp || extrudeOp || copyOp ? 270 : 0;
+  const opWidth = holeOp || argOp || planeOp || mirrorOp || patternOp ? 300 : shellOp || edgeOp || extrudeOp || copyOp ? 270 : 0;
   useEffect(() => {
     viewerRef.current?.setInset(opWidth ? opWidth + 24 : 0);
   }, [opWidth]);
@@ -1774,7 +1941,18 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     try {
       const op = await buildApi.opAt(codeRef.current, line, stepIn.datum);
       if (opOpen) closeOp();
-      if (op.mirror?.of != null) {
+      if (op.pattern?.of != null) {
+        // a pattern copy: its pattern (all the copies made with it), or its original
+        const orig = steps.find((s) => s.line === op.pattern!.of);
+        setPatternShown(null);
+        setPatternOp({ kind: 'copy', line: op.line, lines: op.pattern.lines, join: true, of: op.pattern.of,
+                       v: patternValues(op.pattern.args, op.pattern.exprs),
+                       original: orig ? stepLabel(orig) : `line ${op.pattern.of}` });
+      } else if (op.op === 'pattern_body') {
+        const a = op.args as { pattern: PatternSpec; join: boolean };
+        setPatternShown(null);
+        setPatternOp({ kind: 'body', line: op.line, lines: [], v: patternValues(a.pattern, op.exprs ?? {}), join: a.join !== false });
+      } else if (op.mirror?.of != null) {
         // a linked copy follows its original: edit that, or unlink it
         const orig = steps.find((s) => s.line === op.mirror!.of);
         setCopyOp({ line: op.line, of: op.mirror.of, across: op.mirror.label,
@@ -1919,17 +2097,44 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // applyParam (set_params → rebuild → version), never the AI.
   const selFace = sel.length === 1 && !opOpen ? resRef.current?.faces.find((f) => f.index === sel[0]) ?? null : null;
   const handleOpts = useMemo(() => (selFace ? handleOptions(selFace, sens) : []), [selFace, sens]);
-  const handleKey = `${sel.join()}|${handleOpts.map((h) => h.name).join()}`;
+  // with Pattern open: the spacing (or extent) on the last copy, the count
+  // past it, or the angle — picked by name, so one dragged stays the one
+  // dragged when the list changes under it (a count going from 1 to 2)
+  const patHs = patternOp && patternSame ? patternHandles(patternFirst, patternOp.v, paramVals) : [];
+  const [patPick, setPatPick] = useState('');
+  const handleKey = patternOp ? `pattern|${patHs.map((h) => h.name).join()}` : `${sel.join()}|${handleOpts.map((h) => h.name).join()}`;
   const [handlePick, setHandlePick] = useState({ key: '', i: 0 });
-  const nHandles = handleOpts.length;
+  const nHandles = patternOp ? patHs.length : handleOpts.length;
   const hi = nHandles ? ((((handlePick.key === handleKey ? handlePick.i : 0) % nHandles) + nHandles) % nHandles) : 0;
-  const faceHandle = nHandles ? handleOpts[hi]! : null;
+  const faceHandle = nHandles && !patternOp ? handleOpts[hi]! : null;
+  const patH = patHs.find((h) => h.name === patPick) ?? patHs[0] ?? null;
+  const patHKey = patH ? JSON.stringify(patH) : '';
+  const patNamesRef = useRef<string[]>([]);
+  patNamesRef.current = patHs.map((h) => h.name);
+  const patHNameRef = useRef('');
+  patHNameRef.current = patH?.name ?? '';
+  if (patternOp) {
+    setEdgeSizeRef.current = (value: number) => {
+      const name = patHNameRef.current;
+      setPatPick(name);
+      setPatternOp((o) => {
+        if (!o) return o;
+        const r3 = Math.round(value * 1000) / 1000;
+        const next: PatternValues = { ...o.v, ...(name === 'count' ? { count: Math.max(1, Math.round(value)) }
+          : name === 'spacing' ? { spacing: r3 } : name === 'extent' ? { extent: r3 } : name === 'angle' ? { angle: r3 } : {}) };
+        next.skip = remapSkip(o.v.skip, o.v, next, paramVals);
+        return { ...o, v: next };
+      });
+    };
+  }
   // with Fillet / Chamfer open: a handle on its first edge drags the size
   // (0.1 mm steps), live — the ghost follows ~300 ms behind
   const edgeH = edgeOp?.v.edges[0] ? edgeHandle(edgeAsNow(edgeOp.v.edges[0])) : null;
   const edgeHKey = edgeH ? JSON.stringify(edgeH) : '';
   const edgeSize = edgeOp?.v.size ?? 0;
-  const handle: HandleOption | null = planeOp
+  const handle: HandleOption | null = patternOp
+    ? (patH ? { name: patH.name, value: edgeDragRef.current ?? patH.value, shift: patH.shift, dr: 0, moves: [] } : null)
+    : planeOp
     ? (planeH ? { name: planeOp.kind === 'offset' ? 'distance' : 'angle', value: edgeDragRef.current ?? planeH.value,
                   shift: planeH.shift, dr: 0, moves: [] } : null)
     : edgeOp
@@ -1937,9 +2142,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                                   value: edgeDragRef.current ?? edgeSize, shift: edgeH.dir, dr: 0, moves: [] } : null)
     : faceHandle;
   handleRef.current = handle;
-  edgeHandleOnRef.current = !!edgeOp || !!planeOp;
-  handleUnitRef.current = planeOp?.kind === 'edge' ? '°' : '';
-  dialogDragNoteRef.current = planeOp?.kind === 'offset' ? 'Shift: 0.1 mm · snaps to faces · Esc cancels'
+  edgeHandleOnRef.current = !!edgeOp || !!planeOp || !!patternOp;
+  handleUnitRef.current = planeOp?.kind === 'edge' || patH?.name === 'angle' ? '°' : '';
+  dialogDragNoteRef.current = patH?.name === 'count' ? 'drag to add or remove copies · Esc cancels'
+    : patH?.name === 'angle' ? 'Shift: 0.1° · Esc cancels' : patternOp ? 'Shift: 0.1 mm · Esc cancels'
+    : planeOp?.kind === 'offset' ? 'Shift: 0.1 mm · snaps to faces · Esc cancels'
     : planeOp ? 'Shift: 0.1° · Esc cancels' : '0.1 mm steps · Esc cancels';
   handleHintRef.current = nHandles > 1 ? `Tab ⇄ ${hi + 1}/${nHandles}` : '';
   const handleKeyRef = useRef(handleKey);
@@ -1947,6 +2154,12 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const nHandlesRef = useRef(0);
   nHandlesRef.current = nHandles;
   useEffect(() => {
+    if (patternOp) {
+      if (edgeDragRef.current != null) return;   // its own drag changed the value: leave it be
+      viewerRef.current?.setHandle(patH ? { face: -1, at: patH.at, shift: patH.shift, dr: 0, value: patH.value, moves: [],
+                                            ...('turn' in patH ? { turn: patH.turn } : { step: patH.step, min: patH.min }) } : null);
+      return;
+    }
     if (planeOp) {
       if (edgeDragRef.current != null) return;   // its own drag changed the value: leave it be
       viewerRef.current?.setHandle(planeH);
@@ -1962,7 +2175,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     viewerRef.current?.setHandle(faceHandle && selFace
       ? { face: selFace.index, shift: faceHandle.shift, dr: faceHandle.dr, value: faceHandle.value, moves: faceHandle.moves }
       : null);
-  }, [faceHandle, selFace, !!edgeOp, edgeHKey, edgeSize, planeHKey]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [faceHandle, selFace, !!edgeOp, edgeHKey, edgeSize, planeHKey, patHKey, !!patternOp]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Tab' || nHandlesRef.current < 2 || faceSketchRef.current.activeRef.current) return;
@@ -1970,6 +2183,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       // moves between the editor's fields
       if (e.target instanceof HTMLElement && e.target !== document.body) return;
       e.preventDefault();
+      if (handleKeyRef.current.startsWith('pattern|')) {
+        const names = patNamesRef.current, i = Math.max(0, names.indexOf(patHNameRef.current));
+        setPatPick(names[(i + (e.shiftKey ? -1 : 1) + names.length) % names.length]!);
+        return;
+      }
       const key = handleKeyRef.current;
       setHandlePick((p) => ({ key, i: (p.key === key ? p.i : 0) + (e.shiftKey ? -1 : 1) }));
     };
@@ -2287,6 +2505,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     asking, holeSketches: holeSketches.length, holeAt: holeAtText, autoRound: !!resRef.current?.auto_round,
     exporting: !!exporting, importing, hasParams, showParams, ortho, measure: measureText, section: secOn,
     mirrorSteps: stepSel.filter((l) => steps.some((s) => s.line === l && !mirrorSkip(s))).length,
+    patternSteps: stepSel.filter((l) => steps.some((s) => s.line === l && !patternSkip(s))).length,
   };
   const opCtx: OpContext = {
     sketchOnSelection, sketchOnPlane,
@@ -2321,6 +2540,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     section: toggleSection,
     mirrorBody: startMirrorBody,
     mirrorSteps: startMirrorSteps,
+    patternBody: startPatternBody,
+    patternSteps: startPatternSteps,
   };
   // the last few operations used, for the grid's Recent row
   const [recent, setRecent] = useState<string[]>(loadRecent);
@@ -2739,6 +2960,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                 onToggle={(st, withCopies) => void changeStep(st, st.off ? 'on' : 'off', withCopies ? 'with' : undefined)}
                 onDelete={(st, copies) => void changeStep(st, 'delete', copies)}
                 onMirror={opModel.mirrorSteps > 0 && !opOpen ? startMirrorSteps : undefined}
+                onPattern={opModel.patternSteps! > 0 && !opOpen ? startPatternSteps : undefined}
                 deleteNote={(st) => {
                   const used = st.plane ? planeSketches(docSketches, st.plane) : [];
                   return used.length ? `Used by ${used.length > 1 ? 'sketches' : 'sketch'} ${used.map((x) => `“${x.name}”`).join(', ')}` : null;
@@ -2813,6 +3035,16 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                 preview={mirrorPreview.preview} planes={planeNames} params={paramVals} steps={mirrorRows} after={mirrorAfter}
                 onChange={(v) => setMirrorOp((o) => o && { ...o, v })}
                 onApply={() => void applyMirror()} onCancel={closeOp} />
+            )}
+            {patternOp && (
+              <PatternOpDialog kind={patternOp.kind} value={patternOp.v} editing={patternOp.line != null}
+                onChange={(v) => setPatternOp((o) => o && { ...o, v })}
+                join={patternOp.join} onJoin={(join) => setPatternOp((o) => o && { ...o, join })}
+                preview={patternPreview.preview} params={paramVals} steps={patternRows} after={patternAfter}
+                ways={patternWays} original={patternOp.original}
+                onEditOriginal={() => { const of = patternOp.of; closeOp(); if (of != null) void editOp(of); }}
+                onUnlink={() => { if (patternOp.line != null) void unlinkCopy(patternOp.line, 'Unlink pattern copy'); }}
+                onApply={() => void applyPattern()} onCancel={closeOp} />
             )}
             {copyOp && (
               <MirrorCopyDialog of={copyOp.of} across={copyOp.across} original={copyOp.original}
@@ -3023,6 +3255,23 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
               <text ref={(el) => { hEls.current.sub = el; }} opacity={0} fontSize={10.5}
                     style={{ paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.7)', strokeWidth: 3 }} />
             </svg>
+            {/* a pattern's instance numbers (positioned per frame by onMarks): a click leaves that copy out */}
+            {patternOp && patternChips.map((c) => (
+              <button key={c.index}
+                ref={(el) => { if (el) chipEls.current.set(String(c.index), el); else chipEls.current.delete(String(c.index)); }}
+                onClick={() => { if (c.index) setPatternOp((o) => o && { ...o, v: { ...o.v, skip: toggleSkip(o.v.skip, c.index) } }); }}
+                onWheel={(e) => { canvasRef.current?.dispatchEvent(new WheelEvent('wheel', e.nativeEvent)); }}   // zoom on through a chip
+                title={c.index === 0 ? 'The original (#0): it stays' : c.skip ? `#${c.index} is left out: click to put it back`
+                  : `#${c.index}: click to leave it out`}
+                style={{ position: 'absolute', left: 0, top: 0, visibility: 'hidden', pointerEvents: 'auto',
+                         minWidth: 20, height: 18, padding: '0 4px', borderRadius: 9, fontSize: 11, fontWeight: 700,
+                         lineHeight: '16px', cursor: c.index ? 'pointer' : 'default',
+                         textDecoration: c.skip ? 'line-through' : 'none',
+                         background: c.index === 0 ? '#f59e33' : c.skip ? 'rgba(60,63,70,0.85)' : 'rgba(30,140,70,0.92)',
+                         color: c.skip ? '#aab0ba' : '#fff', border: '1px solid rgba(255,255,255,0.55)' }}>
+                {c.index}
+              </button>
+            ))}
             {/* the section plane's arrow (positioned per frame by onSectionHandle) */}
             <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%',
                           pointerEvents: 'none', overflow: 'hidden' }}>

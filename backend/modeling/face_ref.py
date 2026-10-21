@@ -30,6 +30,9 @@ SAME_NORMAL = 0.999
 AMBIGUOUS = 0.10
 # distance along the normal counts this much against a face (per face size)
 ALONG = 0.5
+# a curved face that moved further than its size is still the one when it is
+# the only face of its kind whose area is within this fraction (a hole moved)
+SAME_AREA = 0.02
 
 
 class FaceRefError(ValueError):
@@ -141,12 +144,22 @@ def find(part, ref: dict, pl: Plane | None = None) -> dict:
     if not scored:
         return none
     score, across, along, ov, c, f = scored[0]
-    if not ov and across > size:
+    if not ov and across > size and not _only_one_like(ref, scored):
         return none
     status = "found"
     if len(scored) > 1 and scored[1][0] <= score * (1 + AMBIGUOUS) + 1e-9:
         status = "ambiguous"
     return {"status": status, "face": f, "center": c, "across": across, "along": along}
+
+
+def _only_one_like(ref: dict, scored: list[tuple]) -> bool:
+    """A curved face (a hole's cylinder, say) is the only one of its kind and
+    size, so the best candidate is it however far it moved."""
+    if ref.get("kind", "plane") == "plane":
+        return False
+    area0 = float(ref["area"])
+    like = [t for t in scored if abs(t[5].area / area0 - 1) <= SAME_AREA]
+    return len(like) == 1 and like[0] is scored[0]
 
 
 def rank(part, ref: dict, pl: Plane | None = None) -> tuple[float, list[tuple]]:

@@ -18,7 +18,7 @@ export const OP_GROUPS: OpGroup[] = ['Sketch', 'Create', 'Construct', 'Modify', 
 
 export type OpIcon =
   | 'sketch-face' | 'plane-top' | 'plane-front' | 'plane-right' | 'extrude' | 'hole' | 'shell' | 'fillet' | 'chamfer' | 'round'
-  | 'plane-offset' | 'plane-edge' | 'mirror' | 'mirror-steps'
+  | 'plane-offset' | 'plane-edge' | 'mirror' | 'mirror-steps' | 'pattern' | 'pattern-circular' | 'pattern-steps'
   | 'lighten' | 'protect' | 'fix' | 'measure' | 'section' | 'normal' | 'ortho' | 'params' | 'build' | 'import'
   | 'export' | 'stl' | 'parts' | 'dxf' | 'views3' | 'versions' | 'process' | 'context'
   | `view-${StandardView}`;
@@ -61,6 +61,8 @@ export interface OpModel {
   section: boolean;
   /** the steps chosen in the steps list that Mirror steps can copy */
   mirrorSteps: number;
+  /** the steps chosen in the steps list that Pattern steps can copy */
+  patternSteps?: number;
 }
 
 export type ExportFormat = 'stl' | 'step' | 'stl-parts' | 'dxf' | 'dxf-views';
@@ -100,6 +102,10 @@ export interface OpContext {
   mirrorBody(): void;
   /** the Mirror steps dialog, for the steps chosen in the steps list */
   mirrorSteps(): void;
+  /** the Pattern body dialog (along the selected edge or face, or round it) */
+  patternBody(): void;
+  /** the Pattern steps dialog, for the steps chosen in the steps list */
+  patternSteps(): void;
 }
 
 export type Need = { ok: true } | { ok: false; reason: string };
@@ -400,6 +406,32 @@ export const OPERATIONS: Operation[] = [
                               [m.mirrorSteps === 0, 'Choose steps in the steps list (Ctrl-click for more)']),
     detail: (_sel, m) => `${plural(m.mirrorSteps, 'step')} chosen`,
     run: (ctx) => ctx.mirrorSteps(),
+  },
+  {
+    id: 'pattern-body', name: 'Pattern body', group: 'Pattern', icon: 'pattern',
+    help: 'Copies of the whole part in a row, a grid or round an axis',
+    longHelp: 'Repeats the whole part along a direction (a second direction makes a grid) or round an axis. Pick '
+      + 'the direction or axis in the view (an edge, a flat face for its normal, a hole or a round edge for its axis) '
+      + 'or use X, Y or Z. Join fuses the copies into one solid; Separate keeps each as a body. Click a copy\'s '
+      + 'number in the view to leave it out.',
+    example: 'make four of this bracket in a row, 30 mm apart',
+    needs: (_sel, m) => first(...notWhile(m), ...built(m)),
+    detail: (sel) => (sel.edges.length === 1 && !sel.faces.length ? 'along the selected edge'
+      : sel.faces.length === 1 && !sel.edges.length ? 'from the selected face' : null),
+    run: (ctx) => ctx.patternBody(),
+  },
+  {
+    id: 'pattern-steps', name: 'Pattern steps', group: 'Pattern', icon: 'pattern-steps',
+    help: 'Repeat the steps chosen in the steps list in a row, a grid or round an axis',
+    longHelp: 'Choose extrudes, holes, fillets or chamfers in the steps list (Ctrl-click or Shift-click for more), '
+      + 'then this repeats each: linear (a row, or a grid with a second direction) or circular (round a hole, a '
+      + 'round edge or an axis). Each copy stays linked to its original: change the original and the copies '
+      + 'follow, until you unlink them. Click a copy\'s number in the view to leave it out.',
+    example: 'repeat the vent slot 8 times across the lid, 3 rows',
+    needs: (_sel, m) => first(...notWhile(m), ...built(m),
+                              [!m.patternSteps, 'Choose steps in the steps list (Ctrl-click for more)']),
+    detail: (_sel, m) => `${plural(m.patternSteps ?? 0, 'step')} chosen`,
+    run: (ctx) => ctx.patternSteps(),
   },
   // Inspect
   {

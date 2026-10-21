@@ -273,6 +273,10 @@ function thickVerts(segs: ArrayLike<number>): Float32Array {
   return out;
 }
 
+/** Lines a dialog draws over the part (a pattern's instances): segment
+ *  pairs in one colour, `width` CSS px; drawn dimmer where the part hides them. */
+export interface MarkLines { segments: number[]; color: Vec3; width?: number }
+
 /** A face's triangle range in the mesh + its plane (for pick / highlight). */
 export interface FaceRange {
   index: number; start: number; count: number;
@@ -361,6 +365,9 @@ export interface Viewer {
   setPickFilter(f: PickFilter): void;
   /** Set the dimension overlay (empty to clear). Reported back via onDims. */
   setDims(dims: DimAnchor[]): void;
+  /** A dialog's marks: lines drawn over the part, and points placed on
+   *  screen each frame via onMarks (a pattern's instance numbers). null clears. */
+  setMarks(m: { lines: MarkLines[]; points: DimAnchor[] } | null): void;
   /** Show a drag handle on a face (null to remove). Cancels any drag. */
   setHandle(h: DragHandle | null): void;
   /** Drop the preview left by a released drag (normally the rebuild that the
@@ -484,6 +491,8 @@ export interface ViewerOpts {
   onSectionMeasure?: (m: SectionMeasure | null) => void;
   /** Called each frame with where the construction planes' names go. */
   onPlaneLabels?: (labels: PlacedPlaneLabel[]) => void;
+  /** Called each frame with the marks' points, projected (see setMarks). */
+  onMarks?: (points: PlacedDim[]) => void;
 }
 
 export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): Viewer {
@@ -582,6 +591,10 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   const fAlpha = gl.getUniformLocation(fillProg, 'uAlpha');
   const hasStencil = !!gl.getContextAttributes()?.stencil;
   const sketchBuf = gl.createBuffer()!;
+  // a dialog's marks (setMarks): thick lines, and points reported via onMarks
+  const markBuf = gl.createBuffer()!;
+  let markRanges: { first: number; count: number; color: Vec3; width: number }[] = [];
+  let markPoints: DimAnchor[] = [];
   let sketchLines: SketchLines[] = [];
   let sketchRanges: { id: string; first: number; count: number }[] = [];
   let hoverSketch: string | null = null;
@@ -1484,6 +1497,35 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       gl!.disableVertexAttribArray(tSide);
     }
 
+    // a dialog's marks: dim through the part, full where seen
+    if (markRanges.length && !thumbMode && !sk) {
+      gl!.useProgram(thickProg);
+      gl!.uniformMatrix4fv(tPV, false, multiply(proj, multiply(view, model)));
+      gl!.uniform2f(tHalfPx, w / 2, h / 2);
+      gl!.uniform1f(tBias, 6e-5);
+      setSec(tSec, tSecOn, true);
+      gl!.bindBuffer(gl!.ARRAY_BUFFER, markBuf);
+      gl!.enableVertexAttribArray(tPos);
+      gl!.enableVertexAttribArray(tOther);
+      gl!.enableVertexAttribArray(tSide);
+      gl!.vertexAttribPointer(tPos, 3, gl!.FLOAT, false, 28, 0);
+      gl!.vertexAttribPointer(tOther, 3, gl!.FLOAT, false, 28, 12);
+      gl!.vertexAttribPointer(tSide, 1, gl!.FLOAT, false, 28, 24);
+      for (const pass of [0, 1]) {
+        if (pass === 0) gl!.disable(gl!.DEPTH_TEST);
+        for (const r of markRanges) {
+          gl!.uniform1f(tWidth, r.width * dpr);
+          gl!.uniform3fv(tColor, pass === 0 ? r.color.map((c) => c * 0.45) as Vec3 : r.color);
+          gl!.drawArrays(gl!.TRIANGLES, r.first, r.count);
+        }
+        if (pass === 0) gl!.enable(gl!.DEPTH_TEST);
+      }
+      gl!.disableVertexAttribArray(tOther);
+      gl!.disableVertexAttribArray(tSide);
+      gl!.useProgram(lineProg);
+      gl!.enableVertexAttribArray(lPos);
+    }
+
     // selected edges: thick, dimmer through the part where it hides them, in
     // full where seen; the hovered one (what a click would pick) on top
     const hoverE = hoverEdgeExt ?? (hoverPick && 'edge' in hoverPick && !drag ? hoverPick.edge : null);
@@ -1646,6 +1688,13 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
         let ax = x, ay = y;
         if (d.dir) [ax, ay] = toCss(add(d.point, scale(d.dir, arm)));
         return { key: d.key, label: d.label, x, y, ax, ay, visible: vis && !(sec && cutDepth(sec, d.point) > 1e-3) };
+      }));
+    }
+    if (opts.onMarks && !thumbMode) {
+      const toCss = cssProjector();
+      opts.onMarks(sk ? [] : markPoints.map((d) => {
+        const [x, y, vis] = toCss(d.point);
+        return { key: d.key, label: d.label, x, y, ax: x, ay: y, visible: vis && !(sec && cutDepth(sec, d.point) > 1e-3) };
       }));
     }
     if (opts.onHandle && !thumbMode) opts.onHandle(placeHandle(cssProjector()));
@@ -2145,6 +2194,19 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       scheduleRender();
     },
     setDims(d: DimAnchor[]) { dims = d; scheduleRender(); },
+    setMarks(m) {
+      const all: number[] = [];
+      markRanges = [];
+      for (const l of m?.lines ?? []) {
+        if (l.segments.length < 6) continue;
+        markRanges.push({ first: all.length, count: l.segments.length, color: l.color, width: l.width ?? 1.6 });
+        for (const v of l.segments) all.push(v);
+      }
+      markPoints = m?.points ?? [];
+      gl!.bindBuffer(gl!.ARRAY_BUFFER, markBuf);
+      gl!.bufferData(gl!.ARRAY_BUFFER, thickVerts(all), gl!.DYNAMIC_DRAW);
+      scheduleRender();
+    },
     setSection(sArg: Section | null) {
       if (sArg === section) return;   // our own onSection, echoed back
       if (secDrag) { secDrag = null; mode = 'none'; window.removeEventListener('keydown', onKey); canvas.style.cursor = baseCursor; }
@@ -2320,6 +2382,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       gl.deleteBuffer(lineBuf);
       gl.deleteBuffer(gridBuf);
       gl.deleteBuffer(sketchBuf);
+      gl.deleteBuffer(markBuf);
       gl.deleteBuffer(ghostBuf);
       gl.deleteBuffer(edgeBuf);
       gl.deleteBuffer(candPosBuf);
