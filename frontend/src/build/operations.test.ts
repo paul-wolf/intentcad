@@ -191,6 +191,15 @@ describe('the operation registry', () => {
     expect(op.needs(NONE, { ...MODEL, sketching: true })).toEqual({ ok: false, reason: 'Finish the sketch first' });
     expect(ok('normal', NONE, { ...MODEL, section: true }).ok).toBe(true);
   });
+
+  it('turns Overhangs on once something is built, and off whatever the state', () => {
+    const fresh: OpModel = { ...MODEL, status: 'idle', hasCode: false };
+    expect(reason('overhangs', NONE, fresh)).toBe('Build the part first');
+    expect(reason('overhangs', NONE, { ...MODEL, status: 'error' })).toBe('Fix the build first');
+    expect(ok('overhangs', NONE).ok).toBe(true);
+    expect(ok('overhangs', NONE, { ...fresh, overhangs: true }).ok).toBe(true);
+    expect(opById('overhangs')!.label!({ ...MODEL, overhangs: true })).toBe('Overhangs off');
+  });
 });
 
 describe('what each operation needs', () => {

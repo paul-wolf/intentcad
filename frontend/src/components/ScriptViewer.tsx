@@ -79,7 +79,6 @@ import { OperationsPanel, Kbd } from './OperationsPanel';
 import { OpIcon, OPS_GRID_ICON } from './OpIcons';
 import { ContextChips, ContextPane, useContextFiles, type CtxColors } from './ContextPane';
 import { acceptable, chatUsageNote, filesToSend, seesSpend, skipList, spendLine, spendNote, usageLabel } from '@/build/contextFiles';
-import { useAuthStore } from '@/stores/authStore';
 import { chooseModel, modelsStale } from '@/build/modelList';
 
 // the view buttons, in key order (1–6, then 0)

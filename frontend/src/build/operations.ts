@@ -505,7 +505,8 @@ export const OPERATIONS: Operation[] = [
       + 'printable fixes in the chat box.',
     example: 'will the lid lip print without supports?',
     label: (m) => (m.overhangs ? 'Overhangs off' : 'Overhangs'),
-    needs: (_sel, m) => first([m.sketching, 'Finish the sketch first']),
+    // turning it off always works; turning it on needs something built to shade
+    needs: (_sel, m) => first([m.sketching, 'Finish the sketch first'], ...(m.overhangs ? [] : built(m))),
     run: (ctx) => ctx.overhangs(),
   },
   // View
