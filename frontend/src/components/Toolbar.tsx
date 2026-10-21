@@ -86,6 +86,9 @@ const MODIFY_TOOLS: { type: ToolType; label: string; icon?: ReactNode; shortcut:
   { type: 'offset', label: 'Offset: a copy of a shape or chain a distance to one side, that follows it (click it, then drag out or type the distance)', icon: <ToolIcon><rect x="5" y="5" width="6" height="6" rx="1" /><rect x="2" y="2" width="12" height="12" rx="3" strokeDasharray="2 1.5" /></ToolIcon>, shortcut: 'O' },
 ];
 
+/** Only while sketching on a part: there are no part edges in the 2D editor. */
+const PROJECT_TOOL = { type: 'project' as ToolType, label: "Project edges: click an edge of the part (dotted: the ones behind the face too) to add it as reference geometry that follows the part", icon: <ToolIcon><path d="M3 11l5-3 5 3-5 3z" strokeDasharray="1.5 1" strokeWidth="1" /><line x1="8" y1="2" x2="8" y2="9" /><path d="M6 7l2 2 2-2" /></ToolIcon>, shortcut: ';' };
+
 function Sep({ color }: { color: string }) {
   return <div style={{ width: '1px', background: color, margin: '2px 4px', alignSelf: 'stretch' }} />;
 }
@@ -139,6 +142,7 @@ export function Toolbar({ embedded = false }: ToolbarProps = {}) {
     embedded ? { style: { ...style, opacity: 0.35, cursor: 'default' }, disabled: true } : { style };
   const [showBuild, setShowBuild] = useState(false);
   const activeTool = useEditorStore((s) => s.activeTool);
+  const projecting = useEditorStore((s) => !!s.projectSource);
   const setActiveTool = useEditorStore((s) => s.setActiveTool);
   const drawerOpen = useUIStateStore((s) => s.drawerOpen);
   const toggleDrawer = useUIStateStore((s) => s.toggleDrawer);
@@ -254,7 +258,7 @@ export function Toolbar({ embedded = false }: ToolbarProps = {}) {
         <Sep color={palette.border} />
         <ToolButtons tools={MEASURE_TOOLS} activeTool={activeTool} setActiveTool={setActiveTool} palette={palette} />
         <Sep color={palette.border} />
-        <ToolButtons tools={MODIFY_TOOLS} activeTool={activeTool} setActiveTool={setActiveTool} palette={palette} />
+        <ToolButtons tools={projecting ? [...MODIFY_TOOLS, PROJECT_TOOL] : MODIFY_TOOLS} activeTool={activeTool} setActiveTool={setActiveTool} palette={palette} />
 
         <div style={{ flex: 1 }} />
 

@@ -16,6 +16,7 @@ import { add, dot, len, scale, sub, type Vec3 } from './dragHandle';
 import { planeBasis, planeForFace, sketchToWorld, worldToSketch, type PlaneBasis } from './sketchPlane';
 import { isRef } from '@/utils/brokenRefs';
 import { followRefs, type OutlineEdge } from './sketchRefs';
+import { matchProjected } from './projectEdges';
 
 /** The face a sketch was drawn on, kept so the build can find it again when
  *  the part changes (modeling/sketch_profile.rebind). Sketches drawn before
@@ -139,29 +140,44 @@ function faceOutline(face: FaceInfo, edges: RunEdge[], b: PlaneBasis): Outline {
       vmin = Math.min(vmin, -p.y); vmax = Math.max(vmax, -p.y);
       if (i) perimeter += Math.hypot(p.x - pts[i - 1]!.x, p.y - pts[i - 1]!.y);
     }
-    const first = pts[0]!, last = pts[pts.length - 1]!;
-    const closed = Math.hypot(first.x - last.x, first.y - last.y) < 1e-6;
-    // reference (datum) + construction: drawn as a marker, snappable, never exported
-    const ref = { construction: true, reference: true } as const;
-    let ent: Entity;
-    if (e.kind === 'circle' && closed) {
-      const ring = pts.slice(0, -1);
-      const c = { x: ring.reduce((s, p) => s + p.x, 0) / ring.length, y: ring.reduce((s, p) => s + p.y, 0) / ring.length };
-      const r = ring.reduce((s, p) => s + Math.hypot(p.x - c.x, p.y - c.y), 0) / ring.length;
-      ent = { id: generateId('e'), type: 'circle', center: c, radius: r, ...ref };
-    } else if (e.kind === 'line' || (!closed && (e.kind === 'circle' || fitsArc(pts)))) {
-      // a line, or an arc as one bulged segment (the sampled middle point fixes the bulge)
-      const bulge = e.kind === 'line' ? 0 : bulgeFromMidpoint(first, last, pts[(pts.length - 1) >> 1]!);
-      ent = { id: generateId('e'), type: 'line', points: [first, last], ...(bulge ? { bulge: [bulge] } : {}), ...ref };
-    } else {
-      const ring = closed ? pts.slice(0, -1) : pts;
-      ent = { id: generateId('e'), type: 'line', points: closed ? ring : simplify(ring, 0.01), closed: closed || undefined, ...ref };
-    }
-    entities.push(ent);
+    const ent = edgeEntity(e.kind, pts);
+    if (ent) entities.push(ent);
   }
   const r6 = (x: number) => Math.round(x * 1e6) / 1e6;
   return { entities, perimeter: r6(perimeter), count,
            ...(count ? { box: [umin, vmin, umax, vmax].map(r6) as FaceRef['box'] } : {}) };
+}
+
+/** An edge (its kind, and points along it in sketch coordinates) as a
+ *  reference (datum) + construction entity — drawn as a marker, snappable,
+ *  never exported: a circle, a line, an arc as one bulged segment, anything
+ *  else as a polyline. Null when it has no length on the sketch (an edge
+ *  seen end on). `inPlane`: the edge lies in the sketch plane (a face
+ *  outline); else it is projected onto it, and a circle seen at an angle (an
+ *  ellipse) is a polyline. */
+export function edgeEntity(kind: string, pts: Point[], inPlane = true): Entity | null {
+  if (pts.length < 2) return null;
+  const first = pts[0]!, last = pts[pts.length - 1]!;
+  const closed = Math.hypot(first.x - last.x, first.y - last.y) < 1e-6;
+  let reach = 0;
+  for (const p of pts) reach = Math.max(reach, Math.hypot(p.x - first.x, p.y - first.y));
+  if (reach < 1e-6) return null;
+  const ref = { construction: true, reference: true } as const;
+  if (kind === 'circle' && closed) {
+    const ring = pts.slice(0, -1);
+    const c = { x: ring.reduce((s, p) => s + p.x, 0) / ring.length, y: ring.reduce((s, p) => s + p.y, 0) / ring.length };
+    const r = ring.reduce((s, p) => s + Math.hypot(p.x - c.x, p.y - c.y), 0) / ring.length;
+    if (inPlane || ring.every((p) => Math.abs(Math.hypot(p.x - c.x, p.y - c.y) - r) < Math.max(0.01, r * 1e-3))) {
+      return { id: generateId('e'), type: 'circle', center: c, radius: r, ...ref };
+    }
+  } else if (kind === 'line' || (!closed && ((kind === 'circle' && inPlane) || fitsArc(pts)))) {
+    if (Math.hypot(last.x - first.x, last.y - first.y) < 1e-6) return null;
+    // a line, or an arc as one bulged segment (the sampled middle point fixes the bulge)
+    const bulge = kind === 'line' ? 0 : bulgeFromMidpoint(first, last, pts[(pts.length - 1) >> 1]!);
+    return { id: generateId('e'), type: 'line', points: [first, last], ...(bulge ? { bulge: [bulge] } : {}), ...ref };
+  }
+  const ring = closed ? pts.slice(0, -1) : pts;
+  return { id: generateId('e'), type: 'line', points: closed ? ring : simplify(ring, 0.01), closed: closed || undefined, ...ref };
 }
 
 /** A new sketch on the face: plane + face description, and the face's edges
@@ -182,13 +198,16 @@ export function newFaceSketch(name: string, face: FaceInfo, edges: RunEdge[]): S
 }
 
 /** The sketch with its reference outline drawn again from the face as it is
- *  now (`plane`: where the last build put the sketch), or null when the
- *  outline hasn't changed: followRefs with the viewer's edges, for a sketch
- *  opened before a build has reported its face's outline. Expression
+ *  now (`plane`: where the last build put the sketch), and the part edges
+ *  projected onto it found again (build/projectEdges.ts), or null when
+ *  nothing changed: followRefs with the viewer's edges, for a sketch opened
+ *  before a build has reported its face's outline. `face`: the face the
+ *  sketch is on (none: a plane sketch, or its face wasn't found). Expression
  *  dimensions are set afterwards by the caller (resolveSketch). */
-export function refreshOutline(sk: Sketch, face: FaceInfo, edges: RunEdge[], plane: NonNullable<Sketch['plane']>): Sketch | null {
-  if (!sk.face) return null;
-  const r = followRefs(sk, faceOutline(face, edges, planeBasis(plane)).entities);
+export function refreshOutline(sk: Sketch, face: FaceInfo | undefined, edges: RunEdge[], plane: NonNullable<Sketch['plane']>): Sketch | null {
+  const b = planeBasis(plane);
+  const outline = face && sk.face ? faceOutline(face, edges, b).entities : [];
+  const r = followRefs(sk, outline, undefined, edges.length ? matchProjected(sk, edges, b) : undefined);
   return r.changed ? r.sketch : null;
 }
 

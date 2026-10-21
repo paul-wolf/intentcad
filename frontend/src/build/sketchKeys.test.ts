@@ -29,6 +29,11 @@ describe("the sketcher's keys", () => {
       .toEqual(['?', 'E', 'Escape', 'F', 'K', 'L', 'N', 'O', 'P', 'R', 'T']);
   });
 
+  it('gives project edges a key of its own, free in the part editor too', () => {
+    expect(SKETCH_KEYS.filter((x) => x === ';')).toHaveLength(1);
+    expect(handledKeys().has(';')).toBe(true);
+  });
+
   it('gives point on curve and symmetric keys of their own', () => {
     for (const k of ['@', '/']) {
       expect(SKETCH_KEYS.filter((x) => x === k)).toHaveLength(1);

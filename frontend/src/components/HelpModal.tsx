@@ -42,6 +42,7 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
       ['(', 'Fillet: click a corner (Shift adds) or drag a box over several, then type the radius and Enter, or drag out from a corner. Too large: clamped to the largest that fits. The radius is a dimension'],
       ['-', 'Trim: hover a curve to see the piece between its neighbouring crossings, click to remove it, or drag across several. Circles become arcs; constraints that no longer apply are dropped (the log says how many)'],
       ['O', 'Offset: click a closed shape, a circle or a chain of lines (Shift adds; a selection made first is used), then drag out to the side you want or type the distance (P allowed) and Enter. Outside / Inside (or Flip side), Arcs / Miters for sharp corners. The offset follows its source and its distance is a dimension; Unlink in the properties makes it independent'],
+      [';', 'Project edges (sketching on a part): click an edge of the part to add it to the sketch as reference geometry, flattened onto the sketch plane; dotted lines show the edges you can pick, including those behind the face. It follows the part when the part changes (kept, marked broken, if its edge goes)'],
       ['W', 'Close / open path'],
       ['F', 'Toggle arc on segment'],
       ['M', 'Mirror selection'],

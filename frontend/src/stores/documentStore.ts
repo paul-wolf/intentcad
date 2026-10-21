@@ -98,6 +98,9 @@ interface DocumentStore {
   addOffset(sourceIds: string[], t: { distance: number; side: 1 | -1; join: 'arc' | 'miter' }, expression?: string): string | null;
   // The offset stops following its source (its distance dimension goes).
   unlinkOffset(id: string): boolean;
+  /** Add part edges projected onto the active sketch (build/projectEdges.ts),
+   *  each fixed where it is (it moves only with its part edge). */
+  addProjectedEdges(entities: Entity[]): void;
 
   // Grid or circular copy: makes the copies and keeps the pattern; given a
   // patternId, replaces that pattern's copies instead. Returns the new ids.
@@ -884,6 +887,15 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     if (!entities) return false;
     set({ document: updateActiveSketch(document, (sk) => ({ entities, constraints: sk.constraints })) });
     return true;
+  },
+
+  addProjectedEdges(entities) {
+    const { document } = get();
+    if (!entities.length || !document.sketches.some((sk) => sk.id === document.activeSketchId)) return;
+    set({ document: updateActiveSketch(document, (sk) => ({
+      entities: [...sk.entities, ...entities],
+      constraints: [...sk.constraints, ...entities.map((e): Constraint => ({ id: generateId('c'), type: 'fixed', entityId: e.id }))],
+    })) });
   },
 
   copyPattern(sourceIds, params, patternId = null) {

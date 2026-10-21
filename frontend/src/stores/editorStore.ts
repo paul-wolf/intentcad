@@ -3,6 +3,13 @@ import type { Entity, Point } from '@/types/document';
 import type { ToolType, ToolState } from '@/types/editor';
 import type { SegmentHit } from '@/hittest/hitTest';
 import { addLog } from '@/stores/logStore';
+import type { RunEdge } from '@/api/client';
+import type { PlaneBasis } from '@/build/sketchPlane';
+
+/** What the project tool picks from: the part's edges, the plane the sketch
+ *  is on, and whether the part in front of that plane is cut away in the
+ *  view (a face sketch). */
+export interface ProjectSource { edges: RunEdge[]; plane: PlaneBasis; clipped: boolean }
 
 export interface SelectedPoint {
   entityId: string;
@@ -49,6 +56,10 @@ interface EditorStore {
    *  2D sketch editor. */
   partParams: Record<string, number> | null;
   setPartParams(params: Record<string, number> | null): void;
+  /** The part's edges and the sketch plane while sketching on a part, for
+   *  the project tool (build/projectEdges.ts). null in the 2D sketch editor. */
+  projectSource: ProjectSource | null;
+  setProjectSource(source: ProjectSource | null): void;
   pendingDxfImport: PendingDxfImport | null;
   viewportScale: number;
   viewportCommand: 'center-origin' | 'fit-entities' | null;
@@ -114,6 +125,8 @@ function defaultToolState(tool: ToolType): ToolState {
       return { type: 'trim' };
     case 'offset':
       return { type: 'offset', sourceIds: [], distance: lastOffset.distance, side: 1, join: lastOffset.join };
+    case 'project':
+      return { type: 'project' };
   }
 }
 
@@ -138,12 +151,17 @@ export const useEditorStore = create<EditorStore>((set) => ({
   copyPreviewCenter: null,
   copyPreviewHides: null,
   partParams: null,
+  projectSource: null,
   pendingDxfImport: null,
   viewportScale: 1,
   viewportCommand: null,
 
   setPartParams(partParams) {
     set({ partParams });
+  },
+
+  setProjectSource(projectSource) {
+    set({ projectSource });
   },
 
   setActiveTool(tool) {

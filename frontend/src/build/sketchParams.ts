@@ -6,7 +6,11 @@
  * build's cache key — follow P.
  */
 import type { Sketch } from '@/types/document';
-import { referencedSketchNames, sketchProfile, type SketchBindings } from './faceSketch';
+import { boundPlane, referencedSketchNames, sketchProfile, type ConstructionPlane, type SketchBindings } from './faceSketch';
+import type { RunEdge } from '@/api/client';
+import { isProjected } from '@/utils/brokenRefs';
+import { matchProjected } from './projectEdges';
+import { planeBasis } from './sketchPlane';
 import { partParams } from './scriptParams';
 import { followRefs, outlineEntities } from './sketchRefs';
 import { resolveSketch, sameGeometry, type ResolveWarning } from '@/utils/resolveSketch';
@@ -69,16 +73,21 @@ export interface FollowedSketches {
 }
 
 /** After a build: each face sketch's reference outline moved onto the edges
- *  of the face the build put it on (`bound`, the build's sketches), and its
- *  dimensions solved again — expression ones with `vars`. Pure: the caller
- *  stores `sketches` when `changed`. */
+ *  of the face the build put it on (`bound`, the build's sketches), the part
+ *  edges projected onto any sketch found again among the build's `edges`
+ *  (on the plane the sketch is on in this build: `planes`, its construction
+ *  planes), and the dimensions solved again — expression ones with `vars`.
+ *  Pure: the caller stores `sketches` when `changed`. */
 export function followPartSketches(sketches: Sketch[], bound: SketchBindings | null | undefined,
-                                   vars?: Record<string, number> | null): FollowedSketches {
+                                   vars?: Record<string, number> | null, edges?: RunEdge[] | null,
+                                   planes?: Record<string, ConstructionPlane> | null): FollowedSketches {
   const changed: string[] = [], moved: string[] = [], profileChanged: string[] = [];
   const out = sketches.map((s) => {
     const outline = s.face ? bound?.[s.name]?.outline : undefined;
-    if (!outline?.length) return s;
-    const r = followRefs(s, outlineEntities(outline), vars);
+    const plane = edges?.length && s.entities.some(isProjected) ? boundPlane(s, bound, planes) : null;
+    const projected = plane ? matchProjected(s, edges!, planeBasis(plane)) : undefined;
+    if (!outline?.length && !projected) return s;
+    const r = followRefs(s, outline?.length ? outlineEntities(outline) : [], vars, projected);
     if (!r.changed) return s;
     changed.push(s.name);
     if (r.moved) moved.push(s.name);

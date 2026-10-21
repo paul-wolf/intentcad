@@ -167,7 +167,7 @@ export function useFaceSketch(
     // dimensioned to it solved again
     const f = face >= 0 ? res?.faces?.find((x) => x.index === face) : undefined;
     const plane = boundPlane(sk, res?.sketches, res?.planes) ?? sk.plane;
-    const fresh = f && sk.face ? refreshOutline(sk, f, res?.edges ?? [], plane) : null;
+    const fresh = refreshOutline(sk, f, res?.edges ?? [], plane);
     if (fresh) {
       const r = resolveSketch(fresh, { ...useDocumentStore.getState().document.parameters, ...(vars ?? {}) });
       const next = r.sketch;
@@ -192,8 +192,11 @@ export function useFaceSketch(
     const base = sketchBasePlane(sk);
     // drawn on a face: on that face where the last build found it
     const label = sk.planeRef ? `plane '${sk.planeRef}'` : base ? BASE_PLANES[base].name : faceLabel(plane.normal);
+    const datum = !sk.face && !onTangentPlane(sk, res?.planes);
+    // the part's edges, for the project tool (the part in front of a face is cut away)
+    es.setProjectSource(res?.edges?.length ? { edges: res.edges, plane: planeBasis(plane), clipped: !datum } : null);
     setSession({ sketchId: sk.id, label, face,
-                 plane: planeBasis(plane), datum: !sk.face && !onTangentPlane(sk, res?.planes), prevActive, phase: 'enter' });
+                 plane: planeBasis(plane), datum, prevActive, phase: 'enter' });
   }, [resRef]);
 
   // a new sketch on the face
@@ -327,6 +330,8 @@ export function useFaceSketch(
         }));
         persistSketches();
         useEditorStore.getState().setPartParams(null);
+        useEditorStore.getState().setProjectSource(null);
+        if (useEditorStore.getState().activeTool === 'project') useEditorStore.getState().setActiveTool('select');
         setSession(null);
         const extrude = pendingExtrude.current;
         pendingExtrude.current = null;

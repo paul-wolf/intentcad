@@ -15,7 +15,7 @@ import { generateId } from '@/utils/id';
 import { arcFromBulge, bulgeFromMidpoint } from '@/utils/arcGeometry';
 import { solveConstraints } from '@/utils/constraintSolver';
 import { dimensionEntities, measureDimension, resolveSketch } from '@/utils/resolveSketch';
-import { brokenIds, isBroken, isRef, onBroken, targetsOf } from '@/utils/brokenRefs';
+import { brokenIds, isBroken, isProjected, isRef, onBroken, targetsOf } from '@/utils/brokenRefs';
 
 type XY = [number, number];
 
@@ -173,12 +173,17 @@ export interface Followed {
  *  dimensions on reference edges keep the values they had and the
  *  constraints are solved again; then expression dimensions are set from
  *  `vars` (when given). Constraints on broken edges are left out of the
- *  solve, and the dimensions on them simply keep their geometry. Pure. */
-export function followRefs(sk: Sketch, fresh: Entity[], vars?: Record<string, number> | null): Followed {
+ *  solve, and the dimensions on them simply keep their geometry.
+ *  `projected`: where the part edges projected onto the sketch are now
+ *  (build/projectEdges.matchProjected; null: the edge is gone, and the
+ *  projection is kept, broken); those not in it are left as they are. Pure. */
+export function followRefs(sk: Sketch, fresh: Entity[], vars?: Record<string, number> | null,
+                           projected?: Map<string, Entity | null>): Followed {
   const same: Followed = { sketch: sk, changed: false, moved: false, added: 0, broken: [...brokenIds(sk.entities)] };
-  if (!sk.face || !fresh.length) return same;
-  const old = sk.entities.filter(isRef);
-  const pairs = matchEdges(old, fresh);
+  const outlineOn = !!sk.face && fresh.length > 0;
+  if (!outlineOn && !projected?.size) return same;
+  const old = sk.entities.filter((e) => isRef(e) && !isProjected(e));
+  const pairs = outlineOn ? matchEdges(old, fresh) : [];
   const matchOf = new Map(pairs.map(([i, j]) => [old[i]!.id, fresh[j]!]));
   const takenNew = new Set(pairs.map(([, j]) => j));
   const user = sk.entities.filter((e) => !isRef(e));
@@ -189,6 +194,26 @@ export function followRefs(sk: Sketch, fresh: Entity[], vars?: Record<string, nu
   const entities: Entity[] = [];
   for (const e of sk.entities) {
     if (!isRef(e)) { entities.push(e); continue; }
+    if (isProjected(e)) {
+      if (!projected?.has(e.id)) { entities.push(e); continue; }
+      const n = projected.get(e.id);
+      if (n) {
+        const m = orientLike(e, n);
+        const refMoved = JSON.stringify((e as { edgeRef?: unknown }).edgeRef) !== JSON.stringify((n as { edgeRef?: unknown }).edgeRef);
+        if (moved(e, m)) {
+          anyMoved = true; anyChange = true;
+          entities.push({ ...m, id: e.id });
+        } else if (isBroken(e) || refMoved) {
+          anyChange = true;   // back again, or moved only along the sketch's normal
+          entities.push({ ...stripBroken(e), edgeRef: (n as { edgeRef?: unknown }).edgeRef } as Entity);
+        } else entities.push(e);
+      } else {
+        if (!isBroken(e)) anyChange = true;
+        entities.push(isBroken(e) ? e : ({ ...e, broken: true } as Entity));
+      }
+      continue;
+    }
+    if (!outlineOn) { entities.push(e); continue; }
     const n = matchOf.get(e.id);
     if (n) {
       const m = orientLike(e, n);
@@ -206,7 +231,7 @@ export function followRefs(sk: Sketch, fresh: Entity[], vars?: Record<string, nu
       dropped.add(e.id); anyChange = true;
     }
   }
-  const added = fresh.filter((_, j) => !takenNew.has(j));
+  const added = outlineOn ? fresh.filter((_, j) => !takenNew.has(j)) : [];
   if (added.length) anyChange = true;
   if (!anyChange) return same;
 
@@ -217,7 +242,7 @@ export function followRefs(sk: Sketch, fresh: Entity[], vars?: Record<string, nu
 
   if (anyMoved || broken.size !== same.broken.length) {
     // what the dimensions on the outline measured before it moved, to keep them
-    const refIds = new Set(old.map((o) => o.id));
+    const refIds = new Set(sk.entities.filter(isRef).map((o) => o.id));
     const held: [string, number][] = [];
     for (const d of user) {
       if (d.type !== 'dimension' || onBroken(d, broken) || !targetsOf(d).some((id) => refIds.has(id))) continue;

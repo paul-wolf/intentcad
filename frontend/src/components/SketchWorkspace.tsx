@@ -23,6 +23,8 @@ import { createBezierTool } from '@/tools/bezierTool';
 import { createFilletTool } from '@/tools/filletTool';
 import { createTrimTool } from '@/tools/trimTool';
 import { createOffsetTool } from '@/tools/offsetTool';
+import { createProjectTool } from '@/tools/projectTool';
+import { addLog } from '@/stores/logStore';
 import type { Tool } from '@/tools/types';
 import type { ToolType } from '@/types/editor';
 
@@ -80,6 +82,8 @@ function createTool(type: ToolType): Tool {
       return createTrimTool();
     case 'offset':
       return createOffsetTool();
+    case 'project':
+      return createProjectTool();
   }
 }
 
@@ -157,6 +161,10 @@ export function SketchWorkspace({
       if (e.key === '(') setActiveTool('fillet');
       if (e.key === '-') setActiveTool('trim');
       if (e.key === 'o' || e.key === 'O') setActiveTool('offset');
+      if (e.key === ';') {
+        if (useEditorStore.getState().projectSource) setActiveTool('project');
+        else addLog('info', 'Project edges (;) works when sketching on a part: a face or a plane in the 3D view');
+      }
       if (e.key === '?') setShowHelp((v) => !v);
     };
     window.addEventListener('keydown', handler);

@@ -14,6 +14,23 @@ export type SourceTransform =
    *  first). */
   | { type: 'offset'; distance: number; side: 1 | -1; join: 'arc' | 'miter'; chain?: string[] };
 
+type Vec3 = [number, number, number];
+
+/** A part's edge as the build describes it (api EdgeRefSpec, backend
+ *  modeling/edge_ref.describe): its two faces, kind, middle and length, and
+ *  its direction (a line) or centre, radius and axis (a circle or arc). */
+export interface ProjectedEdgeRef {
+  faces: { center: Vec3; normal: Vec3; area: number; kind?: string; hint?: string; box?: number[] }[];
+  kind: string;
+  midpoint: Vec3;
+  length: number;
+  direction?: Vec3;
+  center?: Vec3;
+  radius?: number;
+  axis?: Vec3;
+  hint?: string;
+}
+
 export interface LineEntity {
   id: string;
   type: 'line';
@@ -30,6 +47,10 @@ export interface LineEntity {
    *  changed): kept where it was so what uses it isn't lost, but the
    *  constraints on it are left out of the solve (see utils/brokenRefs.ts). */
   broken?: boolean;
+  /** A part edge projected onto the sketch (build/projectEdges.ts): the
+   *  edge as the build last described it, to find it again when the part
+   *  changes. */
+  edgeRef?: ProjectedEdgeRef;
   fill?: boolean;
   sourceId?: string;
   sourceTransform?: SourceTransform;
@@ -49,6 +70,10 @@ export interface CircleEntity {
    *  changed): kept where it was so what uses it isn't lost, but the
    *  constraints on it are left out of the solve (see utils/brokenRefs.ts). */
   broken?: boolean;
+  /** A part edge projected onto the sketch (build/projectEdges.ts): the
+   *  edge as the build last described it, to find it again when the part
+   *  changes. */
+  edgeRef?: ProjectedEdgeRef;
   fill?: boolean;
   sourceId?: string;
   sourceTransform?: SourceTransform;
