@@ -397,8 +397,9 @@ export const buildApi = {
   deleteStep(code: string, line: number, copies?: 'keep' | 'delete'): Promise<{ code: string }> {
     return request('/build/delete_step', { method: 'POST', body: JSON.stringify({ code, line, ...(copies ? { copies } : {}) }) });
   },
-  /** Append `part = mirror_body(part, PLANE, join=…)`, or rewrite the one on `line`. */
-  addMirrorBody(payload: { code: string; plane: MirrorPlane; join: boolean; line?: number | null }): Promise<{ code: string }> {
+  /** Append `part = mirror_body(part, PLANE, join=…)` (Separate: `, gap=…`, a
+   *  number or an expression of P names), or rewrite the one on `line`. */
+  addMirrorBody(payload: { code: string; plane: MirrorPlane; join: boolean; gap?: number | string; line?: number | null }): Promise<{ code: string }> {
     return request('/build/add_mirror_body', { method: 'POST', body: JSON.stringify(payload) });
   },
   /** One linked mirrored copy of each step on `lines`, after the last of them;

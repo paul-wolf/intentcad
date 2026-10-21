@@ -86,6 +86,39 @@ class MirrorBodyTests(SimpleTestCase):
             self.assertAlmostEqual(r["metrics"]["bbox_max"][0], 2 * w + 10, places=4)
             self.assertAlmostEqual(r["metrics"]["volume"], 2 * w * 40 * 20, places=2)
 
+    def test_a_gap_moves_the_copy_exactly_gap_away(self):
+        # the half touches the plane at x = 0: its copy ends at x = -gap
+        for gap in (0, 10, 4.5):
+            r = run_script(self.half + f'part = mirror_body(part, face_ref({self.cut}), join=False, gap={gap})\n')
+            self.assertFalse(r.get("warning"))
+            self.assertEqual(r["metrics"]["solids"], 2)
+            self.assertAlmostEqual(r["metrics"]["bbox_min"][0], -30 - gap, places=6)
+            self.assertAlmostEqual(r["metrics"]["volume"], 2 * 30 * 40 * 20, places=3)
+        # a plane whose normal points into the part (YZ's +x): still outward
+        r = run_script(self.half + 'PLANES["In"] = offset_plane("YZ", distance=0)\n'
+                       'part = mirror_body(part, PLANES["In"], join=False, gap=10)\n')
+        self.assertAlmostEqual(r["metrics"]["bbox_min"][0], -40, places=6)
+        r = run_script('part = Pos(-15, 0, 10) * Box(30, 40, 20)\n'      # on the other side of YZ
+                       'part = mirror_body(part, "YZ", join=False, gap=10)\n')
+        self.assertAlmostEqual(r["metrics"]["bbox_max"][0], 40, places=6)
+
+    def test_gap_0_is_the_old_mirror(self):
+        old = run_script('part = Pos(25, 0, 10) * Box(30, 40, 20)\npart = mirror_body(part, "YZ", join=False)\n')
+        new = run_script('part = Pos(25, 0, 10) * Box(30, 40, 20)\npart = mirror_body(part, "YZ", join=False, gap=0)\n')
+        self.assertEqual(old["metrics"], new["metrics"])
+
+    def test_a_gap_from_a_param_follows_it(self):
+        for g in (6, 12):
+            r = run_script(f'P = dict(g={g})\n' + self.half
+                           + f'part = mirror_body(part, face_ref({self.cut}), join=False, gap=P["g"])\n')
+            self.assertAlmostEqual(r["metrics"]["bbox_min"][0], -30 - g, places=6)
+
+    def test_the_preview_copy_is_the_mirror_image_alone(self):
+        r = run_script(self.half + f'part = _mirror_copy(part, face_ref({self.cut}), join=False, gap=10)\n')
+        self.assertEqual(r["metrics"]["solids"], 1)
+        self.assertAlmostEqual(r["metrics"]["bbox_min"][0], -40, places=6)
+        self.assertAlmostEqual(r["metrics"]["bbox_max"][0], -10, places=6)
+
     def test_a_missing_face_is_reported_on_its_line(self):
         gone = {**self.cut, "center": [-50, 0, 10], "normal": [0, 1, 0]}
         r = run_script(self.half + f'part = mirror_body(part, face_ref({gone}))\n')
@@ -310,9 +343,10 @@ class StepsAndBodyTests(SimpleTestCase):
         code = pe.add_mirror_body(CODE, {"plane": "Mid"}, join=True)
         self.assertTrue(code.endswith('part = mirror_body(part, PLANES["Mid"], join=True)\n'))
         got = pe.op_at(code, 9)
-        self.assertEqual((got["op"], got["args"]), ("mirror_body", {"plane": {"plane": "Mid"}, "join": True}))
+        self.assertEqual((got["op"], got["args"]), ("mirror_body", {"plane": {"plane": "Mid"}, "join": True, "gap": 0.0}))
         code = pe.add_mirror_body(code, "XY", join=False, line=9)
-        self.assertEqual(pe.op_at(code, 9)["args"], {"plane": {"base": "XY"}, "join": False})
+        self.assertIn('part = mirror_body(part, "XY", join=False, gap=0)', code)
+        self.assertEqual(pe.op_at(code, 9)["args"], {"plane": {"base": "XY"}, "join": False, "gap": 0.0})
         step = next(s for s in pe.steps(code) if s["line"] == 9)
         self.assertEqual(step["summary"], "Mirror body across XY · separate body")
         self.assertTrue(step["reopenable"])
@@ -322,3 +356,25 @@ class StepsAndBodyTests(SimpleTestCase):
         self.assertIn("across left face · joined", next(s for s in pe.steps(code) if s["line"] == 9)["summary"])
         with self.assertRaisesRegex(pe.ParamError, "no part"):
             pe.add_mirror_body("P = dict()\n", "XY")
+
+    def test_mirror_body_gap_round_trip(self):
+        code = pe.add_mirror_body(CODE, {"plane": "Mid"}, join=False, gap=10)
+        self.assertTrue(code.endswith('part = mirror_body(part, PLANES["Mid"], join=False, gap=10)\n'))
+        got = pe.op_at(code, 9)
+        self.assertEqual((got["args"]["join"], got["args"]["gap"], got["exprs"]), (False, 10.0, {}))
+        self.assertEqual(next(s for s in pe.steps(code) if s["line"] == 9)["summary"],
+                         "Mirror body across Mid · separate body · 10 mm apart")
+        # an expression of P stays one, and reads back as it was typed
+        code = pe.add_mirror_body(code, {"plane": "Mid"}, join=False, gap="depth * 2", line=9)
+        self.assertIn('join=False, gap=P["depth"] * 2)', code)
+        got = pe.op_at(code, 9)
+        self.assertEqual((got["args"]["gap"], got["exprs"]), (10.0, {"gap": "depth * 2"}))
+        # joined: no gap written
+        code = pe.add_mirror_body(code, {"plane": "Mid"}, join=True, gap=10, line=9)
+        self.assertTrue(code.endswith('part = mirror_body(part, PLANES["Mid"], join=True)\n'))
+        with self.assertRaisesRegex(pe.ParamError, "not a parameter"):
+            pe.add_mirror_body(CODE, "XY", join=False, gap="nope + 1")
+
+    def test_an_old_line_without_gap_reads_as_gap_0(self):
+        code = CODE + 'part = mirror_body(part, "YZ", join=False)\n'
+        self.assertEqual(pe.op_at(code, 9)["args"]["gap"], 0.0)

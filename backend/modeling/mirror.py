@@ -10,7 +10,8 @@ or "YZ" through the origin, or a construction plane PLANES["name"].
 
 mirror_body() reflects the whole part: join=True fuses the mirror with it (a
 half modelled up to the plane becomes one solid), join=False keeps it as a
-separate body beside it (left and right versions).
+separate body beside it (left and right versions). gap moves the plane gap/2
+away from the part, so a copy of a part touching the plane sits `gap` from it.
 
 mirrored() reflects one step's input, so the step does the same thing on
 the other side: a solid (an extrude), sketch_points() (where holes go) and
@@ -66,13 +67,28 @@ def _direction(pl: Plane, d: Vector) -> Vector:
     return d - n * (2 * d.dot(n))
 
 
-def mirror_body(part, plane, join: bool = True):
-    """`part` and its mirror image across `plane`: fused into one (join=True)
-    or as a separate body beside it (join=False)."""
+def outward(part, pl: Plane, gap: float) -> Plane:
+    """`pl` moved gap/2 away from the part: to the side its box's centre
+    isn't on (the plane's own normal when the centre is on it)."""
+    if not gap:
+        return pl
+    n = pl.z_dir.normalized()
+    side = (part.bounding_box().center() - pl.origin).dot(n)
+    shift = n * (float(gap) / 2 * (1.0 if side <= 1e-9 else -1.0))
+    return Plane(origin=pl.origin + shift, x_dir=pl.x_dir, z_dir=pl.z_dir)
+
+
+def _image(part, plane, gap: float):
     if part is None or not hasattr(part, "solids"):
         raise MirrorError("mirror_body(): there is no part to mirror yet")
-    pl = mirror_plane(plane)
-    other = part.mirror(pl)
+    return part.mirror(outward(part, mirror_plane(plane), gap))
+
+
+def mirror_body(part, plane, join: bool = True, gap: float = 0.0):
+    """`part` and its mirror image across `plane`: fused into one (join=True)
+    or as a separate body beside it (join=False), the plane moved gap/2 away
+    from the part (outward)."""
+    other = _image(part, plane, gap)
     if join:
         out = part + other
         return out if isinstance(out, Part) else Part(Compound([out]).wrapped)
@@ -206,4 +222,9 @@ def bind(ns: dict) -> dict:
         raise MirrorError("mirrored() reflects a solid (an extrude), sketch_points(), face_ref() or edges_ref(), "
                           f"not {type(obj).__name__}")
 
-    return {"mirror_body": mirror_body, "mirrored": mirrored, "_mirror_refs": Refs}
+    def mirror_copy(part, plane, join: bool = True, gap: float = 0.0):
+        """mirror_body()'s mirror image alone (the editor's preview draws it
+        in its own colour); `join` is taken and ignored."""
+        return _image(part, plane, gap)
+
+    return {"mirror_body": mirror_body, "mirrored": mirrored, "_mirror_refs": Refs, "_mirror_copy": mirror_copy}

@@ -450,6 +450,7 @@ class AddMirrorBodyRequest(Schema):
     code: str
     plane: dict | str
     join: bool = True               # fuse with the part / keep as a separate body
+    gap: float | str = 0.0          # separate: how far apart (a number, or an expression of P names)
     line: int | None = None         # rewrite the mirror_body() line there instead of appending
 
 

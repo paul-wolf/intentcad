@@ -304,7 +304,8 @@ def add_mirror_body_endpoint(request, payload: AddMirrorBodyRequest):
     if err:
         return err
     try:
-        return CodeResponse(code=add_mirror_body(payload.code, payload.plane, payload.join, payload.line))
+        return CodeResponse(code=add_mirror_body(payload.code, payload.plane, payload.join, payload.line,
+                                                    gap=payload.gap))
     except (ParamError, SyntaxError, KeyError, TypeError, ValueError) as exc:
         return JsonResponse({"message": str(exc)}, status=422)
 
