@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
-  LAYOUTS, OPERATIONS, OP_GROUPS, OPS_KEY, RECENT_MAX, RESERVED_KEYS, SKETCH_KEYS, opById, opForKey, pushRecent,
+  BAR_HINT, LAYOUTS, OPERATIONS, OP_GROUPS, barOperations, OPS_KEY, RECENT_MAX, RESERVED_KEYS, SKETCH_KEYS, opById, opForKey, pushRecent,
   stepLayout, toggleOps, type Layout, type OpContext, type OpModel, type OpSelection,
 } from './operations';
 import { VIEW_KEYS } from './viewOrient';
@@ -69,8 +69,45 @@ describe('the operation registry', () => {
       .toEqual(['Operations layout, and back']);
   });
 
-  it('pins the top bar’s operations', () => {
-    expect(OPERATIONS.filter((o) => o.pinned).map((o) => o.id)).toEqual(['sketch-face', 'hole', 'shell', 'fillet', 'round', 'build']);
+  it('fills the top bar from the selection, in registry order, at most five', () => {
+    const bar = (sel: OpSelection, m: Partial<OpModel> = {}) => barOperations(sel, { ...MODEL, ...m }).map((o) => o.id);
+    const sel = (f: string[], e: string[] = [], p: string[] = []): OpSelection =>
+      ({ faces: f.map((kind) => ({ kind })), edges: e.map((kind) => ({ kind })), planes: p.map((name) => ({ name })) });
+    const idle = { measure: null };
+    // nothing: sketch on a base plane, and what needs no selection
+    expect(bar(NONE, idle)).toEqual(['sketch-top', 'sketch-front', 'sketch-right', 'offset-plane', 'round']);
+    expect(bar(NONE, { ...idle, holeSketches: 2 })).toEqual(['sketch-top', 'sketch-front', 'sketch-right', 'hole', 'offset-plane']);
+    // a new part: nothing built yet
+    expect(bar(NONE, { ...idle, status: 'idle', hasCode: false })).toEqual(['sketch-top', 'sketch-front', 'sketch-right', 'section']);
+    // one planar face
+    expect(bar(FLOOR)).toEqual(['sketch-face', 'extrude', 'hole', 'offset-plane', 'shell']);
+    // several faces
+    expect(bar(faces('plane', 'plane', 'cylinder'))).toEqual(['shell']);
+    expect(bar(TWO)).toEqual(['shell', 'measure']);
+    // one straight edge
+    expect(bar(sel([], ['line']))).toEqual(['plane-edge', 'fillet', 'chamfer', 'pattern-body', 'measure']);
+    // several edges
+    expect(bar(sel([], ['line', 'circle', 'line']))).toEqual(['fillet', 'chamfer', 'measure']);
+    // one cylindrical face
+    expect(bar(CURVED)).toEqual(['plane-tangent', 'shell', 'pattern-body', 'measure']);
+    // a construction plane
+    expect(bar(sel([], [], ['P1']), idle)).toEqual(['sketch-face', 'mirror-body']);
+    // a face and an edge
+    expect(bar(sel(['plane'], ['line']))).toEqual(['sketch-face', 'extrude', 'hole', 'shell', 'fillet']);
+    // with something selected, what doesn't use it (Round, the base planes, the views, Build) stays off
+    for (const s of [FLOOR, SEVERAL, CURVED, sel([], ['line'])]) {
+      for (const id of ['round', 'lighten', 'sketch-top', 'section', 'view-top', 'build']) expect(bar(s)).not.toContain(id);
+    }
+    expect(barOperations(FLOOR, MODEL, 2).map((o) => o.id)).toEqual(['sketch-face', 'extrude']);
+  });
+
+  it('leaves the top bar to its hint when nothing applies', () => {
+    expect(BAR_HINT).toBe('Select a face or edge for operations');
+    // two construction planes: nothing takes two
+    expect(barOperations({ faces: [], edges: [], planes: [{ name: 'P1' }, { name: 'P2' }] }, { ...MODEL, measure: null }))
+      .toEqual([]);
+    // sketching while the AI works on a change
+    expect(barOperations(NONE, { ...MODEL, measure: null, sketching: true, asking: true })).toEqual([]);
   });
 
   it('runs through the editor’s own actions', () => {

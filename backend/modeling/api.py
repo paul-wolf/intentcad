@@ -414,7 +414,7 @@ def sensitivity_endpoint(request, payload: SensitivityRequest):
     return SensitivityResponse(params=m)
 
 
-@router.post("/edit", response=EditResponse)
+@router.post("/edit", response=EditResponse, exclude_none=True)
 def edit_model(request, payload: EditRequest):
     """Edit the build123d script from a natural-language instruction (with the
     current selection as the target). Returns a script already validated to build.
@@ -438,12 +438,15 @@ def edit_model(request, payload: EditRequest):
         # then a retry): log that spend and report it with the error
         if exc.usage:
             _log_ai_edit(request, payload, exc.usage)
-        return JsonResponse({"message": str(exc), **(exc.usage or {})}, status=422)
+        spend = (exc.usage or {}) if sees_spend(request.user) else {}
+        return JsonResponse({"message": str(exc), **spend}, status=422)
     usage = _log_ai_edit(request, payload, r)
+    # the tokens and the cost are for staff; everyone else gets the edit alone
+    spend = {"cost_usd": r.get("cost_usd", 0.0), **usage} if sees_spend(request.user) else {}
     return EditResponse(
         kind=r.get("kind", "edit"),
         code=r.get("code", ""), note=r.get("note"), question=r.get("question", ""),
-        cost_usd=r.get("cost_usd", 0.0), context_files=[str(cf.id) for cf in sent], **usage,
+        context_files=[str(cf.id) for cf in sent], **spend,
     )
 
 
@@ -470,6 +473,11 @@ def context_files_for(document_id: str, skip: list[str]) -> list:
     return [cf for cf in files if str(cf.id) not in skip]
 
 
+def sees_spend(user) -> bool:
+    """Whether `user` is shown what the AI costs: staff and superusers."""
+    return bool(user.is_staff or user.is_superuser)
+
+
 def _log_ai_edit(request, payload, r: dict) -> dict:
     """Record one AI edit's spend; returns its token counts."""
     usage = {k: r.get(k, 0) for k in ("tokens_in", "tokens_out", "cache_read_tokens",
@@ -494,10 +502,13 @@ def models(request, refresh: bool = False):
 
 @router.get("/usage", response=UsageResponse)
 def usage(request, document: str = ""):
-    """AI spend for this document and this user all-time (from the edit log)."""
+    """AI spend for this document and this user all-time (from the edit log);
+    staff only."""
     err = require_auth(request)
     if err:
         return err
+    if not sees_spend(request.user):
+        return JsonResponse({"message": "AI spend is shown to staff only"}, status=403)
 
     def totals(qs) -> UsageTotals:
         a = qs.aggregate(edits=Count("id"), tin=Sum("tokens_in"), tout=Sum("tokens_out"),

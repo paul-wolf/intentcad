@@ -3,7 +3,8 @@
  * (backend: documents/context.py). What gets sent is decided here, so the
  * cards, the chat chips and the edit request agree.
  */
-import type { ContextFile, ContextFiles, EditResponse } from '@/api/client';
+import type { CallSpend, ContextFile, ContextFiles, EditResponse, UsageResponse } from '@/api/client';
+import type { User } from '@/types/auth';
 
 /** What the file pickers offer (HEIC photos are converted to JPEG on upload). */
 export const CONTEXT_ACCEPT = '.pdf,.png,.jpg,.jpeg,.webp,.heic,.heif,application/pdf,image/png,image/jpeg,image/webp,image/heic,image/heif';
@@ -91,7 +92,34 @@ export function togglePage(f: ContextFile, page: number): number[] | null {
 }
 
 /** "14k in (11k cached) · 1.2k out · $0.031" for one AI call. */
-export function usageLabel(r: Pick<EditResponse, 'tokens_in' | 'tokens_out' | 'cost_usd' | 'cache_read_tokens'>): string {
+export function usageLabel(r: CallSpend): string {
   const cached = r.cache_read_tokens ? ` (${tokensLabel(r.cache_read_tokens)} cached)` : '';
   return `${tokensLabel(r.tokens_in)} in${cached} · ${tokensLabel(r.tokens_out)} out · $${r.cost_usd.toFixed(3)}`;
+}
+
+// ---- the AI spend: staff and superusers only (the server leaves it out for everyone else) ----
+
+export const seesSpend = (u: Pick<User, 'is_staff' | 'is_superuser'> | null | undefined): boolean =>
+  !!(u?.is_staff || u?.is_superuser);
+
+/** An edit's usage note for the chat, when the response carries its spend. */
+export function spendNote(r: Pick<EditResponse, 'tokens_in' | 'tokens_out' | 'cost_usd' | 'cache_read_tokens'>):
+  string | undefined {
+  if (typeof r.cost_usd !== 'number') return undefined;
+  return usageLabel({ tokens_in: r.tokens_in ?? 0, tokens_out: r.tokens_out ?? 0, cost_usd: r.cost_usd,
+                      cache_read_tokens: r.cache_read_tokens });
+}
+
+/** A chat message's usage note, if this user sees it (notes saved earlier
+ *  stay in the chat history; they're hidden, not shown, for everyone else). */
+export const chatUsageNote = (u: Pick<User, 'is_staff' | 'is_superuser'> | null | undefined, note?: string) =>
+  (seesSpend(u) && note ? note : null);
+
+/** The status line under the top bar: this part's and all-time spend, for
+ *  staff (null: no line). */
+export function spendLine(u: Pick<User, 'is_staff' | 'is_superuser'> | null | undefined,
+                          usage: UsageResponse | null): string | null {
+  if (!seesSpend(u) || !usage) return null;
+  const { document: d, all_time: a } = usage;
+  return `AI spend · this model $${d.cost_usd.toFixed(3)} (${d.edits}) · all-time $${a.cost_usd.toFixed(2)} (${a.edits})`;
 }

@@ -100,8 +100,9 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
         + 'run with what is selected stays dimmed and says what it needs; tiles that a new selection makes '
         + 'available light up for a moment. Hover or focus a tile for what it does, its key, and an example to ask '
         + 'the AI instead — clicking the example puts it in the chat box (it isn\'t sent). Arrow keys move between '
-        + 'tiles, Enter runs one, Esc goes back. The top bar keeps the most used ones (Sketch on face, Hole, '
-        + 'Shell, Fillet, Round, Build); the Operations button (U) opens the rest.'],
+        + 'tiles, Enter runs one, Esc goes back. The top bar offers up to five that the selection makes possible '
+        + '(a flat face: Sketch on face, Extrude, Hole…; an edge: Fillet, Chamfer…; nothing: sketch on a base plane) '
+        + 'beside Build; the Operations button (U) opens the rest. The keys work either way.'],
       ['Context', 'Datasheets, drawings and photos the AI reads with each message: this part\'s, and the '
         + 'project\'s (shared by its parts). Drop files on the pane, use + Add file (or the Add context file '
         + 'operation), or paste a photo into the chat box. The switch on a card takes a file in or out of context; '

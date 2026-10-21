@@ -85,7 +85,7 @@ export class ApiError extends Error {
   /** For a failed build: each revolve() it reached (where a profile crosses its axis). */
   revolves?: import('@/build/revolve').RevolveReport[];
   /** For a failed AI edit: what its calls cost before it gave up. */
-  usage?: Pick<EditResponse, 'tokens_in' | 'tokens_out' | 'cost_usd' | 'cache_read_tokens'>;
+  usage?: CallSpend;
   constructor(status: number, body: string) {
     let detail = body;
     let fix: SizeFix | undefined;
@@ -462,12 +462,16 @@ export interface DimInfo {
 export interface EditResponse {
   kind: 'edit' | 'question';
   code: string; note?: string; question: string;
-  /** all input read, cached or not; of it, cache_read_tokens came from the prompt cache */
-  tokens_in: number; tokens_out: number; cost_usd: number;
+  /** the spend, sent to staff only: all input read, cached or not; of it,
+   *  cache_read_tokens came from the prompt cache */
+  tokens_in?: number; tokens_out?: number; cost_usd?: number;
   cache_read_tokens?: number; cache_write_tokens?: number;
   /** the ids of the context files sent */
   context_files?: string[];
 }
+
+/** One AI call's spend. */
+export interface CallSpend { tokens_in: number; tokens_out: number; cost_usd: number; cache_read_tokens?: number }
 
 export interface UsageTotals {
   edits: number; tokens_in: number; tokens_out: number; cost_usd: number; cache_read_tokens?: number;
