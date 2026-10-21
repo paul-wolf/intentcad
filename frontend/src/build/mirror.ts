@@ -12,7 +12,7 @@ import { offsetPlaneShape, type BaseName, type PlaneShape } from './construction
 import type { Vec3 } from './dragHandle';
 
 /** The steps a copy can be made of (backend paramedit.MIRROR_OPS). */
-export const MIRROR_OPS = ['extrude', 'holes', 'fillet', 'chamfer'] as const;
+export const MIRROR_OPS = ['extrude', 'revolve', 'holes', 'fillet', 'chamfer'] as const;
 
 const TITLES: Record<string, string> = {
   shell: 'Shell', auto_round: 'Round', truss_windows: 'Lighten', offset_plane: 'Offset plane',

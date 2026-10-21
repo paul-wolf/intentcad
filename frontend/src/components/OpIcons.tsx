@@ -55,6 +55,9 @@ const ICONS: Record<OpIconName, ReactNode> = {
   'mirror-steps': <><path d="M12 2v20" strokeDasharray="2 1.5" /><path d="M3 5h18v14H3z" opacity={0.5} />
                     <circle cx="7" cy="12" r="2.5" /><circle cx="17" cy="12" r="2.5" strokeDasharray="1.6 1.2" /></>,
   extrude: <><path d="M3 19l4-4h14l-4 4z" /><path d="M12 15V4M8.5 7.5L12 4l3.5 3.5" /></>,
+  // a profile beside a dashed axis, turned round it to the other side
+  revolve: <><path d="M12 2v20" strokeDasharray="2 1.5" /><path d="M14 5h5v10h-5z" /><path d="M5 5h5v10H5z" opacity={0.35} />
+             <path d="M4.5 19a7.5 2.5 0 0 0 15 0" /><path d="M17 17.2l2.5 1.8-2.8 1.3" /></>,
   hole: <><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="3.5" /></>,
   shell: <><path d="M3 6v14h18V6" /><path d="M7 6v10h10V6" /></>,
   fillet: <><path d="M4 20h16V11a7 7 0 0 0-7-7H4z" opacity={0.5} /><path d="M13 4a7 7 0 0 1 7 7" strokeWidth={2.4} /></>,

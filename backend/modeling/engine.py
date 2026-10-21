@@ -40,10 +40,12 @@ class EngineError(RuntimeError):
     `params` are the script's editable params as far as it got — so the UI can
     keep offering them even though nothing built."""
 
-    def __init__(self, message: str, fix: dict | None = None, params: dict | None = None):
+    def __init__(self, message: str, fix: dict | None = None, params: dict | None = None,
+                 revolves: list | None = None):
         super().__init__(message)
         self.fix = fix
         self.params = params or {}
+        self.revolves = revolves or []      # the revolves tried: a crossing to mark
 
 
 def _min_env() -> dict[str, str]:
@@ -190,7 +192,7 @@ def load_assets(code: str, document_id: str | None) -> dict[str, bytes]:
 # A face sketch is referenced by name: sketch("Sketch on top face") or
 # sketch_points("..."). Its closed loops and points (the profile the frontend
 # stores with the sketch) travel with the build.
-SKETCH_REF = re.compile(r"""\bsketch(?:_points)?\(\s*(["'])(.+?)\1\s*\)""")
+SKETCH_REF = re.compile(r"""\bsketch(?:_points|_line)?\(\s*(["'])(.+?)\1\s*[,)]""")
 
 
 def sketch_refs(code: str) -> set[str]:
@@ -279,5 +281,5 @@ def run_script(code: str, *, export: list[str] | None = None, timeout: float = 6
         break
     if not result.get("ok"):
         raise EngineError(result.get("error", "build failed"), fix=result.get("fix"),
-                          params=result.get("params"))
+                          params=result.get("params"), revolves=result.get("revolves"))
     return result

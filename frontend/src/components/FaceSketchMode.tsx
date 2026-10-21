@@ -22,6 +22,7 @@ import {
   type ConstructionPlane, type FaceSketchMenu, type SketchBindings,
 } from '@/build/faceSketch';
 import { resolveSketch } from '@/utils/resolveSketch';
+import { axisChoices, defaultAxis, lineProblem, type AxisChoice, type RevolveAxis } from '@/build/revolve';
 import type { Sketch } from '@/types/document';
 
 const FADE_MS = 250;
@@ -39,6 +40,10 @@ const GHOST: Record<ExtrudeOptions['op'], [number, number, number]> = {
 export interface ExtrudeOptions {
   op: 'cut' | 'join' | 'new'; depth: number; through: boolean; flip: boolean; both?: boolean; datum?: boolean;
 }
+
+/** The sketcher's Revolve…: the axis picked here; the angle and the rest are
+ *  set in the 3D Revolve dialog that opens on Done (with a preview). */
+export interface RevolveStart { axis: RevolveAxis | null }
 
 interface Session {
   sketchId: string;
@@ -117,8 +122,9 @@ export function useFaceSketch(
   viewerRef: RefObject<Viewer | null>,
   canvasRef: RefObject<HTMLCanvasElement | null>,
   resRef: RefObject<RunResponse | null>,
-  /** Sketching finished (saved): `extrude` when it ended with Extrude. */
-  onDone?: (sketchName: string, extrude: ExtrudeOptions | null) => void,
+  /** Sketching finished (saved): `extrude` when it ended with Extrude,
+   *  `revolve` with Revolve. */
+  onDone?: (sketchName: string, extrude: ExtrudeOptions | null, revolve: RevolveStart | null) => void,
   /** The script makes a part already: Extrude offers Cut / Join, else New body. */
   hasPart: () => boolean = () => true,
   /** The part's parameters (its P), for dimensions in the sketch to use. */
@@ -139,6 +145,9 @@ export function useFaceSketch(
   const [extruding, setExtruding] = useState(false);   // the Extrude dialog is open
   const [ex, setEx] = useState<ExtrudeOptions>({ op: 'cut', depth: 5, through: true, flip: false });
   const pendingExtrude = useRef<ExtrudeOptions | null>(null);
+  const [revolving, setRevolving] = useState(false);   // the Revolve panel is open
+  const [revAxis, setRevAxis] = useState<string | null>(null);   // the sketch line it turns round
+  const pendingRevolve = useRef<RevolveStart | null>(null);
   const onDoneRef = useRef(onDone);
   onDoneRef.current = onDone;
   const overlayRef = useRef<HTMLDivElement | null>(null);
@@ -187,8 +196,9 @@ export function useFaceSketch(
     const es = useEditorStore.getState();
     es.setActiveTool('select');
     es.clearSelection();
-    setGlRect(null); setShown(false); setStrokes(false); setExtruding(false);
+    setGlRect(null); setShown(false); setStrokes(false); setExtruding(false); setRevolving(false);
     pendingExtrude.current = null;
+    pendingRevolve.current = null;
     const base = sketchBasePlane(sk);
     // drawn on a face: on that face where the last build found it
     const label = sk.planeRef ? `plane '${sk.planeRef}'` : base ? BASE_PLANES[base].name : faceLabel(plane.normal);
@@ -284,6 +294,7 @@ export function useFaceSketch(
     setStrokes(false);   // the 3D lines take over in place
     setShown(false);
     setExtruding(false);
+    setRevolving(false);
     setGlRect(null);
     setSession({ ...s, phase: 'exit' });
   }, []);
@@ -333,9 +344,10 @@ export function useFaceSketch(
         useEditorStore.getState().setProjectSource(null);
         if (useEditorStore.getState().activeTool === 'project') useEditorStore.getState().setActiveTool('select');
         setSession(null);
-        const extrude = pendingExtrude.current;
+        const extrude = pendingExtrude.current, revolve = pendingRevolve.current;
         pendingExtrude.current = null;
-        if (sk && !empty) onDoneRef.current?.(sk.name, extrude);
+        pendingRevolve.current = null;
+        if (sk && !empty) onDoneRef.current?.(sk.name, extrude, revolve);
       });
     }
   }, [glRect, session?.phase, viewerRef, canvasRef, palette.background]);
@@ -356,6 +368,11 @@ export function useFaceSketch(
         if (cur && !sameRect(cur, sk2)) setGlRect(sk2);   // window resized
         const cam = sketchCamera(plane, vp, sk2, gl.getBoundingClientRect());
         v.setSketchCamera(cam.center, cam.halfH);
+        if (revolvingRef.current) {
+          const at = { scale: vp.scale, x: r.left + vp.offset.x, y: r.top + vp.offset.y };
+          const was = marksAtRef.current;
+          if (!was || was.scale !== at.scale || was.x !== at.x || was.y !== at.y) { marksAtRef.current = at; setMarksAt(at); }
+        }
       },
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -375,6 +392,11 @@ export function useFaceSketch(
 
   const extrudingRef = useRef(false);
   extrudingRef.current = extruding;
+  const revolvingRef = useRef(false);
+  revolvingRef.current = revolving;
+  // where the sketch's origin is on the screen, and its scale: for the Revolve marks
+  const [marksAt, setMarksAt] = useState<{ scale: number; x: number; y: number } | null>(null);
+  const marksAtRef = useRef(marksAt);
   // Esc finishes — only once the sketcher has nothing left to cancel
   useEffect(() => {
     if (!session?.sketchId) return;
@@ -384,6 +406,10 @@ export function useFaceSketch(
       if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') return;
       if (document.querySelector('[data-modal]')) return;   // the shortcuts help is open
       if (extrudingRef.current) { e.preventDefault(); e.stopPropagation(); setExtruding(false); return; }
+      const es0 = useEditorStore.getState();
+      if (revolvingRef.current && es0.activeTool === 'select' && !es0.selectedEntityIds.size) {
+        e.preventDefault(); e.stopPropagation(); setRevolving(false); return;
+      }
       const es = useEditorStore.getState();
       if (es.activeTool !== 'select' || es.selectedEntityIds.size || es.selectedPoints.length
           || es.selectedSegments.length || es.editingDimensionId || es.mirrorEntityIds || es.mirrorPickingLine
@@ -416,11 +442,61 @@ export function useFaceSketch(
   // the dialog offers New body only while there is no part, Cut / Join after
   const toggleExtrude = () => {
     if (!extruding) {
+      setRevolving(false);
       const part = hasPartRef.current();
       setEx((e) => (part ? (e.op === 'new' ? { ...e, op: 'cut' } : e) : { ...e, op: 'new', depth: e.op === 'new' ? e.depth : 10 }));
     }
     setExtruding((o) => !o);
   };
+  // Revolve…: pick the axis here (a line of the sketch: its V / H axis, a
+  // construction or reference line), the rest in the 3D dialog after Done
+  const choices = useMemo(() => (current ? axisChoices(current) : []), [current]);
+  const toggleRevolve = () => {
+    if (!revolving && current) {
+      setExtruding(false);
+      setRevAxis((a) => (a && choices.some((c) => c.id === a) ? a : (() => {
+        const d = defaultAxis(current);
+        return d && 'line' in d ? d.line : null;
+      })()));
+      marksAtRef.current = null;
+    }
+    setRevolving((o) => !o);
+  };
+  // clicking one of the lines in the sketch picks it as the axis
+  useEffect(() => {
+    if (!revolving) return;
+    return useEditorStore.subscribe((st, prev) => {
+      if (st.selectedEntityIds === prev.selectedEntityIds || st.selectedEntityIds.size !== 1) return;
+      const [id] = [...st.selectedEntityIds];
+      if (id && choices.some((c) => c.id === id)) setRevAxis(id);
+    });
+  }, [revolving, choices]);
+  const revProblem = revolving && current
+    ? !shapes.loops.length ? { message: 'Draw a closed shape to revolve', crossings: [] }
+      : !revAxis ? { message: 'Pick the axis: one of the lines below, or click a line in the sketch', crossings: [] }
+      : lineProblem(current, revAxis)
+    : null;
+  const applyRevolve = () => {
+    if (!revAxis || revProblem) return;
+    pendingRevolve.current = { axis: { line: revAxis } };
+    exit();
+  };
+  const revLine = revolving ? choices.find((c) => c.id === revAxis) : undefined;
+  const revMarks = revolving && marksAt && revLine && (() => {
+    const at = (p: [number, number]) => [marksAt.x + p[0] * marksAt.scale, marksAt.y + p[1] * marksAt.scale] as const;
+    const [a, b] = [at(revLine.a), at(revLine.b)];
+    const crossings = revProblem?.crossings ?? [];
+    return (
+      <svg aria-hidden style={{ position: 'fixed', inset: 0, width: '100vw', height: '100vh', pointerEvents: 'none', zIndex: 4 }}>
+        <line x1={a[0]} y1={a[1]} x2={b[0]} y2={b[1]} stroke={crossings.length ? palette.danger : palette.accent}
+              strokeWidth={2} strokeDasharray="8 4" opacity={0.85} />
+        {crossings.map((p, i) => {
+          const [x, y] = at(p);
+          return <circle key={i} cx={x} cy={y} r={9} fill="none" stroke={palette.danger} strokeWidth={2.5} />;
+        })}
+      </svg>
+    );
+  })();
   const applyExtrude = () => {
     if (!shapes.loops.length || !(ex.depth > 0 || (ex.op === 'cut' && ex.through))) return;
     pendingExtrude.current = shapeOf(ex, !!session?.datum);
@@ -496,6 +572,7 @@ export function useFaceSketch(
            style={{ position: 'fixed', inset: 0, zIndex: 22, opacity: shown ? 1 : 0, transition: fade,
                     pointerEvents: session.phase === 'exit' ? 'none' : 'auto' }}>
         <style>{'.sof-hide-strokes canvas { visibility: hidden; }'}</style>
+        {revMarks /* the axis and the crossings, over the drawing (not in the transformed banner) */}
         <SketchWorkspace
           docId={getBackendId() ?? undefined}
           transparent
@@ -517,12 +594,19 @@ export function useFaceSketch(
               <button style={{ ...btn, ...(extruding ? { color: palette.accent, borderColor: palette.accent } : {}) }}
                       onClick={toggleExtrude}
                       title="Turn the closed shapes into 3D: the part's first shape, or cut into / grow out of it">Extrude…</button>
+              <button style={{ ...btn, ...(revolving ? { color: palette.accent, borderColor: palette.accent } : {}) }}
+                      onClick={toggleRevolve}
+                      title="Turn the closed shapes round a line of the sketch: knobs, spacers, pulleys, grooves">Revolve…</button>
               <button style={{ ...btn, background: palette.accent, borderColor: palette.accent, color: '#fff' }}
                       onClick={exit}>Done</button>
               {extruding && (
                 <ExtrudeDialog value={ex} onChange={setEx} shapes={shapes.loops.length} open={shapes.open} datum={session.datum}
                                direction={extrudeDirectionText(shapeOf(ex, session.datum), session.plane.normal, partAt)}
                                onApply={applyExtrude} onCancel={() => setExtruding(false)} />
+              )}
+              {revolving && (
+                <RevolvePanel choices={choices} axis={revAxis} onAxis={setRevAxis} problem={revProblem?.message ?? null}
+                              onApply={applyRevolve} onCancel={() => setRevolving(false)} />
               )}
             </div>
           }
@@ -554,6 +638,52 @@ export function useFaceSketch(
 function shapeOf(ex: ExtrudeOptions, datum: boolean): ExtrudeOptions {
   const through = ex.op === 'cut' && ex.through;
   return { ...ex, through, both: datum && !through && !!ex.both, datum };
+}
+
+/** The sketcher's Revolve…: which line the shapes turn round. The angle,
+ *  Join / Cut and the 3D preview come after, in the Revolve dialog. */
+function RevolvePanel({ choices, axis, onAxis, problem, onApply, onCancel }: {
+  choices: AxisChoice[]; axis: string | null; onAxis: (id: string) => void; problem: string | null;
+  onApply: () => void; onCancel: () => void;
+}) {
+  const palette = useThemeStore((s) => s.palette);
+  const ok = !problem;
+  return (
+    <div role="dialog" aria-label="Revolve" onMouseDown={(e) => e.stopPropagation()}
+         onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter' && ok) onApply(); }}
+         style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, width: 250, padding: '10px 12px',
+                  display: 'flex', flexDirection: 'column', gap: '9px', textAlign: 'left',
+                  background: palette.panelBg, border: `1px solid ${palette.border}`, borderRadius: '6px',
+                  boxShadow: '0 4px 14px rgba(0,0,0,0.3)', fontSize: '12px' }}>
+      <label style={{ display: 'flex', alignItems: 'center', gap: '8px', color: palette.text }}>
+        <span style={{ width: 36 }}>Axis</span>
+        <select value={axis ?? ''} onChange={(e) => onAxis(e.target.value)} aria-label="Axis"
+                style={{ flex: 1, minWidth: 0, fontSize: '12px', padding: '2px 4px', background: palette.inputBg,
+                         color: palette.text, border: `1px solid ${palette.border}`, borderRadius: '3px' }}>
+          {!axis && <option value="">Pick a line…</option>}
+          {choices.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+        </select>
+      </label>
+      <div style={{ color: palette.textSecondary, lineHeight: 1.4 }}>
+        or click a line in the sketch (an axis, a construction or reference line). The dashed line is the axis.
+      </div>
+      <div style={{ lineHeight: 1.4, padding: '4px 6px', borderRadius: '4px', background: palette.buttonBg,
+                    color: problem ? palette.danger : palette.text }}>
+        {problem ?? 'The shapes turn round it. Next: the angle, Join / Cut and a 3D preview.'}
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px' }}>
+        <button onClick={onCancel} style={{ fontSize: '12px', padding: '2px 10px', cursor: 'pointer', borderRadius: '4px',
+                                            background: palette.buttonBg, color: palette.text, border: `1px solid ${palette.border}` }}>
+          Cancel
+        </button>
+        <button onClick={onApply} disabled={!ok}
+                style={{ fontSize: '12px', padding: '2px 10px', cursor: ok ? 'pointer' : 'default', borderRadius: '4px', opacity: ok ? 1 : 0.5,
+                         background: palette.accent, color: '#fff', border: `1px solid ${palette.accent}` }}>
+          Revolve…
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function MenuItem({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {

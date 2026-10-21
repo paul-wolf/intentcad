@@ -212,6 +212,21 @@ def _system(production: str = "") -> str:
         "the face it was drawn on exists in `part`. A sketch on a base plane (\"Sketch on "
         "Top plane\", Front, Right) lies on that plane through the origin; with no part "
         "yet, part = extrude(sketch(\"<name>\"), amount=P[\"height\"]) makes the part.\n\n"
+        "REVOLVE (no import): revolve(sketch(\"<name>\"), axis=AXIS, angle=360) turns a sketch's "
+        "closed shapes around an axis lying in the sketch's plane — the way to make round parts "
+        "drawn as a half cross-section (knobs, spacers, pulleys, bushings, grooves, rounded "
+        "handles): prefer it to stacking cylinders and cones whenever a sketch holds the profile. "
+        "part = revolve(...) makes the first body, part += revolve(...) joins, part -= "
+        "revolve(...) cuts (a groove around a boss). AXIS is sketch_line(\"<name>\", \"axis-v\") "
+        "(the same sketch's built-in vertical axis; \"axis-h\" horizontal, or a construction "
+        "line's id from FACE SKETCHES below — it follows the sketch), edge_ref({...}) (a straight "
+        "edge), face_ref({...}) (a cylindrical face: its centre line, so a groove follows the "
+        "boss when its radius or position changes) or \"X\" / \"Y\" / \"Z\" (base axes through the "
+        "origin). angle in degrees (0 < angle <= 360, a number or P[\"…\"]); both=True spreads it "
+        "evenly either side of the sketch plane; flip=True turns the other way. The profile must "
+        "stay on one side of the axis (touching it is fine) and the axis must lie in the sketch "
+        "plane, else the build fails saying so. Never write build123d's own revolve() for a "
+        "sketch.\n\n"
         "CONSTRUCTION PLANES (no import): PLANES is a dict of named build123d Planes "
         "that follow the part. Define each on one line, in order, before anything "
         "that uses it: PLANES[\"Lid\"] = offset_plane(face_ref({...}), distance=P[\"lid_gap\"]) "
@@ -252,7 +267,7 @@ def _system(production: str = "") -> str:
         "part = mirror_body(part, PLANE): it stays symmetric when parameters change. "
         "mirrored(x, PLANE) reflects one step's input so the step repeats on the "
         "other side: a solid (part -= mirrored(extrude(sketch(\"USB\"), "
-        "amount=-P[\"usb_depth\"]), PLANES[\"Mid\"])), sketch_points() "
+        "amount=-P[\"usb_depth\"]), PLANES[\"Mid\"])), or a revolve(...) the same way), sketch_points() "
         "(holes(part, at=mirrored(sketch_points(\"Posts\"), PLANES[\"Mid\"]), ...)) "
         "and face_ref / edges_ref (fillet(part, mirrored(edges_ref([...]), "
         "PLANES[\"Mid\"]), radius=P[\"fillet_r\"]): the edges on the other side). "
@@ -390,6 +405,8 @@ def _system(production: str = "") -> str:
         "part -= extrude(sketch(\"<name>\"), amount=-P[\"cut1_depth\"]) (a cut), "
         "part += extrude(sketch(\"<name>\"), amount=P[\"join1_height\"]) (a join), "
         "part = extrude(sketch(\"<name>\"), amount=P[\"body1_height\"]) (the first body), "
+        "part += revolve(sketch(\"<name>\"), axis=sketch_line(\"<name>\", \"axis-v\"), angle=360) "
+        "(a revolve; -= cuts, = the first body), "
         "amount=-part.bounding_box().diagonal for a cut through everything, and on a "
         "base-plane sketch amount=P[\"…\"], both=True for both ways; shell(), holes(), "
         "fillet(), chamfer(), auto_round() and truss_windows() as described above, "
@@ -489,16 +506,18 @@ def _face_sketches(document_id: str | None) -> list[str]:
         o = [round(v, 2) for v in pl.get("origin", [])]
         face = prof.get("face") or {}
         on = f"drawn on the {face['hint']}, " if face.get("hint") else ""
+        ids = list(prof.get("lines") or {}) or ["axis-h", "axis-v"]
+        lines = f"; its lines for sketch_line(): {', '.join(json.dumps(i) for i in ids)}"
         if prof.get("planeRef"):
             out.append(f"- {json.dumps(s.get('name'))}: "
                        f"{len(prof.get('loops') or [])} closed shape(s), drawn on the construction plane "
                        f"PLANES[{json.dumps(prof['planeRef'])}] (it follows that plane; define the plane "
-                       "before the line that uses the sketch)")
+                       f"before the line that uses the sketch){lines}")
             continue
         pts = len(prof.get("points") or []) + sum(1 for lp in prof.get("loops") or [] for g in lp if g.get("t") == "circle")
         what = f"{len(prof.get('loops') or [])} closed shape(s)" + (f", {pts} point(s)/circle centre(s)" if pts else "")
         out.append(f"- {json.dumps(s.get('name'))}: {what}, {on}on the plane "
-                   f"through {o} with normal {n} (as drawn; it follows its face)")
+                   f"through {o} with normal {n} (as drawn; it follows its face){lines}")
     return out
 
 def _anthropic_call(system: str, user: str | list[dict], tools: list[dict], model: str) -> dict:
@@ -606,7 +625,7 @@ def edit_script(
 
     def prompt(extra: str = "") -> str:
         sel = f"SELECTION: {context}\n\n" if context.strip() else ""
-        sk = ("FACE SKETCHES (usable as sketch(\"<name>\") / sketch_points(\"<name>\")):\n" + "\n".join(drawn) + "\n\n") if drawn else ""
+        sk = ("FACE SKETCHES (usable as sketch(\"<name>\") / sketch_points(\"<name>\") / sketch_line(\"<name>\", id)):\n" + "\n".join(drawn) + "\n\n") if drawn else ""
         berr = (f"BUILD ERROR (the current script fails with this):\n{build_error.strip()}\n\n"
                 if build_error.strip() else "")
         convo = ""

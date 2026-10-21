@@ -17,7 +17,7 @@ export type OpGroup = 'Sketch' | 'Create' | 'Construct' | 'Modify' | 'Pattern' |
 export const OP_GROUPS: OpGroup[] = ['Sketch', 'Create', 'Construct', 'Modify', 'Pattern', 'Inspect', 'View', 'File'];
 
 export type OpIcon =
-  | 'sketch-face' | 'plane-top' | 'plane-front' | 'plane-right' | 'extrude' | 'hole' | 'shell' | 'fillet' | 'chamfer' | 'round'
+  | 'sketch-face' | 'plane-top' | 'plane-front' | 'plane-right' | 'extrude' | 'revolve' | 'hole' | 'shell' | 'fillet' | 'chamfer' | 'round'
   | 'plane-offset' | 'plane-edge' | 'plane-tangent' | 'mirror' | 'mirror-steps' | 'pattern' | 'pattern-circular' | 'pattern-steps'
   | 'lighten' | 'protect' | 'fix' | 'measure' | 'section' | 'normal' | 'ortho' | 'params' | 'build' | 'import'
   | 'export' | 'stl' | 'parts' | 'dxf' | 'views3' | 'versions' | 'process' | 'context'
@@ -63,6 +63,8 @@ export interface OpModel {
   mirrorSteps: number;
   /** the steps chosen in the steps list that Pattern steps can copy */
   patternSteps?: number;
+  /** face sketches with a closed shape (what Revolve turns) */
+  revolveSketches?: number;
 }
 
 export type ExportFormat = 'stl' | 'step' | 'stl-parts' | 'dxf' | 'dxf-views';
@@ -78,6 +80,8 @@ export interface OpContext {
   edgePlane(): void;
   /** the Tangent plane dialog, on the selected cylindrical face (after a click on it for the angle) */
   tangentPlane(): void;
+  /** the Revolve dialog, on the last sketch used with a closed shape */
+  revolve(): void;
   shell(): void;
   hole(): void;
   /** the Fillet / Chamfer dialog, on the selected edges */
@@ -262,6 +266,20 @@ export const OPERATIONS: Operation[] = [
     run: (ctx) => ctx.sketchOnSelection(),
   },
   {
+    id: 'revolve', name: 'Revolve', group: 'Create', icon: 'revolve',
+    help: 'Turn a sketch\'s closed shapes round an axis: knobs, spacers, pulleys, grooves',
+    longHelp: 'Revolve turns a sketch\'s closed shapes round an axis to make a round shape, add it to the part or '
+      + 'cut it away: a knob, a spacer, a pulley, a groove round a boss. The axis is a line of the sketch (its V or H '
+      + 'axis, a construction line), a straight edge or a cylinder picked in the view, or X, Y, Z; it lies in the '
+      + 'sketch plane and the shapes stay on one side of it. 360° makes it fully round; less, a part turn (both '
+      + 'ways spreads it either side of the sketch); a blue ghost previews it, and the round handle drags the '
+      + 'angle (15° steps, Shift 1°). In the sketcher, Revolve… sits next to Extrude….',
+    example: 'a knob: revolve the profile 360° about the V axis',
+    needs: (_sel, m) => first(...notWhile(m),
+                             [!m.revolveSketches, 'Draw a sketch with a closed shape first (K), with the axis line in it']),
+    run: (ctx) => ctx.revolve(),
+  },
+  {
     id: 'hole', name: 'Hole', group: 'Create', icon: 'hole', pinned: true,
     help: 'Screw holes at a sketch\'s points or a flat face\'s centre',
     longHelp: 'Screw holes straight into the part: clearance, tapped, heat-set insert, counterbore or '
@@ -412,7 +430,7 @@ export const OPERATIONS: Operation[] = [
   {
     id: 'mirror-steps', name: 'Mirror steps', group: 'Pattern', icon: 'mirror-steps',
     help: 'Copy the steps chosen in the steps list to the other side of a plane',
-    longHelp: 'Choose extrudes, holes, fillets or chamfers in the steps list (Ctrl-click or Shift-click for more), '
+    longHelp: 'Choose extrudes, revolves, holes, fillets or chamfers in the steps list (Ctrl-click or Shift-click for more), '
       + 'then this adds each again reflected across a face, base plane or construction plane. Each copy stays '
       + 'linked to its original: change the original and the copy follows, until you unlink it.',
     example: 'mirror the USB cutout and the two standoffs across the midplane',
@@ -438,7 +456,7 @@ export const OPERATIONS: Operation[] = [
   {
     id: 'pattern-steps', name: 'Pattern steps', group: 'Pattern', icon: 'pattern-steps',
     help: 'Repeat the steps chosen in the steps list in a row, a grid or round an axis',
-    longHelp: 'Choose extrudes, holes, fillets or chamfers in the steps list (Ctrl-click or Shift-click for more), '
+    longHelp: 'Choose extrudes, revolves, holes, fillets or chamfers in the steps list (Ctrl-click or Shift-click for more), '
       + 'then this repeats each: linear (a row, or a grid with a second direction) or circular (round a hole, a '
       + 'round edge or an axis). Each copy stays linked to its original: change the original and the copies '
       + 'follow, until you unlink them. Click a copy\'s number in the view to leave it out.',

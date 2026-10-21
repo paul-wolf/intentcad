@@ -345,6 +345,7 @@ class RunResponse(Schema):
     planes: dict[str, PlaneReport] = {}         # name -> each construction plane in PLANES
     kept: list[KeptFaces] = []                  # the faces each auto_round keep item is
     patterns: list[dict] = []                   # each linear()/circular() used: its instances (pattern.py)
+    revolves: list[dict] = []                   # each revolve(): its axis and reach, or why it failed (revolve.py)
 
 
 class ExportRequest(Schema):
@@ -378,6 +379,17 @@ class AddExtrudeRequest(Schema):
     datum: bool = False             # sketched on a base plane, not a part face
     both: bool = False              # the depth to each side of a base plane
     line: int | None = None         # rewrite the extrude line there instead of appending
+
+
+class AddRevolveRequest(Schema):
+    code: str
+    sketch: str                     # the sketch's name
+    op: str                         # 'cut' | 'join' | 'new' (the first body)
+    axis: dict | str                # {"line": id} | {"base": "X"} | {"edge": ref} | {"face": ref} | "X"
+    angle: float | str = 360        # degrees, or an expression of P names
+    both: bool = False              # spread the angle either side of the sketch plane
+    flip: bool = False              # turn the other way
+    line: int | None = None         # rewrite the revolve line there instead of appending
 
 
 class AddExtrudeResponse(Schema):

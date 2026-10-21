@@ -13,7 +13,7 @@ from documents.context import ContextFileError, ai_blocks
 from .engine import EngineError, run_script
 from . import hole_presets
 from .llm_models import list_models
-from .paramedit import (ParamError, add_edge_op, add_extrude, add_holes, add_mirror_body, add_plane, add_shell,
+from .paramedit import (ParamError, add_edge_op, add_extrude, add_holes, add_revolve, add_mirror_body, add_plane, add_shell,
                         add_pattern_body, delete_step, edit_args, mirror_steps, op_at, pattern_steps, rename_plane,
                         set_params, set_pattern, steps, suppress, unlink)
 from .schemas import (
@@ -26,6 +26,7 @@ from .schemas import (
     AddOpResponse,
     AddPlaneRequest,
     AddPlaneResponse,
+    AddRevolveRequest,
     AddShellRequest,
     RenamePlaneRequest,
     CodeResponse,
@@ -93,6 +94,8 @@ def run_model(request, payload: RunRequest):
         body = {"message": str(exc), "params": exc.params}
         if exc.fix:
             body["fix"] = exc.fix
+        if exc.revolves:
+            body["revolves"] = exc.revolves
         return JsonResponse(body, status=422)
     return RunResponse(
         mesh=MeshOut(**r["mesh"]),
@@ -110,6 +113,7 @@ def run_model(request, payload: RunRequest):
         planes=r.get("planes") or {},
         kept=r.get("kept") or [],
         patterns=r.get("patterns") or [],
+        revolves=r.get("revolves") or [],
     )
 
 
@@ -158,6 +162,22 @@ def add_extrude_endpoint(request, payload: AddExtrudeRequest):
     except (ParamError, SyntaxError) as exc:
         return JsonResponse({"message": str(exc)}, status=422)
     return AddExtrudeResponse(code=code, param=param)
+
+
+@router.post("/add_revolve", response=CodeResponse)
+def add_revolve_endpoint(request, payload: AddRevolveRequest):
+    """Append a revolve (cut, join, or the first body) of a sketch about an
+    axis to the script (or rewrite the revolve line on `line`), and return
+    the updated script."""
+    err = require_auth(request)
+    if err:
+        return err
+    try:
+        code = add_revolve(payload.code, payload.sketch, payload.op, payload.axis, payload.angle,
+                           payload.both, payload.flip, payload.line)
+    except (ParamError, SyntaxError) as exc:
+        return JsonResponse({"message": str(exc)}, status=422)
+    return CodeResponse(code=code)
 
 
 @router.post("/add_shell", response=AddOpResponse)

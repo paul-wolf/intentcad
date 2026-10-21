@@ -463,7 +463,13 @@ def _run(code: str, export: list | None = None,
 
     pattern_report: list[dict] = []
     ns.update(pattern.bind(ns, pattern_report))
-    ns["__editor_ops__"] = edge_ops.bind()
+    # revolve() — the editor's Revolve (modeling/revolve.py), put back after
+    # the script's `from build123d import *` like fillet(); each revolve →
+    # result["revolves"], for the preview's handle and a crossing's marks
+    from modeling import revolve
+
+    revolve_report: list[dict] = []
+    ns["__editor_ops__"] = {**edge_ops.bind(), **revolve.bind(revolve_report)}
     # Run the script. If an operation fails partway (e.g. a chamfer too big),
     # `part` still holds the model built up to that line — render THAT plus the
     # error as a warning, instead of blanking the whole model.
@@ -495,6 +501,8 @@ def _run(code: str, export: list | None = None,
         out = {"ok": False, "error": warning or "script did not define `part`", "params": params}
         if fix:
             out["fix"] = fix
+        if revolve_report:
+            out["revolves"] = revolve_report   # a crossing to mark, though nothing built
         return out
 
     # Mesh built FACE BY FACE (each face's triangles are contiguous) so the
@@ -681,6 +689,8 @@ def _run(code: str, export: list | None = None,
         result["edge_refs"] = edge_report
     if pattern_report:
         result["patterns"] = pattern_report
+    if revolve_report:
+        result["revolves"] = revolve_report
     plane_report = planes.report(ns.get("PLANES"))
     if plane_report:
         result["planes"] = plane_report
