@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { ContextFile, ContextFiles } from '@/api/client';
 import {
-  acceptable, detailLabel, usageLabel, fileTokens, filesToSend, includedPages, pageRanges, skipList, togglePage, tokensLabel,
+  acceptable, chatUsageNote, detailLabel, seesSpend, spendLine, spendNote, usageLabel, fileTokens, filesToSend,
+  includedPages, pageRanges, skipList, togglePage, tokensLabel,
 } from './contextFiles';
 
 const file = (id: string, over: Partial<ContextFile> = {}): ContextFile => ({
@@ -83,5 +84,44 @@ describe('pages and tokens', () => {
     expect(usageLabel({ tokens_in: 14200, tokens_out: 1200, cost_usd: 0.0312, cache_read_tokens: 10700 }))
       .toBe('14k in (11k cached) · 1.2k out · $0.031');
     expect(usageLabel({ tokens_in: 900, tokens_out: 80, cost_usd: 0.004 })).toBe('900 in · 80 out · $0.004');
+  });
+});
+
+describe('the AI spend', () => {
+  const NORMAL = { is_staff: false, is_superuser: false };
+  const STAFF = { is_staff: true, is_superuser: false };
+  const SUPER = { is_staff: false, is_superuser: true };
+  const USAGE = {
+    document: { edits: 2, tokens_in: 300, tokens_out: 60, cost_usd: 0.03 },
+    all_time: { edits: 3, tokens_in: 350, tokens_out: 70, cost_usd: 0.4412 },
+  };
+
+  it('is for staff and superusers only', () => {
+    expect(seesSpend(STAFF)).toBe(true);
+    expect(seesSpend(SUPER)).toBe(true);
+    expect(seesSpend(NORMAL)).toBe(false);
+    expect(seesSpend(null)).toBe(false);
+  });
+
+  it('shows the status line to staff and superusers, not to anyone else', () => {
+    const line = 'AI spend · this model $0.030 (2) · all-time $0.44 (3)';
+    expect(spendLine(STAFF, USAGE)).toBe(line);
+    expect(spendLine(SUPER, USAGE)).toBe(line);
+    expect(spendLine(NORMAL, USAGE)).toBeNull();
+    expect(spendLine(undefined, USAGE)).toBeNull();
+    expect(spendLine(STAFF, null)).toBeNull();   // not fetched yet
+  });
+
+  it('shows the chat’s per-call notes to staff and superusers, not to anyone else', () => {
+    const note = '900 in · 80 out · $0.004';
+    expect(chatUsageNote(STAFF, note)).toBe(note);
+    expect(chatUsageNote(SUPER, note)).toBe(note);
+    expect(chatUsageNote(NORMAL, note)).toBeNull();   // a note saved earlier stays hidden
+    expect(chatUsageNote(STAFF, undefined)).toBeNull();
+  });
+
+  it('notes an edit’s spend only when the response carries it', () => {
+    expect(spendNote({ tokens_in: 900, tokens_out: 80, cost_usd: 0.004 })).toBe('900 in · 80 out · $0.004');
+    expect(spendNote({})).toBeUndefined();   // a normal user's response: no spend fields
   });
 });

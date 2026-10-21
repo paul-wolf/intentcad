@@ -644,9 +644,10 @@ class EditResponse(Schema):
     code: str = ""               # (edit) the full updated script, validated to build
     note: str | None = None      # (edit) one-sentence description of the change
     question: str = ""           # (question) the assistant's clarifying question
-    tokens_in: int = 0           # all input read, cached or not
-    tokens_out: int = 0
-    cache_read_tokens: int = 0   # of tokens_in, read from the prompt cache
-    cache_write_tokens: int = 0  # of tokens_in, written to it
+    # the spend, for staff only: left out of the response for everyone else
+    tokens_in: int | None = None           # all input read, cached or not
+    tokens_out: int | None = None
+    cache_read_tokens: int | None = None   # of tokens_in, read from the prompt cache
+    cache_write_tokens: int | None = None  # of tokens_in, written to it
     context_files: list[str] = []   # ids of the context files sent
-    cost_usd: float = 0.0
+    cost_usd: float | None = None

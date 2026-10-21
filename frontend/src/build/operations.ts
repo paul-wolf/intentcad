@@ -1,8 +1,9 @@
 /**
  * The part editor's operations, in one list. The Operations layout's grid,
- * the slim top bar (the `pinned` ones) and the single-key shortcuts all come
- * from here. Each operation says what it needs — from the selected faces and
- * the state of the model — with the reason in words when it can't run, and
+ * the top bar (Build, and what the selection makes possible: barOperations)
+ * and the single-key shortcuts all come from here. Each operation says what
+ * it needs — from the selected faces and the state of the model — with the
+ * reason in words when it can't run, and
  * runs through the editor's own actions (OpContext), so a tile, a top-bar
  * button and a key do exactly the same thing.
  *
@@ -127,8 +128,6 @@ export interface Operation {
   example: string;
   needs(sel: OpSelection, m: OpModel): Need;
   run(ctx: OpContext): void;
-  /** shown in the slim top bar */
-  pinned?: boolean;
   /** the name to show now, when it changes with the state (Build → Cancel build) */
   label?(m: OpModel): string;
   /** a live line on an enabled tile (what it will do with this selection) */
@@ -225,7 +224,7 @@ const EXPORTS: [ExportFormat, string, OpIcon, string, string][] = [
 export const OPERATIONS: Operation[] = [
   // Sketch
   {
-    id: 'sketch-face', name: 'Sketch on face', group: 'Sketch', icon: 'sketch-face', shortcut: 'K', pinned: true,
+    id: 'sketch-face', name: 'Sketch on face', group: 'Sketch', icon: 'sketch-face', shortcut: 'K',
     help: 'Open the 2D sketcher on the selected flat face or construction plane',
     longHelp: 'Opens the full 2D sketcher on the selected flat face, with the face\'s edges drawn as references '
       + 'to dimension to. Esc or Done returns to 3D; the sketch stays drawn on the part and follows its face when '
@@ -262,7 +261,7 @@ export const OPERATIONS: Operation[] = [
     run: (ctx) => ctx.sketchOnSelection(),
   },
   {
-    id: 'hole', name: 'Hole', group: 'Create', icon: 'hole', pinned: true,
+    id: 'hole', name: 'Hole', group: 'Create', icon: 'hole',
     help: 'Screw holes at a sketch\'s points or a flat face\'s centre',
     longHelp: 'Screw holes straight into the part: clearance, tapped, heat-set insert, counterbore or '
       + 'countersink, M2–M5, optionally in standoffs. They go at the points and circle centres of the sketch on the '
@@ -323,7 +322,7 @@ export const OPERATIONS: Operation[] = [
   },
   // Modify
   {
-    id: 'shell', name: 'Shell', group: 'Modify', icon: 'shell', pinned: true,
+    id: 'shell', name: 'Shell', group: 'Modify', icon: 'shell',
     help: 'Hollow the part to walls, leaving the selected faces open',
     longHelp: 'Hollows the part out to walls of a thickness, leaving the selected faces open (Shift-click to '
       + 'select more). In the dialog: the thickness, inside or outside, and the open faces — click a face of the '
@@ -334,7 +333,7 @@ export const OPERATIONS: Operation[] = [
     run: (ctx) => ctx.shell(),
   },
   {
-    id: 'fillet', name: 'Fillet', group: 'Modify', icon: 'fillet', pinned: true,
+    id: 'fillet', name: 'Fillet', group: 'Modify', icon: 'fillet',
     help: 'Round the selected edges to a radius',
     longHelp: 'Rounds the selected edges to a radius (double-click an edge for its whole loop, Shift-click for '
       + 'more). In the dialog: the radius — type it or drag the handle on the first edge — and the edges: click '
@@ -357,7 +356,7 @@ export const OPERATIONS: Operation[] = [
     run: (ctx) => ctx.chamfer(),
   },
   {
-    id: 'round', name: 'Round', group: 'Modify', icon: 'round', pinned: true,
+    id: 'round', name: 'Round', group: 'Modify', icon: 'round',
     help: 'AI: round every edge, keeping holes and mating faces exact',
     longHelp: 'Asks the AI to round every edge of the part (outside corners and inside blends) with auto_round, '
       + 'keeping holes, the bed face and mating faces exact. The two radii land in Parameters. With a face '
@@ -519,7 +518,7 @@ export const OPERATIONS: Operation[] = [
   },
   // File
   {
-    id: 'build', name: 'Build', group: 'File', icon: 'build', pinned: true,
+    id: 'build', name: 'Build', group: 'File', icon: 'build',
     help: 'Rebuild from the script',
     longHelp: 'Rebuilds the part from the script after editing it by hand (Ctrl/⌘+Enter in the script does the '
       + 'same). While a build runs, this cancels it.',
@@ -581,6 +580,34 @@ export function opForKey(key: string): Operation | undefined {
   if (key.length !== 1) return undefined;
   const k = key.toUpperCase();
   return OPERATIONS.find((o) => o.shortcut === k);
+}
+
+// ---- the top bar ----
+
+/** How many operations the top bar shows beside Build and Operations. */
+export const BAR_MAX = 5;
+/** The bar's hint when the selection makes nothing possible. */
+export const BAR_HINT = 'Select a face or edge for operations';
+/** Groups that don't act on the selection: their keys and the buttons under
+ *  the 3D view (View), the Operations grid (File) are their place. */
+const OFF_BAR: OpGroup[] = ['View', 'File'];
+const NOTHING: OpSelection = { faces: [], edges: [], planes: [] };
+const isEmpty = (sel: OpSelection) => !sel.faces.length && !sel.edges.length && !planeCount(sel);
+
+/** The operations the top bar offers for this selection, in registry order
+ *  (group order, then entry order), at most `max`. With nothing selected,
+ *  whatever can run (sketch on a base plane, …); with something selected,
+ *  only what uses it: an operation that could run just as well with nothing
+ *  selected, and would do the same, isn't about this selection. Build is
+ *  always on the bar, so it isn't one of these. */
+export function barOperations(sel: OpSelection, m: OpModel, max = BAR_MAX): Operation[] {
+  const empty = isEmpty(sel);
+  const usesSel = (op: Operation) => empty || !op.needs(NOTHING, m).ok
+    || (op.detail?.(sel, m) ?? null) !== (op.detail?.(NOTHING, m) ?? null);
+  return OP_GROUPS.filter((g) => !OFF_BAR.includes(g))
+    .flatMap((g) => OPERATIONS.filter((op) => op.group === g))
+    .filter((op) => op.needs(sel, m).ok && usesSel(op))
+    .slice(0, max);
 }
 
 // ---- layouts ----

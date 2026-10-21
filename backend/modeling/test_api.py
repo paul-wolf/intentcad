@@ -121,12 +121,14 @@ class RunApiTests(TestCase):
         self.assertIn("message", resp.json())
 
 
+SPEND_FIELDS = {"tokens_in", "tokens_out", "cache_read_tokens", "cache_write_tokens", "cost_usd"}
+
+
 class FailedEditSpendTests(TestCase):
-    def test_a_failed_edit_logs_and_returns_its_spend(self):
+    def _fail(self, **flags):
         from unittest import mock
         from modeling.assistant import AssistantError
-        from modeling.models import AiEdit
-        user = get_user_model().objects.create_user(username="f", email="f@example.com", password="pw")
+        user = get_user_model().objects.create_user(username="f", email="f@example.com", password="pw", **flags)
         client = Client()
         client.force_login(user)
         usage = {"tokens_in": 2000, "tokens_out": 1000, "cache_read_tokens": 0,
@@ -136,15 +138,63 @@ class FailedEditSpendTests(TestCase):
             r = client.post("/api/build/edit", data=json.dumps({"code": PART, "instruction": "x"}),
                             content_type="application/json")
         self.assertEqual(r.status_code, 422)
-        self.assertEqual(r.json()["cost_usd"], 0.03)
+        return user, r.json()
+
+    def test_a_failed_edit_logs_and_returns_its_spend(self):
+        from modeling.models import AiEdit
+        user, body = self._fail(is_staff=True)
+        self.assertEqual(body["cost_usd"], 0.03)
         self.assertEqual(AiEdit.objects.get(user=user).cost_usd, 0.03)
+
+    def test_a_failed_edit_logs_but_does_not_tell_a_normal_user_its_spend(self):
+        from modeling.models import AiEdit
+        user, body = self._fail()
+        self.assertEqual(body["message"], "couldn't produce a script that builds")
+        self.assertFalse(SPEND_FIELDS & body.keys())
+        self.assertEqual(AiEdit.objects.get(user=user).cost_usd, 0.03)
+
+
+class EditSpendTests(TestCase):
+    """A successful edit's tokens and cost go to staff and superusers only."""
+
+    def _edit(self, **flags):
+        from unittest import mock
+        user = get_user_model().objects.create_user(username="e", email="e@example.com", password="pw", **flags)
+        client = Client()
+        client.force_login(user)
+        r = {"kind": "edit", "code": PART + "\n", "note": "Made it.", "tokens_in": 3000, "tokens_out": 400,
+             "cache_read_tokens": 1000, "cache_write_tokens": 0, "cost_usd": 0.02}
+        with mock.patch("modeling.api.edit_script", return_value=r):
+            resp = client.post("/api/build/edit", data=json.dumps({"code": PART, "instruction": "x"}),
+                               content_type="application/json")
+        self.assertEqual(resp.status_code, 200)
+        return resp.json()
+
+    def test_staff_get_the_spend(self):
+        body = self._edit(is_staff=True)
+        self.assertEqual(body["cost_usd"], 0.02)
+        self.assertEqual(body["tokens_in"], 3000)
+        self.assertEqual(body["cache_read_tokens"], 1000)
+
+    def test_a_superuser_gets_the_spend(self):
+        self.assertEqual(self._edit(is_superuser=True)["cost_usd"], 0.02)
+
+    def test_a_normal_user_gets_the_edit_without_the_spend(self):
+        from modeling.models import AiEdit
+        body = self._edit()
+        self.assertEqual(body["code"], PART + "\n")
+        self.assertEqual(body["note"], "Made it.")
+        self.assertEqual(body["kind"], "edit")
+        self.assertFalse(SPEND_FIELDS & body.keys())
+        # still logged, for the staff's totals
+        self.assertEqual(AiEdit.objects.get().cost_usd, 0.02)
 
 
 class UsageTests(TestCase):
     def setUp(self):
         self.client = Client()
         self.user = get_user_model().objects.create_user(
-            username="u", email="u@example.com", password="pw")
+            username="u", email="u@example.com", password="pw", is_staff=True)
 
     def test_usage_tallies_per_document_and_all_time(self):
         from modeling.models import AiEdit
@@ -160,3 +210,18 @@ class UsageTests(TestCase):
 
     def test_usage_requires_auth(self):
         self.assertEqual(self.client.get("/api/build/usage?document=A").status_code, 401)
+
+    def test_usage_is_forbidden_to_a_normal_user(self):
+        from modeling.models import AiEdit
+        user = get_user_model().objects.create_user(username="n", email="n@example.com", password="pw")
+        AiEdit.objects.create(user=user, document_id="A", tokens_in=100, tokens_out=20, cost_usd=0.01)
+        self.client.force_login(user)
+        r = self.client.get("/api/build/usage?document=A")
+        self.assertEqual(r.status_code, 403)
+        self.assertNotIn("all_time", r.json())
+
+    def test_usage_is_open_to_a_superuser(self):
+        user = get_user_model().objects.create_user(username="s", email="s@example.com", password="pw",
+                                                    is_superuser=True)
+        self.client.force_login(user)
+        self.assertEqual(self.client.get("/api/build/usage?document=A").status_code, 200)

@@ -61,13 +61,14 @@ import { brokenRefWarning, dimensionedToEdges } from '@/build/sketchRefs';
 import { partParams } from '@/build/scriptParams';
 import { usesNames } from '@/utils/resolveSketch';
 import {
-  LAYOUTS, OPERATIONS, OPS_KEY, isLayout, loadRecent, opById, opForKey, pushRecent,
+  BAR_HINT, LAYOUTS, OPS_KEY, barOperations, isLayout, loadRecent, opById, opForKey, pushRecent,
   saveRecent, stepLayout, toggleOps, type Layout, type OpContext, type OpModel, type OpSelection, type Operation,
 } from '@/build/operations';
 import { OperationsPanel, Kbd } from './OperationsPanel';
 import { OpIcon, OPS_GRID_ICON } from './OpIcons';
 import { ContextChips, ContextPane, useContextFiles, type CtxColors } from './ContextPane';
-import { acceptable, filesToSend, skipList, usageLabel } from '@/build/contextFiles';
+import { acceptable, chatUsageNote, filesToSend, seesSpend, skipList, spendLine, spendNote, usageLabel } from '@/build/contextFiles';
+import { useAuthStore } from '@/stores/authStore';
 import { chooseModel, modelsStale } from '@/build/modelList';
 
 // the view buttons, in key order (1–6, then 0)
@@ -694,7 +695,6 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // has actually loaded (getBackendId is set only after setDocument), so we
   // never seed the starter over a document that simply hasn't arrived yet.
   useEffect(() => {
-    fetchUsage();
     let done = false;
     let tries = 0;
     const start = (initial: string) => {
@@ -856,6 +856,9 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const modelTitle = (m: ModelInfo) =>
     `${m.label} — ${m.note}. $${m.input_per_m}/M in · $${m.output_per_m}/M out (released ${m.released})`
     + (modelsSource === 'static' ? '. Offline list: the Models API could not be reached; retrying.' : '');
+  // the AI spend (the status line, the chat's notes): staff and superusers only
+  const user = useAuthStore((st) => st.user);
+  const staff = seesSpend(user);
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   // context files (reference PDFs and photos the AI reads): the part's and its
   // project's, once the part has a server id (a new part gets one on first save)
@@ -919,7 +922,12 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     const el = chatScrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;   // keep the latest message in view
   }, [chat, asking, layout]);
-  const fetchUsage = () => buildApi.usage(getBackendId() ?? '').then(setUsage).catch(() => {});
+  const fetchUsage = () => {
+    if (!seesSpend(useAuthStore.getState().user)) return;
+    buildApi.usage(getBackendId() ?? '').then(setUsage).catch(() => {});
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (staff) fetchUsage(); else setUsage(null); }, [staff]);
   const [paramVals, setParamVals] = useState<Record<string, number>>({});
   const paramBase = useRef<Record<string, number>>({});   // values as of the last build (good or failed)
   const [sens, setSens] = useState<Record<string, DimInfo>>({});   // param -> what it controls
@@ -2493,7 +2501,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         skip_context: skipList(ctxStore.files, skipCtx),
       });
       setSkipCtx(new Set());
-      const spent = usageLabel(r);
+      const spent = spendNote(r);
       if (r.kind === 'question') {
         persistChat([...base, { role: 'assistant', kind: 'question', text: r.question, usage: spent, at: Date.now() }]);
       } else {
@@ -2549,7 +2557,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
 
   const hasParams = Object.keys(paramVals).length > 0;
   // ---- the operations (build/operations.ts): the Operations grid, the top
-  // bar's pinned buttons and the keys all run these, with this context ----
+  // bar's buttons and the keys all run these, with this context ----
   const hint = (text: string) => {
     setViewHint(text);
     window.clearTimeout(viewHintTimer.current);
@@ -2650,6 +2658,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     if (next !== recentRef.current) { recentRef.current = next; setRecent(next); saveRecent(next); }
     op.run(opCtx);
   };
+  // the top bar's: Build and Operations always, and up to five the selection makes possible
+  const barOps = barOperations(opSel, opModel);
   opsRef.current = { ctx: opCtx, model: opModel, sel: opSel, run: runOp,
                      modal: showHelp || showVersions || showProduction };
   // "or ask: …" on the help card: into the chat box, not sent
@@ -2660,9 +2670,9 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     window.setTimeout(() => chatInputRef.current?.focus(), 0);
   };
   const runById = (id: string) => { const op = opById(id); if (op) runOp(op); };
-  // a top-bar button for a pinned operation: the same entry, the same
-  // reason when it can't run
-  const pinnedButton = (op: Operation) => {
+  // a top-bar button for an operation: the same entry, the same reason when
+  // it can't run (only Build can't: the others are there because they can)
+  const barButton = (op: Operation) => {
     const n = op.needs(opSel, opModel);
     const name = op.label?.(opModel) ?? op.name;
     const isBuild = op.id === 'build';
@@ -2671,8 +2681,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       : isBuild ? { background: palette.primaryBtn, color: '#fff' }
       : { background: 'none', color: palette.textSecondary, border: `1px solid ${palette.border}` };
     return (
-      <button key={op.id} onClick={() => { if (n.ok) runOp(op); }} aria-disabled={!n.ok}
-        onMouseDown={(e) => e.preventDefault()}
+      <button key={op.id} className={isBuild ? undefined : 'bar-fade'} onClick={() => { if (n.ok) runOp(op); }}
+        aria-disabled={!n.ok} onMouseDown={(e) => e.preventDefault()}
         title={`${op.help}${op.shortcut ? ` (${op.shortcut})` : ''}${n.ok ? '' : ` — ${n.reason}`} · or ask: "${op.example}"`}
         style={{ ...btn, ...tone, display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 11px',
                  whiteSpace: 'nowrap', flexShrink: 0, opacity: n.ok ? 1 : 0.5, cursor: n.ok ? 'pointer' : 'default' }}>
@@ -2872,7 +2882,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                 </span>
               )}
             </div>
-            {m.usage && (
+            {chatUsageNote(user, m.usage) && (
               <div title="This call: input tokens (of them, read from the prompt cache) · output tokens · cost"
                 style={{ fontSize: '10.5px', color: palette.textSecondary, marginTop: 2, paddingLeft: 4 }}>
                 {m.usage}
@@ -2950,9 +2960,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                   display: 'flex', flexDirection: 'column' }}>
       <div style={{ background: palette.panelBg, flex: 1, minHeight: 0,
                     display: 'flex', flexDirection: 'column' }}>
-        {/* header */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px',
-                      borderBottom: `1px solid ${palette.border}` }}>
+        {/* header: a fixed height, so the selection's buttons come and go without it moving */}
+        <style>{'@keyframes bar-fade { from { opacity: 0 } } .bar-fade { animation: bar-fade 160ms ease-out; }'}</style>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '0 16px', height: 54,
+                      boxSizing: 'border-box', flexShrink: 0,
+                      borderBottom: staff ? 'none' : `1px solid ${palette.border}` }}>
           {(onHome || onProject) && (
             <div style={{ display: 'flex', gap: '6px' }}>
               {onHome && (
@@ -2986,13 +2998,6 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
               <span style={{ color: palette.textSecondary, fontSize: '12px' }}>(build123d · script)</span>
             </h2>
           )}
-          {usage && (usage.all_time.edits > 0) && (
-            <span title={`This model: ${usage.document.tokens_in.toLocaleString()} in (${(usage.document.cache_read_tokens ?? 0).toLocaleString()} from the prompt cache) / ${usage.document.tokens_out.toLocaleString()} out.  All-time: ${usage.all_time.tokens_in.toLocaleString()} in (${(usage.all_time.cache_read_tokens ?? 0).toLocaleString()} cached) / ${usage.all_time.tokens_out.toLocaleString()} out.`}
-              style={{ fontSize: '12px', color: palette.textSecondary }}>
-              AI spend · this model ${usage.document.cost_usd.toFixed(3)} ({usage.document.edits}) · all-time ${usage.all_time.cost_usd.toFixed(2)} ({usage.all_time.edits})
-            </span>
-          )}
-          <div style={{ flex: 1 }} />
           {/* layout: what sits beside the 3D view; not focusable on click, so keys keep working */}
           <div role="group" aria-label="Layout" onMouseDown={(e) => e.preventDefault()}
             style={{ display: 'flex', flexShrink: 0, border: `1px solid ${palette.border}`, borderRadius: '4px', overflow: 'hidden' }}>
@@ -3009,10 +3014,19 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
               </button>
             ))}
           </div>
-          {/* the pinned operations; the rest are in the Operations layout */}
+          {/* what the selection makes possible (the rest are in the Operations layout), right
+              up against Build and Operations, which stay put */}
           <input ref={stepInput} type="file" accept={STEP_ACCEPT} style={{ display: 'none' }}
             onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void importStep(f); }} />
-          {OPERATIONS.filter((op) => op.pinned && (op.group !== 'Sketch' || sketchOnFace)).map(pinnedButton)}
+          <div role="group" aria-label="Operations for the selection"
+            style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+                     gap: '8px', overflow: 'hidden' }}>
+            {barOps.length ? barOps.map(barButton) : (
+              <span key="hint" className="bar-fade"
+                style={{ fontSize: '12px', color: palette.textSecondary, whiteSpace: 'nowrap' }}>{BAR_HINT}</span>
+            )}
+          </div>
+          {barButton(opById('build')!)}
           <button onClick={toggleOpsLayout} onMouseDown={(e) => e.preventDefault()} aria-pressed={layout === 'ops'}
             title={layout === 'ops' ? `Back to the layout before (${OPS_KEY} or Esc)`
               : `Every operation, enabled by what is selected (${OPS_KEY})`}
@@ -3030,6 +3044,17 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
           <button onClick={handleClose} style={{ background: 'none', border: 'none',
                    color: palette.textSecondary, fontSize: '18px', cursor: 'pointer', padding: '0 4px' }}>&times;</button>
         </div>
+        {/* the AI spend, for staff: a slim line under the bar */}
+        {staff && (
+          <div style={{ height: 22, flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 16px',
+                        fontSize: '11.5px', color: palette.textSecondary, borderBottom: `1px solid ${palette.border}` }}>
+            {usage && (
+              <span title={`This model: ${usage.document.tokens_in.toLocaleString()} in (${(usage.document.cache_read_tokens ?? 0).toLocaleString()} from the prompt cache) / ${usage.document.tokens_out.toLocaleString()} out.  All-time: ${usage.all_time.tokens_in.toLocaleString()} in (${(usage.all_time.cache_read_tokens ?? 0).toLocaleString()} cached) / ${usage.all_time.tokens_out.toLocaleString()} out.`}>
+                {spendLine(user, usage)}
+              </span>
+            )}
+          </div>
+        )}
 
         {/* body: parameters + script or chat (left) | 3D view (right) */}
         <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
