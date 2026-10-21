@@ -25,7 +25,7 @@ import { getStyles } from '@/rendering/styles';
 import { SNAP_INDICATOR_RADIUS } from '@/config';
 import { traceContour } from '@/utils/contourTrace';
 import { openCopyDialog } from './openCopyDialog';
-import { applyHV } from './selectionPoints';
+import { applyHV, applyPointOnCurve, applySymmetric } from './selectionPoints';
 
 /** Filter entities for CAM mode: remove construction, dimension, and standalone points */
 function filterEntitiesForCam(entities: Entity[]): Entity[] {
@@ -751,6 +751,12 @@ export function createSelectTool(): Tool {
       }
       if (e.key === 'v') {
         if (applyHV('vertical')) requestSave();
+      }
+      if (e.key === '@') {
+        if (applyPointOnCurve()) requestSave();
+      }
+      if (e.key === '/') {
+        if (applySymmetric()) requestSave();
       }
       if (e.key === 'n' || e.key === 'N') {
         const segs = resolveTwoSegments();

@@ -209,6 +209,30 @@ export interface VerticalPointsConstraint {
   targetPointIndex: number;
 }
 
+/** A point on a curve: on the infinite line through a straight segment, or
+ *  on a circle (segmentIndex -1) or the circle an arc segment (bulge) lies on. */
+export interface PointOnCurveConstraint {
+  id: string;
+  type: 'pointOnCurve';
+  entityId: string;       // whose point
+  pointIndex: number;
+  targetEntityId: string; // the curve's shape
+  segmentIndex: number;   // its segment; -1 for a circle
+}
+
+/** Two points mirror images of each other about a straight segment's line
+ *  (often a construction line or a reference edge). */
+export interface SymmetricConstraint {
+  id: string;
+  type: 'symmetric';
+  entityId: string;
+  pointIndex: number;
+  entityId2: string;
+  pointIndex2: number;
+  targetEntityId: string; // the line's shape
+  segmentIndex: number;
+}
+
 export interface MidpointConstraint {
   id: string;
   type: 'midpoint';
@@ -254,7 +278,7 @@ export interface BisectConstraint {
   targetSegmentIndex: number; // which segment is bisected
 }
 
-export type Constraint = FixedConstraint | EqualConstraint | CoincidentConstraint | HorizontalConstraint | VerticalConstraint | HorizontalPointsConstraint | VerticalPointsConstraint | MidpointConstraint | ParallelConstraint | PerpendicularConstraint | TangentConstraint | BisectConstraint;
+export type Constraint = FixedConstraint | EqualConstraint | CoincidentConstraint | HorizontalConstraint | VerticalConstraint | HorizontalPointsConstraint | VerticalPointsConstraint | PointOnCurveConstraint | SymmetricConstraint | MidpointConstraint | ParallelConstraint | PerpendicularConstraint | TangentConstraint | BisectConstraint;
 
 /** A grid or circular copy, kept so it can be reopened and changed:
  *  what was copied, the copies it made, and how. */

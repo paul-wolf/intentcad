@@ -18,7 +18,7 @@ import { requestSave, getProjectId, getProjectName, setBackendId, setProjectCont
 import { createEmptyDocument, generateNumberedName } from '@/utils/document';
 import { addLog } from '@/stores/logStore';
 import { openCopyDialog } from '@/tools/openCopyDialog';
-import { applyHV } from '@/tools/selectionPoints';
+import { applyHV, applyPointOnCurve, applySymmetric } from '@/tools/selectionPoints';
 import { api } from '@/api/cachedClient';
 import type { ToolType } from '@/types/editor';
 import type { ThemePalette } from '@/theme';
@@ -451,6 +451,24 @@ export function Toolbar({ embedded = false }: ToolbarProps = {}) {
           title="Midpoint constraint (I)"
         >
           <ToolIcon><line x1="2" y1="8" x2="14" y2="8" /><line x1="8" y1="5" x2="8" y2="11" /><circle cx="8" cy="8" r="1.5" fill="currentColor" stroke="none" /></ToolIcon>
+        </button>
+        <button
+          onClick={() => {
+            if (applyPointOnCurve()) requestSave();
+          }}
+          style={btn(palette)}
+          title="Point on curve (@) — a point on a line (extended), an arc or a circle: select the point, then Shift-click the curve"
+        >
+          <ToolIcon><path d="M2 13 Q8 1 14 13" fill="none" /><circle cx="8" cy="7" r="1.8" fill="currentColor" stroke="none" /></ToolIcon>
+        </button>
+        <button
+          onClick={() => {
+            if (applySymmetric()) requestSave();
+          }}
+          style={btn(palette)}
+          title="Symmetric (/) — two points mirrored about a line: select the two points, then Shift-click the line"
+        >
+          <ToolIcon><line x1="8" y1="1.5" x2="8" y2="14.5" strokeDasharray="2 1.5" /><circle cx="3.5" cy="8" r="1.8" fill="currentColor" stroke="none" /><circle cx="12.5" cy="8" r="1.8" fill="currentColor" stroke="none" /></ToolIcon>
         </button>
         <button
           onClick={() => {

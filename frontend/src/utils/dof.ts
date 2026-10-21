@@ -20,6 +20,8 @@ function baseDoF(entity: Entity): number {
  *  and how much. */
 function pointRelationReduction(c: Constraint): [string, number] | null {
   if (c.type === 'horizontalPoints' || c.type === 'verticalPoints') return [c.targetEntityId, 1];
+  if (c.type === 'pointOnCurve') return [c.entityId, 1];
+  if (c.type === 'symmetric') return [c.entityId2, 2];
   return null;
 }
 

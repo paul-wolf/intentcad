@@ -6,6 +6,7 @@ import { createMirroredEntity, propagateDerived } from '@/utils/propagate';
 import { rotatePoint } from '@/utils/geometry';
 import { getEntityPoints } from '@/utils/entityPoints';
 import { solveConstraints, validateConstraint } from '@/utils/constraintSolver';
+import { targetsOf } from '@/utils/brokenRefs';
 import { generateId } from '@/utils/id';
 import { addLog } from '@/stores/logStore';
 import type { SelectedPoint } from '@/stores/editorStore';
@@ -27,9 +28,7 @@ export interface HistoryEntry {
 
 /** Check if a constraint references any of the given entity IDs. */
 function constraintReferencesAny(c: Constraint, idSet: Set<string>): boolean {
-  if (idSet.has(c.entityId)) return true;
-  if ('targetEntityId' in c && idSet.has(c.targetEntityId)) return true;
-  return false;
+  return targetsOf(c).some((id) => idSet.has(id));
 }
 
 interface DocumentStore {
@@ -112,6 +111,10 @@ interface DocumentStore {
   toggleHorizontal(entityIds: string[], segments?: {entityId: string, segmentIndex: number}[]): void;
   /** Two points level (horizontal) or one above the other (vertical); again to remove. */
   togglePointsHV(type: 'horizontal' | 'vertical', pt1: SelectedPoint, pt2: SelectedPoint): void;
+  /** A point on a segment's line, an arc's or a circle's curve (segmentIndex -1: the circle). */
+  togglePointOnCurve(point: SelectedPoint, curve: { entityId: string; segmentIndex: number }): void;
+  /** Two points mirror images about a straight segment's line. */
+  toggleSymmetric(pt1: SelectedPoint, pt2: SelectedPoint, line: { entityId: string; segmentIndex: number }): void;
   toggleVertical(entityIds: string[], segments?: {entityId: string, segmentIndex: number}[]): void;
 
   // Arc segments
@@ -1218,6 +1221,65 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
       })),
     });
     addLog('info', `${label} (two points) constraint ON`);
+  },
+
+  togglePointOnCurve(point, curve) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return;
+    const existing = sketch.constraints.find((c) => c.type === 'pointOnCurve' && c.entityId === point.entityId
+      && c.pointIndex === point.pointIndex && c.targetEntityId === curve.entityId && c.segmentIndex === curve.segmentIndex);
+    if (existing) {
+      set({ document: updateActiveSketch(document, () => ({ constraints: sketch.constraints.filter((c) => c.id !== existing.id) })) });
+      addLog('info', 'Point on curve constraint OFF');
+      return;
+    }
+    const proposed: Constraint = {
+      id: crypto.randomUUID(), type: 'pointOnCurve',
+      entityId: point.entityId, pointIndex: point.pointIndex,
+      targetEntityId: curve.entityId, segmentIndex: curve.segmentIndex,
+    };
+    const validation = validateConstraint(proposed, sketch.constraints, sketch.entities);
+    if (!validation.valid) {
+      addLog('warn', `Point on curve denied: ${validation.reason}`);
+      return;
+    }
+    const newConstraints = [...sketch.constraints, proposed];
+    // the point goes onto the curve, unless its shape is fixed
+    const solved = solveConstraints(sketch.entities, newConstraints, { movedIds: new Set([curve.entityId]) });
+    set({ document: updateActiveSketch(document, () => ({ constraints: newConstraints, entities: solved.entities })) });
+    addLog('info', 'Point on curve constraint ON');
+  },
+
+  toggleSymmetric(pt1, pt2, line) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return;
+    const existing = sketch.constraints.find((c) => c.type === 'symmetric'
+      && c.targetEntityId === line.entityId && c.segmentIndex === line.segmentIndex
+      && ((c.entityId === pt1.entityId && c.pointIndex === pt1.pointIndex && c.entityId2 === pt2.entityId && c.pointIndex2 === pt2.pointIndex)
+        || (c.entityId === pt2.entityId && c.pointIndex === pt2.pointIndex && c.entityId2 === pt1.entityId && c.pointIndex2 === pt1.pointIndex)));
+    if (existing) {
+      set({ document: updateActiveSketch(document, () => ({ constraints: sketch.constraints.filter((c) => c.id !== existing.id) })) });
+      addLog('info', 'Symmetric constraint OFF');
+      return;
+    }
+    const proposed: Constraint = {
+      id: crypto.randomUUID(), type: 'symmetric',
+      entityId: pt1.entityId, pointIndex: pt1.pointIndex,
+      entityId2: pt2.entityId, pointIndex2: pt2.pointIndex,
+      targetEntityId: line.entityId, segmentIndex: line.segmentIndex,
+    };
+    const validation = validateConstraint(proposed, sketch.constraints, sketch.entities);
+    if (!validation.valid) {
+      addLog('warn', `Symmetric denied: ${validation.reason}`);
+      return;
+    }
+    const newConstraints = [...sketch.constraints, proposed];
+    // the second point becomes the first one's mirror image
+    const solved = solveConstraints(sketch.entities, newConstraints, { movedIds: new Set([pt1.entityId]) });
+    set({ document: updateActiveSketch(document, () => ({ constraints: newConstraints, entities: solved.entities })) });
+    addLog('info', 'Symmetric constraint ON');
   },
 
   toggleMidpoint(point, segment) {

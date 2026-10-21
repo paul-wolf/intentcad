@@ -28,6 +28,8 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
       ['H', 'Horizontal: a line or segment, or two points level (Shift-click two points, or two circles / points)'],
       ['V', 'Vertical: a line or segment, or two points one above the other'],
       ['I', 'Midpoint'],
+      ['@', 'Point on curve: a point on a line (extended), an arc or a circle (select the point, Shift-click the curve)'],
+      ['/', 'Symmetric: two points mirrored about a line (select the two points, Shift-click the line)'],
       ['N', 'Parallel'],
       ['T', 'Perpendicular'],
       ['Y', 'Tangent'],
