@@ -538,6 +538,8 @@ export interface RunFace {
   index: number; start: number; count: number;
   kind: string; area: number; center: [number, number, number]; normal: [number, number, number];
   radius?: number | null;   // radius of a cylindrical face (hole/boss), else null
+  /** a cylindrical face: its axis (the way its ref has it, or the other) and the point on it level with its centre */
+  axis?: [number, number, number]; axis_point?: [number, number, number];
   size?: [number, number, number];   // bounding-box extents of the face
   /** How a script line names this face: face_ref(<ref>) (backend modeling/face_ref.py). */
   ref?: FaceRefSpec | null;
@@ -611,26 +613,32 @@ export type MirrorPlane = { base: 'XY' | 'XZ' | 'YZ' } | { plane: string } | { f
 
 export type ExtrudeOp = 'cut' | 'join' | 'new';
 export type ArgOpKind = 'auto_round' | 'truss_windows';
-export type PlaneOpKind = 'offset_plane' | 'edge_plane';
+export type PlaneOpKind = 'offset_plane' | 'edge_plane' | 'tangent_plane';
 export type OpKind = 'extrude' | 'shell' | 'holes' | EdgeOpKind | ArgOpKind | PlaneOpKind | 'mirror_body' | 'pattern_body';
 
 /** A construction plane as the build put it (backend modeling/planes.py). */
 export interface PlaneReport {
-  /** offset | edge | script (a Plane the script made itself) */
-  kind: 'offset' | 'edge' | 'script';
+  /** offset | edge | tangent | script (a Plane the script made itself) */
+  kind: 'offset' | 'edge' | 'tangent' | 'script';
   /** from its face_ref / edge_ref */
   status: 'same' | 'moved' | 'ambiguous';
   line?: number | null;
   origin: [number, number, number];
   normal: [number, number, number];
   xAxis: [number, number, number];
+  /** a tangent plane: its cylinder (`center` on the axis at the face's start
+   *  end), what is 0° (`zero`), and whether it faces the axis (a bore) */
+  cylinder?: { center: [number, number, number]; axis: [number, number, number]; radius: number;
+               zero: [number, number, number]; length: number; inward: boolean };
 }
 
-/** An offset_plane()/edge_plane() line's values, for /build/add_plane. A
+/** An offset_plane()/edge_plane()/tangent_plane() line's values, for /build/add_plane. A
  *  distance or angle is a number, or an expression of P names ("-width / 2"). */
 export type PlanePayload =
   | { op: 'offset_plane'; name: string; base: 'XY' | 'XZ' | 'YZ' | { face: FaceRefSpec }; distance: number | string }
-  | { op: 'edge_plane'; name: string; edge: EdgeRefSpec; angle: number | string; from_face: FaceRefSpec | null };
+  | { op: 'edge_plane'; name: string; edge: EdgeRefSpec; angle: number | string; from_face: FaceRefSpec | null }
+  | { op: 'tangent_plane'; name: string; face: FaceRefSpec; angle: number | string;
+      ref: 'X' | 'Y' | 'Z' | { face: FaceRefSpec } | null };
 
 /** An auto_round keep item: as written (`src`), and the face_ref inside when it is one. */
 export interface KeepItem { src?: string; ref?: FaceRefSpec | null }

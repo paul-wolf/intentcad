@@ -228,6 +228,13 @@ export function sketchBasePlane(s: Sketch): BasePlane | null {
   return null;
 }
 
+/** A sketch on a tangent plane (planes.tangent_plane): it faces out of the
+ *  material, so it extrudes like a face sketch (a cut goes in), not like a
+ *  sketch on a base or offset plane. */
+export function onTangentPlane(s: Sketch, planes: Record<string, { kind: string }> | undefined): boolean {
+  return !!s.planeRef && planes?.[s.planeRef]?.kind === 'tangent';
+}
+
 /** A new sketch on a base plane, with the origin as a fixed reference point. */
 export function newPlaneSketch(name: string, which: BasePlane): Sketch {
   const plane = planeForFace([0, 0, 0], BASE_PLANES[which].normal);

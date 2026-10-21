@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { Entity, Sketch } from '@/types/document';
 import {
   boundPlane, extrudeDirectionText, extrudeGhost, extrudeSign, extrudeSpan, newConstructionSketch, newPlaneSketch, partSide,
-  planeSketches, renamePlaneRefs, sketchBasePlane, sketchLoops, sketchProfile, type ExtrudeShape,
+  onTangentPlane, planeSketches, renamePlaneRefs, sketchBasePlane, sketchLoops, sketchProfile, type ExtrudeShape,
 } from './faceSketch';
 
 const sketch = (entities: Entity[], plane = true): Sketch => ({
@@ -135,6 +135,15 @@ describe('sketches on construction planes', () => {
     const datum: ExtrudeShape = { op: 'cut', depth: 5, through: false, flip: false, both: false, datum: true };
     expect(extrudeSign(datum)).toBe(1);
     expect(extrudeSpan({ ...datum, both: true }, null)).toEqual([-5, 5]);
+  });
+
+  it('on a tangent plane extrude like face sketches: a cut goes into the material', () => {
+    const sk = newConstructionSketch('Screw', 'Set screw', lid);
+    expect(onTangentPlane(sk, { 'Set screw': { kind: 'tangent' } })).toBe(true);
+    expect(onTangentPlane(sk, { 'Set screw': { kind: 'offset' } })).toBe(false);
+    expect(onTangentPlane(sk, undefined)).toBe(false);
+    expect(onTangentPlane(newPlaneSketch('T', 'top'), { 'Set screw': { kind: 'tangent' } })).toBe(false);
+    expect(extrudeSign({ op: 'cut', depth: 5, through: false, flip: false, both: false, datum: false })).toBe(-1);
   });
 });
 

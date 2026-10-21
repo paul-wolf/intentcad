@@ -2,7 +2,7 @@
 
 from django.test import SimpleTestCase
 
-from modeling.paramedit import (OFF, ParamError, add_extrude, add_param, add_plane, delete_step, edit_args, op_at,
+from modeling.paramedit import (OFF, ParamError, _p_values, add_extrude, add_param, add_plane, delete_step, edit_args, op_at,
                                 op_lines, param_names, plane_names, rename_plane, set_params, steps, suppress)
 
 
@@ -421,6 +421,41 @@ class PlaneLineTests(SimpleTestCase):
         code, _ = add_plane(BOXP, "edge_plane", "E", edge=TOP_EDGE, angle=-15)
         self.assertIn("angle=-15)", code)
         self.assertIsNone(op_at(code, 3)["args"]["from_face"])
+
+    def test_tangent_plane_round_trip(self):
+        hub = {"center": [0, 0, 10], "normal": [0, 0, 1], "area": 1885, "kind": "cylinder", "hint": "hub"}
+        code, _ = add_plane(BOXP, "tangent_plane", "Set screw", face=hub, angle="cam_tilt", ref="x")
+        self.assertIn('PLANES["Set screw"] = tangent_plane(face_ref({"center": [0, 0, 10], "normal": [0, 0, 1], '
+                      '"area": 1885, "kind": "cylinder", "hint": "hub"}), angle=P["cam_tilt"], ref="X")', code)
+        at = op_at(code, 3)
+        self.assertEqual(at["op"], "tangent_plane")
+        self.assertEqual(at["args"], {"name": "Set screw", "face": hub, "angle": 30.0, "ref": "X"})
+        self.assertEqual(at["exprs"], {"angle": "cam_tilt"})
+        again, _ = add_plane(code, "tangent_plane", "Set screw", face=hub, angle="cam_tilt", ref="X", line=3)
+        self.assertEqual(again, code)
+        # a number goes in P, after the plane's name; from a flat face
+        code, _ = add_plane(BOXP, "tangent_plane", "Set screw", face=hub, angle=12.5, ref={"face": RIGHT})
+        self.assertIn('angle=P["set_screw_angle"], ref=face_ref({"center": [30, 0, 10]', code)
+        self.assertEqual(_p_values(code)["set_screw_angle"], 12.5)
+        self.assertEqual(op_at(code, 3)["args"]["ref"], {"face": RIGHT})
+        self.assertEqual(op_at(code, 3)["exprs"], {"angle": "set_screw_angle"})
+        # reopened and set to another number: the same key
+        again, _ = add_plane(code, "tangent_plane", "Set screw", face=hub, angle=40, ref={"face": RIGHT}, line=3)
+        self.assertEqual(_p_values(again)["set_screw_angle"], 40)
+        self.assertEqual(again, code.replace("set_screw_angle=12.5", "set_screw_angle=40"))
+        code, _ = add_plane(BOXP, "tangent_plane", "T", face=hub, angle="cam_tilt / 2", ref={"face": RIGHT})
+        st = steps(code)[1]
+        self.assertEqual(st["summary"], "Plane 'T' · tangent at 15° from right face on hub")
+        self.assertEqual((st["op"], st["plane"], st["reopenable"], st["faces"]), ("tangent_plane", "T", True, [hub, RIGHT]))
+        code, _ = add_plane(BOXP, "tangent_plane", "T", face=hub, angle=0, ref=None)
+        self.assertIn("tangent_plane(face_ref({", code)
+        self.assertIn('angle=P["t_angle"])', code)
+        self.assertIsNone(op_at(code, 3)["args"]["ref"])
+        self.assertEqual(steps(code)[1]["summary"], "Plane 'T' · tangent at 0° on hub")
+        with self.assertRaisesRegex(ParamError, "select a cylindrical face"):
+            add_plane(BOXP, "tangent_plane", "T", face=None, angle=0)
+        with self.assertRaisesRegex(ParamError, "measure the angle from X, Y, Z or a flat face"):
+            add_plane(BOXP, "tangent_plane", "T", face=hub, angle=0, ref="W")
 
     def test_bad_names_and_expressions_are_refused(self):
         code, _ = add_plane(BOXP, "offset_plane", "Lid", base="XY", distance=5)

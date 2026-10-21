@@ -10,8 +10,8 @@ import type { Vec3 } from '@/build/dragHandle';
 import { faceLabel } from '@/build/faceSketch';
 import { sameEdgeRef } from '@/build/edgePick';
 import {
-  amountText, amountValue, edgeSummary, offsetSummary, planeNameProblem, type Amount, type BaseName, type EdgePlaneValues,
-  type OffsetPlaneValues,
+  amountText, amountValue, edgeSummary, offsetSummary, planeNameProblem, tangentRefLabel, tangentSummary, tangentZero,
+  type Amount, type BaseName, type EdgePlaneValues, type OffsetPlaneValues, type TangentPlaneValues, type TangentRef,
 } from '@/build/constructionPlanes';
 import { mirrorBodyHint, mirrorBodySummary, mirrorStepsSummary } from '@/build/mirror';
 import { dirWords, instanceCount, patternSummary, remapSkip, type PatternValues } from '@/build/pattern';
@@ -1105,6 +1105,78 @@ export function EdgePlaneDialog({ value, onChange, editing, params, used, own, o
         <b>{value.name.trim() || 'The plane'}</b>: through the edge, {edgeSummary(face?.hint ?? 'face', a)}.
         <div style={{ color: palette.textSecondary, marginTop: 2 }}>
           Drag the round handle to turn it about the edge (1° steps, Shift 0.1°).
+        </div>
+      </div>
+    </OpFrame>
+  );
+}
+
+const TANGENT_REFS: TangentRef[] = ['auto', 'X', 'Y', 'Z', 'face'];
+
+/** Tangent plane: a name, the angle round the cylinder (a number or an
+ *  expression of P names) and what 0° is (the base axis most nearly square
+ *  to the cylinder, X / Y / Z, or a flat face picked in the view). */
+export function TangentPlaneDialog({ value, onChange, editing, params, used, own, onApply, onCancel }: {
+  value: TangentPlaneValues; onChange: (v: TangentPlaneValues) => void;
+  editing: boolean;
+  params: Record<string, number>;
+  used: string[]; own?: string;
+  onApply: () => void; onCancel: () => void;
+}) {
+  const { palette, seg, row, note } = useStyles();
+  const set = (p: Partial<TangentPlaneValues>) => onChange({ ...value, ...p });
+  const a = amountValue(value.angle, params);
+  const nameBad = planeNameProblem(value.name, used, own);
+  const zero = tangentZero(value.cyl, value.ref, value.refFace);
+  const refBad = zero ? null : value.ref === 'face'
+    ? (value.refFace ? `The ${value.refFace.hint} is square to the cylinder's axis: pick another face or an axis`
+      : 'Click a flat face in the view to measure the angle from')
+    : `${value.ref === 'auto' ? 'No axis' : value.ref} runs along the cylinder's axis: pick another reference`;
+  const problem = nameBad ?? (a === null ? 'The angle must be a number or an expression of the parameters' : null) ?? refBad;
+  const cylText = `Ø${+(value.cyl.radius * 2).toFixed(3)} ${value.cyl.inward ? 'bore' : 'cylinder'}`;
+  return (
+    <OpFrame title={editing ? 'Edit tangent plane' : 'Tangent plane'} preview={planePreview(problem)} ok={!problem}
+             onCancel={onCancel} onApply={onApply} applyLabel={editing ? 'Update' : 'Add plane'} width={300}>
+      <label style={row}>
+        <span style={{ width: 56 }}>Name</span>
+        <input value={value.name} onChange={(e) => set({ name: e.target.value })} spellCheck={false}
+               style={{ flex: 1, fontSize: '12px', padding: '2px 4px', background: palette.inputBg, color: palette.text,
+                        border: `1px solid ${nameBad ? palette.danger : palette.border}`, borderRadius: '3px' }} />
+      </label>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <span style={{ color: palette.textSecondary }}>0° is toward</span>
+        <div style={{ display: 'flex' }}>
+          {TANGENT_REFS.map((r, i) => (
+            <button key={r} onClick={() => set({ ref: r })}
+                    title={r === 'auto' ? 'The base axis most nearly square to the cylinder'
+                      : r === 'face' ? (value.refFace ? `The ${value.refFace.hint} (click another flat face to change it)`
+                        : 'A flat face, e.g. a shaft\'s flat: click it in the view')
+                      : `The ${r} axis, seen square to the cylinder`}
+                    style={{ ...seg(value.ref === r), borderRadius: i === 0 ? '4px 0 0 4px' : i === TANGENT_REFS.length - 1 ? '0 4px 4px 0' : 0,
+                             borderLeft: i ? 'none' : undefined }}>
+              {r === 'auto' ? 'Auto' : r === 'face' ? 'Face' : r}
+            </button>
+          ))}
+        </div>
+        {value.ref === 'face' && (
+          <span style={{ color: value.refFace ? palette.text : palette.textSecondary }}>
+            {value.refFace ? <>The <b>{value.refFace.hint}</b> · click another flat face to change it</>
+              : 'Click a flat face in the view (a shaft\'s flat, a side)'}
+          </span>
+        )}
+      </div>
+      <div style={{ ...row, alignItems: 'flex-start' }}>
+        <span style={{ width: 56, paddingTop: 3 }}>Angle</span>
+        <ParamExprInput value={amountText(value.angle)} onChange={(t) => set({ angle: t })} params={params} unit="°"
+                        autoFocus title="Degrees round the cylinder's axis from 0° (right-handed about the axis)" />
+        <span style={{ color: palette.textSecondary, paddingTop: 3 }}>°</span>
+      </div>
+      <div style={note}>
+        <b>{value.name.trim() || 'The plane'}</b>: {tangentSummary(cylText, tangentRefLabel(value), a, value.cyl.inward)}.
+        Sketch x runs along the cylinder from its end, y round it.
+        <div style={{ color: palette.textSecondary, marginTop: 2 }}>
+          Drag the round handle to turn it round the cylinder (5° steps, Shift 1°; it holds at 0°, 90°, 180°), or click
+          the cylinder where it should touch.
         </div>
       </div>
     </OpFrame>

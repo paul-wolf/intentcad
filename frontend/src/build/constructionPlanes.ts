@@ -1,6 +1,7 @@
 /**
  * Construction planes (backend modeling/planes.py): named planes defined by
- * the part's geometry, PLANES["Lid"] = offset_plane(...) / edge_plane(...).
+ * the part's geometry, PLANES["Lid"] = offset_plane(...) / edge_plane(...) /
+ * tangent_plane(...).
  * Pure helpers: the rectangle a plane is drawn as, the preview geometry a
  * dialog shows while it is being typed (the same math as the backend's), the
  * per-part show/hide list, names, and the dialogs' amounts (a number or an
@@ -137,6 +138,98 @@ export function edgePlaneShape(a: Vec3, b: Vec3, face: { center: Vec3; normal: V
   return { origin, normal, xAxis: d, mid, d, w, n };
 }
 
+/** A cylindrical face as a tangent plane sees it: `start` the point on its
+ *  axis level with the face's end where x is least, `axis` the way its
+ *  face_ref has it, its radius and length along the axis, and whether its
+ *  material is outside (a bore: the plane faces the axis). */
+export interface Cylinder { start: Vec3; axis: Vec3; radius: number; length: number; inward: boolean }
+
+/** What a tangent plane's angle is measured from: the base axis most nearly
+ *  square to the cylinder ('auto'), X / Y / Z, or a flat face. */
+export type TangentRef = 'auto' | 'X' | 'Y' | 'Z' | 'face';
+const AXES: Record<'X' | 'Y' | 'Z', Vec3> = { X: [1, 0, 0], Y: [0, 1, 0], Z: [0, 0, 1] };
+
+/** The direction across the axis that is 0° (planes.tangent_zero), null when
+ *  the reference runs along the axis (or a face is square to it). A flat
+ *  face counts from the axis toward it. */
+export function tangentZero(cyl: Pick<Cylinder, 'start' | 'axis'>, ref: TangentRef,
+                            face?: { center: Vec3; normal: Vec3 } | null): Vec3 | null {
+  const a = unit(cyl.axis);
+  const across = (v: Vec3): Vec3 | null => {
+    const u = unit(v), w = sub(u, scale(a, dot(u, a)));
+    return len(w) > 1e-3 ? unit(w) : null;
+  };
+  if (ref === 'face') {
+    if (!face) return null;
+    const w = across(face.normal);
+    if (!w) return null;
+    const c = sub(face.center, cyl.start), toward = sub(c, scale(a, dot(c, a)));
+    return len(toward) > 1e-6 && dot(toward, w) < 0 ? scale(w, -1) : w;
+  }
+  if (ref === 'auto') {
+    // the base axis most nearly square to the cylinder's; X first on a tie
+    let best: 'X' | 'Y' | 'Z' = 'X';
+    for (const k of ['Y', 'Z'] as const) {
+      if (Math.abs(dot(AXES[k], a)) < Math.abs(dot(AXES[best], a)) - 1e-9) best = k;
+    }
+    return across(AXES[best]);
+  }
+  return across(AXES[ref]);
+}
+
+/** A tangent plane's geometry (planes.tangent_plane): touching the cylinder
+ *  on the line `angle`° round its axis from `zero` (right-handed about the
+ *  axis), facing away from the material, x along the axis from `start`.
+ *  Also the rotation handle's frame: `mid` on the axis halfway along, `w`
+ *  the 0° direction, `n` the 90° one. */
+export function tangentPlaneShape(cyl: Cylinder, zero: Vec3, angle: number):
+  Omit<PlaneShape, 'name'> & { mid: Vec3; w: Vec3; n: Vec3 } {
+  const a = unit(cyl.axis), r = (angle * Math.PI) / 180;
+  const n = cross(a, zero);
+  const radial = add(scale(zero, Math.cos(r)), scale(n, Math.sin(r)));
+  return { origin: add(cyl.start, scale(radial, cyl.radius)), normal: cyl.inward ? scale(radial, -1) : radial,
+           xAxis: a, mid: add(cyl.start, scale(a, cyl.length / 2)), w: zero, n };
+}
+
+/** Whether `point` is nearer the cylinder's axis than its radius (a flat on
+ *  a shaft inside a hub, say), where "the left face" would mislead. */
+export function insideCylinder(point: Vec3, cyl: Pick<Cylinder, 'start' | 'axis' | 'radius'>): boolean {
+  const a = scale(cyl.axis, 1 / (len(cyl.axis) || 1)), d = sub(point, cyl.start);
+  return len(sub(d, scale(a, dot(d, a)))) < cyl.radius - 1e-6;
+}
+
+/** The angle of the point clicked on the cylinder, from `zero` round the
+ *  axis (right-handed), rounded to 0.5° and in (-180, 180]. */
+export function clickAngle(point: Vec3, cyl: Pick<Cylinder, 'start' | 'axis'>, zero: Vec3): number {
+  const a = unit(cyl.axis), d = sub(point, cyl.start), v = sub(d, scale(a, dot(d, a)));
+  let deg = Math.round(((Math.atan2(dot(v, cross(a, zero)), dot(v, zero)) * 180) / Math.PI) * 2) / 2;
+  if (deg <= -180) deg += 360;
+  return deg === 0 ? 0 : deg;    // not -0
+}
+
+/** A cylindrical face of the build as a tangent plane sees it, from its
+ *  axis and radius (the build's) and its triangles (where it starts and
+ *  ends along the axis; which side its material is). `refAxis`: the axis as
+ *  its face_ref has it (the build's may point the other way). */
+export function cylinderOfFace(positions: ArrayLike<number>, normals: ArrayLike<number> | undefined,
+                               face: { start: number; count: number; axis: Vec3; axis_point: Vec3; radius: number },
+                               refAxis?: Vec3): Cylinder {
+  let a = unit(face.axis);
+  if (refAxis && dot(a, refAxis) < 0) a = scale(a, -1);
+  let t0 = Infinity, t1 = -Infinity, out = 0;
+  for (let v = face.start; v < face.start + face.count; v++) {
+    const p: Vec3 = [positions[v * 3]!, positions[v * 3 + 1]!, positions[v * 3 + 2]!];
+    const d = sub(p, face.axis_point), t = dot(d, a);
+    t0 = Math.min(t0, t); t1 = Math.max(t1, t);
+    if (normals) {
+      const radial = sub(d, scale(a, t));
+      out += dot(radial, [normals[v * 3]!, normals[v * 3 + 1]!, normals[v * 3 + 2]!]);
+    }
+  }
+  if (!Number.isFinite(t0)) { t0 = 0; t1 = 0; }
+  return { start: add(face.axis_point, scale(a, t0)), axis: a, radius: face.radius, length: t1 - t0, inward: out < 0 };
+}
+
 /** A new plane's name: "Plane 1", "Plane 2"… not yet used. */
 export function newPlaneName(used: Iterable<string>, base = 'Plane'): string {
   const taken = new Set(used);
@@ -212,6 +305,40 @@ export function reopenedFromFace(faces: EdgePlaneValues['faces'], fromFace: Face
   let from = 0;
   faces.forEach((f, i) => { if (dot(f.normal, fromFace.normal as Vec3) > dot(faces[from]!.normal, fromFace.normal as Vec3)) from = i; });
   return { faces: faces.map((f, i) => (i === from ? { ...f, ref: fromFace } : f)), from };
+}
+
+/** The Tangent plane dialog's values. */
+export interface TangentPlaneValues {
+  name: string;
+  /** the cylindrical face (its ref) and the cylinder as it is now */
+  face: FaceRefSpec;
+  cyl: Cylinder;
+  ref: TangentRef;
+  /** ref 'face': the flat face 0° is measured toward */
+  refFace: { ref: FaceRefSpec; center: Vec3; normal: Vec3; hint: string } | null;
+  angle: Amount;
+}
+
+export function tangentPayload(v: TangentPlaneValues): PlanePayload {
+  return { op: 'tangent_plane', name: v.name.trim(), face: v.face, angle: amountOut(v.angle),
+           ref: v.ref === 'face' ? (v.refFace ? { face: v.refFace.ref } : null) : v.ref === 'auto' ? null : v.ref };
+}
+
+/** "the base axis X", "the flat face", for the dialog's summary. */
+export function tangentRefLabel(v: Pick<TangentPlaneValues, 'ref' | 'refFace' | 'cyl'>): string {
+  if (v.ref === 'face') return v.refFace ? `the ${v.refFace.hint}` : 'a flat face (pick one)';
+  if (v.ref !== 'auto') return v.ref;
+  const z = tangentZero(v.cyl, 'auto');
+  const k = z ? (['X', 'Y', 'Z'] as const).reduce((b, k2) => (Math.abs(z[AXES_I[k2]]) > Math.abs(z[AXES_I[b]]) ? k2 : b), 'X' as 'X' | 'Y' | 'Z') : 'X';
+  return `${k} (auto)`;
+}
+const AXES_I = { X: 0, Y: 1, Z: 2 } as const;
+
+/** "touching the hub 30° round from X, facing out (cuts go in toward the axis)". */
+export function tangentSummary(face: string, from: string, a: number | null, inward: boolean): string {
+  const where = a === null ? 'round' : `${+a.toFixed(3)}° round`;
+  return `touching the ${face} ${where} from ${from}, facing ${inward ? 'the axis (cuts go out into the wall)'
+    : 'out (cuts go in toward the axis)'}`;
 }
 
 export function offsetPayload(v: OffsetPlaneValues): PlanePayload {

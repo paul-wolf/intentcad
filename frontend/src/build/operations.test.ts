@@ -77,7 +77,7 @@ describe('the operation registry', () => {
     const ctx = Object.fromEntries(
       ['sketchOnSelection', 'sketchOnPlane', 'shell', 'hole', 'fillet', 'chamfer', 'ask', 'build', 'importStep', 'exportAs', 'versions',
        'process', 'addContextFile', 'toggleParams', 'setView', 'lookAtSelection', 'toggleOrtho', 'copyMeasure',
-       'section', 'offsetPlane', 'edgePlane', 'mirrorBody', 'mirrorSteps', 'patternBody', 'patternSteps'].map((k) => [k, vi.fn()]),
+       'section', 'offsetPlane', 'edgePlane', 'tangentPlane', 'mirrorBody', 'mirrorSteps', 'patternBody', 'patternSteps'].map((k) => [k, vi.fn()]),
     ) as unknown as Record<keyof OpContext, ReturnType<typeof vi.fn>>;
     for (const op of OPERATIONS) op.run(ctx as unknown as OpContext);
     expect(ctx.shell).toHaveBeenCalledTimes(1);
@@ -91,6 +91,7 @@ describe('the operation registry', () => {
     expect(ctx.section).toHaveBeenCalledTimes(1);
     expect(ctx.offsetPlane).toHaveBeenCalledTimes(1);
     expect(ctx.edgePlane).toHaveBeenCalledTimes(1);
+    expect(ctx.tangentPlane).toHaveBeenCalledTimes(1);
     expect(ctx.mirrorBody).toHaveBeenCalledTimes(1);
     expect(ctx.mirrorSteps).toHaveBeenCalledTimes(1);
     expect(ctx.patternBody).toHaveBeenCalledTimes(1);
@@ -282,6 +283,15 @@ describe('construction planes', () => {
     expect(reason('plane-edge', edges('circle'))).toBe('Select a straight edge, not a curved one');
     expect(reason('plane-edge', edges('line', 'line'))).toBe('Select one straight edge');
     expect(reason('plane-edge', NONE)).toBe('Select one straight edge');
+  });
+
+  it('touch one cylindrical face', () => {
+    expect(opById('plane-tangent')!.group).toBe('Construct');
+    expect(ok('plane-tangent', CURVED).ok).toBe(true);
+    expect(reason('plane-tangent', FLOOR)).toBe('Select a cylindrical face');
+    expect(reason('plane-tangent', faces('cylinder', 'cylinder'))).toBe('Select a cylindrical face');
+    expect(reason('plane-tangent', NONE)).toBe('Select a cylindrical face');
+    expect(reason('plane-tangent', edges('circle'))).toBe('Select a cylindrical face');
   });
 
   it('can be sketched on, and looked at, when one is selected', () => {

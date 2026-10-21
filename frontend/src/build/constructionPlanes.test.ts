@@ -4,7 +4,8 @@ import {
   amountOut, amountText, amountValue, edgePayload, edgePlaneShape, edgeSummary, faceBesideEdge, labelCorner, loadHiddenPlanes,
   newPlaneName, offsetBasePoint, offsetPayload, offsetPlaneShape, offsetSummary, outlineSegments, planeAxes,
   planeCorners, planeNameProblem, renameHidden, reopenedFromFace, saveHiddenPlanes, shownPlanes, type EdgePlaneValues,
-  type OffsetPlaneValues,
+  type OffsetPlaneValues, clickAngle, cylinderOfFace, insideCylinder, tangentPayload, tangentPlaneShape, tangentRefLabel, tangentSummary,
+  tangentZero, type Cylinder, type TangentPlaneValues,
 } from './constructionPlanes';
 import { dot, type Vec3 } from './dragHandle';
 import { planeForFace } from './sketchPlane';
@@ -105,6 +106,82 @@ describe('planes on an edge', () => {
 
   it('give the same plane whichever way the edge runs', () => {
     close(edgePlaneShape(b, a, TOP, 30).normal, edgePlaneShape(a, b, TOP, 30).normal);
+  });
+});
+
+describe('tangent planes', () => {
+  // a Z-axis boss, radius 10, from z=0 to z=20
+  const BOSS: Cylinder = { start: [0, 0, 0], axis: [0, 0, 1], radius: 10, length: 20, inward: false };
+
+  it('measure 0° from X by default on a Z-axis boss, right-handed about the axis', () => {
+    const zero = tangentZero(BOSS, 'auto')!;
+    close(zero, [1, 0, 0]);
+    const p0 = tangentPlaneShape(BOSS, zero, 0);
+    close(p0.origin, [10, 0, 0]); close(p0.normal, [1, 0, 0]); close(p0.xAxis, [0, 0, 1]);
+    const p90 = tangentPlaneShape(BOSS, zero, 90);
+    close(p90.origin, [0, 10, 0]); close(p90.normal, [0, 1, 0]);
+    close(p90.mid, [0, 0, 10]);
+    // the axis the other way round turns the other way
+    const down = { ...BOSS, start: [0, 0, 20] as Vec3, axis: [0, 0, -1] as Vec3 };
+    close(tangentPlaneShape(down, tangentZero(down, 'X')!, 90).normal, [0, -1, 0]);
+  });
+
+  it('face the axis on a bore', () => {
+    const bore = { ...BOSS, inward: true };
+    close(tangentPlaneShape(bore, [1, 0, 0], 0).normal, [-1, 0, 0]);
+  });
+
+  it('take the reference from X / Y / Z or a flat face, never one along the axis', () => {
+    const xAxisCyl = { start: [0, 0, 0] as Vec3, axis: [1, 0, 0] as Vec3 };
+    close(tangentZero(xAxisCyl, 'auto')!, [0, 1, 0]);
+    close(tangentZero(BOSS, 'Y')!, [0, 1, 0]);
+    expect(tangentZero(BOSS, 'Z')).toBeNull();
+    // a D-shaft flat at y=-2 whose normal faces the axis: 0° is still toward the flat
+    close(tangentZero(BOSS, 'face', { center: [0, -2, 10], normal: [0, 1, 0] })!, [0, -1, 0]);
+    expect(tangentZero(BOSS, 'face', { center: [0, 0, 20], normal: [0, 0, 1] })).toBeNull();
+    expect(tangentZero(BOSS, 'face', null)).toBeNull();
+  });
+
+  it('take the angle from a click, to 0.5°, in (-180, 180]', () => {
+    const zero: Vec3 = [1, 0, 0];
+    expect(clickAngle([0, 10, 7], BOSS, zero)).toBe(90);
+    expect(clickAngle([10, -0.01, 3], BOSS, zero)).toBe(0);
+    expect(Object.is(clickAngle([10, -0.01, 3], BOSS, zero), -0)).toBe(false);
+    expect(clickAngle([-10, -0.0001, 3], BOSS, zero)).toBe(180);
+    const r = (d: number) => [10 * Math.cos((d * Math.PI) / 180), 10 * Math.sin((d * Math.PI) / 180), 5] as Vec3;
+    expect(clickAngle(r(-44.8), BOSS, zero)).toBe(-45);
+    expect(clickAngle(r(30.3), BOSS, zero)).toBe(30.5);
+    expect(clickAngle(r(30), BOSS, [0, 1, 0])).toBe(-60);
+  });
+
+  it('tell a flat inside the cylinder (a shaft flat) from a face outside it', () => {
+    expect(insideCylinder([2.5, 0, 30], BOSS)).toBe(true);
+    expect(insideCylinder([0, -12, 5], BOSS)).toBe(false);
+    expect(insideCylinder([10, 0, 5], BOSS)).toBe(false);
+  });
+
+  it('find the cylinder from its triangles', () => {
+    // four points of a radius-10 boss (normals out), z 2..14, axis reported downward
+    const pts = [[10, 0, 2], [0, 10, 2], [-10, 0, 14], [0, -10, 14]];
+    const positions = pts.flat(), normals = pts.flatMap(([x, y]) => [x! / 10, y! / 10, 0]);
+    const face = { start: 0, count: 4, axis: [0, 0, -1] as Vec3, axis_point: [0, 0, 8] as Vec3, radius: 10 };
+    const c = cylinderOfFace(positions, normals, face, [0, 0, 1]);
+    close(c.start, [0, 0, 2]); close(c.axis, [0, 0, 1]);
+    expect(c.length).toBeCloseTo(12); expect(c.inward).toBe(false);
+    const bore = cylinderOfFace(positions, normals.map((n) => -n), face);
+    expect(bore.inward).toBe(true); close(bore.axis, [0, 0, -1]); close(bore.start, [0, 0, 14]);
+  });
+
+  it('write their payload and summary', () => {
+    const v: TangentPlaneValues = { name: ' Set screw ', face: { kind: 'cylinder' } as never, cyl: BOSS,
+                                    ref: 'auto', refFace: null, angle: 'screw_angle' };
+    expect(tangentPayload(v)).toEqual({ op: 'tangent_plane', name: 'Set screw', face: v.face, angle: 'screw_angle', ref: null });
+    expect((tangentPayload({ ...v, ref: 'Y', angle: 30 }) as { ref: unknown }).ref).toBe('Y');
+    const flat = { ref: { kind: 'plane' } as never, center: [0, -2, 10] as Vec3, normal: [0, 1, 0] as Vec3, hint: 'flat face' };
+    expect((tangentPayload({ ...v, ref: 'face', refFace: flat }) as { ref: unknown }).ref).toEqual({ face: flat.ref });
+    expect(tangentRefLabel(v)).toBe('X (auto)');
+    expect(tangentRefLabel({ ...v, ref: 'face', refFace: flat })).toBe('the flat face');
+    expect(tangentSummary('hub', 'X', 30, false)).toBe('touching the hub 30° round from X, facing out (cuts go in toward the axis)');
   });
 });
 

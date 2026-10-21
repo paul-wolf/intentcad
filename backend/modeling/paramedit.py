@@ -272,8 +272,8 @@ def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
 
 OPS = ("extrude", "shell", "holes", "fillet", "chamfer", "auto_round", "truss_windows", "mirror_body",
        "pattern_body")
-# construction planes: PLANES["name"] = offset_plane(...) / edge_plane(...)
-PLANE_OPS = ("offset_plane", "edge_plane")
+# construction planes: PLANES["name"] = offset_plane(...) / edge_plane(...) / tangent_plane(...)
+PLANE_OPS = ("offset_plane", "edge_plane", "tangent_plane")
 # the P key base of each edge operation's size, and its argument
 EDGE_OPS = {"fillet": ("fillet_r", "radius"), "chamfer": ("chamfer_d", "length")}
 
@@ -340,7 +340,7 @@ def _recognise(node):
     fillet, chamfer, auto_round, truss_windows, mirror_body, extrude: a new
     body), `part -= / += extrude(...)` (or its mirrored copy, `part -=
     mirrored(extrude(...), PLANE)`: the call is the extrude) or a construction plane,
-    `PLANES["name"] = offset_plane(...) / edge_plane(...)`. Else None."""
+    `PLANES["name"] = offset_plane(...) / edge_plane(...) / tangent_plane(...)`. Else None."""
     if _plane_name(node) is not None and isinstance(node.value, ast.Call) \
             and isinstance(node.value.func, ast.Name) and node.value.func.id in PLANE_OPS:
         return node.value, node.value.func.id
@@ -928,6 +928,7 @@ def edit_args(code: str, line: int, op: str, values: dict | None = None, keep: l
 # --- Construction planes (modeling/planes.py): one line each,
 #     PLANES["Lid"] = offset_plane(face_ref({...}), distance=P["lid_gap"])
 #     PLANES["Cam"] = edge_plane(edge_ref({...}), angle=30, from_face=face_ref({...}))
+#     PLANES["Set screw"] = tangent_plane(face_ref({...}), angle=P["screw_angle"], ref="X")
 # A distance or angle is a number, or an expression of P names that the
 # dialog shows and takes with bare names ("-width / 2") and the line holds
 # as Python ('-P["width"] / 2').
@@ -1046,8 +1047,10 @@ def _ref_arg(node, fn: str, what: str) -> dict:
 def _read_plane(stmt, call, op: str, pv: dict) -> tuple[dict, dict]:
     """A construction plane's (args, exprs): {"name", "base" (a face ref as
     {"face": ref}, or "XY" / "XZ" / "YZ"), "distance"} or {"name", "edge",
-    "angle", "from_face" (a face ref or None)}; exprs holds the distance or
-    angle when it is an expression (bare P names)."""
+    "angle", "from_face" (a face ref or None)} or {"name", "face" (the
+    cylinder's ref), "angle", "ref" (None: auto, "X" / "Y" / "Z", or a flat
+    face as {"face": ref})}; exprs holds the distance or angle when it is an
+    expression (bare P names)."""
     kw = {k.arg: k.value for k in call.keywords if k.arg}
     args: dict = {"name": _plane_name(stmt)}
     exprs: dict = {}
@@ -1063,6 +1066,22 @@ def _read_plane(stmt, call, op: str, pv: dict) -> tuple[dict, dict]:
         args["distance"], e = _read_amount(dist, pv) if dist is not None else (0.0, None)
         if e is not None:
             exprs["distance"] = e
+    elif op == "tangent_plane":
+        face = call.args[0] if call.args else kw.get("face")
+        if face is None:
+            raise ParamError(f"line {stmt.lineno}: tangent_plane() without a face: edit this line in the code")
+        args["face"] = _ref_arg(face, "face_ref", "face")
+        ang = call.args[1] if len(call.args) > 1 else kw.get("angle")
+        args["angle"], e = _read_amount(ang, pv) if ang is not None else (0.0, None)
+        if e is not None:
+            exprs["angle"] = e
+        ref = call.args[2] if len(call.args) > 2 else kw.get("ref")
+        if ref is None or (isinstance(ref, ast.Constant) and ref.value is None):
+            args["ref"] = None
+        elif isinstance(ref, ast.Constant) and isinstance(ref.value, str) and ref.value.upper() in ("X", "Y", "Z"):
+            args["ref"] = ref.value.upper()
+        else:
+            args["ref"] = {"face": _ref_arg(ref, "face_ref", "reference face")}
     else:
         edge = call.args[0] if call.args else kw.get("edge")
         if edge is None:
@@ -1090,22 +1109,30 @@ def _check_plane_name(code: str, name: str, keep: str | None = None) -> str:
 
 
 def add_plane(code: str, op: str, name: str, *, base=None, distance=0.0, edge: dict | None = None,
-              angle=0.0, from_face: dict | None = None, line: int | None = None) -> tuple[str, str | None]:
+              angle=0.0, from_face: dict | None = None, face: dict | None = None, ref=None,
+              line: int | None = None) -> tuple[str, str | None]:
     """Append a construction plane line — or, with `line`, rewrite the one
     there (a new name renames it everywhere: rename_plane). offset_plane:
     `base` is a face ref or "XY" / "XZ" / "YZ"; edge_plane: `edge` an edge
-    ref, `from_face` the face ref that is 0°. A distance or angle is a number
-    or an expression of P names. Returns (code, the old name when renamed)."""
+    ref, `from_face` the face ref that is 0°; tangent_plane: `face` the
+    cylinder's ref, `ref` what 0° is (None: auto, "X" / "Y" / "Z", or
+    {"face": a flat face's ref}). A distance or angle is a number or an
+    expression of P names. Returns (code, the old name when renamed)."""
     if op not in PLANE_OPS:
         raise ParamError(f"unknown plane {op!r}")
     old = None
+    old_key = None              # tangent_plane: the P key the line's angle is
     if line is not None:
         hit = _op_stmt(ast.parse(code), line)
         if hit is None or hit[2] != op:
             raise ParamError(f"line {line} is not an {op}() line any more")
         old = _plane_name(hit[0])
+        kw = {k.arg: k.value for k in hit[1].keywords if k.arg}
+        ang = hit[1].args[1] if len(hit[1].args) > 1 else kw.get("angle")
+        old_key = _p_key(ang) if ang is not None else None
     name = _check_plane_name(code, name, old)
     names = param_names(code)
+    key = None                  # tangent_plane: a number angle goes in P under this key
     if op == "offset_plane":
         if isinstance(base, str) and base.upper() in ("XY", "XZ", "YZ"):
             b = _lit(base.upper())
@@ -1115,6 +1142,26 @@ def add_plane(code: str, op: str, name: str, *, base=None, distance=0.0, edge: d
         else:
             raise ParamError("pick a flat face, or the XY, XZ or YZ plane, to offset from")
         text = f"PLANES[{_lit(name)}] = offset_plane({b}, distance={_write_amount(distance, names, 'distance')})"
+    elif op == "tangent_plane":
+        if not face:
+            raise ParamError("select a cylindrical face for the plane")
+        if ref is None or (isinstance(ref, str) and ref.strip().lower() in ("", "auto")):
+            r = ""
+        elif isinstance(ref, str) and ref.strip().upper() in ("X", "Y", "Z"):
+            r = f", ref={_lit(ref.strip().upper())}"
+        elif isinstance(ref, dict) and ref:
+            r = f", ref=face_ref({_lit(ref.get('face', ref))})"
+        else:
+            raise ParamError("measure the angle from X, Y, Z or a flat face")
+        if isinstance(angle, (int, float)) and not isinstance(angle, bool):
+            # the angle in P: the line's own key, else a new one after the plane's name
+            stem = re.sub(r"\W+", "_", name).strip("_").lower()
+            stem = stem if stem.isidentifier() and stem not in ("p", "params") else "tangent"
+            key = old_key if old_key in names else _name(names, f"{stem}_angle")
+            amount = f"P[{_lit(key)}]"
+        else:
+            amount = _write_amount(angle, names, "angle")
+        text = f"PLANES[{_lit(name)}] = tangent_plane(face_ref({_lit(face)}), angle={amount}{r})"
     else:
         if not edge:
             raise ParamError("select a straight edge for the plane")
@@ -1122,6 +1169,9 @@ def add_plane(code: str, op: str, name: str, *, base=None, distance=0.0, edge: d
         text = (f"PLANES[{_lit(name)}] = edge_plane(edge_ref({_lit(edge)}), "
                 f"angle={_write_amount(angle, names, 'angle')}{face})")
     code = _write_op(code, text, line, op)
+    if key:
+        value = float(angle)
+        code = set_params(code, {key: value}) if key in names else add_param(code, key, value)
     if old is not None and old != name:
         code = rename_plane(code, old, name, check=False)
         return code, old
@@ -1191,7 +1241,8 @@ def _plural(n: int, word: str) -> str:
 
 TITLES = {"extrude": "Extrude", "shell": "Shell", "holes": "Holes", "fillet": "Fillet", "chamfer": "Chamfer",
           "auto_round": "Round", "truss_windows": "Lighten", "offset_plane": "Offset plane",
-          "edge_plane": "Plane on edge", "mirror_body": "Mirror body", "pattern_body": "Pattern body"}
+          "edge_plane": "Plane on edge", "tangent_plane": "Tangent plane", "mirror_body": "Mirror body",
+          "pattern_body": "Pattern body"}
 _EXTRUDE_TITLES = {"cut": "Cut", "join": "Join", "new": "New body"}
 
 
@@ -1217,6 +1268,12 @@ def _summary(op: str, a: dict, points: dict) -> str:
     if op == "edge_plane":
         edge = str(a["edge"].get("hint") or "edge")
         return f"Plane {a['name']!r} · {_deg(a['angle'])} on {edge}"
+    if op == "tangent_plane":
+        face = str(a["face"].get("hint") or "cylinder")
+        ref = a["ref"]
+        frm = "" if ref is None else f" from {ref}" if isinstance(ref, str) \
+            else f" from {ref['face'].get('hint') or 'face'}"
+        return f"Plane {a['name']!r} · tangent at {_deg(a['angle'])}{frm} on {face}"
     if op == "extrude":
         how = "through all" if a["through"] else _mm(a["depth"])
         return (f"{_EXTRUDE_TITLES[a['op']]} {a['sketch']!r} {how}" + (" both ways" if a["both"] else "")
@@ -1298,6 +1355,8 @@ def _op_step(code: str, stmt, call, op: str, pv: dict, datum, points: dict, shif
     elif op == "edge_plane":
         step["edges"] = [a["edge"]]
         step["faces"] = [a["from_face"]] if a["from_face"] else []
+    elif op == "tangent_plane":
+        step["faces"] = [a["face"]] + ([a["ref"]["face"]] if isinstance(a["ref"], dict) else [])
     return step
 
 

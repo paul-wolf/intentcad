@@ -18,7 +18,7 @@ import { dot, len, scale, sub } from '@/build/dragHandle';
 import { planeBasis, sketchCamera, fitViewport, type PlaneBasis, type Rect } from '@/build/sketchPlane';
 import {
   BASE_PLANES, boundPlane, extrudeDirectionText, extrudeGhost, extrudeSpan, faceLabel, faceSketchMenu, newFaceSketch, partSide,
-  newConstructionSketch, newPlaneSketch, refreshOutline, sketchBasePlane, sketchBounds, sketchLoops, sketchSegments, type BasePlane,
+  newConstructionSketch, newPlaneSketch, onTangentPlane, refreshOutline, sketchBasePlane, sketchBounds, sketchLoops, sketchSegments, type BasePlane,
   type ConstructionPlane, type FaceSketchMenu, type SketchBindings,
 } from '@/build/faceSketch';
 import { resolveSketch } from '@/utils/resolveSketch';
@@ -193,7 +193,7 @@ export function useFaceSketch(
     // drawn on a face: on that face where the last build found it
     const label = sk.planeRef ? `plane '${sk.planeRef}'` : base ? BASE_PLANES[base].name : faceLabel(plane.normal);
     setSession({ sketchId: sk.id, label, face,
-                 plane: planeBasis(plane), datum: !sk.face, prevActive, phase: 'enter' });
+                 plane: planeBasis(plane), datum: !sk.face && !onTangentPlane(sk, res?.planes), prevActive, phase: 'enter' });
   }, [resRef]);
 
   // a new sketch on the face

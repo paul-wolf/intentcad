@@ -37,6 +37,18 @@ class RunApiTests(TestCase):
         self.assertEqual(len(data["mesh"]["positions"]), data["mesh"]["triangle_count"] * 9)
         self.assertLess(data["metrics"]["volume"], 20 * 20 * 6)  # box minus a hole
 
+    def test_a_tangent_plane_reports_its_cylinder(self):
+        # the dialog reopens from the cylinder as built: the response must keep it
+        self.client.force_login(self.user)
+        code = ('part = Pos(0, 0, 10) * Cylinder(10, 20)\n'
+                'PLANES["T"] = tangent_plane(face_ref({"center": [-10, 0, 10], "normal": [0, 0, 1], '
+                '"area": 1256.64, "kind": "cylinder"}), angle=0, ref="X")\n')
+        pl = self._post(code).json()["planes"]["T"]
+        self.assertEqual(pl["kind"], "tangent")
+        self.assertAlmostEqual(pl["cylinder"]["radius"], 10, places=6)
+        self.assertEqual([round(v, 6) for v in pl["cylinder"]["zero"]], [1, 0, 0])
+        self.assertIs(pl["cylinder"]["inward"], False)
+
     def test_export_stl_and_step(self):
         self.client.force_login(self.user)
         for fmt, head in (("stl", "solid"), ("step", "ISO-10303-21;")):
