@@ -490,6 +490,10 @@ def _read_op(code: str, stmt, call, op: str, pv: dict, datum=()) -> tuple[dict, 
         args["plane"] = _mirror_plane_arg(plane)
         join = call.args[2] if len(call.args) > 2 else kw.get("join")
         args["join"] = True if join is None else bool(_value(join, pv)[0])
+        gap = call.args[3] if len(call.args) > 3 else kw.get("gap")
+        args["gap"], e = _read_amount(gap, pv) if gap is not None else (0.0, None)
+        if e is not None:
+            exprs["gap"] = e
     elif op in ARG_OPS:
         args, params, exprs = _read_args(code, op, call, pv)
     elif op in EDGE_OPS:
@@ -1186,7 +1190,10 @@ def _deg(v) -> str:
 
 def _summary(op: str, a: dict, points: dict) -> str:
     if op == "mirror_body":
-        return f"Mirror body across {plane_label(a['plane'])} · {'joined' if a['join'] else 'separate body'}"
+        if a["join"]:
+            return f"Mirror body across {plane_label(a['plane'])} · joined"
+        gap = f" · {_mm(a['gap'])} apart" if a.get("gap") else ""
+        return f"Mirror body across {plane_label(a['plane'])} · separate body{gap}"
     if op == "offset_plane":
         base = a["base"]
         where = f"{base} plane" if isinstance(base, str) else str(base["face"].get("hint") or "face")
@@ -1666,14 +1673,16 @@ def mirror_steps(code: str, lines: list[int], plane) -> tuple[str, list[dict], l
     return "\n".join(rows), made, skipped
 
 
-def add_mirror_body(code: str, plane, join: bool = True, line: int | None = None) -> str:
+def add_mirror_body(code: str, plane, join: bool = True, line: int | None = None, gap=0.0) -> str:
     """Append `part = mirror_body(part, PLANE, join=True)` — or, with `line`,
     rewrite the mirror_body() line there. join=False keeps the mirror image
-    as a separate body."""
+    as a separate body, `gap` (a number or an expression of P names) away:
+    `part = mirror_body(part, PLANE, join=False, gap=10.0)`."""
     if not _assigns_part(ast.parse(code)):
         raise ParamError("there is no part to mirror yet")
     plane_src, _ = _plane_src(code, plane)
-    return _write_op(code, f"part = mirror_body(part, {plane_src}, join={bool(join)})", line, "mirror_body")
+    gap_src = "" if join else f", gap={_write_amount(gap, param_names(code), 'gap')}"
+    return _write_op(code, f"part = mirror_body(part, {plane_src}, join={bool(join)}{gap_src})", line, "mirror_body")
 
 
 def unlink(code: str, line: int) -> str:

@@ -13,6 +13,7 @@ import {
   type Quat, type StandardView,
 } from './viewOrient';
 import { planeQuat, type PlaneBasis } from './sketchPlane';
+import { bodyColor, rangesWithout } from './bodyColors';
 import { labelCorner, outlineSegments, planeCorners, type PlaneShape } from './constructionPlanes';
 import { choosePick, edgesNear, segmentDistance, selectable, EDGE_PX, type EdgeCandidate, type EdgeLike, type PickFilter, type ScreenEdge } from './edgePick';
 import {
@@ -404,8 +405,9 @@ export interface Viewer {
   setExtrudePreview(p: { edges: number[]; arrows: number[]; color: Vec3 } | null): void;
   /** Show what an operation would make (Shell, Hole: a candidate build) in
    *  place of the part, tinted `color`; the selected faces of the part show
-   *  through it. null shows the part again. */
-  setPreviewMesh(p: { mesh: ViewerMesh; color: Vec3 } | null): void;
+   *  through it. `extra`: a second mesh drawn over it in its own colour
+   *  (Mirror body: the mirror image). null shows the part again. */
+  setPreviewMesh(p: { mesh: ViewerMesh; color: Vec3; extra?: { mesh: ViewerMesh; color: Vec3 } | null } | null): void;
   /** Light one face of the part brightly, through anything in front (a
    *  dialog row being hovered); null for none. */
   hoverFace(index: number | null): void;
@@ -519,6 +521,10 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   const candPosBuf = gl.createBuffer()!;
   const candNormBuf = gl.createBuffer()!;
   let cand: { count: number; color: Vec3; inverted: boolean } | null = null;
+  // drawn over the candidate in its own colour (setPreviewMesh's extra)
+  const extraPosBuf = gl.createBuffer()!;
+  const extraNormBuf = gl.createBuffer()!;
+  let candExtra: { count: number; color: Vec3 } | null = null;
   let hovered: number | null = null;
   const HOVER: [number, number, number] = [1.0, 0.85, 0.3];
 
@@ -769,31 +775,35 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   let secPts: { p: Vec3; approx: boolean }[] = [];
   const activeSection = (): Section | null => (section && !sketch && vertexCount ? section : null);
 
+  // the part's bodies in order (the first face's first), each its vertex
+  // ranges; also shades each body its own colour (bodyColors)
+  let bodyList: { ranges: [number, number][]; vol: number }[] | null = null;
+  function partBodies(): { ranges: [number, number][]; vol: number }[] {
+    if (bodyList) return bodyList;
+    if (!faces.length) {
+      return bodyList = [{ ranges: [[0, vertexCount]], vol: signedVolume6(meshPositions, 0, vertexCount) }];
+    }
+    const at = new Map(faces.map((f, i) => [f.index, i]));
+    const body = faceBodies(faces.length, edges.map((e) => ({ faceIndices: e.faceIndices.map((i) => at.get(i) ?? -1) })));
+    const out: { ranges: [number, number][]; vol: number }[] = [];
+    faces.forEach((f, i) => {
+      const e = out[body[i]!] ??= { ranges: [], vol: 0 };
+      const last = e.ranges[e.ranges.length - 1];
+      if (last && last[0] + last[1] === f.start) last[1] += f.count;   // contiguous: one draw
+      else e.ranges.push([f.start, f.count]);
+      e.vol += signedVolume6(meshPositions, f.start, f.count);
+    });
+    return bodyList = out;
+  }
+
   function partCapGroups(): CapGroup[] {
     if (capGroups) return capGroups;
     const groups: CapGroup[] = [];
-    if (!faces.length) {
-      groups.push({ tint: CAP_TINTS[0]!, bodies: [{ ranges: [[0, vertexCount]],
-        inverted: signedVolume6(meshPositions, 0, vertexCount) < 0 }] });
-    } else {
-      const at = new Map(faces.map((f, i) => [f.index, i]));
-      const body = faceBodies(faces.length, edges.map((e) => ({ faceIndices: e.faceIndices.map((i) => at.get(i) ?? -1) })));
-      const bodies = new Map<number, { ranges: [number, number][]; vol: number }>();
-      faces.forEach((f, i) => {
-        const b = body[i]!;
-        let e = bodies.get(b);
-        if (!e) bodies.set(b, e = { ranges: [], vol: 0 });
-        const last = e.ranges[e.ranges.length - 1];
-        if (last && last[0] + last[1] === f.start) last[1] += f.count;   // contiguous: one draw
-        else e.ranges.push([f.start, f.count]);
-        e.vol += signedVolume6(meshPositions, f.start, f.count);
-      });
-      for (const [b, e] of bodies) {
-        const g = b % CAP_TINTS.length;
-        groups[g] ??= { tint: CAP_TINTS[g]!, bodies: [] };
-        groups[g]!.bodies.push({ ranges: e.ranges, inverted: e.vol < 0 });
-      }
-    }
+    partBodies().forEach((e, b) => {
+      const g = b % CAP_TINTS.length;
+      groups[g] ??= { tint: CAP_TINTS[g]!, bodies: [] };
+      groups[g]!.bodies.push({ ranges: e.ranges, inverted: e.vol < 0 });
+    });
     return capGroups = groups.filter(Boolean);
   }
 
@@ -1187,6 +1197,18 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       gl!.vertexAttribPointer(aNormal, 3, gl!.FLOAT, false, 0, 0);
       gl!.uniform3fv(uColor, cand!.color);
       if (cand!.count) gl!.drawArrays(gl!.TRIANGLES, 0, cand!.count);
+      if (candExtra?.count) {
+        // over the candidate where they coincide (pulled toward the eye a little)
+        gl!.bindBuffer(gl!.ARRAY_BUFFER, extraPosBuf);
+        gl!.vertexAttribPointer(aPos, 3, gl!.FLOAT, false, 0, 0);
+        gl!.bindBuffer(gl!.ARRAY_BUFFER, extraNormBuf);
+        gl!.vertexAttribPointer(aNormal, 3, gl!.FLOAT, false, 0, 0);
+        gl!.uniform3fv(uColor, candExtra.color);
+        gl!.enable(gl!.POLYGON_OFFSET_FILL);
+        gl!.polygonOffset(-1, -2);
+        gl!.drawArrays(gl!.TRIANGLES, 0, candExtra.count);
+        gl!.disable(gl!.POLYGON_OFFSET_FILL);
+      }
       gl!.uniform3fv(uColor, color);
       // the part's selected / hovered faces show through it (x-ray)
       const lit = [...selected.map((i) => [i, SELECT] as const), ...(hovered !== null ? [[hovered, HOVER] as const] : [])];
@@ -1211,12 +1233,14 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
         gl!.uniform3fv(uColor, color);
       }
     } else if (vertexCount) {
-      if (df) {
-        gl!.drawArrays(gl!.TRIANGLES, 0, df.start);
-        gl!.drawArrays(gl!.TRIANGLES, df.start + df.count, vertexCount - df.start - df.count);
-      } else {
-        gl!.drawArrays(gl!.TRIANGLES, 0, vertexCount);
-      }
+      // one solid: the part's colour; more: each body shaded a little apart
+      const bodies = thumbMode ? null : partBodies();
+      const list = bodies && bodies.length > 1 ? bodies : [{ ranges: [[0, vertexCount]] as [number, number][] }];
+      list.forEach((b, i) => {
+        if (list.length > 1) gl!.uniform3fv(uColor, bodyColor(color, i));
+        for (const [a, c] of df ? rangesWithout(b.ranges, df.start, df.count) : b.ranges) gl!.drawArrays(gl!.TRIANGLES, a, c);
+      });
+      gl!.uniform3fv(uColor, color);
     }
 
     // the section's caps: per group of bodies, count the kept surfaces behind
@@ -2028,6 +2052,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       // the section stays; its outline and caps are the new mesh's
       partCut = newCut(mesh.positions, mesh.normals);
       capGroups = null;
+      bodyList = null;
       triFace = new Int32Array(mesh.positions.length / 9).fill(-1);
       faces.forEach((f, i) => triFace.fill(i, f.start / 3, (f.start + f.count) / 3));
       secHover = null; secPts = [];
@@ -2059,6 +2084,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       gl!.bindBuffer(gl!.ARRAY_BUFFER, edgeBuf);
       gl!.bufferData(gl!.ARRAY_BUFFER, thickVerts(all), gl!.STATIC_DRAW);
       capGroups = null;   // the bodies come from which faces the edges join
+      bodyList = null;
       selEdges = [];
       hoverEdgeExt = null;
       hoverPick = null;
@@ -2088,7 +2114,16 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       scheduleRender();
     },
     setPreviewMesh(p) {
-      if (!p) { cand = null; candCut = newCut([], []); scheduleRender(); return; }
+      if (!p) { cand = null; candExtra = null; candCut = newCut([], []); scheduleRender(); return; }
+      if (p.extra) {
+        gl!.bindBuffer(gl!.ARRAY_BUFFER, extraPosBuf);
+        gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array(p.extra.mesh.positions), gl!.STATIC_DRAW);
+        gl!.bindBuffer(gl!.ARRAY_BUFFER, extraNormBuf);
+        gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array(p.extra.mesh.normals), gl!.STATIC_DRAW);
+        candExtra = { count: p.extra.mesh.positions.length / 3, color: p.extra.color };
+      } else {
+        candExtra = null;
+      }
       gl!.bindBuffer(gl!.ARRAY_BUFFER, candPosBuf);
       gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array(p.mesh.positions), gl!.STATIC_DRAW);
       gl!.bindBuffer(gl!.ARRAY_BUFFER, candNormBuf);
@@ -2289,6 +2324,8 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       gl.deleteBuffer(edgeBuf);
       gl.deleteBuffer(candPosBuf);
       gl.deleteBuffer(candNormBuf);
+      gl.deleteBuffer(extraPosBuf);
+      gl.deleteBuffer(extraNormBuf);
       gl.deleteBuffer(outlineBuf);
       gl.deleteBuffer(capBuf);
       gl.deleteBuffer(planeBuf);

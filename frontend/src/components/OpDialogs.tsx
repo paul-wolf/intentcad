@@ -5,19 +5,25 @@ import {
   type HolePreset, type HolePresets, type HoleSizeKey, type HolesPayload, type KeepItem, type MirrorPlane, type RunFace,
   type RunResponse, type SizeFix,
 } from '@/api/client';
-import type { Viewer } from '@/build/webglViewer';
+import type { Viewer, ViewerMesh } from '@/build/webglViewer';
+import type { Vec3 } from '@/build/dragHandle';
 import { faceLabel } from '@/build/faceSketch';
 import { sameEdgeRef } from '@/build/edgePick';
 import {
-  amountText, amountValue, edgeSummary, offsetSummary, planeNameProblem, type BaseName, type EdgePlaneValues,
+  amountText, amountValue, edgeSummary, offsetSummary, planeNameProblem, type Amount, type BaseName, type EdgePlaneValues,
   type OffsetPlaneValues,
 } from '@/build/constructionPlanes';
-import { mirrorBodySummary, mirrorStepsSummary } from '@/build/mirror';
+import { mirrorBodyHint, mirrorBodySummary, mirrorStepsSummary } from '@/build/mirror';
+import { BODY_HUES } from '@/build/bodyColors';
 import { ParamExprInput } from './ParamExprInput';
 
 // The part editor's explicit operations (Shell, Hole, Fillet, Chamfer; and reopened,
 // Extrude, Round, Lighten): a dialog that writes one script line, with the result
 // previewed as a ghost while it's open.
+
+/** Mirror body's preview: the mirror image's colour (the hue a second body
+ *  is shaded toward once built). */
+export const MIRROR_COPY_COLOR: Vec3 = BODY_HUES[0]!;
 
 /** The colour the candidate result is drawn in. */
 export const PREVIEW_COLOR: [number, number, number] = [0.36, 0.72, 0.86];
@@ -37,12 +43,17 @@ export function useOpPreview(
   make: (() => Promise<string>) | null,
   key: string,
   run: (code: string, signal: AbortSignal) => Promise<RunResponse>,
+  /** a second mesh to draw over the result in its own colour (Mirror body:
+   *  the mirror image), made from the same candidate; null: none */
+  extra?: (code: string, signal: AbortSignal) => Promise<{ mesh: ViewerMesh; color: Vec3 } | null>,
 ) {
   const [preview, setPreview] = useState<PreviewState>(IDLE);
   const makeRef = useRef(make);
   makeRef.current = make;
   const runRef = useRef(run);
   runRef.current = run;
+  const extraRef = useRef(extra);
+  extraRef.current = extra;
   // the last candidate built for `key` (OK applies it without writing it again)
   const done = useRef<{ key: string; code: string } | null>(null);
   const open = make !== null;
@@ -59,9 +70,12 @@ export function useOpPreview(
       try {
         const code = await makeRef.current!();
         if (ctrl.signal.aborted) return;
-        const res = await runRef.current(code, ctrl.signal);
+        const [res, more] = await Promise.all([
+          runRef.current(code, ctrl.signal),
+          extraRef.current ? extraRef.current(code, ctrl.signal).catch(() => null) : null,
+        ]);
         if (ctrl.signal.aborted) return;
-        viewerRef.current?.setPreviewMesh({ mesh: res.mesh, color: PREVIEW_COLOR });
+        viewerRef.current?.setPreviewMesh({ mesh: res.mesh, color: PREVIEW_COLOR, extra: more });
         done.current = { key, code };
         setPreview(res.warning
           ? { state: 'warning', message: res.warning, fix: res.fix?.param || res.fix?.suggest ? res.fix : null }
@@ -1099,11 +1113,13 @@ export function EdgePlaneDialog({ value, onChange, editing, params, used, own, o
 // ---------------------------------------------------------------- Mirror
 
 /** A Mirror dialog's values: the plane, and (Mirror body) whether the mirror
- *  image joins the part. `face`: the flat face picked, kept while another
+ *  image joins the part, and when it doesn't how far apart (`gap`: mm, or an
+ *  expression of P names). `face`: the flat face picked, kept while another
  *  plane is tried. */
 export interface MirrorValues {
   plane: MirrorPlane | null;
   join: boolean;
+  gap: Amount;
   face: FaceRefSpec | null;
 }
 
@@ -1113,12 +1129,14 @@ export interface MirrorStepRow { line: number; label: string; reason: string | n
 /** Mirror body / Mirror steps: the plane (the face picked, XY, XZ, YZ or a
  *  construction plane), Join or Separate body (Mirror body), the steps it
  *  copies and those it can't (Mirror steps); the result is previewed. */
-export function MirrorOpDialog({ kind, value, onChange, editing, preview, planes, steps = [], after = null,
+export function MirrorOpDialog({ kind, value, onChange, editing, preview, planes, params = {}, steps = [], after = null,
                                  onApply, onCancel }: {
   kind: 'body' | 'steps';
   value: MirrorValues; onChange: (v: MirrorValues) => void;
   editing: boolean;
   preview: PreviewState;
+  /** the P values, for a gap written as an expression */
+  params?: Record<string, number>;
   /** the construction planes the script defines */
   planes: string[];
   steps?: MirrorStepRow[];
@@ -1126,12 +1144,14 @@ export function MirrorOpDialog({ kind, value, onChange, editing, preview, planes
   after?: number | null;
   onApply: () => void; onCancel: () => void;
 }) {
-  const { palette, seg, note } = useStyles();
+  const { palette, seg, row, note } = useStyles();
   const set = (p: Partial<MirrorValues>) => onChange({ ...value, ...p });
   const p = value.plane;
   const on = (b: 'face' | 'XY' | 'XZ' | 'YZ') => (b === 'face' ? !!p && 'face' in p : !!p && 'base' in p && p.base === b);
   const named = p && 'plane' in p ? p.plane : '';
-  const ok = !!p && preview.state !== 'running' && preview.state !== 'error' && (kind === 'body' || steps.some((s) => !s.reason));
+  const gap = kind === 'body' && !value.join ? amountValue(value.gap, params) : 0;
+  const ok = !!p && gap !== null && preview.state !== 'running' && preview.state !== 'error'
+    && (kind === 'body' || steps.some((s) => !s.reason));
   const bases: ('face' | 'XY' | 'XZ' | 'YZ')[] = ['face', 'XY', 'XZ', 'YZ'];
   const can = steps.filter((s) => !s.reason);
   const cant = steps.filter((s) => s.reason);
@@ -1182,6 +1202,17 @@ export function MirrorOpDialog({ kind, value, onChange, editing, preview, planes
           ))}
         </div>
       )}
+      {kind === 'body' && !value.join && (
+        <div style={{ ...row, alignItems: 'flex-start' }}>
+          <span style={{ width: 56, paddingTop: 3 }}>Gap</span>
+          <ParamExprInput value={amountText(value.gap)} onChange={(t) => set({ gap: t })} params={params} unit="mm"
+                          title="How far the copy sits from the part: a number, or an expression of the parameters (e.g. wall * 2)" />
+          <span style={{ color: palette.textSecondary, paddingTop: 3 }}>mm</span>
+        </div>
+      )}
+      {kind === 'body' && (
+        <div style={{ color: palette.textSecondary, marginTop: -2 }}>{mirrorBodyHint(value.join)}</div>
+      )}
       {kind === 'steps' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
           {can.map((s) => (
@@ -1198,9 +1229,11 @@ export function MirrorOpDialog({ kind, value, onChange, editing, preview, planes
         </div>
       )}
       <div style={note}>
-        {kind === 'body' ? mirrorBodySummary(p, value.join) : mirrorStepsSummary(p, can.length, after)}
+        {kind === 'body' ? (gap === null ? 'The gap must be a number or an expression of the parameters.'
+          : mirrorBodySummary(p, value.join, gap)) : mirrorStepsSummary(p, can.length, after)}
         <div style={{ color: palette.textSecondary, marginTop: 2 }}>
-          The plane is drawn in the view; the blue ghost is the result.
+          {kind === 'body' ? 'The mirror plane is drawn in the view; the blue ghost is the result, the green part of it the mirror image.'
+            : 'The plane is drawn in the view; the blue ghost is the result.'}
         </div>
       </div>
     </OpFrame>

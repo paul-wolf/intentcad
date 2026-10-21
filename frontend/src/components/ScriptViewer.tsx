@@ -12,9 +12,9 @@ import type { ChatMessage } from '@/types/document';
 import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim, type PlacedHandle, type ViewerPick,
          type SectionMeasure, type PlacedPlaneLabel, type DragHandle } from '@/build/webglViewer';
 import {
-  amountValue, edgePayload, edgePlaneShape, faceBesideEdge, loadHiddenPlanes, newPlaneName, offsetBasePoint, offsetPayload,
+  amountOut, amountValue, edgePayload, edgePlaneShape, faceBesideEdge, loadHiddenPlanes, newPlaneName, offsetBasePoint, offsetPayload,
   offsetPlaneShape, renameHidden, reopenedFromFace, saveHiddenPlanes, shownPlanes, type BaseName, type EdgePlaneValues,
-  type OffsetPlaneValues, type PlaneShape,
+  type Amount, type OffsetPlaneValues, type PlaneShape,
 } from '@/build/constructionPlanes';
 import {
   atPosition, axisSection, cutNormal, flipSection, loadSection, saveSection, sectionAxis, sectionForView, sectionOnFace,
@@ -37,11 +37,11 @@ import { useFaceSketch, type ExtrudeOptions } from './FaceSketchMode';
 import {
   ShellDialog, HoleDialog, EdgeOpDialog, ExtrudeDialog, RoundDialog, TrussDialog, useOpPreview, refOf, faceOfRef, sameRef,
   holesPayload, holeValuesOf, newHoleValues, placeKey, toggleEdge, addEdges, argOpPayload, OffsetPlaneDialog, EdgePlaneDialog,
-  MirrorOpDialog, MirrorCopyDialog,
+  MirrorOpDialog, MirrorCopyDialog, MIRROR_COPY_COLOR,
   type ShellValues, type HoleValues,
   type HolePlace, type EdgeOpValues, type ExtrudeValues, type ArgOpValues, type MirrorValues,
 } from './OpDialogs';
-import { facePlane, mirrorPlaneShape, mirrorSkip, nextStepSelection } from '@/build/mirror';
+import { facePlane, mirrorCopyScript, mirrorPlaneShape, mirrorSkip, nextStepSelection, shiftedMirrorShape } from '@/build/mirror';
 import { StepsList } from './StepsList';
 import { messageLine, reopenableAt, stepIcon, stepInputs, stepLabel, stepProblems, suppressedNote } from '@/build/steps';
 import {
@@ -1366,9 +1366,18 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // a linked copy reopened: edit its original, or unlink it
   const [copyOp, setCopyOp] = useState<{ line: number; of: number; across: string; original: string } | null>(null);
   const lastMirrorPlane = useRef<MirrorPlane | null>(null);
-  const mirrorKey = mirrorOp ? JSON.stringify([mirrorOp.kind, mirrorOp.line, mirrorOp.lines, mirrorOp.v.plane, mirrorOp.v.join]) : '';
+  const mirrorGap = mirrorOp?.kind === 'body' && !mirrorOp.v.join ? amountValue(mirrorOp.v.gap, paramVals) : 0;
+  const mirrorKey = mirrorOp ? JSON.stringify([mirrorOp.kind, mirrorOp.line, mirrorOp.lines, mirrorOp.v.plane, mirrorOp.v.join,
+                                               mirrorOp.kind === 'body' && !mirrorOp.v.join ? amountOut(mirrorOp.v.gap) : 0]) : '';
+  // Mirror body's preview: the centre of the mirror image's box (which side
+  // the gap moves the plane to)
+  const [mirrorCopyAt, setMirrorCopyAt] = useState<Vec3 | null>(null);
   const mirrorLine = async (o: MirrorOp, plane: MirrorPlane) => {
-    if (o.kind === 'body') return (await buildApi.addMirrorBody({ code: codeRef.current, plane, join: o.v.join, line: o.line })).code;
+    if (o.kind === 'body') {
+      if (!o.v.join && amountValue(o.v.gap, paramVals) === null) throw new Error('The gap must be a number or an expression of the parameters');
+      return (await buildApi.addMirrorBody({ code: codeRef.current, plane, join: o.v.join, line: o.line,
+                                             ...(o.v.join ? {} : { gap: amountOut(o.v.gap) }) })).code;
+    }
     const r = await buildApi.mirrorSteps(codeRef.current, o.lines, plane);
     if (!r.made.length) throw new Error(r.skipped[0] ? `Line ${r.skipped[0].line}: ${r.skipped[0].reason}` : 'Nothing to mirror');
     return r.code;
@@ -1378,6 +1387,15 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     mirrorOp?.v.plane ? () => mirrorLine(mirrorOp, mirrorOp.v.plane!) : null,
     mirrorKey,
     (src, signal) => buildApi.run(src, signal, getBackendId() ?? '', buildInputs(src).sketches),
+    // the mirror image alone, in its own colour (Mirror body)
+    mirrorOp?.kind === 'body' ? async (src, signal) => {
+      const copy = mirrorCopyScript(src, mirrorOp.line);
+      if (!copy) return null;
+      const r = await buildApi.run(copy, signal, getBackendId() ?? '', buildInputs(copy).sketches);
+      const { bbox_min: a, bbox_max: b } = r.metrics;
+      setMirrorCopyAt([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2]);
+      return { mesh: r.mesh, color: MIRROR_COPY_COLOR };
+    } : undefined,
   );
   // where to mirror across from the selection: one flat face, or one construction plane
   const mirrorPlaneOfSelection = (): { plane: MirrorPlane | null; face: FaceRefSpec | null } => {
@@ -1391,7 +1409,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const startMirrorBody = () => {
     if (!resRef.current) return;
     const { plane, face } = mirrorPlaneOfSelection();
-    setMirrorOp({ kind: 'body', line: null, lines: [], v: { plane, join: true, face } });
+    setMirrorCopyAt(null);
+    setMirrorOp({ kind: 'body', line: null, lines: [], v: { plane, join: true, gap: 10, face } });
   };
   const startMirrorSteps = () => {
     if (!resRef.current) return;
@@ -1403,7 +1422,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     const plane: MirrorPlane | null = pl ? { plane: pl.name }
       : last && (!('plane' in last) || planeNames.includes(last.plane)) ? last : null;
     setMirrorOp({ kind: 'steps', line: null, lines: [...stepSel].sort((a, b) => a - b), v: {
-      plane, join: true, face: plane && 'face' in plane ? plane.face : null } });
+      plane, join: true, gap: 0, face: plane && 'face' in plane ? plane.face : null } });
   };
   const mirrorRows = mirrorOp?.kind === 'steps'
     ? mirrorOp.lines.flatMap((l) => {
@@ -1446,7 +1465,13 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     if (!p) return null;
     const f = 'face' in p ? faceOfRef(resRef.current?.faces ?? [], p.face) : null;
     const shape = mirrorPlaneShape(p, builtPlanes, f ? { center: f.center as Vec3, normal: f.normal as Vec3 } : null);
-    return shape && 'face' in p ? { ...shape, name: `Mirror · ${p.face.hint ?? 'face'}` } : shape;
+    if (!shape) return null;
+    // Separate with a gap: the plane it mirrors across is moved gap/2 out (a construction plane stays drawn as built)
+    if (mirrorGap) {
+      const half = +(mirrorGap / 2).toFixed(3);
+      return { ...shiftedMirrorShape(shape, mirrorGap, mirrorCopyAt), name: `Mirror · ${'face' in p ? p.face.hint ?? 'face' : shape.name} + ${half} mm` };
+    }
+    return 'face' in p ? { ...shape, name: `Mirror · ${p.face.hint ?? 'face'}` } : shape;
   })();
   // the face mirrored across shows as selected
   const mirrorFaceKey = mirrorOp ? JSON.stringify(mirrorOp.v.plane) : '';
@@ -1755,9 +1780,13 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         setCopyOp({ line: op.line, of: op.mirror.of, across: op.mirror.label,
                     original: orig ? stepLabel(orig) : `line ${op.mirror.of}` });
       } else if (op.op === 'mirror_body') {
-        const a = op.args as { plane: MirrorPlane; join: boolean };
+        const a = op.args as { plane: MirrorPlane; join: boolean; gap?: number };
+        const join = a.join !== false;
+        // joined: the gap Separate would start from
+        const gap: Amount = join ? 10 : op.exprs?.gap ?? a.gap ?? 0;
+        setMirrorCopyAt(null);
         setMirrorOp({ kind: 'body', line: op.line, lines: [],
-                      v: { plane: a.plane, join: a.join !== false, face: 'face' in a.plane ? a.plane.face : null } });
+                      v: { plane: a.plane, join, gap, face: 'face' in a.plane ? a.plane.face : null } });
       } else if (op.op === 'extrude') {
         const a = op.args as { sketch: string; op: ExtrudeOp; depth: number | null; through: boolean; flip: boolean;
                                both: boolean; datum: boolean };
@@ -2781,7 +2810,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
             )}
             {mirrorOp && (
               <MirrorOpDialog kind={mirrorOp.kind} value={mirrorOp.v} editing={mirrorOp.line != null}
-                preview={mirrorPreview.preview} planes={planeNames} steps={mirrorRows} after={mirrorAfter}
+                preview={mirrorPreview.preview} planes={planeNames} params={paramVals} steps={mirrorRows} after={mirrorAfter}
                 onChange={(v) => setMirrorOp((o) => o && { ...o, v })}
                 onApply={() => void applyMirror()} onCancel={closeOp} />
             )}

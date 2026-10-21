@@ -64,12 +64,45 @@ export function mirrorPlaneShape(p: MirrorPlane | null, planes: Record<string, P
   return { name: 'Mirror', ...offsetPlaneShape(f, 0) };
 }
 
-/** What Mirror body does, in words. */
-export function mirrorBodySummary(p: MirrorPlane | null, join: boolean): string {
+/** What Mirror body does, in words; `gap` (Separate): mm between the part
+ *  and its copy (null: not a valid amount). */
+export function mirrorBodySummary(p: MirrorPlane | null, join: boolean, gap: number | null = 0): string {
   const across = mirrorPlaneWords(p);
-  return join
-    ? `Mirrors the whole part across ${across} and fuses the mirror image with it into one solid. Model one half up to the plane, and this makes the other.`
-    : `Mirrors the whole part across ${across} and keeps the mirror image as a separate body beside it: left and right versions.`;
+  if (join) {
+    return `Mirrors the whole part across ${across} and fuses the mirror image with it into one solid. Model one half up to the plane, and this makes the other.`;
+  }
+  const apart = gap ? `, ${+gap.toFixed(3)} mm further out (the plane moved ${+(gap / 2).toFixed(3)} mm away from the part)` : '';
+  return `Mirrors the whole part across ${across} and keeps the mirror image as a separate body beside it${apart}.`;
+}
+
+/** The one-line hint under Join / Separate body. */
+export const mirrorBodyHint = (join: boolean): string => (join
+  ? 'Model half the part, then mirror it to complete it.'
+  : 'A mirrored copy as its own body, e.g. left and right versions.');
+
+/** The mirror plane as Separate's gap moves it: gap/2 along its normal,
+ *  toward the side the copy is on (`copyCenter`, the centre of the copy's
+ *  box; unknown: not moved), as the backend's mirror.outward does. */
+export function shiftedMirrorShape(shape: PlaneShape, gap: number, copyCenter: Vec3 | null): PlaneShape {
+  if (!gap || !copyCenter) return shape;
+  const n = shape.normal, o = shape.origin;
+  const len = Math.hypot(n[0], n[1], n[2]) || 1;
+  const side = ((copyCenter[0] - o[0]) * n[0] + (copyCenter[1] - o[1]) * n[1] + (copyCenter[2] - o[2]) * n[2]) / len;
+  const k = (side >= 0 ? 1 : -1) * gap / 2 / len;
+  return { ...shape, origin: [o[0] + n[0] * k, o[1] + n[1] * k, o[2] + n[2] * k] };
+}
+
+/** The script that makes Mirror body's mirror image alone, for the preview
+ *  to draw in its own colour: the lines before the mirror_body() line (the
+ *  one on `line`, or the last line when it was just appended) and that line
+ *  as `_mirror_copy(...)`. null: no such line. */
+export function mirrorCopyScript(code: string, line: number | null): string | null {
+  const rows = code.split('\n');
+  let i = line != null ? line - 1 : rows.length - 1;
+  if (line == null) while (i >= 0 && !rows[i]!.trim()) i--;
+  const row = rows[i];
+  if (row == null || !/\bmirror_body\(/.test(row)) return null;
+  return [...rows.slice(0, i), row.replace(/\bmirror_body\(/, '_mirror_copy('), ''].join('\n');
 }
 
 /** What Mirror steps does, in words. */

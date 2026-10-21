@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { Step } from '@/api/client';
 import {
-  copiesOf, groupSteps, mirrorBodySummary, mirrorPlaneShape, mirrorPlaneWords, mirrorSkip, mirrorStepsSummary,
-  nextStepSelection, sameMirrorPlane,
+  copiesOf, groupSteps, mirrorBodyHint, mirrorBodySummary, mirrorCopyScript, mirrorPlaneShape, mirrorPlaneWords, mirrorSkip,
+  mirrorStepsSummary, nextStepSelection, sameMirrorPlane, shiftedMirrorShape,
 } from './mirror';
+import { bodyColor, rangesWithout } from './bodyColors';
 import { stepIcon } from './steps';
 
 const op = (line: number, o: Partial<Step> = {}): Step => ({
@@ -44,7 +45,10 @@ describe('mirror', () => {
 
   it('sums up what the dialogs will do', () => {
     expect(mirrorBodySummary({ plane: 'Mid' }, true)).toMatch(/across plane Mid and fuses .* one solid/);
-    expect(mirrorBodySummary({ base: 'YZ' }, false)).toMatch(/separate body .* left and right versions/);
+    expect(mirrorBodySummary({ base: 'YZ' }, false)).toMatch(/keeps the mirror image as a separate body beside it\.$/);
+    expect(mirrorBodySummary({ base: 'YZ' }, false, 10)).toMatch(/separate body beside it, 10 mm further out \(the plane moved 5 mm away/);
+    expect(mirrorBodyHint(true)).toBe('Model half the part, then mirror it to complete it.');
+    expect(mirrorBodyHint(false)).toBe('A mirrored copy as its own body, e.g. left and right versions.');
     expect(mirrorStepsSummary({ plane: 'Mid' }, 2, 9)).toMatch(/^Adds 2 lines after line 9: each step again on the other side of plane Mid/);
     expect(mirrorStepsSummary({ plane: 'Mid' }, 0, null)).toBe('None of the chosen steps can be mirrored.');
   });
@@ -66,5 +70,35 @@ describe('mirror', () => {
     expect(nextStepSelection([5, 6], order, 6, 5, 'toggle')).toEqual([5]);
     expect(nextStepSelection([5], order, 6, 5, 'range')).toEqual([5, 8, 6]);
     expect(nextStepSelection([], order, 6, null, 'range')).toEqual([6]);
+  });
+
+  it('makes the mirror image alone for the preview, from the line just written or the one reopened', () => {
+    const code = 'part = Box(1, 2, 3)\npart = mirror_body(part, "YZ", join=False, gap=10)\n';
+    expect(mirrorCopyScript(code, null)).toBe('part = Box(1, 2, 3)\npart = _mirror_copy(part, "YZ", join=False, gap=10)\n');
+    const mid = 'part = Box(1, 2, 3)\npart = mirror_body(part, PLANES["Mid"])\npart = shell(part, thickness=2)\n';
+    expect(mirrorCopyScript(mid, 2)).toBe('part = Box(1, 2, 3)\npart = _mirror_copy(part, PLANES["Mid"])\n');
+    expect(mirrorCopyScript(mid, 3)).toBeNull();
+  });
+
+  it('moves the mirror plane gap/2 toward the copy, as the backend does', () => {
+    const yz = { name: 'YZ', origin: [0, 0, 0] as [number, number, number], normal: [1, 0, 0] as [number, number, number],
+                 xAxis: [0, 1, 0] as [number, number, number] };
+    expect(shiftedMirrorShape(yz, 10, [-20, 0, 0]).origin).toEqual([-5, 0, 0]);
+    expect(shiftedMirrorShape(yz, 10, [20, 0, 0]).origin).toEqual([5, 0, 0]);
+    expect(shiftedMirrorShape(yz, 0, [20, 0, 0])).toBe(yz);
+    expect(shiftedMirrorShape(yz, 10, null)).toBe(yz);        // not built yet: as it is
+  });
+
+  it('shades the bodies after the first a little apart', () => {
+    const base: [number, number, number] = [0.62, 0.66, 0.72];
+    expect(bodyColor(base, 0)).toEqual(base);
+    const [one, two] = [bodyColor(base, 1), bodyColor(base, 2)];
+    expect(one).not.toEqual(base);
+    expect(one).not.toEqual(two);
+    // subtle: no channel moves more than a tenth
+    for (const c of [one, two, bodyColor(base, 7)]) c.forEach((x, i) => expect(Math.abs(x - base[i]!)).toBeLessThan(0.1));
+    expect(rangesWithout([[0, 30], [60, 30]], 10, 5)).toEqual([[0, 10], [15, 15], [60, 30]]);
+    expect(rangesWithout([[0, 30]], 0, 30)).toEqual([]);
+    expect(rangesWithout([[0, 30]], 40, 3)).toEqual([[0, 30]]);
   });
 });
