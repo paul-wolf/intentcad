@@ -14,7 +14,7 @@ import { rectangleOutline, rectanglePath } from '@/utils/rectPath';
 import { bezierPoint } from '@/utils/bezierGeometry';
 import { add, dot, len, scale, sub, type Vec3 } from './dragHandle';
 import { planeBasis, planeForFace, sketchToWorld, worldToSketch, type PlaneBasis } from './sketchPlane';
-import { isRef } from '@/utils/brokenRefs';
+import { isBroken, isRef } from '@/utils/brokenRefs';
 import { isAxis } from '@/utils/sketchAxes';
 import { followRefs, type OutlineEdge } from './sketchRefs';
 import { matchProjected } from './projectEdges';
@@ -404,7 +404,7 @@ export function sketchSegments(sketch: Sketch, plane: Sketch['plane'] = sketch.p
   return out;
 }
 
-type XY = [number, number];
+export type XY = [number, number];
 
 /** One edge of a closed shape, in sketch coordinates (y down). */
 export type ProfileSegment =
@@ -420,6 +420,7 @@ export interface SketchProfile {
   plane: NonNullable<Sketch['plane']>;
   loops: ProfileSegment[][];
   points?: XY[];        // its point entities: with the circle centres, where sketch_points() puts holes
+  lines?: Record<string, [XY, XY]>;   // its straight construction / reference lines (the axes too), for sketch_line()
   face?: FaceRef;
   planeRef?: string;    // on a construction plane: the build takes the plane from PLANES[planeRef]
 }
@@ -515,12 +516,28 @@ export function sketchLoops(sketch: Sketch): { loops: ProfileSegment[][]; open: 
 export function sketchProfile(sketch: Sketch): SketchProfile | null {
   if (!sketch.plane) return null;
   const points = sketch.entities.flatMap((e) => (e.type === 'point' ? [xy(e.position)] : []));
+  const lines = axisLines(sketch);
   return {
     plane: sketch.plane, loops: sketchLoops(sketch).loops,
     ...(points.length ? { points } : {}),
+    ...(Object.keys(lines).length ? { lines } : {}),
     ...(sketch.face ? { face: sketch.face } : {}),
     ...(sketch.planeRef ? { planeRef: sketch.planeRef } : {}),
   };
+}
+
+/** The straight lines a revolve can turn about, by id: the built-in axes
+ *  and the sketch's 2-point construction and reference lines. */
+export function axisLines(sketch: Sketch): Record<string, [XY, XY]> {
+  const out: Record<string, [XY, XY]> = {};
+  for (const e of sketch.entities) {
+    if (e.type !== 'line' || e.points.length !== 2 || e.closed || e.bulge?.some((b) => b) || isBroken(e)) continue;
+    if (!e.construction && !e.reference) continue;
+    const [a, b] = e.points as [Point, Point];
+    if (Math.hypot(b.x - a.x, b.y - a.y) < 1e-9) continue;
+    out[e.id] = [xy(a), xy(b)];
+  }
+  return out;
 }
 
 /** Where sketch_points("name") puts holes: the sketch's points and the
@@ -536,9 +553,10 @@ export function sketchHolePoints(sketch: Sketch): Point[] {
 }
 
 // matches the engine's SKETCH_REF (modeling/engine.py)
-const SKETCH_REF = /\bsketch(?:_points)?\(\s*(["'])(.+?)\1\s*\)/g;
+const SKETCH_REF = /\bsketch(?:_points|_line)?\(\s*(["'])(.+?)\1\s*[,)]/g;
 
-/** The names of the sketches `code` uses (sketch("name"), sketch_points("name")), each once. */
+/** The names of the sketches `code` uses (sketch("name"), sketch_points("name"),
+ *  sketch_line("name", "line")), each once. */
 export function referencedSketchNames(code: string): string[] {
   return [...new Set([...code.matchAll(SKETCH_REF)].map((m) => m[2]!))];
 }

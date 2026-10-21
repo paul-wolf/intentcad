@@ -77,7 +77,7 @@ describe('the operation registry', () => {
     const ctx = Object.fromEntries(
       ['sketchOnSelection', 'sketchOnPlane', 'shell', 'hole', 'fillet', 'chamfer', 'ask', 'build', 'importStep', 'exportAs', 'versions',
        'process', 'addContextFile', 'toggleParams', 'setView', 'lookAtSelection', 'toggleOrtho', 'copyMeasure',
-       'section', 'offsetPlane', 'edgePlane', 'tangentPlane', 'mirrorBody', 'mirrorSteps', 'patternBody', 'patternSteps'].map((k) => [k, vi.fn()]),
+       'section', 'offsetPlane', 'edgePlane', 'tangentPlane', 'mirrorBody', 'mirrorSteps', 'patternBody', 'patternSteps', 'revolve'].map((k) => [k, vi.fn()]),
     ) as unknown as Record<keyof OpContext, ReturnType<typeof vi.fn>>;
     for (const op of OPERATIONS) op.run(ctx as unknown as OpContext);
     expect(ctx.shell).toHaveBeenCalledTimes(1);
@@ -96,6 +96,15 @@ describe('the operation registry', () => {
     expect(ctx.mirrorSteps).toHaveBeenCalledTimes(1);
     expect(ctx.patternBody).toHaveBeenCalledTimes(1);
     expect(ctx.patternSteps).toHaveBeenCalledTimes(1);
+    expect(ctx.revolve).toHaveBeenCalledTimes(1);
+  });
+
+  it('revolves a sketch with a closed shape, built or not', () => {
+    expect(opById('revolve')!.group).toBe('Create');
+    expect(reason('revolve', NONE)).toBe('Draw a sketch with a closed shape first (K), with the axis line in it');
+    expect(ok('revolve', NONE, { ...MODEL, revolveSketches: 1 }).ok).toBe(true);
+    expect(ok('revolve', NONE, { ...MODEL, revolveSketches: 1, status: 'idle', hasCode: false }).ok).toBe(true);
+    expect(reason('revolve', NONE, { ...MODEL, revolveSketches: 1, sketching: true })).toBe('Finish the sketch first');
   });
 
   it('patterns the body (along a picked edge or face) or the chosen steps', () => {

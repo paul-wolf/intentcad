@@ -34,11 +34,11 @@ import { buildKey, getCachedBuild, putCachedBuild, putCachedSens } from '@/build
 import { importScript, importLabel, STEP_ACCEPT } from '@/build/importStep';
 import { PartVersionsPanel } from './PartVersionsPanel';
 import { PartHelpModal } from './PartHelpModal';
-import { useFaceSketch, type ExtrudeOptions } from './FaceSketchMode';
+import { useFaceSketch, type ExtrudeOptions, type RevolveStart } from './FaceSketchMode';
 import {
   ShellDialog, HoleDialog, EdgeOpDialog, ExtrudeDialog, RoundDialog, TrussDialog, useOpPreview, refOf, faceOfRef, sameRef,
   holesPayload, holeValuesOf, newHoleValues, placeKey, toggleEdge, addEdges, argOpPayload, OffsetPlaneDialog, EdgePlaneDialog, TangentPlaneDialog,
-  MirrorOpDialog, MirrorCopyDialog, MIRROR_COPY_COLOR, PatternOpDialog,
+  MirrorOpDialog, MirrorCopyDialog, MIRROR_COPY_COLOR, PatternOpDialog, RevolveDialog, type RevolveSketchView,
   type ShellValues, type HoleValues,
   type HolePlace, type EdgeOpValues, type ExtrudeValues, type ArgOpValues, type MirrorValues,
 } from './OpDialogs';
@@ -51,13 +51,18 @@ import {
 import { messageLine, reopenableAt, stepIcon, stepInputs, stepLabel, stepProblems, suppressedNote } from '@/build/steps';
 import {
   BASE_PLANES, boundPlane, extrudeDirectionText, faceLabel, findFaceSketch, partSide, referencedProfiles, referencedSketchNames,
-  onTangentPlane, planeSketches, renamePlaneRefs, sketchBasePlane, sketchBindNotes, sketchHolePoints, sketchSegments, type BasePlane,
+  onTangentPlane, planeSketches, renamePlaneRefs, sketchBasePlane, sketchBindNotes, sketchHolePoints, sketchLoops, sketchSegments, type BasePlane,
   type SketchBindings,
 } from '@/build/faceSketch';
 import {
   buildFollowingSketches, followPartSketches, resolvePartSketches, sketchParamWarning, sketchVars,
 } from '@/build/sketchParams';
 import { brokenRefWarning, dimensionedToEdges } from '@/build/sketchRefs';
+import {
+  angleFromHandle, axisChoices, axisLabel, defaultAxis, lineProblem, revolvable, revolveHandle, revolveReport, revolveSummary,
+  segmentPoints, type RevolveReport, type RevolveValues,
+} from '@/build/revolve';
+import { planeBasis, worldToSketch } from '@/build/sketchPlane';
 import { partParams } from '@/build/scriptParams';
 import { usesNames } from '@/utils/resolveSketch';
 import {
@@ -97,7 +102,7 @@ const NO_CHAT: ChatMessage[] = [];
 const OP_NAMES = {
   shell: 'Shell', holes: 'Hole', fillet: 'Fillet', chamfer: 'Chamfer', extrude: 'Extrude', auto_round: 'Round',
   truss_windows: 'Lighten', offset_plane: 'Offset plane', edge_plane: 'Plane on edge', tangent_plane: 'Tangent plane', mirror_body: 'Mirror body',
-  pattern_body: 'Pattern body',
+  pattern_body: 'Pattern body', revolve: 'Revolve',
 } as const;
 /** An Offset plane, Plane on edge or Tangent plane dialog: `line` the line
  *  it was reopened from (null: a new plane), `own` the plane's name in the
@@ -107,6 +112,9 @@ type PlaneOp = { line: number | null; own: string | null }
 /** A reopened extrude line: its values, the P key its depth is in, and
  *  whether it makes the part (New body, nothing else). */
 interface ExtrudeEdit { line: number; v: ExtrudeValues; param: string | null; firstBody: boolean }
+/** The Revolve dialog: `line` the line it was reopened from (null: a new
+ *  revolve), `firstBody` it makes the part (New body, nothing else). */
+interface RevolveEdit { line: number | null; v: RevolveValues; firstBody: boolean }
 // the drag preview can't show P moving a face sketch: said once a session
 let sketchDragNoted = false;
 
@@ -426,7 +434,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   hasPartRef.current = !(code === STARTER && status !== 'done') && /^part\s*=[^=]/m.test(code);
   const codeRef = useRef(code);
   codeRef.current = code;
-  const faceSketch = useFaceSketch(viewerRef, canvasRef, resRef, (name, ex) => { void sketchDoneRef.current(name, ex); },
+  const faceSketch = useFaceSketch(viewerRef, canvasRef, resRef, (name, ex, rev) => { void sketchDoneRef.current(name, ex, rev); },
                                    () => hasPartRef.current, () => partParams(codeRef.current, paramBase.current));
   const faceSketchRef = useRef(faceSketch);
   faceSketchRef.current = faceSketch;
@@ -1010,7 +1018,25 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // A face sketch was closed. Extrude asked for: append the script line (its
   // depth a new parameter) and build. Otherwise rebuild if the script already
   // extrudes this sketch — its shapes are part of the build's inputs.
-  const sketchDone = async (name: string, ex: ExtrudeOptions | null) => {
+  const sketchDone = async (name: string, ex: ExtrudeOptions | null, rev?: RevolveStart | null) => {
+    const rback = revolveBackRef.current;
+    if (rback) {
+      // "Edit sketch" from the Revolve dialog: rebuild if the script uses the
+      // sketch, then the dialog again (on the axis the sketcher's Revolve set)
+      revolveBackRef.current = null;
+      if (code.trim() && referencedProfiles(code, useDocumentStore.getState().document.sketches)[name]) {
+        await build(code, `Edit sketch ${name}`);
+      }
+      setRevolveOp({ ...rback, v: { ...rback.v, sketch: name, ...(rev?.axis ? { axis: rev.axis } : {}) } });
+      return;
+    }
+    if (rev) {
+      // the sketcher's Revolve…: the dialog, for the angle and a 3D preview
+      const firstBody = !hasPartRef.current;
+      setRevolveOp({ line: null, firstBody,
+                     v: { sketch: name, op: firstBody ? 'new' : 'join', axis: rev.axis, angle: 360, both: false, flip: false } });
+      return;
+    }
     const back = sketchBackRef.current;
     if (back) {
       // "Edit sketch" from a reopened extrude: rebuild with the new shapes, then
@@ -1069,6 +1095,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     setHoleOp(null);
     setEdgeOp(null);
     setExtrudeOp(null);
+    setRevolveOp(null);
     setArgOp(null);
     setPlaneOp(null);
     setTangentAim((a) => { if (a != null) setNotice(''); return null; });
@@ -1493,7 +1520,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const startMirrorSteps = () => {
     if (!resRef.current) return;
     const lines = stepSel.filter((l) => steps.some((s) => s.line === l && !mirrorSkip(s)));
-    if (!lines.length) { planeNotice('Choose extrudes, holes, fillets or chamfers in the steps list first (Ctrl-click for more)'); return; }
+    if (!lines.length) { planeNotice('Choose extrudes, revolves, holes, fillets or chamfers in the steps list first (Ctrl-click for more)'); return; }
     // the steps' own faces and edges light up when chosen: only a plane picked in the view counts
     const pl = selectedPlane();
     const last = lastMirrorPlane.current;
@@ -1631,7 +1658,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const startPatternSteps = () => {
     if (!resRef.current) return;
     const lines = stepSel.filter((l) => steps.some((s) => s.line === l && !patternSkip(s)));
-    if (!lines.length) { planeNotice('Choose extrudes, holes, fillets or chamfers in the steps list first (Ctrl-click for more)'); return; }
+    if (!lines.length) { planeNotice('Choose extrudes, revolves, holes, fillets or chamfers in the steps list first (Ctrl-click for more)'); return; }
     setPatternShown(null);
     setPatternOp({ kind: 'steps', line: null, lines: [...stepSel].sort((a, b) => a - b), v: defaultPattern('linear'), join: true });
   };
@@ -1857,6 +1884,119 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     faceSketchRef.current.open(extrudeSketch.id);
   };
 
+  // Revolve: a sketch's closed shapes turned round an axis — new (Operations,
+  // or the sketcher's Revolve…) or reopened on its line. The build's report on
+  // it (where the axis is, where the shapes cross it) places the angle handle
+  // and marks a crossing.
+  const [revolveOp, setRevolveOp] = useState<RevolveEdit | null>(null);
+  const revolveBackRef = useRef<RevolveEdit | null>(null);   // "Edit sketch": the dialog again on Done
+  const revolveKey = revolveOp ? JSON.stringify({ line: revolveOp.line, v: revolveOp.v }) : '';
+  const revolveKeyRef = useRef(revolveKey);
+  revolveKeyRef.current = revolveKey;
+  const [revolveRep, setRevolveRep] = useState<{ key: string; r: RevolveReport | null } | null>(null);
+  const revolveSk = revolveOp ? docSketches.find((sk) => sk.name === revolveOp.v.sketch) ?? null : null;
+  const revolveChoices = useMemo(() => (revolveSk ? axisChoices(revolveSk) : []), [revolveSk]);
+  const revolveAxis = revolveOp?.v.axis ?? null;
+  // a line of the sketch is checked here at once; the others by the build
+  const revolveLocal = revolveSk && revolveAxis && 'line' in revolveAxis ? lineProblem(revolveSk, revolveAxis.line) : null;
+  const revolveAngle = revolveOp ? amountValue(revolveOp.v.angle, paramVals) : null;
+  const revolveReady = !!revolveSk && !!revolveAxis && !revolveLocal && revolveAngle !== null && revolveAngle > 0 && revolveAngle <= 360;
+  const revolveLine = (o: RevolveEdit) => buildApi.addRevolve({
+    // New body starts the script over when it is still the unbuilt starter
+    code: o.v.op === 'new' && codeRef.current === STARTER ? '' : codeRef.current,
+    sketch: o.v.sketch, op: o.v.op, axis: o.v.axis!, angle: amountOut(o.v.angle), both: o.v.both, flip: o.v.flip, line: o.line,
+  });
+  const revolvePreview = useOpPreview(
+    viewerRef,
+    revolveOp && revolveReady ? () => revolveLine(revolveOp).then((r) => r.code) : null,
+    revolveKey,
+    (src, signal) => {
+      const key = revolveKeyRef.current, line = revolveOp?.line ?? null;
+      // a reopened line moves down by the lines written above it (a new P key)
+      const grown = src.split('\n').length - codeRef.current.split('\n').length;
+      const keep = (r: Pick<RunResponse, 'revolves'>) => setRevolveRep({ key, r: revolveReport(r, line, grown) });
+      return buildApi.run(src, signal, getBackendId() ?? '', buildInputs(src).sketches).then(
+        (r) => { keep(r); return r; },
+        (err: unknown) => { if (err instanceof ApiError && err.revolves) keep(err); throw err; },
+      );
+    },
+  );
+  const revolveNow = revolveRep && revolveRep.key === revolveKey ? revolveRep.r : null;
+  const revolveErr = revolveNow?.error ? revolveNow.error.charAt(0).toUpperCase() + revolveNow.error.slice(1) : null;
+  const revolveProblem = !revolveOp ? null
+    : !revolveSk ? `There is no sketch named “${revolveOp.v.sketch}”`
+    : !revolveAxis ? 'Pick an axis: a line of the sketch, X / Y / Z, or click a straight edge or a cylinder in the view'
+    : revolveLocal?.message ?? revolveErr;
+  const revolvePlane = revolveSk ? boundPlane(revolveSk, resRef.current?.sketches, resRef.current?.planes) : null;
+  // the dialog's drawing: the shapes, the axis, the crossings, in the sketch's coordinates
+  const revolveView = useMemo((): RevolveSketchView => {
+    if (!revolveSk) return { loops: [], axis: null, crossings: [] };
+    const loops = sketchLoops(revolveSk).loops.map((l) => l.flatMap((seg, i) => segmentPoints(seg).slice(i ? 1 : 0)));
+    const on = revolveAxis && 'line' in revolveAxis ? revolveChoices.find((c) => c.id === revolveAxis.line) : undefined;
+    const b = revolvePlane ? planeBasis(revolvePlane) : null;
+    const flat = (w: number[]) => { const q = worldToSketch(b!, w as Vec3); return [q.x, q.y] as [number, number]; };
+    const r = revolveNow;
+    const axis: [[number, number], [number, number]] | null = on ? [on.a, on.b]
+      : r && b ? [flat(r.origin), flat(add(r.origin as Vec3, r.axis as Vec3))] : null;
+    const crossings = revolveLocal ? revolveLocal.crossings : r?.crossings && b ? r.crossings.map(flat) : [];
+    return { loops, axis, crossings };
+  }, [revolveSk, revolveAxis, revolveChoices, revolvePlane, revolveNow, revolveLocal]);
+  const revolveNormal = (revolveOp && (resRef.current?.sketches?.[revolveOp.v.sketch]?.plane?.normal
+    ?? revolveSk?.plane?.normal)) as Vec3 | undefined;
+  // the angle handle: on the axis level with the shapes, from the last build's report
+  const revolveH = revolveOp && !revolveProblem ? revolveHandle(revolveRep?.r ?? null, revolveAngle) : null;
+  const revolveDH: DragHandle | null = revolveH
+    ? { face: -1, at: revolveH.at, shift: revolveH.n, dr: 0, value: revolveH.value, moves: [],
+        turn: { w: revolveH.w, n: revolveH.n, step: 15, fine: 1, arm: revolveH.arm } } : null;
+  const revolveHKey = revolveDH ? JSON.stringify(revolveDH) : '';
+  if (revolveOp) {
+    setEdgeSizeRef.current = (value: number) =>
+      setRevolveOp((o) => o && ({ ...o, v: { ...o.v, angle: angleFromHandle(value, o.v.both) } }));
+  }
+  const applyRevolve = async () => {
+    const o = revolveOp;
+    if (!o || !revolveReady || revolveProblem) return;
+    try {
+      const src = revolvePreview.built(revolveKey) ?? (await revolveLine(o)).code;
+      closeOp();
+      setCode(src);
+      const out = await build(src, `${o.line != null ? 'Edit revolve' : 'Revolve'} ${o.v.sketch}`);
+      if (out.kind === 'ok') saveDraft(src);
+    } catch (err) {
+      setNotice(`Revolve: ${errorText(err)}`);
+    }
+  };
+  const editRevolveSketch = () => {
+    const o = revolveOp;
+    if (!o) return;
+    if (!revolveSk) { planeNotice(`There is no sketch named “${o.v.sketch}” to edit`); return; }
+    revolveBackRef.current = o;
+    closeOp();
+    faceSketchRef.current.open(revolveSk.id);
+  };
+  // a new revolve: on the active sketch if it can be turned, else the first that can
+  const startRevolve = () => {
+    const sks = revolvable(docSketches);
+    if (!sks.length) return;
+    const active = useDocumentStore.getState().document.activeSketchId;
+    const sk = sks.find((x) => x.id === active) ?? sks[0]!;
+    const firstBody = !hasPartRef.current;
+    if (opOpen) closeOp();
+    setRevolveOp({ line: null, firstBody,
+                   v: { sketch: sk.name, op: firstBody ? 'new' : 'join', axis: defaultAxis(sk), angle: 360, both: false, flip: false } });
+  };
+  // another sketch picked in the dialog: its own default axis if the line isn't in it
+  const changeRevolve = (v: RevolveValues) => setRevolveOp((o) => {
+    if (!o) return o;
+    if (v.sketch !== o.v.sketch) {
+      const sk = docSketches.find((x) => x.name === v.sketch);
+      if (sk && (!v.axis || ('line' in v.axis && !axisChoices(sk).some((c) => c.id === (v.axis as { line: string }).line)))) {
+        return { ...o, v: { ...v, axis: defaultAxis(sk) } };
+      }
+    }
+    return { ...o, v };
+  });
+
   // Round (auto_round) and Lighten (truss_windows), reopened: their arguments
   // in a dialog; OK rewrites just those (and the P keys they're in)
   const [argOp, setArgOp] = useState<{ line: number; end: number; v: ArgOpValues; orig: ArgOpValues } | null>(null);
@@ -1903,7 +2043,17 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // while the Shell dialog is open, clicking a face opens or closes it, and
   // the faces it opens show as selected; in the Hole dialog it says where the
   // holes go
-  opPickRef.current = patternOp ? (p) => {
+  opPickRef.current = revolveOp ? (p) => {
+    // the axis: along a straight edge, or a cylinder's centre line
+    const res = resRef.current;
+    if (!p || !res) return;
+    const face = 'face' in p ? res.faces.find((x) => x.index === p.face.index) : undefined;
+    const edge = 'edge' in p ? res.edges.find((x) => x.index === p.edge) : undefined;
+    const d = face && (face.kind === 'cylinder' || face.kind === 'cone') ? dirOfFace(face)
+      : edge?.ref?.kind === 'line' ? dirOfEdge(edge) : null;
+    if (d) setRevolveOp((o) => o && ({ ...o, v: { ...o.v, axis: d } }));
+    else if (face || edge) planeNotice('Revolve round a straight edge or a cylinder (its centre line): pick one of those');
+  } : patternOp ? (p) => {
     // a direction (or the axis): a straight edge, a flat face's normal, a hole's or round edge's axis
     const res = resRef.current;
     if (!p || !res) return;
@@ -2021,14 +2171,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     viewerRef.current?.selectFaces([]);
     viewerRef.current?.selectEdges(idx);
   }, [edgeKey]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const opOpen = !!shellOp || !!holeOp || !!edgeOp || !!extrudeOp || !!argOp || !!planeOp || tangentAim != null || !!mirrorOp || !!copyOp || !!patternOp;
+  const opOpen = !!shellOp || !!holeOp || !!edgeOp || !!extrudeOp || !!revolveOp || !!argOp || !!planeOp || tangentAim != null || !!mirrorOp || !!copyOp || !!patternOp;
   // Shell, Hole and Round work on faces: while one is open a click picks faces
   // only; Fillet and Chamfer, edges only; Pattern takes either, as the filter says
-  const viewFilter: PickFilter = patternOp ? pickFilter : shellOp || holeOp || planeOp || tangentAim != null || mirrorOp || argOp?.v.op === 'auto_round' ? 'faces' : edgeOp ? 'edges'
+  const viewFilter: PickFilter = patternOp || revolveOp ? pickFilter : shellOp || holeOp || planeOp || tangentAim != null || mirrorOp || argOp?.v.op === 'auto_round' ? 'faces' : edgeOp ? 'edges'
     : pickFilter;
   useEffect(() => { viewerRef.current?.setPickFilter(viewFilter); }, [viewFilter]);
   // the dialogs sit at the top left of the view: draw the part beside them
-  const opWidth = holeOp || argOp || planeOp || mirrorOp || patternOp ? 300 : shellOp || edgeOp || extrudeOp || copyOp ? 270 : 0;
+  const opWidth = holeOp || argOp || planeOp || mirrorOp || patternOp || revolveOp ? 300 : shellOp || edgeOp || extrudeOp || copyOp ? 270 : 0;
   useEffect(() => {
     viewerRef.current?.setInset(opWidth ? opWidth + 24 : 0);
   }, [opWidth]);
@@ -2068,6 +2218,12 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         setExtrudeOp({
           line: op.line, firstBody: a.op === 'new', param: op.params.depth ?? null,
           v: { sketch: a.sketch, op: a.op, depth: a.depth ?? 5, through: a.through, flip: a.flip, both: a.both, datum: a.datum },
+        });
+      } else if (op.op === 'revolve') {
+        const a = op.args as { sketch: string; op: ExtrudeOp; axis: RevolveValues['axis']; angle: number; both: boolean; flip: boolean };
+        setRevolveOp({
+          line: op.line, firstBody: a.op === 'new',
+          v: { sketch: a.sketch, op: a.op, axis: a.axis, angle: op.exprs?.angle ?? a.angle, both: !!a.both, flip: !!a.flip },
         });
       } else if (op.op === 'auto_round' || op.op === 'truss_windows') {
         const { keep, ...values } = op.args as Record<string, number | boolean | string> & { keep?: unknown };
@@ -2229,7 +2385,9 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const edgeH = edgeOp?.v.edges[0] ? edgeHandle(edgeAsNow(edgeOp.v.edges[0])) : null;
   const edgeHKey = edgeH ? JSON.stringify(edgeH) : '';
   const edgeSize = edgeOp?.v.size ?? 0;
-  const handle: HandleOption | null = patternOp
+  const handle: HandleOption | null = revolveOp
+    ? (revolveDH ? { name: 'angle', value: edgeDragRef.current ?? revolveDH.value, shift: revolveDH.shift, dr: 0, moves: [] } : null)
+    : patternOp
     ? (patH ? { name: patH.name, value: edgeDragRef.current ?? patH.value, shift: patH.shift, dr: 0, moves: [] } : null)
     : planeOp
     ? (planeH ? { name: planeOp.kind === 'offset' ? 'distance' : 'angle', value: edgeDragRef.current ?? planeH.value,
@@ -2239,9 +2397,10 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                                   value: edgeDragRef.current ?? edgeSize, shift: edgeH.dir, dr: 0, moves: [] } : null)
     : faceHandle;
   handleRef.current = handle;
-  edgeHandleOnRef.current = !!edgeOp || !!planeOp || !!patternOp;
-  handleUnitRef.current = planeOp?.kind === 'edge' || planeOp?.kind === 'tangent' || patH?.name === 'angle' ? '°' : '';
-  dialogDragNoteRef.current = patH?.name === 'count' ? 'drag to add or remove copies · Esc cancels'
+  edgeHandleOnRef.current = !!edgeOp || !!planeOp || !!patternOp || !!revolveOp;
+  handleUnitRef.current = revolveOp || planeOp?.kind === 'edge' || planeOp?.kind === 'tangent' || patH?.name === 'angle' ? '°' : '';
+  dialogDragNoteRef.current = revolveOp ? '15° steps · Shift: 1° · Esc cancels'
+    : patH?.name === 'count' ? 'drag to add or remove copies · Esc cancels'
     : patH?.name === 'angle' ? 'Shift: 0.1° · Esc cancels' : patternOp ? 'Shift: 0.1 mm · Esc cancels'
     : planeOp?.kind === 'offset' ? 'Shift: 0.1 mm · snaps to faces · Esc cancels'
     : planeOp?.kind === 'tangent' ? 'Shift: 1° · holds at 90° steps · Esc cancels'
@@ -2252,6 +2411,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const nHandlesRef = useRef(0);
   nHandlesRef.current = nHandles;
   useEffect(() => {
+    if (revolveOp) {
+      if (edgeDragRef.current != null) return;   // its own drag changed the angle: leave it be
+      viewerRef.current?.setHandle(revolveDH);
+      return;
+    }
     if (patternOp) {
       if (edgeDragRef.current != null) return;   // its own drag changed the value: leave it be
       viewerRef.current?.setHandle(patH ? { face: -1, at: patH.at, shift: patH.shift, dr: 0, value: patH.value, moves: [],
@@ -2273,7 +2437,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     viewerRef.current?.setHandle(faceHandle && selFace
       ? { face: selFace.index, shift: faceHandle.shift, dr: faceHandle.dr, value: faceHandle.value, moves: faceHandle.moves }
       : null);
-  }, [faceHandle, selFace, !!edgeOp, edgeHKey, edgeSize, planeHKey, patHKey, !!patternOp]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [faceHandle, selFace, !!edgeOp, edgeHKey, edgeSize, planeHKey, patHKey, !!patternOp, revolveHKey, !!revolveOp]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Tab' || nHandlesRef.current < 2 || faceSketchRef.current.activeRef.current) return;
@@ -2604,6 +2768,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     exporting: !!exporting, importing, hasParams, showParams, ortho, measure: measureText, section: secOn,
     mirrorSteps: stepSel.filter((l) => steps.some((s) => s.line === l && !mirrorSkip(s))).length,
     patternSteps: stepSel.filter((l) => steps.some((s) => s.line === l && !patternSkip(s))).length,
+    revolveSketches: revolvable(docSketches).length,
   };
   const opCtx: OpContext = {
     sketchOnSelection, sketchOnPlane,
@@ -2641,6 +2806,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     mirrorSteps: startMirrorSteps,
     patternBody: startPatternBody,
     patternSteps: startPatternSteps,
+    revolve: startRevolve,
   };
   // the last few operations used, for the grid's Recent row
   const [recent, setRecent] = useState<string[]>(loadRecent);
@@ -3105,6 +3271,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                 firstBody={extrudeOp.firstBody} param={extrudeOp.param} preview={extrudePreview.preview}
                 direction={extrudeNormal ? extrudeDirectionText(extrudeOp.v, extrudeNormal, extrudePartAt) : ''}
                 onEditSketch={editExtrudeSketch} onApply={() => void applyExtrude()} onCancel={closeOp} />
+            )}
+            {revolveOp && (
+              <RevolveDialog value={revolveOp.v} onChange={changeRevolve} editing={revolveOp.line != null}
+                firstBody={revolveOp.firstBody} sketches={revolvable(docSketches).map((x) => x.name)}
+                choices={revolveChoices} params={paramVals} view={revolveView} problem={revolveProblem}
+                summary={revolveSummary(revolveOp.v, revolveAngle, axisLabel(revolveAxis, revolveChoices), revolveNormal)}
+                preview={revolvePreview.preview} onEditSketch={editRevolveSketch}
+                onApply={() => void applyRevolve()} onCancel={closeOp} />
             )}
             {argOp?.v.op === 'auto_round' && (
               <RoundDialog value={argOp.v} onChange={(v) => setArgOp((o) => o && { ...o, v })}

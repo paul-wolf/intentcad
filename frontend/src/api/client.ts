@@ -82,6 +82,8 @@ export class ApiError extends Error {
   fix?: SizeFix;
   /** For a failed build: the script's editable params as far as it got. */
   params?: Record<string, number>;
+  /** For a failed build: each revolve() it reached (where a profile crosses its axis). */
+  revolves?: import('@/build/revolve').RevolveReport[];
   /** For a failed AI edit: what its calls cost before it gave up. */
   usage?: Pick<EditResponse, 'tokens_in' | 'tokens_out' | 'cost_usd' | 'cache_read_tokens'>;
   constructor(status: number, body: string) {
@@ -89,6 +91,7 @@ export class ApiError extends Error {
     let fix: SizeFix | undefined;
     let params: Record<string, number> | undefined;
     let usage: ApiError['usage'];
+    let revolves: ApiError['revolves'];
     try {
       const j = JSON.parse(body);
       if (j && typeof j.message === 'string') detail = j.message;
@@ -98,6 +101,7 @@ export class ApiError extends Error {
       }
       if (j && j.fix && typeof j.fix === 'object') fix = j.fix as SizeFix;
       if (j && j.params && typeof j.params === 'object') params = j.params as Record<string, number>;
+      if (j && Array.isArray(j.revolves)) revolves = j.revolves;
     } catch { /* not JSON — keep the raw body */ }
     super(`API ${status}: ${detail}`);
     this.name = 'ApiError';
@@ -106,6 +110,7 @@ export class ApiError extends Error {
     this.fix = fix;
     this.params = params;
     this.usage = usage;
+    this.revolves = revolves;
   }
 }
 
@@ -340,6 +345,14 @@ export const buildApi = {
                         datum?: boolean; both?: boolean; line?: number | null }):
     Promise<{ code: string; param: string | null }> {
     return request('/build/add_extrude', { method: 'POST', body: JSON.stringify(payload) });
+  },
+  /** Append a revolve of a face sketch, or rewrite the one on `line`. The
+   *  axis is a line of the sketch ({line: id}), X / Y / Z, a straight edge or
+   *  a cylindrical face; the angle (≤ 360°) a number or an expression. */
+  addRevolve(payload: { code: string; sketch: string; op: ExtrudeOp; axis: import('@/build/revolve').RevolveAxis;
+                        angle: number | string; both?: boolean; flip?: boolean; line?: number | null }):
+    Promise<{ code: string }> {
+    return request('/build/add_revolve', { method: 'POST', body: JSON.stringify(payload) });
   },
   /** Append a shell() line, or rewrite the one on `line` (its thickness a P key). */
   addShell(payload: { code: string; remove: FaceRefSpec[]; thickness: number; inside: boolean; line?: number | null }):
@@ -614,7 +627,7 @@ export type MirrorPlane = { base: 'XY' | 'XZ' | 'YZ' } | { plane: string } | { f
 export type ExtrudeOp = 'cut' | 'join' | 'new';
 export type ArgOpKind = 'auto_round' | 'truss_windows';
 export type PlaneOpKind = 'offset_plane' | 'edge_plane' | 'tangent_plane';
-export type OpKind = 'extrude' | 'shell' | 'holes' | EdgeOpKind | ArgOpKind | PlaneOpKind | 'mirror_body' | 'pattern_body';
+export type OpKind = 'extrude' | 'revolve' | 'shell' | 'holes' | EdgeOpKind | ArgOpKind | PlaneOpKind | 'mirror_body' | 'pattern_body';
 
 /** A construction plane as the build put it (backend modeling/planes.py). */
 export interface PlaneReport {
@@ -746,6 +759,8 @@ export interface RunResponse {
   planes?: Record<string, PlaneReport>;
   /** each linear()/circular() the build used, its instances */
   patterns?: PatternReport[];
+  /** each revolve() of a sketch: its axis, and where a profile crosses it */
+  revolves?: import('@/build/revolve').RevolveReport[];
 }
 
 /** Mirrors backend modeling.schemas.AutoRoundReport. */

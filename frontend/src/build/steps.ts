@@ -8,7 +8,7 @@ import type { RunResponse, Step } from '@/api/client';
 import type { OpIcon } from './operations';
 
 const ICONS: Record<string, OpIcon> = {
-  extrude: 'extrude', shell: 'shell', holes: 'hole', fillet: 'fillet', chamfer: 'chamfer',
+  extrude: 'extrude', revolve: 'revolve', shell: 'shell', holes: 'hole', fillet: 'fillet', chamfer: 'chamfer',
   auto_round: 'round', truss_windows: 'lighten', offset_plane: 'plane-offset', edge_plane: 'plane-edge', tangent_plane: 'plane-tangent',
   mirror_body: 'mirror', pattern_body: 'pattern',
 };

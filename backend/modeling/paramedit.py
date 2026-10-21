@@ -264,14 +264,121 @@ def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
     return code, key
 
 
+# --- Revolve: a sketch's closed shapes turned around an axis (modeling/revolve.py)
+#     part += revolve(sketch("Knob"), axis=sketch_line("Knob", "axis-v"), angle=360)
+#     part -= revolve(sketch("Groove"), axis=face_ref({...}), angle=P["groove_arc"], both=True, flip=True)
+# The axis is, in the API's form, {"line": id} (a line of the same sketch),
+# {"base": "X"}, {"edge": ref} or {"face": ref} (a cylinder's centre line).
+
+_AXIS_WORDS = {"axis-h": "H axis", "axis-v": "V axis", "axis-fh": "face H axis", "axis-fv": "face V axis"}
+
+
+def revolve_axis_label(axis: dict | None) -> str:
+    """A revolve axis in a few words: "V axis", "line l3", "X axis", the edge's or cylinder's hint."""
+    if not axis:
+        return "?"
+    if axis.get("line"):
+        return _AXIS_WORDS.get(axis["line"], f"line {axis['line']}")
+    if axis.get("base"):
+        return f"{axis['base']} axis"
+    ref = axis.get("edge") or axis.get("face") or {}
+    return str(ref.get("hint") or ("edge" if "edge" in axis else "cylinder axis"))
+
+
+def _revolve_axis_src(sketch: str, axis) -> str:
+    if isinstance(axis, dict) and axis.get("line"):
+        return f"sketch_line({json.dumps(sketch)}, {json.dumps(str(axis['line']))})"
+    if isinstance(axis, dict) and not any(axis.get(k) for k in ("base", "edge", "face")):
+        raise ParamError("pick an axis: a line of the sketch, a straight edge, a cylinder, or X, Y, Z")
+    return _dir_src(axis, "revolve axis")
+
+
+def _revolve_text(sketch: str, op: str, axis_src: str, angle_src: str, both: bool, flip: bool) -> str:
+    return (f"part {_EXTRUDE_SYM[op]} revolve(sketch({json.dumps(sketch)}), axis={axis_src}, angle={angle_src}"
+            + (", both=True" if both else "") + (", flip=True" if flip else "") + ")")
+
+
+def _read_revolve(stmt, call, pv: dict) -> tuple[dict, dict]:
+    """A revolve line written as _revolve_text writes it, back into (args
+    {"sketch", "op", "axis", "angle", "both", "flip"}, exprs: the angle's
+    expression when it is one). Any other form raises ParamError."""
+    op = ("cut" if isinstance(stmt.op, ast.Sub) else "join") if isinstance(stmt, ast.AugAssign) else "new"
+    bad = ParamError("this revolve isn't written the way the editor writes them: edit it in the code")
+    kw = {k.arg: k.value for k in call.keywords}
+    if len(call.args) != 1 or None in kw or not {"axis", "angle"} <= kw.keys() <= {"axis", "angle", "both", "flip"}:
+        raise bad
+    s = call.args[0]
+    if not (isinstance(s, ast.Call) and isinstance(s.func, ast.Name) and s.func.id == "sketch"
+            and len(s.args) == 1 and not s.keywords
+            and isinstance(s.args[0], ast.Constant) and isinstance(s.args[0].value, str)):
+        raise bad
+    sketch = s.args[0].value
+    ax = kw["axis"]
+    if isinstance(ax, ast.Call) and isinstance(ax.func, ast.Name) and ax.func.id == "sketch_line":
+        if not (len(ax.args) == 2 and not ax.keywords
+                and all(isinstance(a, ast.Constant) and isinstance(a.value, str) for a in ax.args)
+                and ax.args[0].value == sketch):
+            raise bad
+        axis = {"line": ax.args[1].value}
+    else:
+        axis = _dir_arg(ax, "revolve axis")
+    flags = {}
+    for k in ("both", "flip"):
+        if k in kw and not (isinstance(kw[k], ast.Constant) and isinstance(kw[k].value, bool)):
+            raise bad
+        flags[k] = bool(kw[k].value) if k in kw else False
+    angle, expr = _read_amount(kw["angle"], pv)
+    return ({"sketch": sketch, "op": op, "axis": axis, "angle": angle, **flags},
+            {"angle": expr} if expr is not None else {})
+
+
+def add_revolve(code: str, sketch: str, op: str, axis, angle=360, both: bool = False,
+                flip: bool = False, line: int | None = None) -> str:
+    """Append a revolve of sketch `sketch` about `axis` to the script: op
+    "cut" removes it from `part`, "join" adds it, "new" makes it the part (a
+    script with no `part` yet). `angle` (degrees, at most 360) is a number or
+    an expression of P names; `both` spreads it evenly either side of the
+    sketch plane, `flip` turns the other way.
+
+    With `line`, rewrite the revolve line there instead (its sketch stays).
+    New is only for the line that makes the part first."""
+    if op not in _EXTRUDE_SYM:
+        raise ParamError(f"unknown revolve operation {op!r}")
+    if isinstance(angle, (int, float)) and not isinstance(angle, bool) and not 0 < float(angle) <= 360:
+        raise ParamError("the angle must be more than 0° and at most 360°")
+    angle_src = _write_amount(angle, param_names(code), "angle")
+    tree = ast.parse(code)
+    if line is None:
+        if op == "new" and _assigns_part(tree):
+            raise ParamError("the script already makes a part: Cut or Join this sketch instead")
+        text = _revolve_text(sketch, op, _revolve_axis_src(sketch, axis), angle_src, both, flip)
+        if not code.strip():
+            return text + "\n"
+        return code.rstrip("\n") + ("\n\n" if op == "new" else "\n") + text + "\n"
+    hit = _op_stmt(tree, line)
+    if hit is None or hit[2] != "revolve":
+        raise ParamError(f"line {line} is not a revolve line any more")
+    stmt, call, _ = hit
+    old, _ = _read_revolve(stmt, call, _p_values(code))
+    before = _part_before(tree, stmt.lineno)
+    if op == "new" and before:
+        raise ParamError("New body is only for the first body: the part is made before this line")
+    if op != "new" and not before:
+        raise ParamError(f"there is no part before this line to {op} with: it can only be a New body")
+    text = _revolve_text(old["sketch"], op, _revolve_axis_src(old["sketch"], axis), angle_src, both, flip)
+    return _write_op(code, text, line, "revolve")
+
+
 # --- The operations: one script line each, written by the editor's dialogs (or
 # the AI, in the same form) and read back (op_at) to reopen the dialog on it.
 # Each has a reader (line → the dialog's values) and a writer (values → the
 # line). Editing rewrites that line in place and sets the values of the P keys
 # it uses; nothing else changes.
 
-OPS = ("extrude", "shell", "holes", "fillet", "chamfer", "auto_round", "truss_windows", "mirror_body",
+OPS = ("extrude", "revolve", "shell", "holes", "fillet", "chamfer", "auto_round", "truss_windows", "mirror_body",
        "pattern_body")
+# the operations that make a solid from a sketch: part = / += / -= op(sketch(...), ...)
+SKETCH_OPS = ("extrude", "revolve")
 # construction planes: PLANES["name"] = offset_plane(...) / edge_plane(...) / tangent_plane(...)
 PLANE_OPS = ("offset_plane", "edge_plane", "tangent_plane")
 # the P key base of each edge operation's size, and its argument
@@ -351,8 +458,8 @@ def _recognise(node):
     if (isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name) and node.target.id == "part"
             and isinstance(node.op, (ast.Sub, ast.Add)) and isinstance(node.value, ast.Call)):
         value = node.value.args[0] if _is_copy(node.value) else node.value    # a mirrored / patterned copy
-        if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "extrude":
-            return value, "extrude"
+        if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id in SKETCH_OPS:
+            return value, value.func.id
     return None
 
 
@@ -488,6 +595,8 @@ def _read_op(code: str, stmt, call, op: str, pv: dict, datum=()) -> tuple[dict, 
     exprs: dict = {}
     if op == "extrude":
         args, params["depth"] = _read_extrude(stmt, call, pv, set(datum))
+    elif op == "revolve":
+        args, exprs = _read_revolve(stmt, call, pv)
     elif op in PLANE_OPS:
         args, exprs = _read_plane(stmt, call, op, pv)
     elif op == "mirror_body":
@@ -1239,7 +1348,7 @@ def _plural(n: int, word: str) -> str:
     return f"{n} {word}{'' if n == 1 else 's'}"
 
 
-TITLES = {"extrude": "Extrude", "shell": "Shell", "holes": "Holes", "fillet": "Fillet", "chamfer": "Chamfer",
+TITLES = {"extrude": "Extrude", "revolve": "Revolve", "shell": "Shell", "holes": "Holes", "fillet": "Fillet", "chamfer": "Chamfer",
           "auto_round": "Round", "truss_windows": "Lighten", "offset_plane": "Offset plane",
           "edge_plane": "Plane on edge", "tangent_plane": "Tangent plane", "mirror_body": "Mirror body",
           "pattern_body": "Pattern body"}
@@ -1278,6 +1387,10 @@ def _summary(op: str, a: dict, points: dict) -> str:
         how = "through all" if a["through"] else _mm(a["depth"])
         return (f"{_EXTRUDE_TITLES[a['op']]} {a['sketch']!r} {how}" + (" both ways" if a["both"] else "")
                 + (" · flipped" if a["flip"] else ""))
+    if op == "revolve":
+        return (f"{_EXTRUDE_TITLES[a['op']]} {a['sketch']!r} revolved {_deg(a['angle'])} about the "
+                f"{revolve_axis_label(a['axis'])}" + (" both ways" if a["both"] else "")
+                + (" · flipped" if a["flip"] else ""))
     if op == "shell":
         opens = [str(r.get("hint") or "face").removesuffix(" face") for r in a["remove"]]
         where = f"{', '.join(opens)} open" if opens else "closed"
@@ -1303,7 +1416,7 @@ def _variant(stmt) -> str | None:
     if isinstance(stmt, ast.AugAssign):
         return "cut" if isinstance(stmt.op, ast.Sub) else "join"
     return "new" if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Call) \
-        and getattr(stmt.value.func, "id", None) == "extrude" else None
+        and getattr(stmt.value.func, "id", None) in SKETCH_OPS else None
 
 
 def _op_step(code: str, stmt, call, op: str, pv: dict, datum, points: dict, shift: int, off: bool) -> dict:
@@ -1340,6 +1453,10 @@ def _op_step(code: str, stmt, call, op: str, pv: dict, datum, points: dict, shif
         step["summary"] += f" · mirrored across {step['mirror_plane']}"
     elif op == "extrude":
         step["sketch"] = a["sketch"]
+    elif op == "revolve":
+        step["sketch"] = a["sketch"]
+        step["edges"] = [a["axis"]["edge"]] if a["axis"].get("edge") else []
+        step["faces"] = [a["axis"]["face"]] if a["axis"].get("face") else []
     elif op == "shell":
         step["faces"] = a["remove"]
     elif op in EDGE_OPS:
@@ -1493,7 +1610,7 @@ def _delete(code: str, line: int) -> str:
 # face (face_ref), "XY" / "XZ" / "YZ" or PLANES["name"]; the API passes it as
 # {"face": ref}, {"base": "XY"} or {"plane": "name"}.
 
-MIRROR_OPS = ("extrude", "holes", "fillet", "chamfer")
+MIRROR_OPS = ("extrude", "revolve", "holes", "fillet", "chamfer")
 # a copy's link comment: "# mirror of line 7 across Mid" or "# pattern of line 7"
 _LINK = re.compile(r"\s*#\s*(mirror|pattern) of line (\d+)(?: across (.+?))?\s*$")
 # the call that wraps a copy's input, and what its link comment says it is
@@ -1508,7 +1625,7 @@ def _is_copy(node) -> bool:
 
 def _copy_node(stmt, call, op: str):
     """The mirrored(..., PLANE) or patterned(..., PATTERN) call of a copy, else None."""
-    if op == "extrude":
+    if op in SKETCH_OPS:
         return stmt.value if isinstance(stmt, ast.AugAssign) and _is_copy(stmt.value) else None
     if op == "holes":
         node = next((k.value for k in call.keywords if k.arg == "at"), None)
@@ -1582,7 +1699,7 @@ def _copy_text(text: str, op: str, arg_src: str, fn: str = "mirrored") -> str:
     stmt, (call, _) = body[0], hit
     if _copy_node(stmt, call, op) is not None:
         raise ParamError(f"it is a copy already: {verb} its original")
-    if op == "extrude":
+    if op in SKETCH_OPS:
         sym = "-=" if isinstance(stmt, ast.AugAssign) and isinstance(stmt.op, ast.Sub) else "+="
         a, b = _span(text, call)
         return f"part {sym} {fn}({text[a:b]}, {arg_src})"
@@ -1607,9 +1724,9 @@ def _link_key(stmt, op: str):
     mirrored() / patterned() taken off (an extrude: whether it adds or cuts,
     and the extrude)."""
     bare = _Unwrap().visit(ast.parse(ast.unparse(stmt)).body[0])
-    if op == "extrude":
+    if op in SKETCH_OPS:
         cut = isinstance(bare, ast.AugAssign) and isinstance(bare.op, ast.Sub)
-        return ("extrude", cut, ast.dump(bare.value))
+        return (op, cut, ast.dump(bare.value))
     return (op, ast.dump(bare))
 
 
@@ -2090,7 +2207,7 @@ def _step_stem(code: str, stmt, call, op: str) -> str:
                  and getattr(n.func, "id", None) in ("sketch", "sketch_points") and n.args
                  and isinstance(n.args[0], ast.Constant) and isinstance(n.args[0].value, str)]
         return _stem(named[0]) if named else "pattern"
-    if op == "extrude":
+    if op in SKETCH_OPS:
         return _stem(a.get("sketch"))
     if op == "holes":
         return _stem((a.get("at") or {}).get("sketch") or "holes")
@@ -2231,7 +2348,7 @@ def _relinked(fn):
 
 
 # every writer leaves the link comments naming the right lines
-for _fn in (set_params, add_param, drop_param, add_extrude, add_shell, add_edge_op, add_holes, edit_args,
+for _fn in (set_params, add_param, drop_param, add_extrude, add_revolve, add_shell, add_edge_op, add_holes, edit_args,
             add_plane, rename_plane, suppress, delete_step, mirror_steps, add_mirror_body, unlink,
             pattern_steps, add_pattern_body, set_pattern):
     globals()[_fn.__name__] = _relinked(_fn)

@@ -16,6 +16,8 @@ import {
 import { mirrorBodyHint, mirrorBodySummary, mirrorStepsSummary } from '@/build/mirror';
 import { dirWords, instanceCount, patternSummary, remapSkip, type PatternValues } from '@/build/pattern';
 import { BODY_HUES } from '@/build/bodyColors';
+import { axisLabel, type AxisChoice, type RevolveAxis, type RevolveValues } from '@/build/revolve';
+import type { XY } from '@/build/faceSketch';
 import { ParamExprInput } from './ParamExprInput';
 
 // The part editor's explicit operations (Shell, Hole, Fillet, Chamfer; and reopened,
@@ -763,6 +765,182 @@ export function ExtrudeDialog({ value, onChange, firstBody, param, direction, pr
         <div><b>{direction}</b></div>
       </div>
     </OpFrame>
+  );
+}
+
+// ---------------------------------------------------------------- Revolve
+
+/** The Revolve dialog's drawing of the sketch: its shapes, the axis (long
+ *  enough to run across it) and where they cross it, in sketch coordinates. */
+export interface RevolveSketchView { loops: XY[][]; axis: [XY, XY] | null; crossings: XY[] }
+
+const AXIS_KEY = (a: RevolveAxis | null): string =>
+  !a ? '' : 'line' in a ? `line:${a.line}` : 'base' in a ? `base:${a.base}` : 'picked';
+
+/** Revolve (new or reopened): the sketch, the axis (a line of the sketch, X /
+ *  Y / Z, or an edge or cylinder clicked in the view), the angle, both ways,
+ *  flip and the operation; a drawing of the sketch with the axis, any crossing
+ *  in red; the result is previewed, its angle on a round handle. */
+export function RevolveDialog({ value, onChange, editing, firstBody, sketches, choices, params, view, problem, summary,
+  preview, onEditSketch, onApply, onCancel }: {
+  value: RevolveValues; onChange: (v: RevolveValues) => void;
+  editing: boolean;
+  /** the line makes the part: New body, and nothing else */
+  firstBody: boolean;
+  /** the sketches it can turn */
+  sketches: string[];
+  /** the sketch's lines to turn about */
+  choices: AxisChoice[];
+  params: Record<string, number>;
+  view: RevolveSketchView;
+  /** why it can't be built as it is (the axis crosses the shapes, none picked...) */
+  problem: string | null;
+  summary: string;
+  preview: PreviewState;
+  onEditSketch: () => void;
+  onApply: () => void; onCancel: () => void;
+}) {
+  const { palette, seg, row, note } = useStyles();
+  const set = (p: Partial<RevolveValues>) => onChange({ ...value, ...p });
+  const a = amountValue(value.angle, params);
+  const angleBad = a === null ? 'The angle must be a number or an expression of the parameters'
+    : a <= 0 || a > 360 ? 'The angle is more than 0° and at most 360°' : null;
+  const bad = problem ?? angleBad;
+  const full = a !== null && a >= 360 - 1e-9;
+  const flipOff = value.both || full;
+  const ok = !bad && preview.state !== 'running' && preview.state !== 'error';
+  const shown: PreviewState = bad ? { state: 'error', message: bad, fix: null } : preview;
+  const key = AXIS_KEY(value.axis);
+  const pickAxis = (k: string) => {
+    if (k.startsWith('line:')) set({ axis: { line: k.slice(5) } });
+    else if (k.startsWith('base:')) set({ axis: { base: k.slice(5) as 'X' | 'Y' | 'Z' } });
+  };
+  const ops: ExtrudeOp[] = firstBody ? ['new'] : ['join', 'cut'];
+  const opText = { new: 'New body', join: 'Join', cut: 'Cut' } as const;
+  const opTip = { new: 'The turned shape is the part', join: 'Add the turned shape to the part (a boss, a rim)',
+                  cut: 'Remove the turned shape from the part (a groove, a bore)' } as const;
+  const field: CSSProperties = { flex: 1, minWidth: 0, fontSize: '12px', padding: '2px 4px', background: palette.inputBg,
+                                 color: palette.text, border: `1px solid ${palette.border}`, borderRadius: '3px' };
+  return (
+    <OpFrame title={editing ? 'Edit revolve' : 'Revolve'} preview={shown} ok={ok} onCancel={onCancel} onApply={onApply}
+             applyLabel={editing ? 'Update' : value.op === 'cut' ? 'Cut' : value.op === 'join' ? 'Join' : 'Create'} width={300}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: palette.text }}>
+        <span style={{ width: 44 }}>Sketch</span>
+        {sketches.length > 1 && !editing ? (
+          <select value={value.sketch} onChange={(e) => set({ sketch: e.target.value })} style={field} aria-label="Sketch">
+            {sketches.map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        ) : (
+          <b style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+             title={value.sketch}>{value.sketch}</b>
+        )}
+        <button onClick={onEditSketch} title="Open the sketch to change its shapes or draw an axis line; Done brings you back here"
+                style={{ fontSize: '12px', padding: '2px 8px', cursor: 'pointer', borderRadius: '4px',
+                         background: palette.buttonBg, color: palette.text, border: `1px solid ${palette.border}` }}>
+          Edit sketch
+        </button>
+      </div>
+      <div style={{ display: 'flex' }}>
+        {ops.map((o, i) => (
+          <button key={o} style={{ ...seg(value.op === o), borderRadius: ops.length === 1 ? '4px' : i === 0 ? '4px 0 0 4px' : '0 4px 4px 0',
+                                   borderLeft: i ? 'none' : undefined }}
+                  onClick={() => set({ op: o })} title={opTip[o]}>{opText[o]}</button>
+        ))}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <label style={row}>
+          <span style={{ width: 44 }}>Axis</span>
+          <select value={key} onChange={(e) => pickAxis(e.target.value)} style={field} aria-label="Axis"
+                  title="The line the shapes turn round: it lies in the sketch plane">
+            {!key && <option value="">Pick an axis…</option>}
+            <optgroup label="In the sketch">
+              {choices.map((c) => <option key={c.id} value={`line:${c.id}`}>{c.label}</option>)}
+            </optgroup>
+            <optgroup label="Through the origin">
+              {(['X', 'Y', 'Z'] as const).map((b) => <option key={b} value={`base:${b}`}>{b} axis</option>)}
+            </optgroup>
+            {key === 'picked' && <option value="picked">{axisLabel(value.axis)}</option>}
+          </select>
+        </label>
+        <span style={{ color: palette.textSecondary, lineHeight: 1.35 }}>
+          or click a straight edge or a cylinder in the view (its centre line)
+        </span>
+      </div>
+      <RevolveSketchDrawing view={view} />
+      <div style={{ ...row, alignItems: 'flex-start' }}>
+        <span style={{ width: 44, paddingTop: 3 }}>Angle</span>
+        <ParamExprInput value={amountText(value.angle)} onChange={(t) => set({ angle: t })} params={params} unit="°"
+                        width={80} title="Degrees to turn: 360 makes it fully round" />
+        <span style={{ color: palette.textSecondary, paddingTop: 3 }}>°</span>
+        <div style={{ display: 'flex', gap: '3px', marginLeft: 'auto' }}>
+          {[90, 180, 360].map((d) => (
+            <button key={d} onClick={() => set({ angle: d })}
+                    style={{ fontSize: '11px', padding: '1px 5px', cursor: 'pointer', borderRadius: '3px',
+                             background: a === d ? palette.accent : palette.buttonBg, color: a === d ? '#fff' : palette.text,
+                             border: `1px solid ${a === d ? palette.accent : palette.border}` }}>{d}</button>
+          ))}
+        </div>
+      </div>
+      <label style={{ ...row, opacity: full ? 0.45 : 1 }} title="Spread the angle evenly either side of the sketch plane">
+        <input type="checkbox" checked={value.both && !full} disabled={full} onChange={(e) => set({ both: e.target.checked })} />
+        Both ways (symmetric about the sketch)
+      </label>
+      <label style={{ ...row, opacity: flipOff ? 0.45 : 1 }}
+             title="Turn the other way round the axis — the preview shows where it goes">
+        <input type="checkbox" checked={value.flip && !flipOff} disabled={flipOff} onChange={(e) => set({ flip: e.target.checked })} />
+        Flip direction
+      </label>
+      <div style={note}>
+        {summary}
+        {!full && (
+          <div style={{ color: palette.textSecondary, marginTop: 2 }}>
+            Drag the round handle to set the angle (15° steps, Shift 1°).
+          </div>
+        )}
+      </div>
+    </OpFrame>
+  );
+}
+
+/** The sketch's shapes, the axis and the crossings, fitted into a strip. */
+function RevolveSketchDrawing({ view }: { view: RevolveSketchView }) {
+  const { palette } = useStyles();
+  const pts = view.loops.flat().concat(view.crossings);
+  if (!pts.length) return null;
+  let x0 = Math.min(...pts.map((p) => p[0])), x1 = Math.max(...pts.map((p) => p[0]));
+  let y0 = Math.min(...pts.map((p) => p[1])), y1 = Math.max(...pts.map((p) => p[1]));
+  if (view.axis) {
+    // the axis's nearest point to the shapes, so it shows beside them
+    const [a, b] = view.axis, dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy || 1;
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, t = ((cx - a[0]) * dx + (cy - a[1]) * dy) / l2;
+    const fx = a[0] + dx * t, fy = a[1] + dy * t;
+    x0 = Math.min(x0, fx); x1 = Math.max(x1, fx); y0 = Math.min(y0, fy); y1 = Math.max(y1, fy);
+  }
+  const size = Math.max(x1 - x0, y1 - y0, 1e-3), pad = size * 0.12;
+  const vb = [x0 - pad, y0 - pad, x1 - x0 + 2 * pad, y1 - y0 + 2 * pad];
+  const r = size * 0.035;
+  const axisLine = view.axis && (() => {
+    const [a, b] = view.axis!, dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy) || 1;
+    const cx = vb[0]! + vb[2]! / 2, cy = vb[1]! + vb[3]! / 2, t = ((cx - a[0]) * dx + (cy - a[1]) * dy) / l;
+    const fx = a[0] + (dx / l) * t, fy = a[1] + (dy / l) * t, k = size * 4;
+    return [fx - (dx / l) * k, fy - (dy / l) * k, fx + (dx / l) * k, fy + (dy / l) * k];
+  })();
+  return (
+    <svg viewBox={vb.join(' ')} preserveAspectRatio="xMidYMid meet" role="img" aria-label="The sketch and the axis"
+         style={{ width: '100%', height: 110, background: palette.buttonBg, borderRadius: '4px' }}>
+      {view.loops.map((l, i) => (
+        <polygon key={i} points={l.map((p) => p.join(',')).join(' ')} fill={`${palette.accent}33`} stroke={palette.text}
+                 strokeWidth={1.2} vectorEffect="non-scaling-stroke" />
+      ))}
+      {axisLine && (
+        <line x1={axisLine[0]} y1={axisLine[1]} x2={axisLine[2]} y2={axisLine[3]} stroke={palette.accent}
+              strokeWidth={1.4} strokeDasharray="6 3" vectorEffect="non-scaling-stroke" />
+      )}
+      {view.crossings.map((p, i) => (
+        <circle key={i} cx={p[0]} cy={p[1]} r={r} fill="none" stroke={palette.danger} strokeWidth={2.2}
+                vectorEffect="non-scaling-stroke" />
+      ))}
+    </svg>
   );
 }
 

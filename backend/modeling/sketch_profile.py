@@ -5,7 +5,9 @@ sketch, in sketch coordinates on the sketch's plane:
 
     {"plane": {"origin": [x,y,z], "normal": [x,y,z], "xAxis": [x,y,z]},
      "loops": [[segment, ...], ...],
-     "points": [[x,y], ...]}          (its point entities: where sketch_points() puts holes)
+     "points": [[x,y], ...],          (its point entities: where sketch_points() puts holes)
+     "lines": {id: [[x,y], [x,y]]}}   (its straight construction / reference lines and
+                                       built-in axes: what sketch_line() turns into a revolve axis)
 
     segment = {"t": "line",   "p": [[x,y], [x,y]]}
             | {"t": "arc",    "p": [[x,y], mid, [x,y]]}      (three-point arc)
@@ -275,4 +277,59 @@ def bind(profiles: dict, ns: dict | None = None, report: dict | None = None) -> 
         if report is not None:
             report[name] = where
         return profile_points({**profile, "plane": where["plane"] or profile.get("plane")}, name)
-    return {"sketch": sketch, "sketch_points": sketch_points}
+
+    def sketch_line(name: str, line: str) -> SketchLine:
+        """A straight line of the face sketch `name` (a built-in axis "axis-h"
+        / "axis-v", a construction or a reference line, by entity id) as an
+        axis on the sketch's plane as rebound onto `part`: what revolve()
+        turns a profile around."""
+        if name not in profiles:
+            raise SketchError(f"no sketch named {name!r} in this part")
+        profile = profiles[name]
+        where = on_plane(profile, name, ns) or rebind(profile, (ns or {}).get("part"))
+        if report is not None:
+            report[name] = where
+        return profile_line({**profile, "plane": where["plane"] or profile.get("plane")}, name, line)
+    return {"sketch": sketch, "sketch_points": sketch_points, "sketch_line": sketch_line}
+
+
+_AXIS_LABELS = {"axis-h": "H axis", "axis-v": "V axis", "axis-fh": "face H axis", "axis-fv": "face V axis"}
+
+
+class SketchLine:
+    """A sketch line in 3D: a point on it, its unit direction, the normal of
+    the sketch's plane and how to name it in a message ("the V axis of
+    'Knob'")."""
+
+    def __init__(self, origin: Vector, direction: Vector, normal: Vector, label: str, sketch: str, line: str):
+        self.origin, self.direction, self.normal = origin, direction, normal
+        self.label, self.sketch, self.line = label, sketch, line
+
+    def __repr__(self) -> str:
+        return f"sketch_line({self.sketch!r}, {self.line!r})"
+
+
+def profile_line(profile: dict, name: str, line: str) -> SketchLine:
+    """Line `line` of a sketch's profile on its plane. The built-in axes are
+    worked out from the plane when the profile doesn't list them (an older
+    saved profile): H along the sketch x, V along its y, through the world
+    origin projected onto a face sketch's plane, else the plane's origin."""
+    pl = _plane(profile.get("plane") or {})
+    label = f"the {_AXIS_LABELS[line]} of {name!r}" if line in _AXIS_LABELS else f"line {line!r} of {name!r}"
+    pts = (profile.get("lines") or {}).get(line)
+    if pts is None and line in ("axis-h", "axis-v"):
+        o = pl.origin
+        if profile.get("face"):
+            o = pl.z_dir * o.dot(pl.z_dir)     # the world origin, projected onto the plane
+        d = pl.x_dir if line == "axis-h" else pl.y_dir
+        return SketchLine(o, d.normalized(), pl.z_dir, label, name, line)
+    if pts is None:
+        raise SketchError(f"sketch {name!r} has no straight line {line!r} to revolve about "
+                          "(deleted, curved, or not a construction / reference line?)")
+    try:
+        a, b = (pl.from_local_coords((float(p[0]), -float(p[1]))) for p in pts)
+    except (TypeError, ValueError, IndexError) as exc:
+        raise SketchError(f"sketch {name!r}: line {line!r} is not a straight line") from exc
+    if (b - a).length < 1e-9:
+        raise SketchError(f"{label} has no length, so it has no direction to revolve about")
+    return SketchLine(a, (b - a).normalized(), pl.z_dir, label, name, line)
