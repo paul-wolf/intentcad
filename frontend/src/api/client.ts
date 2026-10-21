@@ -408,7 +408,23 @@ export const buildApi = {
     Promise<{ code: string; made: { of: number; line: number }[]; skipped: { line: number; reason: string }[] }> {
     return request('/build/mirror_steps', { method: 'POST', body: JSON.stringify({ code, lines, plane }) });
   },
-  /** Drop a mirrored copy's link comment: it no longer follows its original. */
+  /** Append `part = pattern_body(part, PATTERN, join=…)`, or rewrite the one
+   *  on `line`; `params`: the P keys holding the pattern's numbers. */
+  addPatternBody(payload: { code: string; pattern: PatternSpec; join: boolean; line?: number | null }):
+    Promise<{ code: string; params: string[] }> {
+    return request('/build/add_pattern_body', { method: 'POST', body: JSON.stringify(payload) });
+  },
+  /** The copies in `pattern` of each step on `lines`, one linked line each
+   *  after the last of them; `skipped`: the steps that can't be, and why. */
+  patternSteps(code: string, lines: number[], pattern: PatternSpec):
+    Promise<{ code: string; made: { of: number; line: number }[]; skipped: { line: number; reason: string }[]; params: string[] }> {
+    return request('/build/pattern_steps', { method: 'POST', body: JSON.stringify({ code, lines, pattern }) });
+  },
+  /** The pattern of the copy on `line`, and of the copies made with it, rewritten. */
+  setPattern(code: string, line: number, pattern: PatternSpec): Promise<{ code: string; params: string[] }> {
+    return request('/build/set_pattern', { method: 'POST', body: JSON.stringify({ code, line, pattern }) });
+  },
+  /** Drop a mirrored or pattern copy's link comment: it no longer follows its original. */
   unlinkStep(code: string, line: number): Promise<{ code: string }> {
     return request('/build/unlink_step', { method: 'POST', body: JSON.stringify({ code, line }) });
   },
@@ -553,6 +569,41 @@ export interface OpAt {
   /** a mirrored copy (`mirrored(..., PLANE)`): across what, and the line of the
    *  step it follows (null: unlinked) */
   mirror?: { plane: MirrorPlane; label: string; of: number | null } | null;
+  /** a pattern copy (`patterned(..., PATTERN)`): the pattern as written (its
+   *  P keys and expressions), the step it follows (null: unlinked) and the
+   *  copies made with it (their lines) */
+  pattern?: { args: PatternSpec; params: Record<string, string>; exprs: Record<string, string>; label: string;
+              of: number | null; lines: number[] } | null;
+}
+
+/** A pattern's direction (linear) or axis (circular): X / Y / Z, an edge (a
+ *  straight edge: along it, or about it; a circular edge: its centre axis) or
+ *  a face (a flat face's normal; a cylindrical face's axis). */
+export type PatternDir = { base: 'X' | 'Y' | 'Z' } | { edge: EdgeRefSpec } | { face: FaceRefSpec };
+
+/** A pattern as the API has it (backend paramedit._pattern_src). Each number
+ *  may be an expression of P names. Instance 0 is the original; `skip` lists
+ *  instances left out (in a grid, index = i + j·n1). */
+export type PatternSpec =
+  | { type: 'linear'; dir: PatternDir | null; count: number | string; mode: 'spacing' | 'extent';
+      spacing?: number | string | null; extent?: number | string | null; symmetric?: boolean; flip?: boolean;
+      dir2?: PatternDir | null; count2?: number | string; mode2?: 'spacing' | 'extent';
+      spacing2?: number | string | null; extent2?: number | string | null; flip2?: boolean; skip?: number[] }
+  | { type: 'circular'; axis: PatternDir | null; count: number | string; angle: number | string;
+      symmetric?: boolean; flip?: boolean; skip?: number[] };
+
+/** A pattern as the build laid it out (backend pattern._report), for the preview. */
+export interface PatternReport {
+  line?: number | null;
+  what: 'body' | 'solid' | 'points' | 'edges' | 'faces';
+  kind: 'linear' | 'circular';
+  skip: number[];
+  instances: { index: number; skip: boolean; center?: [number, number, number]; corners?: [number, number, number][] }[];
+  /** linear: unit direction, spacing, count and instances along it (n1) */
+  dir?: [number, number, number]; spacing?: number; count?: number; n1?: number; symmetric?: boolean;
+  dir2?: [number, number, number]; spacing2?: number; count2?: number;
+  /** circular: a point on the axis, the axis, the angle between instances */
+  origin?: [number, number, number]; axis?: [number, number, number]; step?: number; angle?: number; full?: boolean;
 }
 
 /** A plane to mirror across, as the API has it (backend paramedit._plane_src). */
@@ -561,7 +612,7 @@ export type MirrorPlane = { base: 'XY' | 'XZ' | 'YZ' } | { plane: string } | { f
 export type ExtrudeOp = 'cut' | 'join' | 'new';
 export type ArgOpKind = 'auto_round' | 'truss_windows';
 export type PlaneOpKind = 'offset_plane' | 'edge_plane';
-export type OpKind = 'extrude' | 'shell' | 'holes' | EdgeOpKind | ArgOpKind | PlaneOpKind | 'mirror_body';
+export type OpKind = 'extrude' | 'shell' | 'holes' | EdgeOpKind | ArgOpKind | PlaneOpKind | 'mirror_body' | 'pattern_body';
 
 /** A construction plane as the build put it (backend modeling/planes.py). */
 export interface PlaneReport {
@@ -604,6 +655,9 @@ export interface Step {
   /** a mirrored copy: the line of the step it follows, and the plane's label */
   mirror_of?: number | null;
   mirror_plane?: string | null;
+  /** a pattern copy: the line of the step it follows, and its pattern in words */
+  pattern_of?: number | null;
+  pattern?: string | null;
 }
 
 /** An auto_round keep item's faces, as the part was when its line ran. */
@@ -682,6 +736,8 @@ export interface RunResponse {
   kept?: KeptFaces[];
   /** name -> each construction plane in PLANES */
   planes?: Record<string, PlaneReport>;
+  /** each linear()/circular() the build used, its instances */
+  patterns?: PatternReport[];
 }
 
 /** Mirrors backend modeling.schemas.AutoRoundReport. */

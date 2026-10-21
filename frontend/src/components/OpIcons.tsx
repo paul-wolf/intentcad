@@ -41,6 +41,14 @@ const ICONS: Record<OpIconName, ReactNode> = {
   // a block and its mirror image either side of a dashed plane
   mirror: <><path d="M12 2v20" strokeDasharray="2 1.5" /><path d="M9.5 6H4v12h5.5z" /><path d="M14.5 6H20v12h-5.5z" opacity={0.5} /></>,
   // a hole and its mirror image either side of a dashed plane
+  // a block and two copies of it, in a row
+  pattern: <><path d="M3 8h5v8H3z" /><path d="M10 8h5v8h-5z" opacity={0.6} /><path d="M17 8h5v8h-5z" opacity={0.35} /></>,
+  // a circle of dots round a centre
+  'pattern-circular': <><circle cx="12" cy="12" r="1.2" fill="currentColor" /><circle cx="12" cy="4.5" r="2" />
+                        <circle cx="18.5" cy="16" r="2" opacity={0.6} /><circle cx="5.5" cy="16" r="2" opacity={0.35} /></>,
+  // a hole and copies of it in a row, on a plate
+  'pattern-steps': <><path d="M2 6h20v12H2z" opacity={0.5} /><circle cx="6.5" cy="12" r="2" /><circle cx="12" cy="12" r="2" opacity={0.6} />
+                     <circle cx="17.5" cy="12" r="2" opacity={0.35} /></>,
   'mirror-steps': <><path d="M12 2v20" strokeDasharray="2 1.5" /><path d="M3 5h18v14H3z" opacity={0.5} />
                     <circle cx="7" cy="12" r="2.5" /><circle cx="17" cy="12" r="2.5" strokeDasharray="1.6 1.2" /></>,
   extrude: <><path d="M3 19l4-4h14l-4 4z" /><path d="M12 15V4M8.5 7.5L12 4l3.5 3.5" /></>,

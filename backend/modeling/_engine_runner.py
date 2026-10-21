@@ -456,6 +456,13 @@ def _run(code: str, export: list | None = None,
     from modeling import mirror
 
     ns.update(mirror.bind(ns))
+    # linear() / circular() / pattern_body() / patterned() — the editor's
+    # Pattern body and Pattern steps (modeling/pattern.py); each pattern used
+    # → result["patterns"], for the preview
+    from modeling import pattern
+
+    pattern_report: list[dict] = []
+    ns.update(pattern.bind(ns, pattern_report))
     ns["__editor_ops__"] = edge_ops.bind()
     # Run the script. If an operation fails partway (e.g. a chamfer too big),
     # `part` still holds the model built up to that line — render THAT plus the
@@ -672,6 +679,8 @@ def _run(code: str, export: list | None = None,
         result["face_refs"] = face_report
     if edge_report:
         result["edge_refs"] = edge_report
+    if pattern_report:
+        result["patterns"] = pattern_report
     plane_report = planes.report(ns.get("PLANES"))
     if plane_report:
         result["planes"] = plane_report

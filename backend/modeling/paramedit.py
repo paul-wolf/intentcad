@@ -59,7 +59,7 @@ def set_params(code: str, overrides: dict[str, float]) -> str:
             continue  # skip multi-line values (shouldn't happen for numbers)
         line = lines[lineno - 1]
         lines[lineno - 1] = line[:c0] + lit + line[c1:]
-    return "\n".join(lines)
+    return _renumber_skips(code, "\n".join(lines))
 
 
 def _unique(names: set[str], stem: str, suffix: str) -> str:
@@ -270,7 +270,8 @@ def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
 # line). Editing rewrites that line in place and sets the values of the P keys
 # it uses; nothing else changes.
 
-OPS = ("extrude", "shell", "holes", "fillet", "chamfer", "auto_round", "truss_windows", "mirror_body")
+OPS = ("extrude", "shell", "holes", "fillet", "chamfer", "auto_round", "truss_windows", "mirror_body",
+       "pattern_body")
 # construction planes: PLANES["name"] = offset_plane(...) / edge_plane(...)
 PLANE_OPS = ("offset_plane", "edge_plane")
 # the P key base of each edge operation's size, and its argument
@@ -349,7 +350,7 @@ def _recognise(node):
         return node.value, node.value.func.id
     if (isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name) and node.target.id == "part"
             and isinstance(node.op, (ast.Sub, ast.Add)) and isinstance(node.value, ast.Call)):
-        value = node.value.args[0] if _is_mirrored(node.value) else node.value    # a mirrored copy
+        value = node.value.args[0] if _is_copy(node.value) else node.value    # a mirrored / patterned copy
         if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "extrude":
             return value, "extrude"
     return None
@@ -406,7 +407,7 @@ def _face_refs(node) -> list[dict]:
 def _edge_refs(node) -> list[dict]:
     """fillet()/chamfer()'s edges: edges_ref([...]) (or edge_ref({...})), or
     a mirrored copy's mirrored(edges_ref([...]), PLANE)."""
-    if _is_mirrored(node):
+    if _is_copy(node):
         node = node.args[0]
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.args:
         if node.func.id == "edges_ref":
@@ -428,7 +429,7 @@ HOLE_SIZES = {"d": "hole_d", "cbore_d": "cbore_d", "cbore_depth": "cbore_depth",
 def _at(node) -> dict:
     """holes(at=...): {"sketch": name} or {"face": ref} (of a mirrored
     copy's mirrored(..., PLANE) too)."""
-    if _is_mirrored(node):
+    if _is_copy(node):
         node = node.args[0]
     if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.args
             and node.func.id == "sketch_points" and isinstance(node.args[0], ast.Constant)):
@@ -465,11 +466,17 @@ def op_at(code: str, line: int, datum=()) -> dict:
     args, params, exprs = _read_op(code, stmt, call, op, pv, datum)
     out = {"op": op, "line": stmt.lineno, "end_line": stmt.end_lineno or stmt.lineno,
            "args": args, "params": {k: v for k, v in params.items() if v}, "exprs": exprs}
-    wrap = _mirror_node(stmt, call, op)
-    if wrap is not None:
+    wrap = _copy_node(stmt, call, op)
+    if wrap is not None and wrap.func.id == "mirrored":
         plane = _mirror_plane_arg(wrap.args[1])
         link = _links(code).get(stmt.lineno)
         out["mirror"] = {"plane": plane, "label": plane_label(plane), "of": link["of"] if link else None}
+    elif wrap is not None:
+        pat, pparams, pexprs = _read_pattern(wrap.args[1], pv)
+        link = _links(code).get(stmt.lineno)
+        out["pattern"] = {"args": pat, "params": pparams, "exprs": pexprs, "label": pattern_label(pat),
+                          "of": link["of"] if link else None,
+                          "lines": _pattern_group(code, stmt.lineno)}
     return out
 
 
@@ -494,6 +501,13 @@ def _read_op(code: str, stmt, call, op: str, pv: dict, datum=()) -> tuple[dict, 
         args["gap"], e = _read_amount(gap, pv) if gap is not None else (0.0, None)
         if e is not None:
             exprs["gap"] = e
+    elif op == "pattern_body":
+        pat = call.args[1] if len(call.args) > 1 else kw.get("pattern")
+        if pat is None:
+            raise ParamError(f"line {stmt.lineno}: pattern_body() without a pattern: edit this line in the code")
+        args["pattern"], params, exprs = _read_pattern(pat, pv)
+        join = call.args[2] if len(call.args) > 2 else kw.get("join")
+        args["join"] = True if join is None else bool(_value(join, pv)[0])
     elif op in ARG_OPS:
         args, params, exprs = _read_args(code, op, call, pv)
     elif op in EDGE_OPS:
@@ -539,10 +553,10 @@ def _write_op(code: str, text: str, line: int | None, op: str) -> str:
     if hit is None or hit[2] != op:
         raise ParamError(f"line {line} is not a {op}() line any more")
     stmt, call, _ = hit
-    wrap = _mirror_node(stmt, call, op)
+    wrap = _copy_node(stmt, call, op)
     copies: list[int] = []
     if wrap is not None:
-        text = _copy_text(text, op, ast.get_source_segment(code, wrap.args[1]))
+        text = _copy_text(text, op, ast.get_source_segment(code, wrap.args[1]), wrap.func.id)
     elif op in MIRROR_OPS:
         copies = sorted((c for c, link in _links(code).items() if link["of"] == stmt.lineno), reverse=True)
     lines = code.split("\n")
@@ -1177,7 +1191,7 @@ def _plural(n: int, word: str) -> str:
 
 TITLES = {"extrude": "Extrude", "shell": "Shell", "holes": "Holes", "fillet": "Fillet", "chamfer": "Chamfer",
           "auto_round": "Round", "truss_windows": "Lighten", "offset_plane": "Offset plane",
-          "edge_plane": "Plane on edge", "mirror_body": "Mirror body"}
+          "edge_plane": "Plane on edge", "mirror_body": "Mirror body", "pattern_body": "Pattern body"}
 _EXTRUDE_TITLES = {"cut": "Cut", "join": "Join", "new": "New body"}
 
 
@@ -1189,6 +1203,8 @@ def _deg(v) -> str:
 
 
 def _summary(op: str, a: dict, points: dict) -> str:
+    if op == "pattern_body":
+        return f"Pattern body {pattern_label(a['pattern'])} · " + ("joined" if a["join"] else "separate bodies")
     if op == "mirror_body":
         if a["join"]:
             return f"Mirror body across {plane_label(a['plane'])} · joined"
@@ -1237,22 +1253,33 @@ def _op_step(code: str, stmt, call, op: str, pv: dict, datum, points: dict, shif
     step = {"kind": "op", "op": op, "variant": _variant(stmt), "line": stmt.lineno + shift,
             "end_line": (stmt.end_lineno or stmt.lineno) + shift, "off": off, "reopenable": False,
             "sketch": None, "faces": [], "edges": [], "plane": _plane_name(stmt),
-            "mirror_of": None, "mirror_plane": None}
-    wrap = _mirror_node(stmt, call, op)
-    if wrap is not None:
+            "mirror_of": None, "mirror_plane": None, "pattern_of": None, "pattern": None}
+    wrap = _copy_node(stmt, call, op)
+    if wrap is not None and wrap.func.id == "mirrored":
         try:
             step["mirror_plane"] = plane_label(_mirror_plane_arg(wrap.args[1]))
         except (ParamError, ValueError, SyntaxError):
             step["mirror_plane"] = "?"
+    elif wrap is not None:
+        try:
+            step["pattern"] = pattern_label(_read_pattern(wrap.args[1], pv)[0])
+        except (ParamError, ValueError, SyntaxError, KeyError, TypeError):
+            step["pattern"] = "?"
     try:
         a, _, _ = _read_op(code, stmt, call, op, pv, datum)
     except (ValueError, KeyError, TypeError, SyntaxError):
         title = _EXTRUDE_TITLES.get(step["variant"] or "", TITLES[op])
         step["summary"] = f"{title} · written in code"
+        if wrap is not None and step["pattern"]:
+            step["summary"] += f" · pattern {step['pattern']}"
+        elif wrap is not None and step["mirror_plane"]:
+            step["summary"] += f" · mirrored across {step['mirror_plane']}"
         return step
     step["summary"] = _summary(op, a, points)
     step["reopenable"] = not off
-    if wrap is not None:            # it works on the other side: nothing of its own to show
+    if wrap is not None and step["pattern"]:     # copies elsewhere: nothing of its own to show
+        step["summary"] += f" · pattern {step['pattern']}"
+    elif wrap is not None:            # it works on the other side: nothing of its own to show
         step["summary"] += f" · mirrored across {step['mirror_plane']}"
     elif op == "extrude":
         step["sketch"] = a["sketch"]
@@ -1313,10 +1340,14 @@ def steps(code: str, datum=(), points: dict | None = None) -> list[dict]:
         else:
             raw.append({"kind": "op", "op": "script", "variant": None, "line": a, "end_line": b, "off": True,
                         "reopenable": False, "summary": "Script", "sketch": None, "faces": [], "edges": [],
-                        "plane": None, "mirror_of": None, "mirror_plane": None})
+                        "plane": None, "mirror_of": None, "mirror_plane": None, "pattern_of": None,
+                        "pattern": None})
+    links = _links(code)
     for st in raw:
         if st["kind"] == "op" and st.get("mirror_plane"):
-            st["mirror_of"] = (_links(code).get(st["line"]) or {}).get("of")
+            st["mirror_of"] = (links.get(st["line"]) or {}).get("of")
+        if st["kind"] == "op" and st.get("pattern"):
+            st["pattern_of"] = (links.get(st["line"]) or {}).get("of")
     raw.sort(key=lambda st: st["line"])
     out: list[dict] = []
     for st in raw:
@@ -1404,25 +1435,29 @@ def _delete(code: str, line: int) -> str:
 # {"face": ref}, {"base": "XY"} or {"plane": "name"}.
 
 MIRROR_OPS = ("extrude", "holes", "fillet", "chamfer")
-_LINK = re.compile(r"\s*#\s*mirror of line (\d+)(?: across (.+?))?\s*$")
+# a copy's link comment: "# mirror of line 7 across Mid" or "# pattern of line 7"
+_LINK = re.compile(r"\s*#\s*(mirror|pattern) of line (\d+)(?: across (.+?))?\s*$")
+# the call that wraps a copy's input, and what its link comment says it is
+COPY_FNS = {"mirrored": "mirror", "patterned": "pattern"}
 
 
-def _is_mirrored(node) -> bool:
-    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "mirrored"
+def _is_copy(node) -> bool:
+    """A mirrored(x, PLANE) or patterned(x, PATTERN) call."""
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in COPY_FNS
             and len(node.args) == 2 and not node.keywords)
 
 
-def _mirror_node(stmt, call, op: str):
-    """The mirrored(..., PLANE) call of a mirrored copy, else None."""
+def _copy_node(stmt, call, op: str):
+    """The mirrored(..., PLANE) or patterned(..., PATTERN) call of a copy, else None."""
     if op == "extrude":
-        return stmt.value if isinstance(stmt, ast.AugAssign) and _is_mirrored(stmt.value) else None
+        return stmt.value if isinstance(stmt, ast.AugAssign) and _is_copy(stmt.value) else None
     if op == "holes":
         node = next((k.value for k in call.keywords if k.arg == "at"), None)
     elif op in EDGE_OPS:
         node = call.args[1] if len(call.args) > 1 else next((k.value for k in call.keywords if k.arg == "edges"), None)
     else:
         return None
-    return node if _is_mirrored(node) else None
+    return node if _is_copy(node) else None
 
 
 def _mirror_plane_arg(node) -> dict:
@@ -1476,41 +1511,42 @@ def _span(text: str, node) -> tuple[int, int]:
             starts[node.end_lineno - 1] + _chars(rows[node.end_lineno - 1], node.end_col_offset))
 
 
-def _copy_text(text: str, op: str, plane_src: str) -> str:
-    """The statement `text` of an `op` step, mirrored across `plane_src`: the
-    same operation with its input (the extruded solid, where the holes go,
-    the edges) reflected."""
+def _copy_text(text: str, op: str, arg_src: str, fn: str = "mirrored") -> str:
+    """The statement `text` of an `op` step as a copy: the same operation
+    with its input (the extruded solid, where the holes go, the edges)
+    wrapped in fn(..., arg_src) — mirrored across a plane, or patterned."""
     body = ast.parse(text).body
     hit = _recognise(body[0]) if len(body) == 1 else None
+    verb = "mirror" if fn == "mirrored" else "pattern"
     if hit is None or hit[1] != op:
-        raise ParamError(f"can't mirror {text[:60]!r}")
+        raise ParamError(f"can't {verb} {text[:60]!r}")
     stmt, (call, _) = body[0], hit
-    if _mirror_node(stmt, call, op) is not None:
-        raise ParamError("it is a mirrored copy already: mirror its original")
+    if _copy_node(stmt, call, op) is not None:
+        raise ParamError(f"it is a copy already: {verb} its original")
     if op == "extrude":
         sym = "-=" if isinstance(stmt, ast.AugAssign) and isinstance(stmt.op, ast.Sub) else "+="
         a, b = _span(text, call)
-        return f"part {sym} mirrored({text[a:b]}, {plane_src})"
+        return f"part {sym} {fn}({text[a:b]}, {arg_src})"
     if op == "holes":
         node = next((k.value for k in call.keywords if k.arg == "at"), None)
     else:
         node = call.args[1] if len(call.args) > 1 else next((k.value for k in call.keywords if k.arg == "edges"), None)
     if node is None:
-        raise ParamError(f"can't tell what to mirror in {text[:60]!r}")
+        raise ParamError(f"can't tell what to {verb} in {text[:60]!r}")
     a, b = _span(text, node)
-    return f"{text[:a]}mirrored({text[a:b]}, {plane_src}){text[b:]}"
+    return f"{text[:a]}{fn}({text[a:b]}, {arg_src}){text[b:]}"
 
 
 class _Unwrap(ast.NodeTransformer):
     def visit_Call(self, node):
         self.generic_visit(node)
-        return node.args[0] if _is_mirrored(node) else node
+        return node.args[0] if _is_copy(node) else node
 
 
 def _link_key(stmt, op: str):
-    """What a step and its mirrored copy have in common: the statement with
-    mirrored() taken off (an extrude: whether it adds or cuts, and the
-    extrude)."""
+    """What a step and its copy have in common: the statement with
+    mirrored() / patterned() taken off (an extrude: whether it adds or cuts,
+    and the extrude)."""
     bare = _Unwrap().visit(ast.parse(ast.unparse(stmt)).body[0])
     if op == "extrude":
         cut = isinstance(bare, ast.AugAssign) and isinstance(bare.op, ast.Sub)
@@ -1520,7 +1556,8 @@ def _link_key(stmt, op: str):
 
 def _stmts(code: str) -> list[dict]:
     """Every operation statement, switched off or not: [{"line", "end",
-    "stmt", "call", "op", "off", "tail" (the comment after it)}], in order."""
+    "stmt", "call", "op", "off", "tail" (the comment after it), "src" (the
+    text it was parsed from), "shift" (its line offset in it)}], in order."""
     tree = ast.parse(code)
     found = [(n, 0, code, False) for n in tree.body]
     for a, _, text in _off_blocks(code):
@@ -1535,17 +1572,18 @@ def _stmts(code: str) -> list[dict]:
             continue
         row = src.split("\n")[node.end_lineno - 1]
         out.append({"line": node.lineno + shift, "end": node.end_lineno + shift, "stmt": node, "call": hit[0],
-                    "op": hit[1], "off": off, "tail": row[_chars(row, node.end_col_offset):]})
+                    "op": hit[1], "off": off, "tail": row[_chars(row, node.end_col_offset):],
+                    "src": src, "shift": shift})
     return sorted(out, key=lambda s: s["line"])
 
 
 def _links(code: str) -> dict[int, dict]:
-    """The mirrored copies with a link comment: {copy's line: {"of" (its
-    step's line), "stated" (the comment's line number), "label" (the
-    comment's plane), "plane" (the copy's plane, in a few words), "end",
-    "off"}}. A copy belongs to the nearest step before it that it copies
-    (so the link survives lines moving), else to the step its comment names
-    when that is the same operation."""
+    """The copies with a link comment: {copy's line: {"kind" ("mirror" /
+    "pattern"), "of" (its step's line), "stated" (the comment's line number),
+    "label" (the comment's plane), "plane" (a mirrored copy's plane, in a few
+    words), "end", "off"}}. A copy belongs to the nearest step before it that
+    it copies (so the link survives lines moving), else to the step its
+    comment names when that is the same operation."""
     try:
         ss = _stmts(code)
     except SyntaxError:
@@ -1559,33 +1597,37 @@ def _links(code: str) -> dict[int, dict]:
     out = {}
     for s in ss:
         m = _LINK.search(s["tail"])
-        wrap = _mirror_node(s["stmt"], s["call"], s["op"]) if m else None
-        if wrap is None:
+        wrap = _copy_node(s["stmt"], s["call"], s["op"]) if m else None
+        if wrap is None or COPY_FNS[wrap.func.id] != m.group(1):
             continue
-        stated = int(m.group(1))
+        stated = int(m.group(2))
         origs = [o for o in ss if o["line"] < s["line"] and o["op"] == s["op"]
-                 and _mirror_node(o["stmt"], o["call"], o["op"]) is None]
+                 and _copy_node(o["stmt"], o["call"], o["op"]) is None]
         same = [o["line"] for o in origs if keys[o["line"]] is not None and keys[o["line"]] == keys[s["line"]]]
         of = stated if stated in same else same[-1] if same else \
             stated if any(o["line"] == stated for o in origs) else None
         if of is None:
             continue
-        try:
-            label = plane_label(_mirror_plane_arg(wrap.args[1]))
-        except (ParamError, ValueError, SyntaxError):
-            label = m.group(2) or ""
-        out[s["line"]] = {"of": of, "stated": stated, "label": m.group(2), "plane": label,
+        label = None
+        if m.group(1) == "mirror":
+            try:
+                label = plane_label(_mirror_plane_arg(wrap.args[1]))
+            except (ParamError, ValueError, SyntaxError):
+                label = m.group(3) or ""
+        out[s["line"]] = {"kind": m.group(1), "of": of, "stated": stated, "label": m.group(3), "plane": label,
                           "end": s["end"], "off": s["off"]}
     return out
 
 
-def _link_comment(of: int, label: str) -> str:
+def _link_comment(of: int, label: str | None, kind: str = "mirror") -> str:
+    if kind == "pattern":
+        return f"  # pattern of line {of}"
     return f"  # mirror of line {of} across {label}"
 
 
 def relink(code: str) -> str:
-    """`code` with each link comment naming its step's line (and the copy's
-    plane) as they are now."""
+    """`code` with each link comment naming its step's line (and a mirrored
+    copy's plane) as they are now."""
     links = _links(code)
     if not links:
         return code
@@ -1593,31 +1635,45 @@ def relink(code: str) -> str:
     for link in links.values():
         if link["stated"] != link["of"] or link["label"] != link["plane"]:
             i = link["end"] - 1
-            text = _link_comment(link["of"], link["plane"])
+            text = _link_comment(link["of"], link["plane"], link["kind"])
             rows[i] = _LINK.sub(lambda _m, t=text: t, rows[i], count=1)
     return "\n".join(rows)
 
 
-def _rewrite_copy(code: str, line: int, text: str, op: str) -> str:
-    """The mirrored copy on `line` written again from its step's new
-    statement `text` (across the same plane; its comment and whether it is
-    switched off stay)."""
-    s = next((s for s in _stmts(code) if s["line"] == line), None)
-    if s is None or s["op"] != op:
-        return code
-    wrap = _mirror_node(s["stmt"], s["call"], op)
-    if wrap is None:
-        return code
+def _copy_parts(code: str, line: int, op: str | None = None):
+    """The copy statement on `line` (switched off or not): (its _stmts
+    entry, its own text, the wrapping call parsed from that text), else None."""
+    s = next((s for s in _stmts(code) if s["line"] <= line <= s["end"]), None)
+    if s is None or (op is not None and s["op"] != op) or _copy_node(s["stmt"], s["call"], s["op"]) is None:
+        return None
     rows = code.split("\n")
     src = "\n".join(_off_text(r) for r in rows[s["line"] - 1:s["end"]]) if s["off"] else \
         "\n".join(rows[s["line"] - 1:s["end"]])
     sub = ast.parse(src).body[0]
-    plane = ast.get_source_segment(src, _mirror_node(sub, _recognise(sub)[0], op).args[1])
-    new = (_copy_text(text, op, plane) + s["tail"]).split("\n")
+    return s, src, _copy_node(sub, _recognise(sub)[0], s["op"])
+
+
+def _put(code: str, s: dict, text: str) -> str:
+    """`code` with the statement `s` (a _stmts entry) replaced by `text`
+    (its comment, and whether it is switched off, stay)."""
+    rows = code.split("\n")
+    new = (text + s["tail"]).split("\n")
     if s["off"]:
         new = [OFF + r for r in new]
     rows[s["line"] - 1:s["end"]] = new
     return "\n".join(rows)
+
+
+def _rewrite_copy(code: str, line: int, text: str, op: str) -> str:
+    """The copy on `line` written again from its step's new statement `text`
+    (across the same plane, or with the same pattern; its comment and
+    whether it is switched off stay)."""
+    got = _copy_parts(code, line, op)
+    if got is None:
+        return code
+    s, src, wrap = got
+    arg = ast.get_source_segment(src, wrap.args[1])
+    return _put(code, s, _copy_text(text, op, arg, wrap.func.id))
 
 
 def _step_start(code: str, line: int) -> int:
@@ -1651,8 +1707,9 @@ def mirror_steps(code: str, lines: list[int], plane) -> tuple[str, list[dict], l
         if op not in MIRROR_OPS:
             skipped.append({"line": ln, "reason": f"{TITLES.get(op, op)} can't be mirrored"})
             continue
-        if _mirror_node(stmt, call, op) is not None:
-            skipped.append({"line": ln, "reason": "it is a mirrored copy already: mirror its original"})
+        if (wrap := _copy_node(stmt, call, op)) is not None:
+            what = "mirrored copy" if wrap.func.id == "mirrored" else "pattern copy"
+            skipped.append({"line": ln, "reason": f"it is a {what} already: mirror its original"})
             continue
         try:
             todo.append((stmt, _copy_text(ast.get_source_segment(code, stmt), op, plane_src)))
@@ -1686,14 +1743,420 @@ def add_mirror_body(code: str, plane, join: bool = True, line: int | None = None
 
 
 def unlink(code: str, line: int) -> str:
-    """The mirrored copy on `line` without its link comment: a step of its
-    own, no longer written again from the one it copied."""
+    """The copy (mirrored or patterned) on `line` without its link comment:
+    a step of its own, no longer written again from the one it copied."""
     s = next((s for s in _stmts(code) if s["line"] <= line <= s["end"]), None)
-    if s is None or _mirror_node(s["stmt"], s["call"], s["op"]) is None or not _LINK.search(s["tail"]):
-        raise ParamError(f"line {line} is not a linked mirrored copy")
+    if s is None or _copy_node(s["stmt"], s["call"], s["op"]) is None or not _LINK.search(s["tail"]):
+        raise ParamError(f"line {line} is not a linked copy")
     rows = code.split("\n")
     rows[s["end"] - 1] = _LINK.sub("", rows[s["end"] - 1], count=1)
     return "\n".join(rows)
+
+
+# --- Pattern (modeling/pattern.py). A whole body: `part = pattern_body(part,
+# PATTERN, join=True)`. A step's copies are the same operation with its input
+# wrapped in patterned(..., PATTERN), on a line after it, with a link comment:
+#     part -= patterned(extrude(sketch("Vent"), amount=-P["vent_depth"]),
+#                       linear("X", P["vent_count"], spacing=P["vent_pitch"]))  # pattern of line 7
+# PATTERN is linear(...) or circular(...); the API passes it as
+#     {"type": "linear", "dir": DIR, "count", "spacing" | "extent", "symmetric", "flip",
+#      "dir2": DIR | None, "count2", "spacing2" | "extent2", "flip2", "skip": [...]}
+#     {"type": "circular", "axis": DIR, "count", "angle", "symmetric", "flip", "skip": [...]}
+# DIR being {"base": "X"}, {"edge": edge ref} or {"face": face ref}, and each
+# number a number (held in P, named after the step: vent_count, vent_pitch) or
+# an expression of P names.
+
+# linear() / circular()'s arguments in order, and the P key suffix of each number
+_PATTERN_ARGS = {"linear": ("dir", "count", "spacing", "extent", "symmetric", "flip", "dir2", "count2",
+                            "spacing2", "extent2", "flip2", "skip"),
+                 "circular": ("axis", "count", "angle", "symmetric", "flip", "skip")}
+_PATTERN_KEYS = {"count": "count", "spacing": "pitch", "extent": "extent", "count2": "count2",
+                 "spacing2": "pitch2", "extent2": "extent2", "angle": "angle"}
+
+
+def _is_pattern(node) -> bool:
+    return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _PATTERN_ARGS
+
+
+def _dir_arg(node, what: str) -> dict:
+    """A direction or axis argument as the API has it: {"base"}, {"edge"} or {"face"}."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value.upper() in ("X", "Y", "Z"):
+        return {"base": node.value.upper()}
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "edge_ref":
+        return {"edge": _ref_arg(node, "edge_ref", what)}
+    return {"face": _ref_arg(node, "face_ref", what)}
+
+
+def _dir_src(d, what: str) -> str:
+    if isinstance(d, str):
+        d = {"base": d}
+    if not isinstance(d, dict):
+        raise ParamError(f"pick an edge or a face for the {what}, or X, Y, Z")
+    if d.get("base"):
+        base = str(d["base"]).upper()
+        if base not in ("X", "Y", "Z"):
+            raise ParamError(f"the {what} is X, Y or Z, not {d['base']!r}")
+        return _lit(base)
+    if isinstance(d.get("edge"), dict) and d["edge"]:
+        return f"edge_ref({_lit(d['edge'])})"
+    if isinstance(d.get("face"), dict) and d["face"]:
+        return f"face_ref({_lit(d['face'])})"
+    raise ParamError(f"pick an edge or a face for the {what}, or X, Y, Z")
+
+
+def dir_label(d: dict | None) -> str:
+    """A direction or axis in a few words: "X", the edge's or face's hint."""
+    if not d:
+        return "?"
+    if d.get("base"):
+        return d["base"]
+    ref = d.get("edge") or d.get("face") or {}
+    return str(ref.get("hint") or ("edge" if "edge" in d else "face"))
+
+
+def _read_pattern(node, pv: dict) -> tuple[dict, dict, dict]:
+    """linear(...) / circular(...) as (args, params, exprs): the API's form
+    (numbers with P's values), the P key of each number written as one, and
+    the expression (bare P names) of each written as one."""
+    if not _is_pattern(node):
+        raise ParamError(f"can't read the pattern {ast.unparse(node)[:60]!r}: edit this line in the code")
+    kind = node.func.id
+    names = _PATTERN_ARGS[kind]
+    if len(node.args) > len(names):
+        raise ParamError(f"{kind}() has too many arguments: edit this line in the code")
+    given = dict(zip(names, node.args))
+    for k in node.keywords:
+        if k.arg not in names:
+            raise ParamError(f"{kind}() has no argument {k.arg!r}: edit this line in the code")
+        given[k.arg] = k.value
+    args: dict = {"type": kind}
+    params: dict = {}
+    exprs: dict = {}
+    for name in names:
+        n = given.get(name)
+        if name in ("dir", "axis", "dir2"):
+            args[name] = None if n is None or (isinstance(n, ast.Constant) and n.value is None) \
+                else _dir_arg(n, "pattern direction" if name != "axis" else "pattern axis")
+        elif name in ("symmetric", "flip", "flip2"):
+            args[name] = bool(_value(n, pv)[0]) if n is not None else False
+        elif name == "skip":
+            v = ast.literal_eval(n) if n is not None else []
+            args[name] = sorted({int(x) for x in v})
+        elif n is None or (isinstance(n, ast.Constant) and n.value is None):
+            args[name] = 360.0 if name == "angle" else 1 if name == "count2" else None
+        else:
+            args[name], e = _read_amount(n, pv)
+            key = _p_key(n)
+            if key is not None:
+                params[name] = key
+            elif e is not None:
+                exprs[name] = e
+    if kind == "linear":
+        args["mode"] = "extent" if args["extent"] is not None else "spacing"
+        args["mode2"] = "extent" if args["extent2"] is not None else "spacing"
+    for k in ("count", "count2"):
+        if isinstance(args.get(k), float) and args[k].is_integer():
+            args[k] = int(args[k])
+    return args, params, exprs
+
+
+def _grid(a: dict) -> list[tuple[int, int]] | None:
+    """Each instance's (step along dir, step along dir2), in index order, as
+    pattern.py numbers them; None when a count isn't known."""
+    from .pattern import _steps
+    try:
+        n = int(round(float(a["count"])))
+        n2 = int(round(float(a.get("count2") or 1))) if a.get("type") == "linear" else 1
+    except (TypeError, ValueError, KeyError):
+        return None
+    if n < 1 or n2 < 1:
+        return None
+    sym = bool(a.get("symmetric"))
+    if a.get("type") == "circular" and float(a.get("angle") or 360) % 360 == 0:
+        sym = False
+    return [(i, j) for j in _steps(n2, sym) for i in _steps(n, sym)]
+
+
+def _renumber_skips(old: str, new: str) -> str:
+    """After a P change, keep each pattern's skip on the same copies: skip
+    holds instance indices, and a count change renumbers the instances (a
+    grid's second row starts at the new count). A copy no longer there drops
+    out. Round the full circle the indices stay (the angles move instead)."""
+    try:
+        tree = ast.parse(new)
+    except SyntaxError:
+        return new
+    pv_old, pv_new = _p_values(old), _p_values(new)
+    if pv_old == pv_new:
+        return new
+    spans = []
+    for node in ast.walk(tree):
+        if not _is_pattern(node):
+            continue
+        skip = next((k.value for k in node.keywords if k.arg == "skip"), None)
+        if skip is None:
+            continue
+        try:
+            a, _, _ = _read_pattern(node, pv_old)
+            b, _, _ = _read_pattern(node, pv_new)
+        except (ParamError, ValueError, SyntaxError):
+            continue
+        ga, gb = _grid(a), _grid(b)
+        if not a["skip"] or ga is None or gb is None or ga == gb:
+            continue
+        if b["type"] == "circular" and float(b.get("angle") or 360) % 360 == 0:
+            keep = sorted(i for i in a["skip"] if 0 < i < len(gb))
+        else:
+            at = {g: k for k, g in enumerate(gb)}
+            keep = sorted({at[ga[i]] for i in a["skip"] if i < len(ga) and at.get(ga[i])})
+        if keep != a["skip"]:
+            spans.append((skip, repr(keep)))
+    lines = new.split("\n")
+    for node, text in sorted(spans, key=lambda s: (s[0].lineno, s[0].col_offset), reverse=True):
+        if node.lineno != node.end_lineno:
+            continue
+        row = lines[node.lineno - 1]
+        c0, c1 = _chars(row, node.col_offset), _chars(row, node.end_col_offset)
+        lines[node.lineno - 1] = row[:c0] + text + row[c1:]
+    return "\n".join(lines)
+
+
+def _instances(a: dict) -> int:
+    def one(n, sym):
+        n = int(round(float(n or 1)))
+        return 2 * n - 1 if sym else n
+    if a.get("type") == "circular":
+        full = abs(abs(float(a.get("angle") or 360)) - 360) < 1e-9
+        return one(a.get("count"), a.get("symmetric") and not full)
+    return one(a.get("count"), a.get("symmetric")) * (one(a.get("count2"), a.get("symmetric")) if a.get("dir2") else 1)
+
+
+def pattern_label(a: dict) -> str:
+    """A pattern in a few words: "8 × 3", "4 along X", "6 round the cylinder face"."""
+    def n(k):
+        v = int(round(float(a.get(k) or 1)))
+        return 2 * v - 1 if a.get("symmetric") else v
+    skipped = f", {len(a['skip'])} skipped" if a.get("skip") else ""
+    if a.get("type") == "circular":
+        full = abs(abs(float(a.get("angle") or 360)) - 360) < 1e-9
+        count = int(round(float(a.get("count") or 1)))
+        count = 2 * count - 1 if a.get("symmetric") and not full else count
+        over = "" if full else f" over {_deg(a.get('angle'))}" + (" each way" if a.get("symmetric") else "")
+        return f"{count} round {dir_label(a.get('axis'))}{over}{skipped}"
+    if a.get("dir2"):
+        return f"{n('count')} × {n('count2')}{skipped}"
+    return f"{n('count')} along {dir_label(a.get('dir'))}{skipped}"
+
+
+def _stem(name: str | None) -> str:
+    """The start of a pattern's P keys: the step's sketch name ("Vent" → vent)."""
+    stem = re.sub(r"\W+", "_", str(name or "")).strip("_").lower()
+    return stem if stem and stem.isidentifier() and stem not in ("p", "params") else "pattern"
+
+
+def _pattern_src(code: str, pattern: dict, stem: str, old: dict | None = None) -> tuple[str, str, list[str]]:
+    """(code, the linear(...) / circular(...) text, its P keys): each number
+    held in P — in the key the old pattern had for it (`old`: its params), or
+    a new one named stem_count, stem_pitch, ... — and each expression written
+    as it is."""
+    if not isinstance(pattern, dict) or pattern.get("type") not in _PATTERN_ARGS:
+        raise ParamError("give the pattern: linear or circular")
+    kind = pattern["type"]
+    old = old or {}
+    names = param_names(code)
+    keys: list[str] = []
+    parts: list[str] = []
+
+    def num(field: str, what: str, integer: bool = False) -> str:
+        nonlocal code
+        v = pattern.get(field)
+        if isinstance(v, str):
+            return _write_amount(v, names, what)
+        if v is None or isinstance(v, bool):
+            raise ParamError(f"give the {what}")
+        v = float(v)
+        if integer:
+            if v < 1 or not v.is_integer():
+                raise ParamError(f"the {what} must be a whole number, at least 1 (got {v:g})")
+        code, key = _number(code, v, old.get(field), f"{stem}_{_PATTERN_KEYS[field]}", names)
+        keys.append(key)
+        return f'P["{key}"]'
+
+    if kind == "linear":
+        parts.append(_dir_src(pattern.get("dir"), "pattern direction"))
+        parts.append(num("count", "count", True))
+        mode = pattern.get("mode") or ("extent" if pattern.get("extent") is not None else "spacing")
+        parts.append(f"{mode}={num(mode, mode)}")
+        if pattern.get("symmetric"):
+            parts.append("symmetric=True")
+        if pattern.get("flip"):
+            parts.append("flip=True")
+        if pattern.get("dir2"):
+            parts.append(f"dir2={_dir_src(pattern['dir2'], 'second direction')}")
+            parts.append(f"count2={num('count2', 'second count', True)}")
+            mode2 = pattern.get("mode2") or ("extent" if pattern.get("extent2") is not None else "spacing")
+            parts.append(f"{mode2}2={num(mode2 + '2', 'second ' + mode2)}")
+            if pattern.get("flip2"):
+                parts.append("flip2=True")
+    else:
+        parts.append(_dir_src(pattern.get("axis"), "pattern axis"))
+        parts.append(num("count", "count", True))
+        angle = pattern.get("angle", 360)
+        if isinstance(angle, str) or abs(abs(float(angle if angle is not None else 360)) - 360) > 1e-9:
+            parts.append(f"angle={num('angle', 'angle')}")
+        if pattern.get("symmetric"):
+            parts.append("symmetric=True")
+        if pattern.get("flip"):
+            parts.append("flip=True")
+    skip = sorted({int(x) for x in pattern.get("skip") or []})
+    if 0 in skip:
+        raise ParamError("instance 0 is the original: it can't be skipped")
+    if skip:
+        parts.append(f"skip={_lit(skip)}")
+    return code, f"{kind}({', '.join(parts)})", keys
+
+
+def _drop_unused(code: str, keys) -> str:
+    for k in sorted(set(keys)):
+        code = drop_param(code, k)
+    return code
+
+
+def _step_stem(code: str, stmt, call, op: str) -> str:
+    try:
+        a, _, _ = _read_op(code, stmt, call, op, _p_values(code))
+    except (ParamError, ValueError, KeyError, TypeError, SyntaxError):
+        # written by hand: still named after the sketch it uses, if it says
+        named = [n.args[0].value for n in ast.walk(call) if isinstance(n, ast.Call)
+                 and getattr(n.func, "id", None) in ("sketch", "sketch_points") and n.args
+                 and isinstance(n.args[0], ast.Constant) and isinstance(n.args[0].value, str)]
+        return _stem(named[0]) if named else "pattern"
+    if op == "extrude":
+        return _stem(a.get("sketch"))
+    if op == "holes":
+        return _stem((a.get("at") or {}).get("sketch") or "holes")
+    return _stem(op)
+
+
+def _pattern_group(code: str, line: int) -> list[int]:
+    """The pattern copies made together with the one on `line` (the same
+    pattern, word for word): their lines, in order."""
+    got = _copy_parts(code, line)
+    if got is None or got[2].func.id != "patterned":
+        return []
+    text = ast.unparse(got[2].args[1])
+    out = []
+    for s in _stmts(code):
+        other = _copy_parts(code, s["line"])
+        if other is not None and other[2].func.id == "patterned" and ast.unparse(other[2].args[1]) == text:
+            out.append(s["line"])
+    return out
+
+
+def pattern_steps(code: str, lines: list[int], pattern: dict) -> tuple[str, list[dict], list[dict], list[str]]:
+    """The copies in `pattern` of each step on `lines` (extrudes, holes,
+    fillets and chamfers), one line each after the last of them, each with
+    its link comment; the pattern's numbers go in P, named after the first
+    step (vent_count, vent_pitch). Returns (code, the copies [{"of",
+    "line"}], the steps left out [{"line", "reason"}], the P keys)."""
+    tree = ast.parse(code)
+    offs = _off_blocks(code)
+    todo, skipped = [], []
+    for ln in sorted(set(int(x) for x in lines)):
+        if any(a <= ln <= b for a, b, _ in offs):
+            skipped.append({"line": ln, "reason": "it is switched off"})
+            continue
+        hit = _op_stmt(tree, ln)
+        if hit is None:
+            skipped.append({"line": ln, "reason": "it isn't a step the editor can pattern"})
+            continue
+        stmt, call, op = hit
+        if op not in MIRROR_OPS:
+            skipped.append({"line": ln, "reason": f"{TITLES.get(op, op)} can't be patterned"})
+            continue
+        if (wrap := _copy_node(stmt, call, op)) is not None:
+            what = "mirrored copy" if wrap.func.id == "mirrored" else "pattern copy"
+            skipped.append({"line": ln, "reason": f"it is a {what} already: pattern its original"})
+            continue
+        todo.append((stmt, call, op))
+    if not todo:
+        return code, [], skipped, []
+    stmt0, call0, op0 = todo[0]
+    n0 = len(code.split("\n"))
+    code, src, keys = _pattern_src(code, pattern, _step_stem(code, stmt0, call0, op0))
+    grown = len(code.split("\n")) - n0           # P got a line for a new key (it is above the steps)
+    tree = ast.parse(code)
+    texts = []
+    for stmt, _, op in todo:
+        moved = _op_stmt(tree, stmt.lineno + grown)
+        try:
+            texts.append((moved[0], _copy_text(ast.get_source_segment(code, moved[0]), op, src, "patterned")))
+        except (ParamError, TypeError) as exc:
+            skipped.append({"line": stmt.lineno, "reason": str(exc)})
+    if not texts:
+        return _drop_unused(code, keys), [], skipped, []
+    after = max(s.end_lineno for s, _ in texts)
+    rows = code.split("\n")
+    new, made = [], []
+    for s, text in texts:
+        made.append({"of": s.lineno, "line": after + len(new) + 1})
+        new += (text + _link_comment(s.lineno, None, "pattern")).split("\n")
+    rows[after:after] = new
+    return "\n".join(rows), made, skipped, keys
+
+
+def add_pattern_body(code: str, pattern: dict, join: bool = True, line: int | None = None) -> tuple[str, list[str]]:
+    """Append `part = pattern_body(part, PATTERN, join=True)` — or, with
+    `line`, rewrite the pattern_body() line there (its P keys kept). Returns
+    (code, the P keys)."""
+    if not _assigns_part(ast.parse(code)):
+        raise ParamError("there is no part to pattern yet")
+    old: dict = {}
+    if line is not None:
+        got = op_at(code, line)
+        if got["op"] != "pattern_body":
+            raise ParamError(f"line {line} is not a pattern_body() line any more")
+        old = got["params"]
+    before = set(old.values())
+    n0 = len(code.split("\n"))
+    code, src, keys = _pattern_src(code, pattern, "pattern", old)
+    if line is not None:
+        line += len(code.split("\n")) - n0           # P got a line for a new key (it is above the step)
+    code = _write_op(code, f"part = pattern_body(part, {src}, join={bool(join)})", line, "pattern_body")
+    return _drop_unused(code, before - set(keys)), keys
+
+
+def set_pattern(code: str, line: int, pattern: dict) -> tuple[str, list[str]]:
+    """The pattern of the copy on `line` — and of the copies made with it
+    (_pattern_group) — written as `pattern` (its P keys kept). Returns
+    (code, the P keys)."""
+    got = _copy_parts(code, line)
+    if got is None or got[2].func.id != "patterned":
+        raise ParamError(f"line {line} is not a pattern copy")
+    s0, _, wrap0 = got
+    _, old, _ = _read_pattern(wrap0.args[1], _p_values(code))
+    group = _pattern_group(code, s0["line"])
+    stem = "pattern"
+    if old:
+        k = next(iter(old.values()))
+        stem = k.rsplit("_", 1)[0] if "_" in k else k
+    else:
+        orig = (_links(code).get(s0["line"]) or {}).get("of")
+        hit = _op_stmt(ast.parse(code), orig) if orig else None
+        if hit is not None:
+            stem = _step_stem(code, *hit)
+    n0 = len(code.split("\n"))
+    code, src, keys = _pattern_src(code, pattern, stem, old)
+    grown = len(code.split("\n")) - n0           # P got a line for a new key (it is above the steps)
+    for ln in reversed(group):
+        got = _copy_parts(code, ln + grown)
+        if got is None:
+            continue
+        s, text, wrap = got
+        text = text[:len(text) - len(s["tail"])]       # _put keeps the comment
+        a, b = _span(text, wrap.args[1])
+        code = _put(code, s, text[:a] + src + text[b:])
+    return _drop_unused(code, set(old.values()) - set(keys)), keys
 
 
 def _relinked(fn):
@@ -1710,6 +2173,7 @@ def _relinked(fn):
 
 # every writer leaves the link comments naming the right lines
 for _fn in (set_params, add_param, drop_param, add_extrude, add_shell, add_edge_op, add_holes, edit_args,
-            add_plane, rename_plane, suppress, delete_step, mirror_steps, add_mirror_body, unlink):
+            add_plane, rename_plane, suppress, delete_step, mirror_steps, add_mirror_body, unlink,
+            pattern_steps, add_pattern_body, set_pattern):
     globals()[_fn.__name__] = _relinked(_fn)
 del _fn

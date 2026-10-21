@@ -333,6 +333,7 @@ class RunResponse(Schema):
     edge_refs: list[FaceRefReport] = []         # each edge_ref() lookup (moved_by: mm), in order
     planes: dict[str, PlaneReport] = {}         # name -> each construction plane in PLANES
     kept: list[KeptFaces] = []                  # the faces each auto_round keep item is
+    patterns: list[dict] = []                   # each linear()/circular() used: its instances (pattern.py)
 
 
 class ExportRequest(Schema):
@@ -388,6 +389,7 @@ class OpAtResponse(Schema):
     params: dict[str, str] = {}     # argument -> the P key holding it
     exprs: dict[str, str] = {}      # argument -> its source, when written as an expression
     mirror: dict | None = None      # a mirrored copy: {"plane", "label", "of": its step's line, None unlinked}
+    pattern: dict | None = None     # a pattern copy: {"args", "params", "exprs", "label", "of", "lines": its group}
 
 
 class EditArgsRequest(Schema):
@@ -427,6 +429,8 @@ class Step(Schema):
     plane: str | None = None        # a construction plane's name
     mirror_of: int | None = None    # a mirrored copy: the line of the step it is linked to
     mirror_plane: str | None = None  # a mirrored copy: its plane, in a few words
+    pattern_of: int | None = None   # a pattern copy: the line of the step it is linked to
+    pattern: str | None = None      # a pattern copy: its pattern, in a few words ("8 × 3")
 
 
 class StepsResponse(Schema):
@@ -464,6 +468,36 @@ class MirrorStepsResponse(Schema):
     code: str
     made: list[dict] = []           # [{"of": the step's line, "line": its copy's}]
     skipped: list[dict] = []        # [{"line", "reason"}]: steps that can't be mirrored
+
+
+# a pattern: {"type": "linear", "dir": DIR, "count", "mode": "spacing" | "extent", "spacing" | "extent",
+# "symmetric", "flip", "dir2": DIR | None, "count2", "mode2", "spacing2" | "extent2", "flip2", "skip"}
+# or {"type": "circular", "axis": DIR, "count", "angle", "symmetric", "flip", "skip"}; DIR is
+# {"base": "X" | "Y" | "Z"}, {"edge": edge ref} or {"face": face ref}; numbers may be P expressions
+class AddPatternBodyRequest(Schema):
+    code: str
+    pattern: dict
+    join: bool = True               # fuse the copies / keep them as separate bodies
+    line: int | None = None         # rewrite the pattern_body() line there instead of appending
+
+
+class PatternStepsRequest(Schema):
+    code: str
+    lines: list[int]                # a line of each step to pattern
+    pattern: dict
+
+
+class SetPatternRequest(Schema):
+    code: str
+    line: int                       # a pattern copy: it and the copies made with it get `pattern`
+    pattern: dict
+
+
+class PatternResponse(Schema):
+    code: str
+    made: list[dict] = []           # pattern_steps: [{"of": the step's line, "line": its copies'}]
+    skipped: list[dict] = []        # pattern_steps: [{"line", "reason"}]
+    params: list[str] = []          # the P keys holding the pattern's numbers
 
 
 class AddShellRequest(Schema):

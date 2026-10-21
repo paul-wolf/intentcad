@@ -14,6 +14,7 @@ import {
   type OffsetPlaneValues,
 } from '@/build/constructionPlanes';
 import { mirrorBodyHint, mirrorBodySummary, mirrorStepsSummary } from '@/build/mirror';
+import { dirWords, instanceCount, patternSummary, remapSkip, type PatternValues } from '@/build/pattern';
 import { BODY_HUES } from '@/build/bodyColors';
 import { ParamExprInput } from './ParamExprInput';
 
@@ -1258,6 +1259,238 @@ export function MirrorCopyDialog({ of, across, original, onEditOriginal, onUnlin
                        background: palette.buttonBg, color: palette.text, border: `1px solid ${palette.border}` }}>
         Unlink, edit it on its own
       </button>
+    </OpFrame>
+  );
+}
+
+// ---------------------------------------------------------------- Pattern
+
+/** A step Pattern steps was given: what it is, and why it can't be patterned (null: it can). */
+export interface PatternStepRow { line: number; label: string; reason: string | null }
+
+/** Pattern body / Pattern steps / a pattern copy reopened: Linear (a
+ *  direction, count, spacing or extent, both ways, reversed, and a second
+ *  direction for a grid) or Circular (an axis, count, angle, both ways);
+ *  Join or Separate (Pattern body); the steps it copies (Pattern steps).
+ *  The directions are picked in the view; the instances are drawn there,
+ *  numbered, and a number clicked leaves that copy out. */
+export function PatternOpDialog({ kind, value, onChange, join = true, onJoin, editing, preview, params = {}, steps = [],
+                                  after = null, ways, original, onEditOriginal, onUnlink, onApply, onCancel }: {
+  kind: 'body' | 'steps' | 'copy';
+  value: PatternValues; onChange: (v: PatternValues) => void;
+  join?: boolean; onJoin?: (join: boolean) => void;
+  editing: boolean;
+  preview: PreviewState;
+  params?: Record<string, number>;
+  steps?: PatternStepRow[];
+  /** the line the copies go after */
+  after?: number | null;
+  /** which way the directions point, as the preview built them ("+X") */
+  ways: { dir: string; dir2: string; axis: string };
+  /** a copy: the step it follows, in words */
+  original?: string;
+  onEditOriginal?: () => void; onUnlink?: () => void;
+  onApply: () => void; onCancel: () => void;
+}) {
+  const { palette, seg, row, note } = useStyles();
+  // a count changed: the skipped copies stay the same ones (where they still are)
+  const set = (p: Partial<PatternValues>) => {
+    const next = { ...value, ...p };
+    if (!('skip' in p)) next.skip = remapSkip(value.skip, value, next, params);
+    onChange(next);
+  };
+  const total = instanceCount(value, params);
+  const can = steps.filter((s) => !s.reason);
+  const cant = steps.filter((s) => s.reason);
+  const num = (a: Amount) => amountValue(a, params) !== null;
+  const linear = value.type === 'linear';
+  const full = !linear && (() => { const a = amountValue(value.angle, params); return a !== null && Math.abs(Math.abs(a) - 360) < 1e-9; })();
+  const valid = total !== null && (linear
+    ? !!value.dir && num(value.mode === 'spacing' ? value.spacing : value.extent)
+      && (!value.two || (!!value.dir2 && num(value.mode2 === 'spacing' ? value.spacing2 : value.extent2)))
+    : !!value.axis && num(value.angle));
+  const ok = valid && preview.state !== 'running' && preview.state !== 'error' && (kind !== 'steps' || can.length > 0);
+  const title = kind === 'copy' ? 'Pattern copy' : kind === 'body' ? (editing ? 'Edit pattern body' : 'Pattern body') : 'Pattern steps';
+  const ends = (i: number, n: number) => (i === 0 ? '4px 0 0 4px' : i === n - 1 ? '0 4px 4px 0' : 0);
+  const small: CSSProperties = { fontSize: '12px', padding: '1px 7px', cursor: 'pointer', borderRadius: '4px',
+                                 background: palette.buttonBg, color: palette.text, border: `1px solid ${palette.border}` };
+  // a direction (or the axis): X / Y / Z, or what was picked in the view
+  const dirRow = (which: 'dir' | 'dir2' | 'axis', label: string) => {
+    const d = value[which];
+    const picking = which === 'axis' || value.target === which;
+    const flipKey = which === 'dir2' ? 'flip2' : 'flip';
+    // The report's words lag the preview; X/Y/Z can be named at once.
+    const way = ways[which] || (d && 'base' in d ? `${value[flipKey] ? '−' : '+'}${d.base}` : undefined);
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}
+           onClick={() => { if (which !== 'axis' && value.target !== which) set({ target: which }); }}>
+        <span style={{ color: palette.textSecondary }}>{label}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <div style={{ display: 'flex', flex: 1 }}>
+            {(['X', 'Y', 'Z'] as const).map((b, i) => (
+              <button key={b} onClick={() => set({ [which]: { base: b }, ...(which !== 'axis' ? { target: which } : {}) })}
+                      title={which === 'axis' ? `Round the ${b} axis through the origin` : `Along ${b}`}
+                      style={{ ...seg(!!d && 'base' in d && d.base === b), borderRadius: ends(i, 3), borderLeft: i ? 'none' : undefined }}>
+                {b}
+              </button>
+            ))}
+          </div>
+          {flipKey && (
+            <button onClick={() => set({ [flipKey]: !value[flipKey] })}
+                    title={which === 'axis' ? 'Turn the other way round the axis' : 'Reverse the direction'}
+                    style={{ ...small, background: value[flipKey] ? palette.accent : palette.buttonBg,
+                             color: value[flipKey] ? '#fff' : palette.text }}>
+              ⇄ Flip
+            </button>
+          )}
+        </div>
+        <span style={{ color: palette.text, outline: picking && which !== 'axis' && value.two ? `1px dashed ${palette.accent}` : 'none',
+                       borderRadius: '3px', padding: picking && which !== 'axis' && value.two ? '1px 3px' : 0 }}>
+          {d && !('base' in d) ? <><b>{dirWords(d).replace(/^the /, '')}</b>{way ? <> · {which === 'axis' ? 'axis ' : 'toward '}{way}</> : null}</>
+            : d && way ? <>{which === 'axis' ? 'Axis' : 'Toward'} {way}</> : null}
+          {picking && (
+            <span style={{ color: palette.textSecondary }}>
+              {d ? ' · ' : ''}{which === 'axis'
+                ? 'click a hole, a round edge or a straight edge in the view'
+                : 'click an edge or a face in the view'}
+            </span>
+          )}
+          {!picking && <span style={{ color: palette.textSecondary }}>{d ? ' · ' : ''}click here to pick an edge or face</span>}
+        </span>
+      </div>
+    );
+  };
+  const amountRow = (label: string, field: keyof PatternValues, unit: string, tip: string) => (
+    <div style={{ ...row, alignItems: 'flex-start' }}>
+      <span style={{ width: 56, paddingTop: 3 }}>{label}</span>
+      <ParamExprInput value={amountText(value[field] as Amount)} onChange={(t) => set({ [field]: t })} params={params}
+                      unit={unit} width={90} title={tip} />
+      <span style={{ color: palette.textSecondary, paddingTop: 3 }}>{unit}</span>
+    </div>
+  );
+  const spacingRow = (second: boolean) => {
+    const mode = second ? value.mode2 : value.mode;
+    const modeKey = second ? 'mode2' : 'mode';
+    return (
+      <>
+        {amountRow('Count', second ? 'count2' : 'count', '', second ? 'How many rows, the first among them' : 'How many, the original among them')}
+        <div style={{ display: 'flex' }}>
+          {(['spacing', 'extent'] as const).map((m, i) => (
+            <button key={m} onClick={() => set({ [modeKey]: m })}
+                    title={m === 'spacing' ? 'The distance from one to the next' : 'The distance from the first to the last: the count is fitted evenly within it'}
+                    style={{ ...seg(mode === m), borderRadius: ends(i, 2), borderLeft: i ? 'none' : undefined }}>
+              {m === 'spacing' ? 'Spacing' : 'Extent'}
+            </button>
+          ))}
+        </div>
+        {amountRow(mode === 'spacing' ? 'Spacing' : 'Extent',
+                   (second ? (mode === 'spacing' ? 'spacing2' : 'extent2') : mode) as keyof PatternValues, 'mm',
+                   'A number, or an expression of the parameters')}
+      </>
+    );
+  };
+  const check = (label: string, on: boolean, flip: () => void, tip: string, disabled = false) => (
+    <label title={tip} style={{ ...row, cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.5 : 1 }}>
+      <input type="checkbox" checked={on} disabled={disabled} onChange={flip} /> {label}
+    </label>
+  );
+  const shownSkip = value.skip.filter((i) => total === null || i < total);
+  return (
+    <OpFrame title={title} preview={preview} ok={ok} onCancel={onCancel} onApply={onApply} width={300}
+             applyLabel={editing || kind === 'copy' ? 'Update' : kind === 'body' ? 'Pattern'
+               : `Pattern ${can.length === 1 ? 'step' : `${can.length} steps`}`}>
+      {kind === 'copy' && (
+        <div style={note}>
+          A copy of <b>{original}</b>: it follows the original. Change the pattern here (all the copies made with it
+          change), or edit the original.
+          <div style={{ display: 'flex', gap: '6px', marginTop: 5, flexWrap: 'wrap' }}>
+            <button onClick={onEditOriginal} style={small}>Edit the original</button>
+            <button onClick={onUnlink} style={small} title="Drop the link: the copy keeps its values and no longer follows the original">
+              Unlink
+            </button>
+          </div>
+        </div>
+      )}
+      <div style={{ display: 'flex' }}>
+        {(['linear', 'circular'] as const).map((t, i) => (
+          <button key={t} onClick={() => {
+            if (t === value.type) return;
+            // the direction picked carries over as the axis, and back
+            const keep = t === 'circular' ? value.dir : value.axis;
+            onChange({ ...value, type: t, skip: [], ...(t === 'circular'
+              ? { axis: value.axis ?? (keep && !('base' in keep) ? keep : { base: 'Z' }), count: 6, angle: 360 }
+              : { dir: value.dir ?? (keep && !('base' in keep) ? keep : { base: 'X' }), count: 3 }) });
+          }} title={t === 'linear' ? 'In a row, or a grid' : 'Round an axis'}
+                  style={{ ...seg(value.type === t), borderRadius: ends(i, 2), borderLeft: i ? 'none' : undefined }}>
+            {t === 'linear' ? 'Linear' : 'Circular'}
+          </button>
+        ))}
+      </div>
+      {linear ? (
+        <>
+          {dirRow('dir', value.two ? 'First direction' : 'Direction')}
+          {spacingRow(false)}
+          {check('Both ways (symmetric)', value.symmetric, () => set({ symmetric: !value.symmetric }),
+                 'As many copies again the other way from the original')}
+          {check('Second direction (a grid)', value.two, () => set({ two: !value.two, target: value.two ? 'dir' : 'dir2' }),
+                 'Rows of them along a second direction')}
+          {value.two && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '9px', paddingLeft: 10,
+                          borderLeft: `2px solid ${palette.border}` }}>
+              {dirRow('dir2', 'Second direction')}
+              {spacingRow(true)}
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          {dirRow('axis', 'Axis')}
+          {amountRow('Count', 'count', '', 'How many, the original among them')}
+          {amountRow('Angle', 'angle', '°', '360: spread evenly round the full circle; less: from the first to the last')}
+          {check('Both ways (symmetric)', value.symmetric && !full, () => set({ symmetric: !value.symmetric }),
+                 full ? 'Round the full circle there is no other way' : 'As many again turning the other way', full)}
+        </>
+      )}
+      {kind === 'body' && onJoin && (
+        <div style={{ display: 'flex' }}>
+          {([true, false] as const).map((j, i) => (
+            <button key={String(j)} onClick={() => onJoin(j)}
+                    title={j ? 'Fuse the copies with the part: one solid' : 'Keep each copy as its own body'}
+                    style={{ ...seg(join === j), borderRadius: ends(i, 2), borderLeft: i ? 'none' : undefined }}>
+              {j ? 'Join' : 'Separate bodies'}
+            </button>
+          ))}
+        </div>
+      )}
+      {kind === 'steps' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          {can.map((s) => (
+            <div key={s.line} style={{ color: palette.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                 title={s.label}>
+              ✓ {s.label} <span style={{ color: palette.textSecondary }}>· line {s.line}</span>
+            </div>
+          ))}
+          {cant.map((s) => (
+            <div key={s.line} style={{ color: palette.textSecondary }} title={s.label}>
+              <span style={{ textDecoration: 'line-through' }}>{s.label}</span> · can't be patterned: {s.reason}
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ color: palette.text }}>
+        {shownSkip.length ? <>Left out: {shownSkip.map((i) => `#${i}`).join(', ')}{' '}
+          <button onClick={() => set({ skip: [] })} style={{ ...small, padding: '0 5px' }}>Restore all</button></>
+          : <span style={{ color: palette.textSecondary }}>Click a copy's number in the view to leave it out.</span>}
+      </div>
+      <div style={note}>
+        {patternSummary(value, params, kind === 'body' ? { kind: 'body', join } : kind === 'copy' ? { kind: 'copy', of: original ?? 'the step' }
+          : { kind: 'steps', n: can.length, after })}
+        <div style={{ color: palette.textSecondary, marginTop: 2 }}>
+          The blue ghost is the result; in the view the orange box is the original (#0), green boxes the copies,
+          crossed grey ones left out. {linear ? 'Drag the arrow on the last copy for the spacing; Tab switches to the count.'
+            : full ? '' : 'Drag the arc handle for the angle.'}
+        </div>
+      </div>
     </OpFrame>
   );
 }

@@ -77,7 +77,7 @@ describe('the operation registry', () => {
     const ctx = Object.fromEntries(
       ['sketchOnSelection', 'sketchOnPlane', 'shell', 'hole', 'fillet', 'chamfer', 'ask', 'build', 'importStep', 'exportAs', 'versions',
        'process', 'addContextFile', 'toggleParams', 'setView', 'lookAtSelection', 'toggleOrtho', 'copyMeasure',
-       'section', 'offsetPlane', 'edgePlane', 'mirrorBody', 'mirrorSteps'].map((k) => [k, vi.fn()]),
+       'section', 'offsetPlane', 'edgePlane', 'mirrorBody', 'mirrorSteps', 'patternBody', 'patternSteps'].map((k) => [k, vi.fn()]),
     ) as unknown as Record<keyof OpContext, ReturnType<typeof vi.fn>>;
     for (const op of OPERATIONS) op.run(ctx as unknown as OpContext);
     expect(ctx.shell).toHaveBeenCalledTimes(1);
@@ -93,6 +93,22 @@ describe('the operation registry', () => {
     expect(ctx.edgePlane).toHaveBeenCalledTimes(1);
     expect(ctx.mirrorBody).toHaveBeenCalledTimes(1);
     expect(ctx.mirrorSteps).toHaveBeenCalledTimes(1);
+    expect(ctx.patternBody).toHaveBeenCalledTimes(1);
+    expect(ctx.patternSteps).toHaveBeenCalledTimes(1);
+  });
+
+  it('patterns the body (along a picked edge or face) or the chosen steps', () => {
+    expect(opById('pattern-body')!.group).toBe('Pattern');
+    expect(opById('pattern-steps')!.group).toBe('Pattern');
+    expect(ok('pattern-body', NONE).ok).toBe(true);
+    expect(reason('pattern-body', NONE, { ...MODEL, status: 'idle' })).toBe('Build the part first');
+    expect(opById('pattern-body')!.detail!({ faces: [], edges: [{ kind: 'line' }] }, MODEL)).toBe('along the selected edge');
+    expect(opById('pattern-body')!.detail!(FLOOR, MODEL)).toBe('from the selected face');
+    expect(reason('pattern-steps', NONE)).toBe('Choose steps in the steps list (Ctrl-click for more)');
+    const three = { ...MODEL, patternSteps: 3 };
+    expect(ok('pattern-steps', NONE, three).ok).toBe(true);
+    expect(opById('pattern-steps')!.detail!(NONE, three)).toBe('3 steps chosen');
+    expect(reason('pattern-steps', NONE, { ...three, dialogOpen: true })).toBe('Close the open dialog first');
   });
 
   it('mirrors the body or the chosen steps across one flat face, one plane, or one picked in the dialog', () => {

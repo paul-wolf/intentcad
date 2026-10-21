@@ -16,7 +16,7 @@ export const MIRROR_OPS = ['extrude', 'holes', 'fillet', 'chamfer'] as const;
 
 const TITLES: Record<string, string> = {
   shell: 'Shell', auto_round: 'Round', truss_windows: 'Lighten', offset_plane: 'Offset plane',
-  edge_plane: 'Plane on edge', mirror_body: 'Mirror body',
+  edge_plane: 'Plane on edge', mirror_body: 'Mirror body', pattern_body: 'Pattern body',
 };
 
 /** Why a step can't be mirrored (null: it can), as the backend says it. */
@@ -25,6 +25,7 @@ export function mirrorSkip(s: Step): string | null {
   if (s.kind !== 'op' || !s.op || s.op === 'script') return "it isn't a step the editor can mirror";
   if (!(MIRROR_OPS as readonly string[]).includes(s.op)) return `${TITLES[s.op] ?? s.op} can't be mirrored`;
   if (s.mirror_of != null) return 'it is a mirrored copy already: mirror its original';
+  if (s.pattern_of != null) return 'it is a pattern copy already: mirror its original';
   return null;
 }
 
@@ -117,13 +118,16 @@ export function mirrorStepsSummary(p: MirrorPlane | null, n: number, after: numb
  *  sits under its original). */
 export interface StepRow { step: Step; depth: 0 | 1 }
 
+/** The line of the step a linked copy (mirrored or pattern) follows; null: none. */
+export const copyOf = (s: Step): number | null => s.mirror_of ?? s.pattern_of ?? null;
+
 /** The steps in list order, each linked copy moved up under its original. */
 export function groupSteps(steps: Step[]): StepRow[] {
   const lines = new Set(steps.map((s) => s.line));
   const copies = new Map<number, Step[]>();
-  const isCopy = (s: Step) => s.mirror_of != null && s.mirror_of !== s.line && lines.has(s.mirror_of);
+  const isCopy = (s: Step) => { const o = copyOf(s); return o != null && o !== s.line && lines.has(o); };
   for (const s of steps) {
-    if (isCopy(s)) copies.set(s.mirror_of!, [...(copies.get(s.mirror_of!) ?? []), s]);
+    if (isCopy(s)) copies.set(copyOf(s)!, [...(copies.get(copyOf(s)!) ?? []), s]);
   }
   const out: StepRow[] = [];
   for (const s of steps) {
@@ -134,9 +138,9 @@ export function groupSteps(steps: Step[]): StepRow[] {
   return out;
 }
 
-/** The linked copies of the step on `line`. */
+/** The linked copies (mirrored or pattern) of the step on `line`. */
 export function copiesOf(steps: Step[], line: number): Step[] {
-  return steps.filter((s) => s.mirror_of === line && s.line !== line);
+  return steps.filter((s) => copyOf(s) === line && s.line !== line);
 }
 
 /** The steps selection after a click on `line`: alone, Ctrl/Cmd toggles it

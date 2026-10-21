@@ -14,14 +14,15 @@ from .engine import EngineError, run_script
 from . import hole_presets
 from .llm_models import list_models
 from .paramedit import (ParamError, add_edge_op, add_extrude, add_holes, add_mirror_body, add_plane, add_shell,
-                        delete_step, edit_args, mirror_steps, op_at, rename_plane, set_params, steps, suppress,
-                        unlink)
+                        add_pattern_body, delete_step, edit_args, mirror_steps, op_at, pattern_steps, rename_plane,
+                        set_params, set_pattern, steps, suppress, unlink)
 from .schemas import (
     AddEdgeOpRequest,
     AddExtrudeRequest,
     AddExtrudeResponse,
     AddHolesRequest,
     AddMirrorBodyRequest,
+    AddPatternBodyRequest,
     AddOpResponse,
     AddPlaneRequest,
     AddPlaneResponse,
@@ -32,6 +33,8 @@ from .schemas import (
     EditArgsResponse,
     OpAtRequest,
     OpAtResponse,
+    PatternResponse,
+    PatternStepsRequest,
     EditRequest,
     EditResponse,
     ExportRequest,
@@ -49,6 +52,7 @@ from .schemas import (
     SensitivityResponse,
     SetParamsRequest,
     SetParamsResponse,
+    SetPatternRequest,
     StepLineRequest,
     StepsRequest,
     StepsResponse,
@@ -105,6 +109,7 @@ def run_model(request, payload: RunRequest):
         edge_refs=r.get("edge_refs") or [],
         planes=r.get("planes") or {},
         kept=r.get("kept") or [],
+        patterns=r.get("patterns") or [],
     )
 
 
@@ -321,6 +326,45 @@ def mirror_steps_endpoint(request, payload: MirrorStepsRequest):
     except (ParamError, SyntaxError, KeyError, TypeError, ValueError) as exc:
         return JsonResponse({"message": str(exc)}, status=422)
     return MirrorStepsResponse(code=code, made=made, skipped=skipped)
+
+
+@router.post("/add_pattern_body", response=PatternResponse)
+def add_pattern_body_endpoint(request, payload: AddPatternBodyRequest):
+    """Append `part = pattern_body(part, PATTERN, join=...)` (or rewrite the one on `line`)."""
+    err = require_auth(request)
+    if err:
+        return err
+    try:
+        code, keys = add_pattern_body(payload.code, payload.pattern, payload.join, payload.line)
+    except (ParamError, SyntaxError, KeyError, TypeError, ValueError) as exc:
+        return JsonResponse({"message": str(exc)}, status=422)
+    return PatternResponse(code=code, params=keys)
+
+
+@router.post("/pattern_steps", response=PatternResponse)
+def pattern_steps_endpoint(request, payload: PatternStepsRequest):
+    """The copies in a pattern of each chosen step, linked to it, after the last of them."""
+    err = require_auth(request)
+    if err:
+        return err
+    try:
+        code, made, skipped, keys = pattern_steps(payload.code, payload.lines, payload.pattern)
+    except (ParamError, SyntaxError, KeyError, TypeError, ValueError) as exc:
+        return JsonResponse({"message": str(exc)}, status=422)
+    return PatternResponse(code=code, made=made, skipped=skipped, params=keys)
+
+
+@router.post("/set_pattern", response=PatternResponse)
+def set_pattern_endpoint(request, payload: SetPatternRequest):
+    """The pattern of the copy on `line` (and of the copies made with it), rewritten."""
+    err = require_auth(request)
+    if err:
+        return err
+    try:
+        code, keys = set_pattern(payload.code, payload.line, payload.pattern)
+    except (ParamError, SyntaxError, KeyError, TypeError, ValueError) as exc:
+        return JsonResponse({"message": str(exc)}, status=422)
+    return PatternResponse(code=code, params=keys)
 
 
 @router.post("/unlink_step", response=CodeResponse)

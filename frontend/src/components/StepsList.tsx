@@ -29,6 +29,8 @@ interface Props {
   onDelete(s: Step, copies?: 'keep' | 'delete'): void;
   /** Mirror steps on the chosen ones */
   onMirror?(): void;
+  /** Pattern steps on the chosen ones */
+  onPattern?(): void;
   /** a change is being written: the buttons wait */
   busy?: boolean;
   /** said in the delete confirm: what else goes wrong if this step goes
@@ -36,7 +38,7 @@ interface Props {
   deleteNote?(s: Step): string | null;
 }
 
-export function StepsList({ steps, problems, selected, onSelect, onEdit, onToggle, onDelete, onMirror, busy, deleteNote }: Props) {
+export function StepsList({ steps, problems, selected, onSelect, onEdit, onToggle, onDelete, onMirror, onPattern, busy, deleteNote }: Props) {
   const palette = useThemeStore((s) => s.palette);
   const [confirm, setConfirm] = useState<{ line: number; what: 'delete' | 'toggle' } | null>(null);
   const [hover, setHover] = useState<number | null>(null);
@@ -65,6 +67,13 @@ export function StepsList({ steps, problems, selected, onSelect, onEdit, onToggl
             <OpIcon name="mirror-steps" size={13} /> Mirror…
           </button>
         )}
+        {onPattern && selected.length > 0 && (
+          <button disabled={busy} onClick={onPattern} title="Repeat the chosen steps in a row, a grid or round an axis (Ctrl-click or Shift-click to choose more)"
+                  style={{ ...small, display: 'inline-flex', alignItems: 'center', gap: '3px', textTransform: 'none',
+                           letterSpacing: 0, fontWeight: 400 }}>
+            <OpIcon name="pattern-steps" size={13} /> Pattern…
+          </button>
+        )}
       </div>
       <div role="list" style={{ overflow: 'auto', padding: '0 6px 6px', fontSize: '12.5px' }}>
         {steps.length === 0 && (
@@ -86,6 +95,7 @@ export function StepsList({ steps, problems, selected, onSelect, onEdit, onToggl
                  onDoubleClick={() => { if (editable) onEdit(s); }}
                  onMouseEnter={() => setHover(s.line)} onMouseLeave={() => setHover(null)}
                  title={[s.mirror_of != null ? `Mirror of line ${s.mirror_of}${s.mirror_plane ? ` across ${s.mirror_plane}` : ''}: it follows the original` : '',
+                         s.pattern_of != null ? `Pattern copy of line ${s.pattern_of}${s.pattern ? ` (${s.pattern})` : ''}: it follows the original` : '',
                          s.off ? 'Switched off: the build skips this line' : '',
                          editable ? 'Double-click to edit' : s.kind === 'op' && !s.off ? 'Written in a form the dialogs don’t reopen: edit it in the code' : '',
                          ...(probs ?? [])].filter(Boolean).join('\n')}
