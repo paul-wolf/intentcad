@@ -16,7 +16,7 @@ import { requestSave } from '@/api/autoSave';
 import { getEntityPoint, getEntityPoints } from '@/utils/entityPoints';
 import { getSegmentCount, getSegmentPointIndices, getSegmentBulge } from '@/utils/lineSegments';
 import { bulgeFromMidpoint, arcIntersectsRect } from '@/utils/arcGeometry';
-import { resolveDimensionEndpoints, resolveDimensionAngleIntersection } from '@/utils/dimensionGeom';
+import { resolveDimensionEndpoints, resolveDimensionAngleIntersection, resolveRadiusDimension } from '@/utils/dimensionGeom';
 import type { DimensionEntity } from '@/types/document';
 import { migrateDocument } from '@/utils/document';
 import { useClipboardStore } from '@/stores/clipboardStore';
@@ -377,7 +377,13 @@ export function createSelectTool(): Tool {
           const dim = activeSketch.entities.find((e) => e.id === hitEntityOnDown!.id) as DimensionEntity | undefined;
           if (dim) {
             const intersection = resolveDimensionAngleIntersection(dim, activeSketch.entities);
-            if (intersection) {
+            const radiusGeom = resolveRadiusDimension(dim, activeSketch.entities);
+            if (radiusGeom) {
+              // Radius: offset = how far past the arc, along the leader
+              const { center, arcPoint, radius } = radiusGeom;
+              const newOffset = ((worldPos.x - arcPoint.x) * (arcPoint.x - center.x) + (worldPos.y - arcPoint.y) * (arcPoint.y - center.y)) / radius;
+              useDocumentStore.getState().updateEntity(dim.id, { ...dim, offset: Math.max(-radius, newOffset) });
+            } else if (intersection) {
               // Angle dimension: offset = distance from intersection to cursor
               const dx = worldPos.x - intersection.x;
               const dy = worldPos.y - intersection.y;

@@ -1,7 +1,47 @@
 import type { Point, DimensionEntity, Entity, LineEntity } from '@/types/document';
-import { getSegmentCount, getSegmentPointIndices, getEntitySegmentEndpoints } from '@/utils/lineSegments';
+import { getSegmentCount, getSegmentPointIndices, getEntitySegmentEndpoints, getSegmentBulge } from '@/utils/lineSegments';
 import { lineLineIntersection } from '@/utils/geometry';
 import { getEntityPoint } from '@/utils/entityPoints';
+import { arcFromBulge, arcMidpoint } from '@/utils/arcGeometry';
+import { rectangleCorners, effectiveCornerRadius } from '@/utils/rectPath';
+
+/** A radius dimension's layout: a leader from the arc's centre through the
+ *  middle of the arc (`arcPoint`), on past it by the dimension's offset to
+ *  `end`, where the label sits. */
+export interface RadiusGeom {
+  center: Point;
+  arcPoint: Point;
+  end: Point;
+  radius: number;
+}
+
+export function resolveRadiusDimension(dim: DimensionEntity, allEntities: Entity[]): RadiusGeom | null {
+  if (!dim.radius) return null;
+  const target = allEntities.find((e) => e.id === dim.targetEntityId);
+  if (!target) return null;
+  let center: Point, arcPoint: Point, radius: number;
+  if (target.type === 'line') {
+    const b = getSegmentBulge(target, dim.segmentIndex);
+    if (!b || dim.segmentIndex < 0 || dim.segmentIndex >= getSegmentCount(target)) return null;
+    const [i1, i2] = getSegmentPointIndices(target, dim.segmentIndex);
+    const p1 = target.points[i1]!, p2 = target.points[i2]!;
+    ({ center, radius } = arcFromBulge(p1, p2, b));
+    arcPoint = arcMidpoint(p1, p2, b);
+  } else if (target.type === 'rectangle') {
+    radius = effectiveCornerRadius(target);
+    if (!(radius > 0)) return null;
+    const corner = rectangleCorners(target)[((dim.segmentIndex % 4) + 4) % 4]!;
+    const sx = Math.sign(corner.x - target.center.x) || 1, sy = Math.sign(corner.y - target.center.y) || 1;
+    center = { x: corner.x - sx * radius, y: corner.y - sy * radius };
+    arcPoint = { x: center.x + sx * radius * Math.SQRT1_2, y: center.y + sy * radius * Math.SQRT1_2 };
+  } else {
+    return null;
+  }
+  if (!(radius > 0)) return null;
+  const ux = (arcPoint.x - center.x) / radius, uy = (arcPoint.y - center.y) / radius;
+  const end = { x: arcPoint.x + ux * dim.offset, y: arcPoint.y + uy * dim.offset };
+  return { center, arcPoint, end, radius };
+}
 
 /**
  * Resolve the two measurement endpoints for a non-angle dimension.
@@ -12,6 +52,10 @@ export function resolveDimensionEndpoints(
   allEntities: Entity[],
 ): { a: Point; b: Point } | null {
   if (dim.angleMode) return null;
+  if (dim.radius) {
+    const g = resolveRadiusDimension(dim, allEntities);
+    return g && { a: g.center, b: g.arcPoint };
+  }
 
   const target = allEntities.find((e) => e.id === dim.targetEntityId);
   if (!target) return null;

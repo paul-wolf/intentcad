@@ -232,6 +232,49 @@ export function drawDiameterDimension(
   renderer.drawText(displayLabel, mid, textStyle);
 }
 
+/** A radius dimension: a leader from the centre out through the arc, an
+ *  arrow where it meets the arc, the label "R…" at its end. */
+export function drawRadiusDimension(
+  renderer: Renderer,
+  viewport: Viewport,
+  center: Point,
+  arcPoint: Point,
+  end: Point,
+  radius: number,
+  lineStyle: LineStyle,
+  textStyle: TextStyle,
+  bgColor?: string,
+  derived?: boolean,
+  label?: string,
+  scale = 1,
+): void {
+  const sc = viewport.worldToScreen(center);
+  const sa = viewport.worldToScreen(arcPoint);
+  const se = viewport.worldToScreen(end);
+  renderer.drawLine(sc, se, lineStyle);
+  const dx = sa.x - sc.x, dy = sa.y - sc.y;
+  const len = Math.hypot(dx, dy);
+  if (len >= 2) {
+    const ux = dx / len, uy = dy / len;
+    const aLen = DIMENSION_ARROW_LENGTH * scale;
+    const aHalf = DIMENSION_ARROW_HALF_WIDTH * scale;
+    renderer.drawLine(sa, { x: sa.x - ux * aLen - uy * aHalf, y: sa.y - uy * aLen + ux * aHalf }, lineStyle);
+    renderer.drawLine(sa, { x: sa.x - ux * aLen + uy * aHalf, y: sa.y - uy * aLen - ux * aHalf }, lineStyle);
+  }
+  const value = `R${formatLength(radius)}`;
+  const displayLabel = label?.replace('{v}', value) ?? (derived ? `(${value})` : value);
+  const metrics = renderer.measureText(displayLabel, textStyle);
+  const pad = DIMENSION_TEXT_PAD;
+  if (bgColor) {
+    renderer.drawRect(
+      { x: se.x - metrics.width / 2 - pad, y: se.y - metrics.height / 2 - pad },
+      { x: metrics.width + pad * 2, y: metrics.height + pad * 2 },
+      bgColor,
+    );
+  }
+  renderer.drawText(displayLabel, se, textStyle);
+}
+
 export function drawSegmentLabel(
   renderer: Renderer,
   viewport: Viewport,

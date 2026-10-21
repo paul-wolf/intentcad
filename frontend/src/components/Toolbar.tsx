@@ -80,6 +80,10 @@ const MEASURE_TOOLS: { type: ToolType; label: string; icon?: ReactNode; shortcut
   { type: 'dimension', label: 'Dimension', icon: <ToolIcon><line x1="2" y1="4" x2="2" y2="12" /><line x1="14" y1="4" x2="14" y2="12" /><line x1="2" y1="8" x2="5" y2="8" /><line x1="11" y1="8" x2="14" y2="8" /><path d="M5 6l-3 2 3 2" fill="none" /><path d="M11 6l3 2-3 2" fill="none" /></ToolIcon>, shortcut: 'D' },
 ];
 
+const MODIFY_TOOLS: { type: ToolType; label: string; icon?: ReactNode; shortcut: string }[] = [
+  { type: 'fillet', label: 'Fillet: round corners (click a corner or drag a box, then type or drag the radius)', icon: <ToolIcon><path d="M2 14V8a6 6 0 0 1 6-6h6" /><path d="M2 2h4M2 2v4" strokeDasharray="1.5 1" strokeWidth="1" /></ToolIcon>, shortcut: '(' },
+];
+
 function Sep({ color }: { color: string }) {
   return <div style={{ width: '1px', background: color, margin: '2px 4px', alignSelf: 'stretch' }} />;
 }
@@ -247,6 +251,8 @@ export function Toolbar({ embedded = false }: ToolbarProps = {}) {
         <ToolButtons tools={ENTITY_TOOLS} activeTool={activeTool} setActiveTool={setActiveTool} palette={palette} />
         <Sep color={palette.border} />
         <ToolButtons tools={MEASURE_TOOLS} activeTool={activeTool} setActiveTool={setActiveTool} palette={palette} />
+        <Sep color={palette.border} />
+        <ToolButtons tools={MODIFY_TOOLS} activeTool={activeTool} setActiveTool={setActiveTool} palette={palette} />
 
         <div style={{ flex: 1 }} />
 

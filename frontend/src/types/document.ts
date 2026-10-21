@@ -96,6 +96,9 @@ export interface DimensionEntity {
   pointIndex2?: number;
   // Angle dimension between two non-parallel segments:
   angleMode?: boolean;
+  // Radius of an arc: arc segment `segmentIndex` of a line (a fillet), or a
+  // rectangle's corner radius (drawn at corner `segmentIndex`, 0=TL…3=BL):
+  radius?: boolean;
   // Expression that drives this dimension's value (e.g. "bolt_hole / 2"):
   expression?: string;
 }

@@ -12,6 +12,7 @@ import { getSegmentCount, getSegmentPointIndices, getEntitySegmentEndpoints } fr
 import { evaluateExpression, expressionNames } from '@/utils/expression';
 import { resolveDimensionEndpoints } from '@/utils/dimensionGeom';
 import { brokenIds, onBroken } from '@/utils/brokenRefs';
+import { setArcRadius, filletRectangle } from '@/utils/fillet';
 
 /** What dimension `dim` measures now (mm, or degrees for an angle); null
  *  when its targets are gone. */
@@ -69,6 +70,17 @@ export function dimensionEntities(sketch: Sketch, dimId: string, newValue: numbe
 
   const target = sketch.entities.find((e) => e.id === dim.targetEntityId);
   if (!target) return null;
+
+  // Radius of a fillet or other arc segment, or of a rectangle's corners
+  if (dim.radius) {
+    if ('sourceId' in target && target.sourceId) return null;
+    let next: Entity | null = null;
+    if (target.type === 'line') next = setArcRadius(target, dim.segmentIndex, newValue);
+    if (target.type === 'rectangle') next = filletRectangle(target, newValue).entity;
+    if (!next) return null;
+    const updated = sketch.entities.map((e) => (e.id === target.id ? next! : e));
+    return solveConstraints(updated, sketch.constraints, { movedIds: new Set([target.id]) }).entities;
+  }
 
   // Point-to-point dimension editing
   if (dim.pointIndex != null && dim.pointIndex2 != null) {

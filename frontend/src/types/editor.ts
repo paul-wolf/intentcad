@@ -1,6 +1,6 @@
 import type { Point } from './document';
 
-export type ToolType = 'select' | 'line' | 'point' | 'circle' | 'rectangle' | 'rect2pt' | 'axisrect' | 'polygon' | 'dimension' | 'bezier';
+export type ToolType = 'select' | 'line' | 'point' | 'circle' | 'rectangle' | 'rect2pt' | 'axisrect' | 'polygon' | 'dimension' | 'bezier' | 'fillet';
 
 export interface LineToolState {
   type: 'line';
@@ -55,7 +55,14 @@ export interface BezierToolState {
   points: Point[];
 }
 
-export type ToolState = LineToolState | SelectToolState | PointToolState | CircleToolState | RectangleToolState | Rect2ptToolState | AxisRectToolState | PolygonToolState | DimensionToolState | BezierToolState;
+export interface FilletToolState {
+  type: 'fillet';
+  /** the corners picked: a polyline vertex, or a rectangle corner (0=TL…3=BL) */
+  corners: { entityId: string; index: number }[];
+  radius: number;
+}
+
+export type ToolState = LineToolState | SelectToolState | PointToolState | CircleToolState | RectangleToolState | Rect2ptToolState | AxisRectToolState | PolygonToolState | DimensionToolState | BezierToolState | FilletToolState;
 
 export interface EditorState {
   activeTool: ToolType;

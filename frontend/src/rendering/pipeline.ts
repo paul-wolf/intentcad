@@ -8,10 +8,10 @@ import type { SegmentHit } from '@/hittest/hitTest';
 import { GRID_SPACING_MM, GRID_MAJOR_EVERY, GHOSTED_OPACITY, ENDPOINT_RADIUS, SELECTED_POINT_RADIUS, ORIGIN_RADIUS, AXIS_OPACITY } from '@/config';
 import { getStyles } from './styles';
 import type { ThemeStyles } from './styles';
-import { drawDimension, drawDiameterDimension, drawSegmentLabel, drawDiameterLabel, computeAngleDimensionGeom, drawAngleDimension } from './dimensionRenderer';
+import { drawDimension, drawDiameterDimension, drawSegmentLabel, drawDiameterLabel, computeAngleDimensionGeom, drawAngleDimension, drawRadiusDimension } from './dimensionRenderer';
 import { computeSketchDoF, computeDerivedDimensionIds } from '@/utils/dof';
 import { getEntityPoint } from '@/utils/entityPoints';
-import { resolveDimensionEndpoints } from '@/utils/dimensionGeom';
+import { resolveDimensionEndpoints, resolveRadiusDimension } from '@/utils/dimensionGeom';
 import { brokenIds, onBroken } from '@/utils/brokenRefs';
 import { getConstraintPartners, getEntityRepresentativePoint, pointRelationMarks, CONSTRAINT_SYMBOLS } from '@/utils/constraints';
 import { targetsOf } from '@/utils/brokenRefs';
@@ -405,6 +405,12 @@ function renderActiveSketch(ctx: RenderContext) {
         // {v}: the measured value, filled in by the renderer
         const dimLabel = entity.expression && ctx.expressionValues ? `${entity.expression} = {v}` : entity.expression;
 
+        if (entity.radius) {
+          const g = resolveRadiusDimension(entity, activeSketch.entities);
+          if (g) drawRadiusDimension(renderer, viewport, g.center, g.arcPoint, g.end, g.radius, lineStyle, textStyle, ctx.palette.background, isDerived, dimLabel, ws);
+          break;
+        }
+
         // Point-to-point dimension (vertex-based)
         if (entity.pointIndex != null) {
           const endpoints = resolveDimensionEndpoints(entity, activeSketch.entities);
@@ -674,7 +680,7 @@ function renderToolOverlay(ctx: RenderContext) {
   }
 }
 
-function renderEntity(
+export function renderEntity(
   renderer: Renderer,
   viewport: Viewport,
   entity: Entity,

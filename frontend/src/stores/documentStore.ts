@@ -14,6 +14,7 @@ import { getSegmentCount } from '@/utils/lineSegments';
 import { BoundsBuilder } from '@/utils/bounds';
 import { evaluateExpression } from '@/utils/expression';
 import { dimensionEntities, resolveSketch } from '@/utils/resolveSketch';
+import { filletSketch, type Corner, type FilletOutcome } from '@/utils/fillet';
 
 const UNDO_STACK_LIMIT = 100;
 
@@ -81,6 +82,10 @@ interface DocumentStore {
 
   // Mirror
   mirrorEntities(entityIds: string[], lineA: Point, lineB: Point): string[];
+
+  // Round corners of polylines / rectangles with radius r (each gets a radius
+  // dimension); null when none of the corners can be rounded.
+  filletCorners(corners: Corner[], r: number): FilletOutcome | null;
 
   // Grid or circular copy: makes the copies and keeps the pattern; given a
   // patternId, replaces that pattern's copies instead. Returns the new ids.
@@ -838,6 +843,16 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     });
     addLog('info', `Mirrored ${newEntities.length} entit${newEntities.length === 1 ? 'y' : 'ies'}`);
     return newEntities.map((e) => e.id);
+  },
+
+  filletCorners(corners, r) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return null;
+    const out = filletSketch(sketch.entities, sketch.constraints, corners, r, () => generateId('dim'));
+    if (!out) return null;
+    set({ document: updateActiveSketch(document, () => ({ entities: propagateDerived(out.entities), constraints: out.constraints })) });
+    return out;
   },
 
   copyPattern(sourceIds, params, patternId = null) {

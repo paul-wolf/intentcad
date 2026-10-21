@@ -7,10 +7,12 @@ import { useCanvasRenderer, type InitialViewport } from './useCanvasRenderer';
 import { useMouseHandlers } from './useMouseHandlers';
 import { getDimensionTextScreenPos, getDiameterTextScreenPos, computeAngleDimensionGeom, getAngleDimensionTextScreenPos } from '@/rendering/dimensionRenderer';
 import { MirrorDialog } from '@/components/MirrorDialog';
+import { FilletPanel } from '@/components/FilletPanel';
 import { CircularCopyDialog } from '@/components/CircularCopyDialog';
 import { GridCopyDialog } from '@/components/GridCopyDialog';
 import { DxfImportDialog } from '@/components/DxfImportDialog';
 import type { DimensionGeom } from '@/rendering/dimensionRenderer';
+import { resolveRadiusDimension } from '@/utils/dimensionGeom';
 import type { Tool } from '@/tools/types';
 import type { ViewportImpl } from '@/rendering/viewport';
 import type { Point, LineEntity } from '@/types/document';
@@ -512,6 +514,11 @@ export function CanvasContainer({ activeTool, docId, transparent, grid, soloActi
     const target = sketch.entities.find((e) => e.id === dim.targetEntityId);
     if (!target) return null;
 
+    if (dim.radius) {
+      const g = resolveRadiusDimension(dim, sketch.entities);
+      return g && { pos: vp.worldToScreen(g.end), value: g.radius, expression: dim.expression };
+    }
+
     // Point-to-segment dimension
     if (dim.pointIndex != null && dim.pointIndex2 == null && dim.targetEntityId2 != null) {
       const a = getEntityPoint(target, dim.pointIndex);
@@ -648,6 +655,7 @@ export function CanvasContainer({ activeTool, docId, transparent, grid, soloActi
         />
       )}
       <MirrorDialog />
+      <FilletPanel />
       <CircularCopyDialog />
       <GridCopyDialog />
       <DxfImportDialog />

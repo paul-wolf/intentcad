@@ -39,6 +39,7 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
   {
     title: 'Modify',
     items: [
+      ['(', 'Fillet: click a corner (Shift adds) or drag a box over several, then type the radius and Enter, or drag out from a corner. Too large: clamped to the largest that fits. The radius is a dimension'],
       ['W', 'Close / open path'],
       ['F', 'Toggle arc on segment'],
       ['M', 'Mirror selection'],

@@ -78,6 +78,10 @@ interface EditorStore {
   setViewportCommand(cmd: 'center-origin' | 'fit-entities' | null): void;
 }
 
+/** The fillet tool starts with the radius used last. */
+let lastFilletRadius = 2;
+export function rememberFilletRadius(r: number) { lastFilletRadius = r; }
+
 function defaultToolState(tool: ToolType): ToolState {
   switch (tool) {
     case 'line':
@@ -100,6 +104,8 @@ function defaultToolState(tool: ToolType): ToolState {
       return { type: 'dimension' };
     case 'bezier':
       return { type: 'bezier', points: [] };
+    case 'fillet':
+      return { type: 'fillet', corners: [], radius: lastFilletRadius };
   }
 }
 

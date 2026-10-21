@@ -7,7 +7,7 @@ import { getSegmentCount, getSegmentPointIndices, getSegmentBulge, getEntitySegm
 import { arcFromBulge, pointToArcDist, arcMidpoint } from '@/utils/arcGeometry';
 import { rectanglePath } from '@/utils/rectPath';
 import { pointToBezierDist } from '@/utils/bezierGeometry';
-import { resolveDimensionEndpoints } from '@/utils/dimensionGeom';
+import { resolveDimensionEndpoints, resolveRadiusDimension } from '@/utils/dimensionGeom';
 
 /**
  * Screen-space distance from `screenPos` to each of a rectangle's four edges,
@@ -239,6 +239,17 @@ export function hitTestEntities(
         (e) => e.id === entity.targetEntityId,
       );
       if (!target) continue;
+
+      if (entity.radius) {
+        const g = resolveRadiusDimension(entity, allEntities);
+        if (!g) continue;
+        const d = pointToSegmentDist(screenPos, viewport.worldToScreen(g.center), viewport.worldToScreen(g.end));
+        if (d < bestDist) {
+          bestDist = d;
+          best = entity;
+        }
+        continue;
+      }
 
       // Point-to-point dimension (vertex-based)
       if (entity.pointIndex != null) {

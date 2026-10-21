@@ -20,6 +20,7 @@ import { createDimensionTool } from '@/tools/dimensionTool';
 import { createRect2ptTool } from '@/tools/rect2ptTool';
 import { createAxisRectTool } from '@/tools/axisRectTool';
 import { createBezierTool } from '@/tools/bezierTool';
+import { createFilletTool } from '@/tools/filletTool';
 import type { Tool } from '@/tools/types';
 import type { ToolType } from '@/types/editor';
 
@@ -71,6 +72,8 @@ function createTool(type: ToolType): Tool {
       return createDimensionTool();
     case 'bezier':
       return createBezierTool();
+    case 'fillet':
+      return createFilletTool();
   }
 }
 
@@ -145,6 +148,7 @@ export function SketchWorkspace({
       if (e.key === 'p' || e.key === 'P') setActiveTool('polygon');
       if (e.key === 'd' || e.key === 'D') setActiveTool('dimension');
       if (e.key === 's' || e.key === 'S') setActiveTool('bezier');
+      if (e.key === '(') setActiveTool('fillet');
       if (e.key === '?') setShowHelp((v) => !v);
     };
     window.addEventListener('keydown', handler);
