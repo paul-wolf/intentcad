@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
 import {
@@ -6,7 +6,7 @@ import {
   type FaceRefSpec, type HolePresets, type EdgeOpKind, type EdgeRefSpec, type ExtrudeOp, type KeepItem, type Step,
   type PlaneReport, type MirrorPlane, type PatternReport, type PatternSpec, type PlaneOpKind, type RunFace,
 } from '@/api/client';
-import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, persistSketches, getBackendId } from '@/api/autoSave';
+import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, persistPrintBed, persistSketches, getBackendId } from '@/api/autoSave';
 import { DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
 import type { ChatMessage } from '@/types/document';
 import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim, type PlacedHandle, type ViewerPick,
@@ -22,6 +22,12 @@ import {
   sectionPosition, type Section,
 } from '@/build/section';
 import { SectionPanel } from './SectionPanel';
+import { OverhangPanel } from './OverhangPanel';
+import {
+  bedWords, clampThreshold, DEFAULT_DOWN, dirWords, loadOverhangs, overhangInstruction, overhangSummary, saveOverhangs,
+  type OverhangState,
+} from '@/build/overhang';
+import { useAuthStore } from '@/stores/authStore';
 import {
   FILTER_KEY, PICK_FILTERS, clickSelect, edgeHandle, edgeLength, edgeLoop, edgeOfRef, faceEdges, measureEdges, nextFilter,
   sameEdgeRef, selectEdges, tangentChain, type PickFilter,
@@ -151,13 +157,19 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // lazy sensitivity: compute the param→face map only when first needed
   const builtCodeRef = useRef<string>('');
   const sensKeyRef = useRef<string | null>(null);
-  // A build is a pure function of the script and the face sketches it
-  // extrudes (sketch("name")): both go to the engine and into the cache key.
+  // A build is a pure function of the script, the face sketches it extrudes
+  // (sketch("name")) and the print bed face (auto_round's keep_bed): all go
+  // to the engine and into the cache key.
   const buildInputs = (src: string) => {
-    const sketches = referencedProfiles(src, useDocumentStore.getState().document.sketches);
-    const extra = Object.keys(sketches).length ? `\n# sketches ${JSON.stringify(sketches)}` : '';
-    return { sketches, key: buildKey(src + extra) };
+    const doc = useDocumentStore.getState().document;
+    const sketches = referencedProfiles(src, doc.sketches);
+    const bed = doc.printBed ?? null;
+    const extra = (Object.keys(sketches).length ? `\n# sketches ${JSON.stringify(sketches)}` : '')
+      + (bed ? `\n# bed ${JSON.stringify(bed)}` : '');
+    return { sketches, bed, key: buildKey(src + extra) };
   };
+  // buildApi.run / export's last arguments for this script
+  const runArgs = (src: string) => { const b = buildInputs(src); return [b.sketches, b.bed] as const; };
   const ensureSens = () => {
     const src = builtCodeRef.current;
     if (!src) return;
@@ -348,6 +360,31 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   };
   const secPlaneRef = useRef<Section | null>(null);
   secPlaneRef.current = secPlane;
+
+  // the overhang highlight (H): shades what would print as an overhang.
+  // View-only, like the section; on/off and the threshold are per user. The
+  // print bed face is the part's (Document.printBed): the build finds it again
+  const userId = useAuthStore((s) => s.user?.id ?? '');
+  const [ovState, setOvStateRaw] = useState<OverhangState>(() => loadOverhangs(userId));
+  useEffect(() => { setOvStateRaw(loadOverhangs(userId)); }, [userId]);
+  const setOvState = (f: (o: OverhangState) => OverhangState) => setOvStateRaw((o) => {
+    const n = f(o); saveOverhangs(n, userId); return n;
+  });
+  const printBed = useDocumentStore((s) => s.document.printBed ?? null);
+  // the last build, with the bed face it was built with
+  const [ovBuilt, setOvBuilt] = useState<{ res: RunResponse; bed: string } | null>(null);
+  const [ovTip, setOvTip] = useState<{ text: string; x: number; y: number } | null>(null);
+  // the view buttons wrap onto two rows in a narrow view: the panels above them follow
+  const [viewBarH, setViewBarH] = useState(20);
+  const viewBarObs = useRef<ResizeObserver | null>(null);
+  const viewBarRef = useCallback((el: HTMLDivElement | null) => {
+    viewBarObs.current?.disconnect();
+    viewBarObs.current = null;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    viewBarObs.current = new ResizeObserver(() => setViewBarH(el.offsetHeight));
+    viewBarObs.current.observe(el);
+  }, []);
+  const ovLiveRef = useRef<{ down: Vec3; threshold: number } | null>(null);
   type SecEls = HandleEls & { wall: HTMLDivElement | null; dist: HTMLDivElement | null };
   const sEls = useRef<SecEls>({ line: null, knob: null, label: null, sub: null, wall: null, dist: null });
   const onSectionHandle = (p: PlacedHandle | null) => {
@@ -599,9 +636,9 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       // Deterministic: same code → same mesh. Serve an unchanged part from the
       // IndexedDB cache with no engine call.
       const runOnce = async () => {
-        const { key, sketches } = buildInputs(src);
+        const { key, sketches, bed } = buildInputs(src);
         const cached = await getCachedBuild(key);
-        const run = cached?.run ?? await buildApi.run(src, ctrl.signal, getBackendId() ?? '', sketches);
+        const run = cached?.run ?? await buildApi.run(src, ctrl.signal, getBackendId() ?? '', sketches, bed);
         if (!cached) putCachedBuild(key, run);
         return { run, key, cached };
       };
@@ -619,6 +656,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       viewerRef.current.setEdges(res.edges);
       prevBindRef.current = resRef.current?.sketches ?? null;
       resRef.current = res;
+      setOvBuilt({ res, bed: JSON.stringify(buildInputs(src).bed) });
       setBuiltPlanes(res.planes ?? {});
       if (sketchOnFace) faceSketchRef.current.pushLines();   // each on its face, where the build put it
       setParamVals(res.params);
@@ -711,7 +749,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         try {
           viewerRef.current = createViewer(canvasRef.current, {
             onPick, onEdgeDoubleClick, onAxes, onDims, onHandle, onHandleDrop, onHandleMove, onMarks,
-            onSection, onSectionHandle, onSectionMeasure, onPlaneLabels,
+            onSection, onSectionHandle, onSectionMeasure, onPlaneLabels, onOverhangHover: setOvTip,
             ...(sketchOnFace ? {
               onSketchHover: (h: { name: string; x: number; y: number } | null) => setSketchTip(h),
               onSketchOpen: (id: string) => { setSketchTip(null); faceSketchRef.current.open(id); },
@@ -719,6 +757,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
           });
           if (sketchOnFace) faceSketchRef.current.pushLines();
           viewerRef.current.setSection(secLiveRef.current);
+          viewerRef.current.setOverhangs(ovLiveRef.current);
         } catch (err) {
           setStatus('error');
           setMessage(errorText(err));
@@ -888,6 +927,27 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     secLiveRef.current = live;
     viewerRef.current?.setSection(live);
   }, [secOn, secPlane]);
+  // which way is down: the bed face as the last build found it; while a new
+  // one is being built, the face as it was picked; not found, Z
+  const ovBedPending = !!ovBuilt && ovBuilt.bed !== JSON.stringify(printBed);
+  const ovBedFound = ovBuilt?.res.bed?.normal && ovBuilt.res.bed.status !== 'not_found' ? ovBuilt.res.bed : null;
+  const ovDown: Vec3 = !printBed ? DEFAULT_DOWN
+    : ovBedPending ? printBed.normal : ovBedFound ? ovBedFound.normal! : DEFAULT_DOWN;
+  const bedMissing = !!printBed && !!ovBuilt && !ovBedPending && !ovBedFound;
+  const ovDownKey = ovDown.join(',');
+  useEffect(() => {
+    const live = ovState.on ? { down: ovDown, threshold: ovState.threshold } : null;
+    ovLiveRef.current = live;
+    viewerRef.current?.setOverhangs(live);
+    if (!live) setOvTip(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ovState.on, ovState.threshold, ovDownKey]);
+  const ovSummary = useMemo(() => {
+    if (!ovState.on || !ovBuilt) return null;
+    return overhangSummary(ovBuilt.res.mesh, ovBuilt.res.faces,
+      { down: ovDown, threshold: ovState.threshold, inverted: viewerRef.current?.invertedRanges() ?? [] });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ovState.on, ovState.threshold, ovBuilt, ovDownKey]);
   const ctxStore = useContextFiles(ctxOwner);
   // files left out of the next message only (the chips' ×); cleared after it is sent
   const [skipCtx, setSkipCtx] = useState<ReadonlySet<string>>(new Set());
@@ -1081,7 +1141,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     viewerRef,
     shellOp && shellOp.v.thickness > 0 ? () => shellLine(shellOp).then((r) => r.code) : null,
     shellKey,
-    (src, signal) => buildApi.run(src, signal, getBackendId() ?? '', buildInputs(src).sketches),
+    (src, signal) => buildApi.run(src, signal, getBackendId() ?? '', ...runArgs(src)),
   );
   const startShell = () => {
     const res = resRef.current;
@@ -1135,7 +1195,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     viewerRef,
     holeOp && holePresets ? () => holeLine(holeOp, holePresets).then((r) => r.code) : null,
     holeKey,
-    (src, signal) => buildApi.run(src, signal, getBackendId() ?? '', buildInputs(src).sketches),
+    (src, signal) => buildApi.run(src, signal, getBackendId() ?? '', ...runArgs(src)),
   );
   const loadHolePresets = async () => {
     if (holePresets) return holePresets;
@@ -1234,7 +1294,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     viewerRef,
     edgeOp && edgeOp.v.size > 0 && edgeOp.v.edges.length ? () => edgeOpLine(edgeOp).then((r) => r.code) : null,
     edgeKey,
-    (src, signal) => buildApi.run(src, signal, getBackendId() ?? '', buildInputs(src).sketches),
+    (src, signal) => buildApi.run(src, signal, getBackendId() ?? '', ...runArgs(src)),
   );
   const selectedEdgeRefs = () => {
     const res = resRef.current;
@@ -1491,12 +1551,12 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     viewerRef,
     mirrorOp?.v.plane ? () => mirrorLine(mirrorOp, mirrorOp.v.plane!) : null,
     mirrorKey,
-    (src, signal) => buildApi.run(src, signal, getBackendId() ?? '', buildInputs(src).sketches),
+    (src, signal) => buildApi.run(src, signal, getBackendId() ?? '', ...runArgs(src)),
     // the mirror image alone, in its own colour (Mirror body)
     mirrorOp?.kind === 'body' ? async (src, signal) => {
       const copy = mirrorCopyScript(src, mirrorOp.line);
       if (!copy) return null;
-      const r = await buildApi.run(copy, signal, getBackendId() ?? '', buildInputs(copy).sketches);
+      const r = await buildApi.run(copy, signal, getBackendId() ?? '', ...runArgs(copy));
       const { bbox_min: a, bbox_max: b } = r.metrics;
       setMirrorCopyAt([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2]);
       return { mesh: r.mesh, color: MIRROR_COPY_COLOR };
@@ -1634,7 +1694,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     patternOp && patternReady(patternOp.v) ? () => patternLine(patternOp) : null,
     patternKey,
     async (src, signal) => {
-      const r = await buildApi.run(src, signal, getBackendId() ?? '', buildInputs(src).sketches);
+      const r = await buildApi.run(src, signal, getBackendId() ?? '', ...runArgs(src));
       const made = patternMade.current;
       if (made?.code === src) setPatternShown({ reports: reportsOn(r.patterns, made.lines), dirs: made.dirs });
       return r;
@@ -1848,7 +1908,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     viewerRef,
     extrudeOp && extrudeOk(extrudeOp) ? () => extrudeLine(extrudeOp).then((r) => r.code) : null,
     extrudeKey,
-    (src, signal) => buildApi.run(src, signal, getBackendId() ?? '', buildInputs(src).sketches),
+    (src, signal) => buildApi.run(src, signal, getBackendId() ?? '', ...runArgs(src)),
   );
   const extrudeSketch = extrudeOp ? docSketches.find((sk) => sk.name === extrudeOp.v.sketch) ?? null : null;
   const extrudeNormal = (extrudeOp && (resRef.current?.sketches?.[extrudeOp.v.sketch]?.plane?.normal
@@ -1915,7 +1975,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       // a reopened line moves down by the lines written above it (a new P key)
       const grown = src.split('\n').length - codeRef.current.split('\n').length;
       const keep = (r: Pick<RunResponse, 'revolves'>) => setRevolveRep({ key, r: revolveReport(r, line, grown) });
-      return buildApi.run(src, signal, getBackendId() ?? '', buildInputs(src).sketches).then(
+      return buildApi.run(src, signal, getBackendId() ?? '', ...runArgs(src)).then(
         (r) => { keep(r); return r; },
         (err: unknown) => { if (err instanceof ApiError && err.revolves) keep(err); throw err; },
       );
@@ -2007,7 +2067,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     viewerRef,
     argOp ? () => argLine(argOp).then((r) => r.code) : null,
     argKey,
-    (src, signal) => buildApi.run(src, signal, getBackendId() ?? '', buildInputs(src).sketches),
+    (src, signal) => buildApi.run(src, signal, getBackendId() ?? '', ...runArgs(src)),
   );
   const applyArgOp = async () => {
     const o = argOp;
@@ -2685,7 +2745,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     setExporting(format);
     try {
       resolveSketches(code);
-      const r = await buildApi.export(code, format, getBackendId() ?? '', buildInputs(code).sketches);
+      const r = await buildApi.export(code, format, getBackendId() ?? '', ...runArgs(code));
       if (format === 'stl-parts' || format === 'dxf-views') {
         // r.data is a base64 zip (STL per body, or top/front/side DXFs)
         const bytes = Uint8Array.from(atob(r.data), (c) => c.charCodeAt(0));
@@ -2756,6 +2816,32 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       : sectionForView(back, center));
     setSecOn(true);
   };
+  // H: the overhang highlight on / off
+  const toggleOverhangs = () => {
+    if (!ovState.on && !resRef.current?.faces.length) { hint('Build the part first, then press H'); return; }
+    setOvState((o) => ({ ...o, on: !o.on }));
+  };
+  // the selected flat face becomes the print bed: stored with the part, found again on each build
+  const setBedFace = () => {
+    const f = lastFace();
+    if (!f?.ref) { hint('Select one flat face first'); return; }
+    persistPrintBed({ ...f.ref, kind: 'plane', hint: f.ref.hint ?? faceLabel(f.normal) });
+    hint(`Prints on the ${f.ref.hint ?? faceLabel(f.normal)} now`);
+    void rebuild();
+  };
+  const resetBed = () => {
+    if (!printBed) return;
+    persistPrintBed(null);
+    hint('Prints on the lowest side along Z again');
+    void rebuild();
+  };
+  // the flagged regions into the chat box (not sent), their faces selected as its context
+  const askFixOverhangs = () => {
+    const res = resRef.current;
+    if (!ovSummary || !res || !ovSummary.regions.length) return;
+    applySelection(ovSummary.faces, [], []);
+    putInChat(overhangInstruction(ovSummary, res.faces, printBed && !bedMissing ? printBed : null));
+  };
   const sectionAxisTo = (axis: 0 | 1 | 2) => {
     const v = viewerRef.current;
     if (!v || !secPlane || sectionAxis(secPlane) === 'XYZ'[axis]) return;
@@ -2766,6 +2852,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     status, hasCode: !!code.trim(), dialogOpen: opOpen, sketching: faceSketch.active, canSketch: sketchOnFace,
     asking, holeSketches: holeSketches.length, holeAt: holeAtText, autoRound: !!resRef.current?.auto_round,
     exporting: !!exporting, importing, hasParams, showParams, ortho, measure: measureText, section: secOn,
+    overhangs: ovState.on,
     mirrorSteps: stepSel.filter((l) => steps.some((s) => s.line === l && !mirrorSkip(s))).length,
     patternSteps: stepSel.filter((l) => steps.some((s) => s.line === l && !patternSkip(s))).length,
     revolveSketches: revolvable(docSketches).length,
@@ -2802,6 +2889,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       } catch { hint(text); }
     },
     section: toggleSection,
+    overhangs: toggleOverhangs,
     mirrorBody: startMirrorBody,
     mirrorSteps: startMirrorSteps,
     patternBody: startPatternBody,
@@ -3245,6 +3333,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
               background: palette.panelBg, border: `1px solid ${palette.border}`, borderRadius: '6px',
               boxShadow: '0 4px 14px rgba(0,0,0,0.3)', zIndex: 2,
             })}
+            {ovTip && ovState.on && !faceSketch.active && (
+              <div style={{ position: 'absolute', left: ovTip.x + 14, top: ovTip.y + 12, padding: '3px 8px',
+                            background: 'rgba(20,22,26,0.86)', border: '1px solid rgba(255,255,255,0.12)',
+                            borderRadius: '4px', color: '#eef1f5', fontSize: '12px', pointerEvents: 'none',
+                            whiteSpace: 'nowrap', zIndex: 3 }}>
+                {ovTip.text}
+              </div>
+            )}
             {sketchTip && !faceSketch.active && (
               <div style={{ position: 'absolute', left: sketchTip.x + 12, top: sketchTip.y + 12, padding: '3px 8px',
                             background: 'rgba(20,22,26,0.86)', border: '1px solid rgba(255,255,255,0.12)',
@@ -3418,7 +3514,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
               ))}
             </svg>
             {/* view buttons (keys 1–6, 0, N, O do the same) */}
-            <div style={{ position: 'absolute', left: 84, right: 130, bottom: 12, display: 'flex', alignItems: 'center',
+            <div ref={viewBarRef} style={{ position: 'absolute', left: 84, right: 130, bottom: 12, display: 'flex', alignItems: 'center',
                           flexWrap: 'wrap', gap: '4px', fontSize: '11px', color: palette.textSecondary }}
                  onMouseDown={(e) => e.preventDefault()}>{/* don't take focus: keys keep working */}
               {VIEW_BUTTONS.map(([key, view]) => (
@@ -3474,6 +3570,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                       onClick={() => { const v = viewerRef.current; if (v) setOrtho(v.toggleOrtho()); }}
                       title={ortho ? 'Orthographic: click for perspective (O)' : 'Perspective: click for orthographic (O)'}>
                 {ortho ? 'Ortho' : 'Persp'}
+              </button>
+              <button style={{ ...viewBtn, marginLeft: '6px', ...(ovState.on ? { color: palette.accent, borderColor: palette.accent } : {}) }}
+                      aria-pressed={ovState.on} onClick={toggleOverhangs}
+                      title={ovState.on ? 'Overhangs shown: click to hide (H)' : 'Shade the faces that would print as overhangs (H)'}>
+                Overhangs
               </button>
               {/* what a click picks (E steps through) */}
               <span role="radiogroup" aria-label="What a click picks"
@@ -3581,10 +3682,18 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                 <div style={{ fontSize: '10.5px', opacity: 0.7 }} />
               </div>
             ))}
-            {secOn && secPlane && !faceSketch.active && (
-              <div style={{ position: 'absolute', left: opWidth ? opWidth + 24 : 12, right: 12, bottom: 44, zIndex: 2,
-                            display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
-                <SectionPanel plane={secPlane} palette={palette} canAlign={!!lastFace() || !!selectedPlane()} dragging={secDragging}
+            {((secOn && secPlane) || ovState.on) && !faceSketch.active && (
+              <div style={{ position: 'absolute', left: opWidth ? opWidth + 24 : 12, right: 12, bottom: viewBarH + 24, zIndex: 2,
+                            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', pointerEvents: 'none' }}>
+                {ovState.on && (
+                  <OverhangPanel palette={palette} summary={ovSummary} threshold={ovState.threshold}
+                    bed={bedWords(printBed && !bedMissing ? printBed : null)} down={dirWords(ovDown)}
+                    bedMissing={bedMissing} bedSet={!!printBed} canSetBed={sel.length === 1 && !!lastFace()?.ref}
+                    onThreshold={(t) => setOvState((o) => ({ ...o, threshold: clampThreshold(t) }))}
+                    onSetBed={setBedFace} onResetBed={resetBed} onAsk={askFixOverhangs}
+                    onOff={() => setOvState((o) => ({ ...o, on: false }))} />
+                )}
+                {secOn && secPlane && <SectionPanel plane={secPlane} palette={palette} canAlign={!!lastFace() || !!selectedPlane()} dragging={secDragging}
                   onAxis={sectionAxisTo}
                   onAlign={() => {
                     const f = lastFace(), pl = selectedPlane();
@@ -3593,7 +3702,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                   }}
                   onFlip={() => setSecPlane((p) => p && flipSection(p))}
                   onPosition={(v) => setSecPlane((p) => p && atPosition(p, v))}
-                  onOff={() => setSecOn(false)} />
+                  onOff={() => setSecOn(false)} />}
               </div>
             )}
             {Object.keys(paramVals).length > 0 && status === 'done' && (
@@ -3650,6 +3759,12 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
               <span>⚠ an operation failed (model shown up to it): {warn}</span>
               {offNote && <span>{offNote}</span>}
               {fix && fixButton(fix)}
+            </span>
+          )}
+          {status === 'done' && bedMissing && (
+            <span style={{ color: palette.warning ?? '#c78a1a', marginRight: '10px' }}
+                  title="The face set as the print bed is no longer on the part: the overhangs and auto_round's bed use Z">
+              ⚠ Print bed face not found; using Z
             </span>
           )}
           {status === 'done' && resRef.current?.sketches && (() => {

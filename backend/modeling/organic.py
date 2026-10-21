@@ -674,11 +674,12 @@ def _grid(face2d: Face, n: int = 7) -> list[Vector]:
     return pts
 
 
-def _protected(part, keep, keep_bed: bool, protect_holes: bool, hole_max_r: float) -> list[Face]:
+def _protected(part, keep, keep_bed: bool, protect_holes: bool, hole_max_r: float,
+               bed=None) -> list[Face]:
     """auto_round's protected faces: keep, the bed, small hole walls."""
     prot = list(_keep_faces(part, keep))
     if keep_bed:
-        prot += _bed_faces(part)
+        prot += _bed_faces(part, bed)
     if protect_holes:
         prot += [f for f in part.faces() if _is_hole_wall(f, hole_max_r)]
     return prot
@@ -835,7 +836,7 @@ def _footprints(part, pl: Plane, T: float) -> list[Face]:
 
 def truss_windows(part, face, rim, rib, anchors, corner_r, keep_clear=3.0, pattern="fan",
                   max_span=None, keep=(), keep_bed=True, protect_holes=True, hole_max_r=6.0,
-                  min_wall=None, report=None):
+                  min_wall=None, report=None, bed=None):
     """Lighten a planar plate: windows through it, separated by ribs.
 
     The window area is the face's outline inset by `rim`, minus rib strips
@@ -872,7 +873,7 @@ def truss_windows(part, face, rim, rib, anchors, corner_r, keep_clear=3.0, patte
         blocked += _offset(h, max(rim, clear))
     for fp in _footprints(part, pl, T):
         blocked += _offset(fp, clear)
-    for pf in _protected(part, keep, keep_bed, protect_holes, hole_max_r):
+    for pf in _protected(part, keep, keep_bed, protect_holes, hole_max_r, bed):
         pts = [pl.to_local_coords(v.center()) for v in pf.vertices()]
         for e in pf.edges():
             pts += [pl.to_local_coords(e @ (i / 6)) for i in range(7)]
@@ -949,15 +950,18 @@ def truss_windows(part, face, rim, rib, anchors, corner_r, keep_clear=3.0, patte
 
 # ── engine hook ──────────────────────────────────────────────────────────────
 
-def bind(sink, min_wall) -> dict:
+def bind(sink, min_wall, bed=None) -> dict:
     """The script-namespace versions: every call reports to `sink`, and
-    min_wall comes from min_wall() (the script's P) unless passed."""
+    min_wall comes from min_wall() (the script's P) unless passed; `bed`
+    (the print bed face's outward normal) is truss_windows' bed unless passed."""
     from modeling.edge_ref import _script_line
 
     def wrap(fn):
         def call(*args, **kwargs):
             kwargs.pop("report", None)
             kwargs.setdefault("min_wall", min_wall())
+            if fn is truss_windows and bed is not None:
+                kwargs.setdefault("bed", bed)
             line = _script_line()
             return fn(*args, report=lambda r: sink({"op": fn.__name__, "line": line, **r}), **kwargs)
         call.__name__ = fn.__name__

@@ -26,7 +26,7 @@ describe("the sketcher's keys", () => {
       ...OPERATIONS.flatMap((o) => (o.shortcut ? [o.shortcut.split(' ')[0]!] : [])),
     ]);
     expect(SKETCH_KEYS.filter((k) => editor.has(k)).sort())
-      .toEqual(['?', 'E', 'Escape', 'F', 'K', 'L', 'N', 'O', 'P', 'R', 'T']);
+      .toEqual(['?', 'E', 'Escape', 'F', 'H', 'K', 'L', 'N', 'O', 'P', 'R', 'T']);
   });
 
   it('gives project edges a key of its own, free in the part editor too', () => {

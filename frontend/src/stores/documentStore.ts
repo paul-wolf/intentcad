@@ -49,6 +49,7 @@ interface DocumentStore {
   setChat(chat: import('@/types/document').ChatMessage[]): void;
   setThumbnail(thumbnail: string): void;
   setProductionNotes(notes: string): void;
+  setPrintBed(bed: import('@/api/client').FaceRefSpec | null): void;
 
   // Undo/Redo
   beginTransaction(label: string): void;
@@ -258,6 +259,9 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
 
   setProductionNotes(productionNotes) {
     set((s) => ({ document: { ...s.document, productionNotes } }));
+  },
+  setPrintBed(printBed) {
+    set((s) => ({ document: { ...s.document, printBed } }));
   },
 
   setMetadata(metadata) {

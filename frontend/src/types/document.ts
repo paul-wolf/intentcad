@@ -377,6 +377,9 @@ export interface Document {
   /** The target production process for this part (e.g. FDM 3D printing). Fed to
    *  the AI as standing context so every edit designs in the right clearances. */
   productionNotes?: string;
+  /** The face the part prints on (the overhang highlight's bed; auto_round's
+   *  keep_bed), found again on each build; absent: the lowest face along Z. */
+  printBed?: import('@/api/client').FaceRefSpec | null;
 }
 
 export interface ChatMessage {

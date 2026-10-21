@@ -89,7 +89,7 @@ def run_model(request, payload: RunRequest):
         return err
     try:
         r = run_script(payload.code, document_id=payload.document_id,
-                       sketches=payload.sketches)
+                       sketches=payload.sketches, bed=payload.bed)
     except EngineError as exc:
         body = {"message": str(exc), "params": exc.params}
         if exc.fix:
@@ -114,6 +114,7 @@ def run_model(request, payload: RunRequest):
         kept=r.get("kept") or [],
         patterns=r.get("patterns") or [],
         revolves=r.get("revolves") or [],
+        bed=r.get("bed"),
     )
 
 
@@ -128,7 +129,7 @@ def export_model(request, payload: ExportRequest):
         return JsonResponse({"message": f"unknown format {payload.format!r}"}, status=422)
     try:
         r = run_script(payload.code, export=[fmt], document_id=payload.document_id,
-                       sketches=payload.sketches)
+                       sketches=payload.sketches, bed=payload.bed)
     except EngineError as exc:
         return JsonResponse({"message": str(exc)}, status=422)
     return ExportResponse(format=fmt, data=r.get("exports", {}).get(fmt, ""))

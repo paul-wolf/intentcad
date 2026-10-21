@@ -9,7 +9,8 @@ step:
 What it leaves alone — every edge on, or ending at, a protected face, so the
 protected face keeps its plane, its boundary and its area exactly:
   - `keep`: faces, ShapeLists, or selector callables (evaluated on the input);
-  - the bed: the lowest downward-facing planar face(s), when keep_bed;
+  - the bed: the lowest downward-facing planar face(s), when keep_bed — "down"
+    is -Z, or `bed` (the print bed face's outward normal, set in the editor);
   - hole walls: cylinders of radius <= hole_max_r with the material outside
     (a boss has it inside), when protect_holes;
 plus tangent / mixed edges and edges shorter than min_edge.
@@ -207,18 +208,32 @@ def _is_hole_wall(f, max_r: float) -> bool:
     return _dot(_vec(n), radial) < 0
 
 
-def _bed_faces(part) -> list:
-    """The lowest downward-facing planar face(s)."""
-    down = []
+def _bed_dir(bed=None) -> tuple[float, float, float]:
+    """The direction into the bed, unit: -Z, or `bed` (a face's outward normal)."""
+    if bed is None:
+        return (0.0, 0.0, -1.0)
+    d = _vec(bed) if hasattr(bed, "X") else tuple(float(x) for x in bed)
+    n = math.sqrt(_dot(d, d))
+    if n < 1e-12:
+        raise ValueError("bed: the direction has no length")
+    return (d[0] / n, d[1] / n, d[2] / n)
+
+
+def _bed_faces(part, bed=None) -> list:
+    """The planar face(s) facing straight into the bed, furthest that way:
+    the lowest downward-facing ones, or with `bed` (the print bed face's
+    outward normal) those facing along it."""
+    down = _bed_dir(bed)
+    on = []
     for f in part.faces():
         if BRepAdaptor_Surface(f.wrapped).GetType() != GeomAbs_Plane:
             continue
-        if f.normal_at(f.center()).Z < -1 + 1e-6:
-            down.append(f)
-    if not down:
+        if _dot(_vec(f.normal_at(f.center())), down) > 1 - 1e-6:
+            on.append(f)
+    if not on:
         return []
-    z = min(f.center().Z for f in down)
-    return [f for f in down if f.center().Z < z + 1e-6]
+    far = max(_dot(_vec(f.center()), down) for f in on)
+    return [f for f in on if _dot(_vec(f.center()), down) > far - 1e-6]
 
 
 # ── wall thickness ──────────────────────────────────────────────────────────
@@ -647,7 +662,7 @@ def _round_solid(solid, protected_sigs, protected_same, opts, deadline, report):
 
 def auto_round(part, convex=1.0, concave=2.0, keep=(), keep_bed=True, protect_holes=True,
                hole_max_r=6.0, min_edge=1.0, max_thickness_frac=0.45, time_budget=20.0,
-               report=None):
+               report=None, bed=None):
     """Round `part`'s convex edges to `convex` and concave edges to `concave`,
     leaving protected faces untouched. Returns a new shape of the same kind
     (each solid of a compound is rounded on its own). See the module doc."""
@@ -659,7 +674,7 @@ def auto_round(part, convex=1.0, concave=2.0, keep=(), keep_bed=True, protect_ho
 
     kept = _keep_faces(part, keep)
     if keep_bed:
-        kept += _bed_faces(part)
+        kept += _bed_faces(part, bed)
     sigs = [_face_sig(f) for f in kept]
     same = [f.wrapped for f in kept]
     opts = {"convex": float(convex), "concave": float(concave), "protect_holes": protect_holes,

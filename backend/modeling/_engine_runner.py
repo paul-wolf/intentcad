@@ -383,7 +383,7 @@ def _stage_assets(assets: dict | None, refs: list | None) -> dict[str, str]:
 
 def _run(code: str, export: list | None = None,
          assets: dict | None = None, asset_refs: list | None = None,
-         sketches: dict | None = None) -> dict:
+         sketches: dict | None = None, bed: dict | None = None) -> dict:
     from build123d import export_step, export_stl
 
     _instrument()
@@ -401,9 +401,14 @@ def _run(code: str, export: list | None = None,
     rounds: list[dict] = []
 
     kept: list[dict] = []
+    # the print bed face set in the editor (a face ref): auto_round's and
+    # truss_windows' bed faces face its way, not -Z
+    bed_dir = _bed_dir(bed)
 
     def auto_round_reported(part, *args, **kwargs):
         kwargs.pop("report", None)
+        if bed_dir is not None:
+            kwargs.setdefault("bed", bed_dir)
         _report_kept(part, args[2] if len(args) > 2 else kwargs.get("keep"), kept)
         return auto_round(part, *args, report=rounds.append, **kwargs)
 
@@ -422,7 +427,7 @@ def _run(code: str, export: list | None = None,
         except (TypeError, ValueError):
             return 2.0
 
-    ns.update(organic.bind(organic_events.append, min_wall))
+    ns.update(organic.bind(organic_events.append, min_wall, bed_dir))
     # sketch("name") — a face sketch's closed shapes as faces on its plane
     # (modeling/sketch_profile.py); the engine sends the profiles referenced.
     # Each follows its face on the `part` built so far; where each went is
@@ -691,6 +696,8 @@ def _run(code: str, export: list | None = None,
         result["patterns"] = pattern_report
     if revolve_report:
         result["revolves"] = revolve_report
+    if bed:
+        result["bed"] = _find_bed(part, face_list, bed)
     plane_report = planes.report(ns.get("PLANES"))
     if plane_report:
         result["planes"] = plane_report
@@ -699,6 +706,39 @@ def _run(code: str, export: list | None = None,
     if fix:
         result["fix"] = fix           # ...and here's the size that would have fit
     return result
+
+
+def _bed_dir(bed: dict | None) -> tuple | None:
+    """The direction into the bed from the bed face's ref (its outward
+    normal); None for the default (-Z) or a ref without one."""
+    try:
+        n = [float(x) for x in (bed or {}).get("normal") or []]
+    except (TypeError, ValueError):
+        return None
+    if len(n) != 3 or sum(x * x for x in n) < 1e-12:
+        return None
+    return tuple(n)
+
+
+def _find_bed(part, face_list, bed: dict) -> dict:
+    """The print bed face found again on the built part (face_ref's matching,
+    as a sketch finds its face): {status, face (its index), normal (outward)}.
+    A ref that can't be read, or isn't a flat face, is not_found."""
+    from modeling import face_ref
+
+    none = {"status": "not_found", "face": None, "normal": None}
+    try:
+        m = face_ref.find(part, {**bed, "kind": "plane"})
+    except (KeyError, TypeError, ValueError, IndexError):
+        return none
+    f = m["face"]
+    if f is None:
+        return none
+    idx = next((j for j, fc in enumerate(face_list) if fc.wrapped.IsSame(f.wrapped)), -1)
+    if idx < 0:
+        return none
+    n = f.normal_at(f.center())
+    return {"status": m["status"], "face": idx, "normal": [n.X, n.Y, n.Z]}
 
 
 def _report_kept(part, keep, out: list) -> None:
@@ -736,7 +776,8 @@ def main() -> None:
     try:
         payload = json.loads(sys.stdin.read() or "{}")
         result = _run(payload.get("code", ""), payload.get("export"),
-                      payload.get("assets"), payload.get("asset_refs"), payload.get("sketches"))
+                      payload.get("assets"), payload.get("asset_refs"), payload.get("sketches"),
+                      payload.get("bed"))
     except Exception as exc:  # any script/engine error → structured, not a crash
         import traceback
         result = {"ok": False, "error": f"{type(exc).__name__}: {exc}",

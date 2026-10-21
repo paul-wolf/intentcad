@@ -191,6 +191,8 @@ class RunRequest(Schema):
     document_id: str = ""   # whose uploaded files ASSETS["<sha256>"] resolves to
     # name -> profile ({plane, loops, face?}), for sketch("name"); else the document's
     sketches: dict[str, dict] = {}
+    # the print bed face set in the editor (a face ref), else the bed is -Z
+    bed: dict | None = None
 
 
 class RunMetrics(Schema):
@@ -346,6 +348,7 @@ class RunResponse(Schema):
     kept: list[KeptFaces] = []                  # the faces each auto_round keep item is
     patterns: list[dict] = []                   # each linear()/circular() used: its instances (pattern.py)
     revolves: list[dict] = []                   # each revolve(): its axis and reach, or why it failed (revolve.py)
+    bed: dict | None = None                     # the print bed face found again: {status, face, normal}
 
 
 class ExportRequest(Schema):
@@ -353,6 +356,7 @@ class ExportRequest(Schema):
     format: str        # 'stl' | 'step' | 'stl-parts' | 'dxf'
     document_id: str = ""
     sketches: dict[str, dict] = {}
+    bed: dict | None = None
 
 
 class ExportResponse(Schema):

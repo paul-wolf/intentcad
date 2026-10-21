@@ -7,7 +7,8 @@
  * independent shading, render-on-demand.
  */
 
-import { add, dot, scale, faceMotion, dragAmount, dragShift, snapToStep, snapToPlane, type Vec3 } from './dragHandle';
+import { add, cross, dot, scale, sub, faceMotion, dragAmount, dragShift, snapToStep, snapToPlane, type Vec3 } from './dragHandle';
+import { bedLevel, CEILING_DEG, onBed, overhangAngle, overhangHoverText, overhangKind, type OverhangKind } from './overhang';
 import {
   lookFrom, axisView, orbit, slerp, quatToMat4, easeInOutCubic, VIEW_DIRS,
   type Quat, type StandardView,
@@ -150,6 +151,12 @@ uniform vec4 uSec;
 uniform float uSecOn;
 uniform float uDim;
 uniform vec3 uBg;
+// overhangs (overhang.ts): uDown into the bed, uOv = (sin threshold, sin ceiling,
+// asin threshold, bed level along uDown); uFlip -1 on a body wound inside out
+uniform float uOvOn;
+uniform vec3 uDown;
+uniform vec4 uOv;
+uniform float uFlip;
 void main() {
   if (dot(vWorld, uClip.xyz) > uClip.w) discard;
   if (uSecOn > 0.5) {
@@ -161,7 +168,22 @@ void main() {
   vec3 l2 = normalize(vec3(-0.5, -0.3, -0.6));
   float d1 = max(dot(n, l1), 0.0);
   float d2 = max(dot(n, l2), 0.0);
-  vec3 col = uColor * (0.28 + 0.62 * d1 + 0.22 * d2);
+  float light = 0.28 + 0.62 * d1 + 0.22 * d2;
+  vec3 col = uColor * light;
+  if (uOvOn > 0.5) {
+    float s = dot(normalize(vWorldN) * uFlip, uDown);
+    if (s > 0.9995 && dot(vWorld, uDown) > uOv.w - 0.01) {
+      // on the bed: faint diagonal stripes
+      float k = step(fract((gl_FragCoord.x + gl_FragCoord.y) / 12.0), 0.35);
+      col = mix(col, vec3(0.25, 0.55, 0.95) * light, 0.18 + 0.22 * k);
+    } else if (s > uOv.x) {
+      // past the threshold: stronger the flatter it is
+      float a = asin(clamp(s, 0.0, 1.0));
+      float k = clamp((a - uOv.z) / (1.5707963 - uOv.z), 0.0, 1.0);
+      vec3 tint = s >= uOv.y ? vec3(0.85, 0.1, 0.12) : vec3(0.88, 0.28, 0.72);
+      col = mix(col, tint * (0.45 + 0.55 * light), 0.35 + 0.5 * k);
+    }
+  }
   float g = dot(col, vec3(0.299, 0.587, 0.114));
   col = mix(col, mix(vec3(g), uBg, 0.62), uDim);
   gl_FragColor = vec4(col, uAlpha);
@@ -427,6 +449,13 @@ export interface Viewer {
    *  across update(); off while sketching and in a thumbnail. Clears the
    *  measured points. */
   setSection(s: Section | null): void;
+  /** The overhang highlight: shade the faces past `threshold`° from vertical
+   *  as seen with `down` into the bed (overhang.ts); null turns it off. Kept
+   *  across update(); off while sketching and in a thumbnail. Hover reports
+   *  the angle via onOverhangHover. */
+  setOverhangs(o: { down: Vec3; threshold: number } | null): void;
+  /** The vertex ranges of bodies wound inside out (their normals point in). */
+  invertedRanges(): [number, number][];
   /** For starting a section: the direction toward the camera (from the part)
    *  and the part's centre. */
   sectionFrame(): { back: Vec3; center: Vec3 };
@@ -496,6 +525,9 @@ export interface ViewerOpts {
   onPlaneLabels?: (labels: PlacedPlaneLabel[]) => void;
   /** Called each frame with the marks' points, projected (see setMarks). */
   onMarks?: (points: PlacedDim[]) => void;
+  /** The pointer is over a highlighted overhang (setOverhangs): its angle in
+   *  words ("62° overhang"), at CSS px in the canvas; null when it left. */
+  onOverhangHover?: (h: { text: string; kind: OverhangKind; x: number; y: number } | null) => void;
 }
 
 export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): Viewer {
@@ -525,6 +557,10 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   const uBg = gl.getUniformLocation(prog, 'uBg');
   const uSec = gl.getUniformLocation(prog, 'uSec');
   const uSecOn = gl.getUniformLocation(prog, 'uSecOn');
+  const uOvOn = gl.getUniformLocation(prog, 'uOvOn');
+  const uDown = gl.getUniformLocation(prog, 'uDown');
+  const uOv = gl.getUniformLocation(prog, 'uOv');
+  const uFlip = gl.getUniformLocation(prog, 'uFlip');
 
   const posBuf = gl.createBuffer()!;
   const normBuf = gl.createBuffer()!;
@@ -533,6 +569,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   const candPosBuf = gl.createBuffer()!;
   const candNormBuf = gl.createBuffer()!;
   let cand: { count: number; color: Vec3; inverted: boolean } | null = null;
+  let candPositions: number[] = [];
   // drawn over the candidate in its own colour (setPreviewMesh's extra)
   const extraPosBuf = gl.createBuffer()!;
   const extraNormBuf = gl.createBuffer()!;
@@ -728,6 +765,8 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
   let modelCenter: Vec3 = [0, 0, 0];
   let modelMin: Vec3 = [-40, -40, -40], modelMax: Vec3 = [40, 40, 40];
   let thumbMode = false;   // when capturing a thumbnail: draw the solid only (no grid/overlays)
+  // the overhang highlight (setOverhangs); bed: the lowest level along down, of the part / candidate
+  let ov: { down: Vec3; threshold: number; bed: number; candBed: number } | null = null;
   const SELECT: [number, number, number] = [1.0, 0.62, 0.2];
   const SNAP: [number, number, number] = [0.18, 0.83, 0.75];
 
@@ -972,7 +1011,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
 
   // the frontmost face under (px, py) CSS px, and its NDC depth there. With
   // a section, what is cut away isn't there, and the cap (face null) is
-  function hitAt(px: number, py: number): { face: FaceRange | null; depth: number; point?: Vec3 } | null {
+  function hitAt(px: number, py: number): { face: FaceRange | null; depth: number; point?: Vec3; tri?: number } | null {
     if (!vertexCount || faces.length === 0) return null;
     const sec = activeSection();
     const w = canvas.width, h = canvas.height;
@@ -1030,7 +1069,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     }
     if (!bestFace) return null;
     const at = (j: number) => [0, 1, 2].reduce((sum, i) => sum + bestAt!.k[i]! * meshPositions[(bestAt!.v + i) * 3 + j]!, 0);
-    return { face: bestFace, depth: bestDepth, point: bestAt ? [at(0), at(1), at(2)] : undefined };
+    return { face: bestFace, depth: bestDepth, point: bestAt ? [at(0), at(1), at(2)] : undefined, tri: bestAt ? bestAt.v / 3 : undefined };
   }
 
   // world → [CSS x, CSS y, NDC depth] (null: behind the camera)
@@ -1201,6 +1240,17 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       gl!.uniform1f(onLoc, on && secPlane ? 1 : 0);
     };
     setSec(uSec, uSecOn, true);
+    // overhangs: on the part (or candidate) itself, never its overlays
+    const ovOn = !!ov && !sk && !thumbMode;
+    const setOv = (on: boolean, bed = ov?.bed ?? 0, flip = false) => {
+      gl!.uniform1f(uOvOn, on && ovOn ? 1 : 0);
+      if (!on || !ovOn) return;
+      const t = (ov!.threshold * Math.PI) / 180;
+      gl!.uniform3fv(uDown, ov!.down);
+      gl!.uniform4f(uOv, Math.sin(t), Math.sin((CEILING_DEG * Math.PI) / 180), t, bed);
+      gl!.uniform1f(uFlip, flip ? -1 : 1);
+    };
+    setOv(false);
 
     gl!.bindBuffer(gl!.ARRAY_BUFFER, posBuf);
     gl!.enableVertexAttribArray(aPos);
@@ -1219,7 +1269,9 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       gl!.bindBuffer(gl!.ARRAY_BUFFER, candNormBuf);
       gl!.vertexAttribPointer(aNormal, 3, gl!.FLOAT, false, 0, 0);
       gl!.uniform3fv(uColor, cand!.color);
+      setOv(true, ov?.candBed, cand!.inverted);
       if (cand!.count) gl!.drawArrays(gl!.TRIANGLES, 0, cand!.count);
+      setOv(false);
       if (candExtra?.count) {
         // over the candidate where they coincide (pulled toward the eye a little)
         gl!.bindBuffer(gl!.ARRAY_BUFFER, extraPosBuf);
@@ -1261,8 +1313,10 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       const list = bodies && bodies.length > 1 ? bodies : [{ ranges: [[0, vertexCount]] as [number, number][] }];
       list.forEach((b, i) => {
         if (list.length > 1) gl!.uniform3fv(uColor, bodyColor(color, i));
+        setOv(true, ov?.bed, (bodies?.[i]?.vol ?? 0) < 0);
         for (const [a, c] of df ? rangesWithout(b.ranges, df.start, df.count) : b.ranges) gl!.drawArrays(gl!.TRIANGLES, a, c);
       });
+      setOv(false);
       gl!.uniform3fv(uColor, color);
     }
 
@@ -1946,6 +2000,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
 
   function onDown(e: PointerEvent) {
     if (sketch) return;   // sketch mode: the sketcher owns the view
+    overhangHover(null);
     lastX = e.clientX; lastY = e.clientY;
     downX = e.clientX; downY = e.clientY; moved = 0;
     canvas.setPointerCapture(e.pointerId);
@@ -2007,13 +2062,33 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     if (hoverRaf) return;
     hoverRaf = requestAnimationFrame(() => {
       hoverRaf = 0;
-      if (!hoverXY || mode !== 'none' || sketch) return;
+      if (!hoverXY || mode !== 'none' || sketch) { overhangHover(null); return; }
       // on the section's cut: measure the wall there instead
-      if (measureAt(hoverXY[0], hoverXY[1])) { setHoverPick(null); canvas.style.cursor = 'crosshair'; return; }
+      if (measureAt(hoverXY[0], hoverXY[1])) { setHoverPick(null); overhangHover(null); canvas.style.cursor = 'crosshair'; return; }
+      overhangHover(ov && !cand ? hoverXY : null);
       const p = opts.onPick ? pickAt(hoverXY[0], hoverXY[1]) : null;
       setHoverPick(p && ('edge' in p ? { edge: p.edge } : 'plane' in p ? { plane: p.plane } : { face: p.face.index }));
       canvas.style.cursor = p && ('edge' in p || 'plane' in p) ? 'pointer' : baseCursor;
     });
+  }
+  // over a highlighted overhang: say its angle
+  let ovHoverKey = '';
+  function overhangHover(at: [number, number] | null) {
+    const hit = at && ov ? hitAt(at[0], at[1]) : null;
+    let r: { text: string; kind: OverhangKind; x: number; y: number } | null = null;
+    if (hit?.tri != null && ov) {
+      const v = hit.tri * 3, P = (i: number): Vec3 => [meshPositions[i * 3]!, meshPositions[i * 3 + 1]!, meshPositions[i * 3 + 2]!];
+      const a = P(v), b = P(v + 1), c = P(v + 2);
+      let n = cross(sub(b, a), sub(c, a));
+      if (partBodies().some((e) => e.vol < 0 && e.ranges.some(([s0, k]) => v >= s0 && v < s0 + k))) n = scale(n, -1);
+      const alpha = overhangAngle(n, ov.down);
+      const kind = overhangKind(alpha, ov.threshold);
+      if (kind && !onBed(n, [a, b, c], ov.down, ov.bed)) r = { text: overhangHoverText(alpha!, kind), kind, x: at![0], y: at![1] };
+    }
+    const key = r ? `${r.text}@${r.x},${r.y}` : '';
+    if (key === ovHoverKey) return;
+    ovHoverKey = key;
+    opts.onOverhangHover?.(r);
   }
   function setHoverPick(p: { edge: number } | { face: number } | { plane: string } | null) {
     const key = (x: typeof p) => (x ? ('edge' in x ? `e${x.edge}` : 'plane' in x ? `p${x.plane}` : `f${x.face}`) : '');
@@ -2088,6 +2163,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
     opts.onSketchHover?.(null);
     hoverXY = null;
     setHoverPick(null);
+    overhangHover(null);
   }
   canvas.addEventListener('pointerdown', onDown);
   canvas.addEventListener('pointermove', onMove);
@@ -2116,6 +2192,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       bodyList = null;
       triFace = new Int32Array(mesh.positions.length / 9).fill(-1);
       faces.forEach((f, i) => triFace.fill(i, f.start / 3, (f.start + f.count) / 3));
+      if (ov) ov.bed = bedLevel(meshPositions, ov.down);
       secHover = null; secPts = [];
       if (secDrag) endSecDrag(true);
       selected = [];
@@ -2175,7 +2252,7 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       scheduleRender();
     },
     setPreviewMesh(p) {
-      if (!p) { cand = null; candExtra = null; candCut = newCut([], []); scheduleRender(); return; }
+      if (!p) { cand = null; candExtra = null; candPositions = []; candCut = newCut([], []); scheduleRender(); return; }
       if (p.extra) {
         gl!.bindBuffer(gl!.ARRAY_BUFFER, extraPosBuf);
         gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array(p.extra.mesh.positions), gl!.STATIC_DRAW);
@@ -2191,6 +2268,8 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array(p.mesh.normals), gl!.STATIC_DRAW);
       const count = p.mesh.positions.length / 3;
       cand = { count, color: p.color, inverted: signedVolume6(p.mesh.positions, 0, count) < 0 };
+      candPositions = p.mesh.positions;
+      if (ov) ov.candBed = bedLevel(candPositions, ov.down);
       candCut = newCut(p.mesh.positions, p.mesh.normals);
       secHover = null;
       scheduleRender();
@@ -2227,6 +2306,19 @@ export function createViewer(canvas: HTMLCanvasElement, opts: ViewerOpts = {}): 
       hoverPick = null;
       if (!sArg) opts.onSectionMeasure?.(null);
       scheduleRender();
+    },
+    setOverhangs(o) {
+      if (!o) { ov = null; overhangHover(null); scheduleRender(); return; }
+      const l = Math.hypot(...o.down) || 1;
+      const down: Vec3 = [o.down[0] / l, o.down[1] / l, o.down[2] / l];
+      ov = { down, threshold: o.threshold, bed: bedLevel(meshPositions, down), candBed: bedLevel(candPositions, down) };
+      ovHoverKey = '';
+      // the threshold or bed changed under the pointer: say the angle there afresh
+      overhangHover(hoverXY && mode === 'none' && !sketch && !cand ? hoverXY : null);
+      scheduleRender();
+    },
+    invertedRanges() {
+      return vertexCount ? partBodies().filter((b) => b.vol < 0).flatMap((b) => b.ranges) : [];
     },
     sectionFrame() {
       const rot = quatToMat4(anim ? anim.to : q);

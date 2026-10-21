@@ -147,6 +147,17 @@ export function persistProductionNotes(notes: string) {
   doSave(backendId, doc, history);
 }
 
+/** Persist the print bed face NOW (no debounce), with the rest of the document. */
+export function persistPrintBed(bed: import('./client').FaceRefSpec | null) {
+  useDocumentStore.getState().setPrintBed(bed);
+  if (!backendId) return;
+  const state = useDocumentStore.getState();
+  const sketches = state.document.sketches.map((s) => (s.plane ? { ...s, profile: sketchProfile(s) ?? undefined } : s));
+  const doc = { ...state.document, sketches } as unknown as Record<string, unknown>;
+  const history = { undo: state.undoStack, redo: state.redoStack };
+  doSave(backendId, doc, history);
+}
+
 /** Persist the AI modeling conversation NOW (no debounce), directly. */
 export function persistChat(chat: import('@/types/document').ChatMessage[]) {
   useDocumentStore.getState().setChat(chat);
