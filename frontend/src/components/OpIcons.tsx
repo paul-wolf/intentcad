@@ -70,6 +70,8 @@ const ICONS: Record<OpIconName, ReactNode> = {
   // a block cut open: the cut face hatched, the plane beyond it
   section: <><path d="M4 9l5-5h11v11l-5 5H4z" opacity={0.5} /><path d="M4 9h11v11H4z" /><path d="M15 9l5-5" opacity={0.5} />
     <path d="M4 13l4-4M4 17l8-8M7 20l8-8M11 20l4-4" strokeWidth={1.1} /></>,
+  // a ledge sticking out over the bed, hatched where it hangs
+  overhang: <><path d="M3 21h18" /><path d="M6 21V8h13v4h-9v9" /><path d="M14 12l-4 4M18 12l-4 4M19 15l-2 2" strokeWidth={1.1} opacity={0.6} /></>,
   normal: <><path d="M5 3v18" /><path d="M21 12H9M12.5 8.5L9 12l3.5 3.5" /></>,
   ortho: <><path d="M5 4h14M5 20h14" /><path d="M5 4v16M19 4v16" strokeDasharray="2 2" /></>,
   params: <><path d="M4 7h16M4 17h16" /><circle cx="9" cy="7" r="2.2" fill="var(--op-icon-bg, none)" /><circle cx="15" cy="17" r="2.2" fill="var(--op-icon-bg, none)" /></>,

@@ -32,6 +32,7 @@ operations cost nothing to support, they just don't get UI.
 - Pattern: linear (one or two directions, spacing or extent, symmetric, skip) and circular (round an axis: X/Y/Z, a straight edge, a hole's rim or cylinder) of a whole body or of chosen steps, as linked copies like Mirror; numbers in P, drag handles for spacing and count, click a copy to leave it out
 - Tangent plane on a cylindrical face (outward on a boss, toward the axis in a bore) at an angle round it from X/Y/Z or a flat face (a shaft's flat), angle in P, set by clicking the face or dragging a handle; for radial holes, with circular pattern for several
 - Revolve: a closed sketch profile turned round an axis (sketch V/H axis, construction or reference line; a straight part edge; a cylinder's centre line; X/Y/Z) as new body, join or cut; full or partial angle, both ways, flip, numbers in P; default axis picked from the profile, crossings marked red and refused; rotation handle on the preview; supported in mirror/pattern steps
+- Overhang highlight (H, Inspect): faces past a threshold (30–70°, default 45°) shaded steep or ceiling by angle, per fragment; hover for the angle; a print bed face other than Z (stored in the part, matched each build, also used by auto_round's bed protection); panel with projected areas and region count; Ask AI to fix puts a request with the flagged regions in the chat box
 - Context files: datasheets and photos the AI reads, with cited dimensions (step 1 of 3)
 - Sketcher gaps: H/V between any two points; point on line / circle and symmetric about a line; corner fillet (radius a dimension, clamped when too large); trim (splits polylines and circles, keeps the constraints that still apply); offset of a closed shape, circle or chain (arcs or miters, follows its source, distance a dimension, unlink); project part edges onto a face/plane sketch (follow the part, broken when the edge goes)
 
@@ -63,7 +64,7 @@ lines, pattern directions, revolve axes and "up to" references all depend on it.
 | 10 | Text (sketch text, extrude to emboss/engrave) | Labels and markings. | M |
 | 11 | Split body (optional alignment pin holes) | Parts bigger than the bed; support-free halves. | M |
 | 12 | 3MF export | Slicers prefer it: units and bodies survive. | S |
-| 13 | Overhang highlight (faces past 45 deg) | See print problems before slicing. | S |
+| 13 | ~~Overhang highlight~~ ✓ done | See print problems before slicing: steep and ceiling faces past an adjustable threshold, a chosen print bed face, areas, Ask AI to fix. | S |
 
 ## AI only (no buttons)
 
@@ -76,7 +77,7 @@ it), simulation, sheet metal, surface modelling, rendering.
 
 ## Order
 
-Done: edge selection, 1, 2, 3, 4, 5, 6, 6b, 7, 9. Next:
-13 (overhang highlight) -> 8 (up to face) -> 12, 10, 11. Context files
+Done: edge selection, 1, 2, 3, 4, 5, 6, 6b, 7, 9, 13. Next:
+8 (up to face) -> 12, 10, 11. Context files
 steps 2-3 run on their own track. Each step stands alone and is kept or reverted on
 its own merit.

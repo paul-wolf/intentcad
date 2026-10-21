@@ -219,7 +219,7 @@ def load_sketches(code: str, document_id: str | None,
 
 def run_script(code: str, *, export: list[str] | None = None, timeout: float = 60.0,
                document_id: str | None = None, assets: dict[str, bytes] | None = None,
-               sketches: dict[str, dict] | None = None) -> dict:
+               sketches: dict[str, dict] | None = None, bed: dict | None = None) -> dict:
     """Execute `code` (a build123d script that binds `part`) and return
     {mesh, faces, edges, params, metrics, exports}. `export` requests STEP/STL
     text. Raises EngineError with the script's error message on failure.
@@ -229,6 +229,9 @@ def run_script(code: str, *, export: list[str] | None = None, timeout: float = 6
     caller already has them (sensitivity rebuilds one script many times).
     Face sketches it references (sketch("name")) likewise: `sketches`
     ({name: profile}) first, the document's stored profiles for the rest.
+    `bed`: the print bed face set in the editor (a face ref): auto_round
+    keeps the faces facing its way sharp, and result["bed"] says where the
+    build found it.
 
     Runs on the warm worker; serialized by a lock. On timeout or crash the worker
     is discarded so the next call gets a fresh one."""
@@ -253,6 +256,7 @@ def run_script(code: str, *, export: list[str] | None = None, timeout: float = 6
                            for sha in sorted(refs) if sha not in w.assets},
                 "asset_refs": sorted(refs),
                 "sketches": profiles,
+                "bed": bed,
             })
             try:
                 w.proc.stdin.write(payload + "\n")

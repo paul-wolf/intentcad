@@ -232,5 +232,46 @@ class AutoRoundTests(SimpleTestCase):
         self.assertEqual(rep["protected"], 1)
         self.assertGreater(rep["elapsed"], 0)
 
+    def test_the_bed_can_face_another_way(self):
+        part = _box_on_plate()
+        # the default: the plate's underside
+        self.assertEqual([round(f.center().Z, 6) for f in ar._bed_faces(part)], [0.0])
+        # printed upside down: the box's top, the furthest face looking up
+        # (not the plate's top, which looks up too but is nearer)
+        up = ar._bed_faces(part, (0, 0, 1))
+        self.assertEqual([round(f.center().Z, 6) for f in up], [15.0])
+        self.assertAlmostEqual(up[0].area, 400.0, places=6)
+        # on its side, and any length of direction
+        self.assertEqual([round(f.center().X, 6) for f in ar._bed_faces(part, (5, 0, 0))], [20.0])
+        with self.assertRaises(ValueError):
+            ar._bed_faces(part, (0, 0, 0))
+
+    def test_the_engine_keeps_the_bed_face_set_in_the_editor_sharp(self):
+        code = ('part = Box(40, 40, 5, align=(Align.CENTER, Align.CENTER, Align.MIN))\n'
+                'part += Pos(0, 0, 5) * Box(20, 20, 10, align=(Align.CENTER, Align.CENTER, Align.MIN))\n'
+                'part = auto_round(part, convex=1.0, concave=2.0)\n')
+        top = {"center": [0, 0, 15], "normal": [0, 0, 1], "area": 400, "box": [-10, -10, 10, 10]}
+
+        def top_area(r):
+            return [round(f["area"], 3) for f in r["faces"]
+                    if f["kind"] == "plane" and f["normal"][2] > 0.999 and abs(f["center"][2] - 15) < 1e-6]
+
+        plain = run_script(code)
+        self.assertEqual(top_area(plain), [324.0])     # rounded: (20 - 2)²
+        self.assertNotIn("bed", plain)
+        r = run_script(code, bed=top)
+        self.assertEqual(top_area(r), [400.0])         # the bed stays whole
+        self.assertEqual(r["bed"]["status"], "found")
+        f = r["faces"][r["bed"]["face"]]
+        self.assertAlmostEqual(f["center"][2], 15, places=6)
+        self.assertEqual([round(x, 6) for x in r["bed"]["normal"]], [0, 0, 1])
+        # the plate's underside is free to round now
+        bottom = [f for f in r["faces"] if f["kind"] == "plane" and f["normal"][2] < -0.999 and f["center"][2] < 1e-6]
+        self.assertAlmostEqual(bottom[0]["area"], 38 * 38, places=3)
+
+    def test_a_bed_face_that_is_gone_is_not_found(self):
+        r = run_script("part = Box(10, 10, 10)", bed={"center": [0, 0, 0], "normal": [0.6, 0, 0.8], "area": 5})
+        self.assertEqual(r["bed"], {"status": "not_found", "face": None, "normal": None})
+
     def test_no_report_without_auto_round(self):
         self.assertNotIn("auto_round", run_script("part = Box(1, 1, 1)"))

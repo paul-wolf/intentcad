@@ -315,12 +315,14 @@ export const buildApi = {
   },
   // `documentId`: the part whose uploaded files the script imports (ASSETS[...])
   // `sketches`: the face sketches it extrudes (sketch("name")) as on screen — saved or not
-  run(code: string, signal?: AbortSignal, documentId = '', sketches: Record<string, unknown> = {}): Promise<RunResponse> {
-    return request('/build/run', { method: 'POST', body: JSON.stringify({ code, document_id: documentId, sketches }), signal });
+  /** `bed`: the print bed face (Document.printBed), found again in the build (RunResponse.bed). */
+  run(code: string, signal?: AbortSignal, documentId = '', sketches: Record<string, unknown> = {},
+      bed: FaceRefSpec | null = null): Promise<RunResponse> {
+    return request('/build/run', { method: 'POST', body: JSON.stringify({ code, document_id: documentId, sketches, bed }), signal });
   },
   export(code: string, format: 'stl' | 'step' | 'stl-parts' | 'dxf' | 'dxf-views', documentId = '',
-         sketches: Record<string, unknown> = {}): Promise<{ format: string; data: string }> {
-    return request('/build/export', { method: 'POST', body: JSON.stringify({ code, format, document_id: documentId, sketches }) });
+         sketches: Record<string, unknown> = {}, bed: FaceRefSpec | null = null): Promise<{ format: string; data: string }> {
+    return request('/build/export', { method: 'POST', body: JSON.stringify({ code, format, document_id: documentId, sketches, bed }) });
   },
   edit(payload: { code: string; instruction: string; context?: string; document_id?: string;
                   history?: { role: string; text: string }[]; model?: string; production?: string;
@@ -765,6 +767,8 @@ export interface RunResponse {
   patterns?: PatternReport[];
   /** each revolve() of a sketch: its axis, and where a profile crosses it */
   revolves?: import('@/build/revolve').RevolveReport[];
+  /** the print bed face (the run's `bed`) found again: its index and outward normal now */
+  bed?: { status: 'found' | 'ambiguous' | 'not_found'; face: number | null; normal: [number, number, number] | null } | null;
 }
 
 /** Mirrors backend modeling.schemas.AutoRoundReport. */

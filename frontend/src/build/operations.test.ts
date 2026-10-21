@@ -114,7 +114,7 @@ describe('the operation registry', () => {
     const ctx = Object.fromEntries(
       ['sketchOnSelection', 'sketchOnPlane', 'shell', 'hole', 'fillet', 'chamfer', 'ask', 'build', 'importStep', 'exportAs', 'versions',
        'process', 'addContextFile', 'toggleParams', 'setView', 'lookAtSelection', 'toggleOrtho', 'copyMeasure',
-       'section', 'offsetPlane', 'edgePlane', 'tangentPlane', 'mirrorBody', 'mirrorSteps', 'patternBody', 'patternSteps', 'revolve'].map((k) => [k, vi.fn()]),
+       'section', 'overhangs', 'offsetPlane', 'edgePlane', 'tangentPlane', 'mirrorBody', 'mirrorSteps', 'patternBody', 'patternSteps', 'revolve'].map((k) => [k, vi.fn()]),
     ) as unknown as Record<keyof OpContext, ReturnType<typeof vi.fn>>;
     for (const op of OPERATIONS) op.run(ctx as unknown as OpContext);
     expect(ctx.shell).toHaveBeenCalledTimes(1);
@@ -126,6 +126,7 @@ describe('the operation registry', () => {
     expect(ctx.setView).toHaveBeenCalledTimes(7);
     expect(ctx.ask).toHaveBeenCalledTimes(4);   // round, lighten, keep sharp, fix
     expect(ctx.section).toHaveBeenCalledTimes(1);
+    expect(ctx.overhangs).toHaveBeenCalledTimes(1);
     expect(ctx.offsetPlane).toHaveBeenCalledTimes(1);
     expect(ctx.edgePlane).toHaveBeenCalledTimes(1);
     expect(ctx.tangentPlane).toHaveBeenCalledTimes(1);

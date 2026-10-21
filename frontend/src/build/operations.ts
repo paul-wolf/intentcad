@@ -20,7 +20,7 @@ export const OP_GROUPS: OpGroup[] = ['Sketch', 'Create', 'Construct', 'Modify', 
 export type OpIcon =
   | 'sketch-face' | 'plane-top' | 'plane-front' | 'plane-right' | 'extrude' | 'revolve' | 'hole' | 'shell' | 'fillet' | 'chamfer' | 'round'
   | 'plane-offset' | 'plane-edge' | 'plane-tangent' | 'mirror' | 'mirror-steps' | 'pattern' | 'pattern-circular' | 'pattern-steps'
-  | 'lighten' | 'protect' | 'fix' | 'measure' | 'section' | 'normal' | 'ortho' | 'params' | 'build' | 'import'
+  | 'lighten' | 'protect' | 'fix' | 'measure' | 'section' | 'overhang' | 'normal' | 'ortho' | 'params' | 'build' | 'import'
   | 'export' | 'stl' | 'parts' | 'dxf' | 'views3' | 'versions' | 'process' | 'context'
   | `view-${StandardView}`;
 
@@ -60,6 +60,8 @@ export interface OpModel {
   measure: string | null;
   /** the section view is on */
   section: boolean;
+  /** the overhang highlight is on */
+  overhangs?: boolean;
   /** the steps chosen in the steps list that Mirror steps can copy */
   mirrorSteps: number;
   /** the steps chosen in the steps list that Pattern steps can copy */
@@ -105,6 +107,8 @@ export interface OpContext {
   copyMeasure(): void;
   /** Z: the section view on (or off) */
   section(): void;
+  /** H: the overhang highlight on (or off) */
+  overhangs(): void;
   /** the Mirror body dialog, across the selected flat face or plane (or one picked in it) */
   mirrorBody(): void;
   /** the Mirror steps dialog, for the steps chosen in the steps list */
@@ -491,6 +495,18 @@ export const OPERATIONS: Operation[] = [
     label: (m) => (m.section ? 'Section off' : 'Section'),
     needs: (_sel, m) => first([m.sketching, 'Finish the sketch first']),
     run: (ctx) => ctx.section(),
+  },
+  {
+    id: 'overhangs', name: 'Overhangs', group: 'Inspect', icon: 'overhang', shortcut: 'H',
+    help: 'Shade the faces that would print as overhangs',
+    longHelp: 'Shades the faces that would print as overhangs, steep ones in magenta and flat ceilings in red, '
+      + 'darker the flatter they are; the script is not changed. Up is +Z unless you set a print bed face in its '
+      + 'panel, which also sets the threshold and shows the area to support. Ask AI to fix puts a request for '
+      + 'printable fixes in the chat box.',
+    example: 'will the lid lip print without supports?',
+    label: (m) => (m.overhangs ? 'Overhangs off' : 'Overhangs'),
+    needs: (_sel, m) => first([m.sketching, 'Finish the sketch first']),
+    run: (ctx) => ctx.overhangs(),
   },
   // View
   {
