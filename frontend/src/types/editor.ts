@@ -1,6 +1,6 @@
 import type { Point } from './document';
 
-export type ToolType = 'select' | 'line' | 'point' | 'circle' | 'rectangle' | 'rect2pt' | 'axisrect' | 'polygon' | 'dimension' | 'bezier' | 'fillet';
+export type ToolType = 'select' | 'line' | 'point' | 'circle' | 'rectangle' | 'rect2pt' | 'axisrect' | 'polygon' | 'dimension' | 'bezier' | 'fillet' | 'trim';
 
 export interface LineToolState {
   type: 'line';
@@ -62,7 +62,11 @@ export interface FilletToolState {
   radius: number;
 }
 
-export type ToolState = LineToolState | SelectToolState | PointToolState | CircleToolState | RectangleToolState | Rect2ptToolState | AxisRectToolState | PolygonToolState | DimensionToolState | BezierToolState | FilletToolState;
+export interface TrimToolState {
+  type: 'trim';
+}
+
+export type ToolState = LineToolState | SelectToolState | PointToolState | CircleToolState | RectangleToolState | Rect2ptToolState | AxisRectToolState | PolygonToolState | DimensionToolState | BezierToolState | FilletToolState | TrimToolState;
 
 export interface EditorState {
   activeTool: ToolType;

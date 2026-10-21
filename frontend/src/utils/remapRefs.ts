@@ -5,8 +5,10 @@
  */
 import type { Constraint, Entity } from '@/types/document';
 
-/** A new index for an old one, or null when that point or segment is gone. */
-export type IndexMap = (i: number) => number | null;
+/** A new index for an old one, or null when that point or segment is gone;
+ *  `{ entityId, index }` when it's now on another shape (a trimmed polyline's
+ *  second piece). `ref` is the constraint or dimension asking. */
+export type IndexMap = (i: number, ref: Constraint | Entity) => number | { entityId: string; index: number } | null;
 
 export interface Remap {
   entityId: string;
@@ -48,28 +50,41 @@ function dimensionSlots(d: Record<string, unknown>): Slot[] {
   return slots;
 }
 
-/** `obj` with its slots on `remap.entityId` renumbered; null when one is gone. */
-function remapSlots<T extends object>(obj: T, slots: Slot[], remap: Remap): T | null {
-  const src = obj as Record<string, unknown>;
+/** `obj` with its slots on `remap.entityId` renumbered; null when one is gone
+ *  (or two slots sharing a shape now land on different ones). */
+function remapSlots<T extends Constraint | Entity>(obj: T, slots: Slot[], remap: Remap): T | null {
+  const src = obj as unknown as Record<string, unknown>;
   let out: Record<string, unknown> | null = null;
+  const moved = new Map<string, string>(); // entity key → the shape it now names
   for (const [ek, ik, kind] of slots) {
     if (src[ek] !== remap.entityId) continue;
     const old = src[ik];
     if (typeof old !== 'number') continue; // an optional index left out: the whole shape
-    const idx = (kind === 'point' ? remap.point : remap.segment)(old);
+    const idx = (kind === 'point' ? remap.point : remap.segment)(old, obj);
     if (idx == null) return null;
     out ??= { ...src };
-    out[ik] = idx;
+    if (typeof idx === 'number') {
+      out[ik] = idx;
+      continue;
+    }
+    if (moved.has(ek) && moved.get(ek) !== idx.entityId) return null;
+    moved.set(ek, idx.entityId);
+    out[ek] = idx.entityId;
+    out[ik] = idx.index;
+  }
+  for (const [ek, other] of moved) {
+    // a slot on the same shape left at the old id (an optional index left out) can't follow
+    for (const [ek2, ik2] of slots) if (ek2 === ek && typeof src[ik2] !== 'number' && src[ek2] === remap.entityId && other !== remap.entityId) return null;
   }
   if (remap.newEntityId) {
     for (const [ek] of slots) {
-      if (src[ek] === remap.entityId) {
+      if (src[ek] === remap.entityId && !moved.has(ek)) {
         out ??= { ...src };
         out[ek] = remap.newEntityId;
       }
     }
   }
-  return (out ?? obj) as T;
+  return (out ?? obj) as unknown as T;
 }
 
 /** The sketch's constraints and dimensions with references to `remap.entityId`

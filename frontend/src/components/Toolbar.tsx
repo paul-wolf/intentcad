@@ -82,6 +82,7 @@ const MEASURE_TOOLS: { type: ToolType; label: string; icon?: ReactNode; shortcut
 
 const MODIFY_TOOLS: { type: ToolType; label: string; icon?: ReactNode; shortcut: string }[] = [
   { type: 'fillet', label: 'Fillet: round corners (click a corner or drag a box, then type or drag the radius)', icon: <ToolIcon><path d="M2 14V8a6 6 0 0 1 6-6h6" /><path d="M2 2h4M2 2v4" strokeDasharray="1.5 1" strokeWidth="1" /></ToolIcon>, shortcut: '(' },
+  { type: 'trim', label: 'Trim: remove the piece of a curve between crossings (click, or drag across several)', icon: <ToolIcon><line x1="2" y1="8" x2="14" y2="8" strokeDasharray="2 1.5" /><line x1="5" y1="2" x2="5" y2="14" /><line x1="11" y1="2" x2="11" y2="14" /><line x1="6.5" y1="6" x2="9.5" y2="10" strokeWidth="1" /><line x1="9.5" y1="6" x2="6.5" y2="10" strokeWidth="1" /></ToolIcon>, shortcut: '-' },
 ];
 
 function Sep({ color }: { color: string }) {

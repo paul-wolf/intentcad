@@ -21,6 +21,7 @@ import { createRect2ptTool } from '@/tools/rect2ptTool';
 import { createAxisRectTool } from '@/tools/axisRectTool';
 import { createBezierTool } from '@/tools/bezierTool';
 import { createFilletTool } from '@/tools/filletTool';
+import { createTrimTool } from '@/tools/trimTool';
 import type { Tool } from '@/tools/types';
 import type { ToolType } from '@/types/editor';
 
@@ -74,6 +75,8 @@ function createTool(type: ToolType): Tool {
       return createBezierTool();
     case 'fillet':
       return createFilletTool();
+    case 'trim':
+      return createTrimTool();
   }
 }
 
@@ -149,6 +152,7 @@ export function SketchWorkspace({
       if (e.key === 'd' || e.key === 'D') setActiveTool('dimension');
       if (e.key === 's' || e.key === 'S') setActiveTool('bezier');
       if (e.key === '(') setActiveTool('fillet');
+      if (e.key === '-') setActiveTool('trim');
       if (e.key === '?') setShowHelp((v) => !v);
     };
     window.addEventListener('keydown', handler);

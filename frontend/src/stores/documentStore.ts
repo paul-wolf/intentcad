@@ -15,6 +15,7 @@ import { BoundsBuilder } from '@/utils/bounds';
 import { evaluateExpression } from '@/utils/expression';
 import { dimensionEntities, resolveSketch } from '@/utils/resolveSketch';
 import { filletSketch, type Corner, type FilletOutcome } from '@/utils/fillet';
+import { trimSketch, type TrimOutcome } from '@/utils/trim';
 
 const UNDO_STACK_LIMIT = 100;
 
@@ -86,6 +87,9 @@ interface DocumentStore {
   // Round corners of polylines / rectangles with radius r (each gets a radius
   // dimension); null when none of the corners can be rounded.
   filletCorners(corners: Corner[], r: number): FilletOutcome | null;
+
+  // Remove the piece of a curve around parameter s (see utils/trim.ts).
+  trimPiece(entityId: string, s: number): TrimOutcome | null;
 
   // Grid or circular copy: makes the copies and keeps the pattern; given a
   // patternId, replaces that pattern's copies instead. Returns the new ids.
@@ -850,6 +854,16 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
     if (!sketch) return null;
     const out = filletSketch(sketch.entities, sketch.constraints, corners, r, () => generateId('dim'));
+    if (!out) return null;
+    set({ document: updateActiveSketch(document, () => ({ entities: propagateDerived(out.entities), constraints: out.constraints })) });
+    return out;
+  },
+
+  trimPiece(entityId, s) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return null;
+    const out = trimSketch(sketch.entities, sketch.constraints, entityId, s, () => crypto.randomUUID());
     if (!out) return null;
     set({ document: updateActiveSketch(document, () => ({ entities: propagateDerived(out.entities), constraints: out.constraints })) });
     return out;

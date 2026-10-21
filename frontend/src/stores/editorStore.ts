@@ -106,6 +106,8 @@ function defaultToolState(tool: ToolType): ToolState {
       return { type: 'bezier', points: [] };
     case 'fillet':
       return { type: 'fillet', corners: [], radius: lastFilletRadius };
+    case 'trim':
+      return { type: 'trim' };
   }
 }
 
