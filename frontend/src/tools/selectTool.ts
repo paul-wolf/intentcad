@@ -25,6 +25,7 @@ import { getStyles } from '@/rendering/styles';
 import { SNAP_INDICATOR_RADIUS } from '@/config';
 import { traceContour } from '@/utils/contourTrace';
 import { openCopyDialog } from './openCopyDialog';
+import { applyHV } from './selectionPoints';
 
 /** Filter entities for CAM mode: remove construction, dimension, and standalone points */
 function filterEntitiesForCam(entities: Entity[]): Entity[] {
@@ -746,28 +747,10 @@ export function createSelectTool(): Tool {
         }
       }
       if (e.key === 'h' || e.key === 'H') {
-        const es = useEditorStore.getState();
-        const ids = es.selectedEntityIds;
-        if (ids.size > 0) {
-          const segs = es.selectedSegments.length > 0
-            ? es.selectedSegments.map((s) => ({ entityId: s.entityId, segmentIndex: s.segmentIndex }))
-            : undefined;
-          useDocumentStore.getState().beginTransaction('Toggle horizontal');
-          useDocumentStore.getState().toggleHorizontal([...ids], segs);
-          requestSave();
-        }
+        if (applyHV('horizontal')) requestSave();
       }
       if (e.key === 'v') {
-        const es = useEditorStore.getState();
-        const ids = es.selectedEntityIds;
-        if (ids.size > 0) {
-          const segs = es.selectedSegments.length > 0
-            ? es.selectedSegments.map((s) => ({ entityId: s.entityId, segmentIndex: s.segmentIndex }))
-            : undefined;
-          useDocumentStore.getState().beginTransaction('Toggle vertical');
-          useDocumentStore.getState().toggleVertical([...ids], segs);
-          requestSave();
-        }
+        if (applyHV('vertical')) requestSave();
       }
       if (e.key === 'n' || e.key === 'N') {
         const segs = resolveTwoSegments();

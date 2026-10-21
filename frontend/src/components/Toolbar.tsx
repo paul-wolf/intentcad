@@ -18,6 +18,7 @@ import { requestSave, getProjectId, getProjectName, setBackendId, setProjectCont
 import { createEmptyDocument, generateNumberedName } from '@/utils/document';
 import { addLog } from '@/stores/logStore';
 import { openCopyDialog } from '@/tools/openCopyDialog';
+import { applyHV } from '@/tools/selectionPoints';
 import { api } from '@/api/cachedClient';
 import type { ToolType } from '@/types/editor';
 import type { ThemePalette } from '@/theme';
@@ -422,35 +423,19 @@ export function Toolbar({ embedded = false }: ToolbarProps = {}) {
         </button>
         <button
           onClick={() => {
-            const es = useEditorStore.getState();
-            const ids = es.selectedEntityIds;
-            if (ids.size === 0) return;
-            const segs = es.selectedSegments.length > 0
-              ? es.selectedSegments.map((s) => ({ entityId: s.entityId, segmentIndex: s.segmentIndex }))
-              : undefined;
-            useDocumentStore.getState().beginTransaction('Toggle horizontal');
-            useDocumentStore.getState().toggleHorizontal([...ids], segs);
-            requestSave();
+            if (applyHV('horizontal')) requestSave();
           }}
           style={btn(palette)}
-          title="Horizontal constraint (H)"
+          title="Horizontal constraint (H) — a line or segment, or between two points (same height)"
         >
           <ToolIcon><line x1="2" y1="8" x2="14" y2="8" /></ToolIcon>
         </button>
         <button
           onClick={() => {
-            const es = useEditorStore.getState();
-            const ids = es.selectedEntityIds;
-            if (ids.size === 0) return;
-            const segs = es.selectedSegments.length > 0
-              ? es.selectedSegments.map((s) => ({ entityId: s.entityId, segmentIndex: s.segmentIndex }))
-              : undefined;
-            useDocumentStore.getState().beginTransaction('Toggle vertical');
-            useDocumentStore.getState().toggleVertical([...ids], segs);
-            requestSave();
+            if (applyHV('vertical')) requestSave();
           }}
           style={btn(palette)}
-          title="Vertical constraint (V)"
+          title="Vertical constraint (V) — a line or segment, or between two points (one above the other)"
         >
           <ToolIcon><line x1="8" y1="2" x2="8" y2="14" /></ToolIcon>
         </button>

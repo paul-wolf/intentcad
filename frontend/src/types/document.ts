@@ -188,6 +188,27 @@ export interface VerticalConstraint {
   segmentIndex: number;
 }
 
+/** Two points level with each other (same y), e.g. vertices, centres,
+ *  rectangle corners or point entities. */
+export interface HorizontalPointsConstraint {
+  id: string;
+  type: 'horizontalPoints';
+  entityId: string;
+  pointIndex: number;
+  targetEntityId: string;
+  targetPointIndex: number;
+}
+
+/** Two points one above the other (same x). */
+export interface VerticalPointsConstraint {
+  id: string;
+  type: 'verticalPoints';
+  entityId: string;
+  pointIndex: number;
+  targetEntityId: string;
+  targetPointIndex: number;
+}
+
 export interface MidpointConstraint {
   id: string;
   type: 'midpoint';
@@ -233,7 +254,7 @@ export interface BisectConstraint {
   targetSegmentIndex: number; // which segment is bisected
 }
 
-export type Constraint = FixedConstraint | EqualConstraint | CoincidentConstraint | HorizontalConstraint | VerticalConstraint | MidpointConstraint | ParallelConstraint | PerpendicularConstraint | TangentConstraint | BisectConstraint;
+export type Constraint = FixedConstraint | EqualConstraint | CoincidentConstraint | HorizontalConstraint | VerticalConstraint | HorizontalPointsConstraint | VerticalPointsConstraint | MidpointConstraint | ParallelConstraint | PerpendicularConstraint | TangentConstraint | BisectConstraint;
 
 /** A grid or circular copy, kept so it can be reopened and changed:
  *  what was copied, the copies it made, and how. */

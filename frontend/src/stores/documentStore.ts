@@ -110,6 +110,8 @@ interface DocumentStore {
   toggleTangent(e1Id: string, seg1Idx: number, e2Id: string, seg2Idx: number): void;
   toggleBisect(seg1: {entityId: string, segmentIndex: number}, seg2: {entityId: string, segmentIndex: number}): void;
   toggleHorizontal(entityIds: string[], segments?: {entityId: string, segmentIndex: number}[]): void;
+  /** Two points level (horizontal) or one above the other (vertical); again to remove. */
+  togglePointsHV(type: 'horizontal' | 'vertical', pt1: SelectedPoint, pt2: SelectedPoint): void;
   toggleVertical(entityIds: string[], segments?: {entityId: string, segmentIndex: number}[]): void;
 
   // Arc segments
@@ -1165,6 +1167,57 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
       });
       addLog('info', 'Coincident constraint ON');
     }
+  },
+
+  togglePointsHV(type, pt1, pt2) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return;
+    const ctype = type === 'horizontal' ? 'horizontalPoints' as const : 'verticalPoints' as const;
+    const label = type === 'horizontal' ? 'Horizontal' : 'Vertical';
+
+    const e1 = sketch.entities.find((e) => e.id === pt1.entityId);
+    const e2 = sketch.entities.find((e) => e.id === pt2.entityId);
+    if (!e1 || !e2 || e1.type === 'dimension' || e2.type === 'dimension') return;
+
+    const same = (c: Constraint) => c.type === ctype &&
+      ((c.entityId === pt1.entityId && c.pointIndex === pt1.pointIndex &&
+        c.targetEntityId === pt2.entityId && c.targetPointIndex === pt2.pointIndex) ||
+       (c.entityId === pt2.entityId && c.pointIndex === pt2.pointIndex &&
+        c.targetEntityId === pt1.entityId && c.targetPointIndex === pt1.pointIndex));
+    const existing = sketch.constraints.find(same);
+    if (existing) {
+      set({
+        document: updateActiveSketch(document, () => ({
+          constraints: sketch.constraints.filter((c) => c.id !== existing.id),
+        })),
+      });
+      addLog('info', `${label} (two points) constraint OFF`);
+      return;
+    }
+
+    const proposed: Constraint = {
+      id: crypto.randomUUID(),
+      type: ctype,
+      entityId: pt1.entityId,
+      pointIndex: pt1.pointIndex,
+      targetEntityId: pt2.entityId,
+      targetPointIndex: pt2.pointIndex,
+    };
+    const validation = validateConstraint(proposed, sketch.constraints, sketch.entities);
+    if (!validation.valid) {
+      addLog('warn', `${label} constraint denied: ${validation.reason}`);
+      return;
+    }
+    const newConstraints = [...sketch.constraints, proposed];
+    const solved = solveConstraints(sketch.entities, newConstraints, { movedIds: new Set([pt1.entityId]) });
+    set({
+      document: updateActiveSketch(document, () => ({
+        constraints: newConstraints,
+        entities: solved.entities,
+      })),
+    });
+    addLog('info', `${label} (two points) constraint ON`);
   },
 
   toggleMidpoint(point, segment) {

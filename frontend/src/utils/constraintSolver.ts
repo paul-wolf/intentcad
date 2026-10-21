@@ -58,6 +58,17 @@ export function validateConstraint(
       const ec = c as Constraint & { targetEntityId: string };
       const ecSeg = 'segmentIndex' in ec ? (ec as any).segmentIndex as number | undefined : undefined;
       const ecTargetSeg = 'targetSegmentIndex' in ec ? (ec as any).targetSegmentIndex as number | undefined : undefined;
+      // For point-pair constraints, also compare the points
+      if ('pointIndex' in p && 'targetPointIndex' in p && 'pointIndex' in ec && 'targetPointIndex' in ec) {
+        const pp = p as Constraint & { targetEntityId: string; pointIndex: number; targetPointIndex: number };
+        const ep = ec as Constraint & { targetEntityId: string; pointIndex: number; targetPointIndex: number };
+        return (
+          (ep.entityId === pp.entityId && ep.pointIndex === pp.pointIndex &&
+           ep.targetEntityId === pp.targetEntityId && ep.targetPointIndex === pp.targetPointIndex) ||
+          (ep.entityId === pp.targetEntityId && ep.pointIndex === pp.targetPointIndex &&
+           ep.targetEntityId === pp.entityId && ep.targetPointIndex === pp.pointIndex)
+        );
+      }
       // For segment-based constraints, also compare segment indices
       if (pSeg !== undefined && pTargetSeg !== undefined) {
         return (
@@ -163,6 +174,7 @@ export function solveConstraints(
     enforceTangent(entityMap, constraints, fixedIds);
     enforceBisect(entityMap, constraints, fixedIds);
     enforceHorizontalVertical(entityMap, constraints, fixedIds);
+    enforcePointsHV(entityMap, constraints, fixedIds, movedIds);
 
     const after = snapshotPositions(entityMap);
     const maxDelta = computeMaxDelta(before, after);
@@ -896,4 +908,52 @@ function enforceHorizontalVertical(
       entityMap.set(c.entityId, { ...entity, points: newPoints } as LineEntity);
     }
   }
+}
+
+/** Which side of a two-entity constraint gives way: never a fixed one, and
+ *  not the one the user just moved when the other wasn't (as coincident). */
+function movesTarget(entityId: string, targetEntityId: string, fixedIds: Set<string>, movedIds: Set<string>): boolean {
+  const e1Fixed = fixedIds.has(entityId);
+  const e2Fixed = fixedIds.has(targetEntityId);
+  if (e1Fixed) return true;
+  if (e2Fixed) return false;
+  return !(movedIds.has(targetEntityId) && !movedIds.has(entityId));
+}
+
+/** Two points level (horizontalPoints: same y) or one above the other
+ *  (verticalPoints: same x). One point moves along the other axis only. */
+function enforcePointsHV(
+  entityMap: Map<string, Entity>,
+  constraints: Constraint[],
+  fixedIds: Set<string>,
+  movedIds: Set<string>,
+): void {
+  for (const c of constraints) {
+    if (c.type !== 'horizontalPoints' && c.type !== 'verticalPoints') continue;
+    if (fixedIds.has(c.entityId) && fixedIds.has(c.targetEntityId)) continue;
+    const e1 = entityMap.get(c.entityId);
+    const e2 = entityMap.get(c.targetEntityId);
+    if (!e1 || !e2) continue;
+    const p1 = getEntityPoint(e1, c.pointIndex);
+    const p2 = getEntityPoint(e2, c.targetPointIndex);
+    if (!p1 || !p2) continue;
+    const horizontal = c.type === 'horizontalPoints';
+    if (Math.abs(horizontal ? p1.y - p2.y : p1.x - p2.x) < 1e-9) continue;
+
+    const moveTarget = movesTarget(c.entityId, c.targetEntityId, fixedIds, movedIds);
+    const [moveId, moveIdx, mover, anchor] = moveTarget
+      ? [c.targetEntityId, c.targetPointIndex, p2, p1]
+      : [c.entityId, c.pointIndex, p1, p2];
+    const to = horizontal ? { x: mover.x, y: anchor.y } : { x: anchor.x, y: mover.y };
+    const updated = movePointOf(entityMap.get(moveId)!, moveIdx, mover, to);
+    if (updated) entityMap.set(moveId, updated);
+  }
+}
+
+/** Move one of a shape's points for a point relation: a rectangle goes as a
+ *  whole (aligning a corner keeps its size, which its dimensions set); anything
+ *  else as setEntityPoint does (a vertex alone, a polygon whole). */
+function movePointOf(entity: Entity, pointIndex: number, from: Point, to: Point): Entity | null {
+  if (entity.type === 'rectangle') return translateEntity(entity, to.x - from.x, to.y - from.y);
+  return setEntityPoint(entity, pointIndex, to);
 }

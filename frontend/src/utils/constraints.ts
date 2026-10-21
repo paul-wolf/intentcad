@@ -1,4 +1,5 @@
 import type { Constraint, Entity, Point } from '@/types/document';
+import { getEntityPoint } from '@/utils/entityPoints';
 
 export interface ConstraintLink {
   constraintId: string;
@@ -21,6 +22,8 @@ export const CONSTRAINT_SYMBOLS: Record<string, string> = {
   coincident: '\u2022',    // •
   midpoint: '\u25C6',      // ◆
   bisect: '\u2020',        // †
+  horizontalPoints: 'H',
+  verticalPoints: 'V',
 };
 
 /**
@@ -101,4 +104,26 @@ export function getEntityRepresentativePoint(entity: Entity): Point | null {
     case 'text':
       return entity.position;
   }
+}
+
+/** A constraint's glyph drawn between two points: from one point to the other. */
+export interface PointRelationMark {
+  a: Point;
+  b: Point;
+  symbol: string;
+}
+
+/**
+ * Point relations (two points level, ...) are marked between the points
+ * themselves, not the shapes' centres. null for other constraints.
+ */
+export function pointRelationMarks(c: Constraint, entities: Map<string, Entity>): PointRelationMark[] | null {
+  if (c.type === 'horizontalPoints' || c.type === 'verticalPoints') {
+    const e1 = entities.get(c.entityId);
+    const e2 = entities.get(c.targetEntityId);
+    const a = e1 && getEntityPoint(e1, c.pointIndex);
+    const b = e2 && getEntityPoint(e2, c.targetPointIndex);
+    return a && b ? [{ a, b, symbol: CONSTRAINT_SYMBOLS[c.type]! }] : [];
+  }
+  return null;
 }

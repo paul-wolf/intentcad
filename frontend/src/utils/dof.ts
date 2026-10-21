@@ -16,6 +16,13 @@ function baseDoF(entity: Entity): number {
   }
 }
 
+/** The entity a point relation (two points level, ...) takes freedom from,
+ *  and how much. */
+function pointRelationReduction(c: Constraint): [string, number] | null {
+  if (c.type === 'horizontalPoints' || c.type === 'verticalPoints') return [c.targetEntityId, 1];
+  return null;
+}
+
 /**
  * Compute per-entity DoF for all entities in a sketch.
  * - Derived entities (sourceId set) → 0 DoF
@@ -106,6 +113,11 @@ export function computeSketchDoF(entities: Entity[], constraints: Constraint[] =
         dofMap.set(c.entityId, Math.max(0, current - 1));
       }
     }
+    const rel = pointRelationReduction(c);
+    if (rel) {
+      const current = dofMap.get(rel[0]);
+      if (current !== undefined && current > 0) dofMap.set(rel[0], Math.max(0, current - rel[1]));
+    }
   }
 
   return dofMap;
@@ -178,6 +190,11 @@ export function computeDerivedDimensionIds(entities: Entity[], constraints: Cons
       if (current !== undefined && current > 0) {
         constraintDof.set(c.entityId, Math.max(0, current - 1));
       }
+    }
+    const rel = pointRelationReduction(c);
+    if (rel) {
+      const current = constraintDof.get(rel[0]);
+      if (current !== undefined && current > 0) constraintDof.set(rel[0], Math.max(0, current - rel[1]));
     }
   }
 

@@ -13,7 +13,8 @@ import { computeSketchDoF, computeDerivedDimensionIds } from '@/utils/dof';
 import { getEntityPoint } from '@/utils/entityPoints';
 import { resolveDimensionEndpoints } from '@/utils/dimensionGeom';
 import { brokenIds, onBroken } from '@/utils/brokenRefs';
-import { getConstraintPartners, getEntityRepresentativePoint, CONSTRAINT_SYMBOLS } from '@/utils/constraints';
+import { getConstraintPartners, getEntityRepresentativePoint, pointRelationMarks, CONSTRAINT_SYMBOLS } from '@/utils/constraints';
+import { targetsOf } from '@/utils/brokenRefs';
 import { getSegmentCount, getSegmentPointIndices, getSegmentBulge, getEntitySegmentEndpoints } from '@/utils/lineSegments';
 import { arcFromBulge, arcMidpoint } from '@/utils/arcGeometry';
 import { rectanglePath, rectangleOutline, rectangleCorners } from '@/utils/rectPath';
@@ -790,7 +791,9 @@ function renderEntity(
 /** Step 4a: Draw dashed connection lines between selected entities and their constraint partners */
 function renderConstraintLinks(ctx: RenderContext) {
   const { renderer, viewport, document: doc, selectedEntityIds } = ctx;
-  if (selectedEntityIds.size === 0) return;
+  // A selected point shows its shape's point relations too
+  const involved = new Set([...selectedEntityIds, ...ctx.selectedPoints.map((p) => p.entityId)]);
+  if (involved.size === 0) return;
 
   const activeSketch = doc.sketches.find((s) => s.id === doc.activeSketchId);
   if (!activeSketch || activeSketch.suppressed) return;
@@ -799,28 +802,14 @@ function renderConstraintLinks(ctx: RenderContext) {
   const { links } = getConstraintPartners(selectedEntityIds, activeSketch.constraints);
 
   const entityMap = new Map(activeSketch.entities.map((e) => [e.id, e]));
+  const constraintMap = new Map(activeSketch.constraints.map((c) => [c.id, c]));
 
-  for (const link of links) {
-    // Skip coincident — points overlap, line would be zero-length noise
-    if (link.constraintType === 'coincident') continue;
-
-    const srcEntity = entityMap.get(link.entityId);
-    const tgtEntity = entityMap.get(link.targetEntityId);
-    if (!srcEntity || !tgtEntity) continue;
-
-    const srcPt = getEntityRepresentativePoint(srcEntity);
-    const tgtPt = getEntityRepresentativePoint(tgtEntity);
-    if (!srcPt || !tgtPt) continue;
-
-    const screenA = viewport.worldToScreen(srcPt);
-    const screenB = viewport.worldToScreen(tgtPt);
-
+  const drawLink = (screenA: Point, screenB: Point, symbol: string) => {
     // Draw dashed connection line
     renderer.drawLine(screenA, screenB, styles.constraintLinkLine);
 
     // Draw constraint symbol at midpoint
     const mid = { x: (screenA.x + screenB.x) / 2, y: (screenA.y + screenB.y) / 2 };
-    const symbol = CONSTRAINT_SYMBOLS[link.constraintType] ?? '?';
     const textStyle = styles.constraintLinkText;
     const measured = renderer.measureText(symbol, textStyle);
     const padX = 4;
@@ -839,6 +828,31 @@ function renderConstraintLinks(ctx: RenderContext) {
       textAlign: 'center',
       textBaseline: 'middle',
     });
+  };
+
+  for (const link of links) {
+    // Skip coincident — points overlap, line would be zero-length noise
+    if (link.constraintType === 'coincident') continue;
+    // Point relations are drawn between their points, below
+    const c = constraintMap.get(link.constraintId);
+    if (c && pointRelationMarks(c, entityMap)) continue;
+
+    const srcEntity = entityMap.get(link.entityId);
+    const tgtEntity = entityMap.get(link.targetEntityId);
+    if (!srcEntity || !tgtEntity) continue;
+
+    const srcPt = getEntityRepresentativePoint(srcEntity);
+    const tgtPt = getEntityRepresentativePoint(tgtEntity);
+    if (!srcPt || !tgtPt) continue;
+
+    drawLink(viewport.worldToScreen(srcPt), viewport.worldToScreen(tgtPt), CONSTRAINT_SYMBOLS[link.constraintType] ?? '?');
+  }
+
+  for (const c of activeSketch.constraints) {
+    if (!targetsOf(c).some((id) => involved.has(id))) continue;
+    for (const m of pointRelationMarks(c, entityMap) ?? []) {
+      drawLink(viewport.worldToScreen(m.a), viewport.worldToScreen(m.b), m.symbol);
+    }
   }
 }
 
