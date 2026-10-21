@@ -10,6 +10,7 @@ import { computeAngleDimensionGeom } from '@/rendering/dimensionRenderer';
 import { computeDerivedDimensionIds } from '@/utils/dof';
 import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
 import { clampCornerRadius } from '@/utils/rectPath';
+import { measureDimension } from '@/utils/resolveSketch';
 
 interface PropertiesPanelProps {
   entity: Entity;
@@ -101,6 +102,7 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
   );
 
   const isDerived = 'sourceId' in entity && !!entity.sourceId;
+  const isOffset = isDerived && 'sourceTransform' in entity && entity.sourceTransform?.type === 'offset';
 
   const applyDimensionValue = useDocumentStore((s) => s.applyDimensionValue);
   const setDimensionExpression = useDocumentStore((s) => s.setDimensionExpression);
@@ -119,6 +121,7 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
     const sketch = doc.sketches.find((sk) => sk.id === doc.activeSketchId);
     if (!sketch) return null;
     const dim = entity as DimensionEntity;
+    if (dim.offsetDistance) return measureDimension(dim, sketch.entities);
 
     // Angle dimension
     if (dim.angleMode && dim.targetEntityId2 != null) {
@@ -192,8 +195,20 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
           </span>
         {isDerived && (
           <span style={{ fontSize: '10px', color: palette.warning, fontStyle: 'italic' }}>
-            (Derived)
+            {isOffset ? '(Offset)' : '(Derived)'}
           </span>
+        )}
+        {isOffset && (
+          <button
+            onClick={() => {
+              beginTransaction('Unlink offset');
+              if (useDocumentStore.getState().unlinkOffset(entity.id)) requestSave();
+            }}
+            title="Drop the link: the offset keeps its shape, no longer follows its source, and its distance dimension goes"
+            style={{ fontSize: '10px', padding: '0 6px', border: `1px solid ${palette.inputBorder}`, borderRadius: 3, background: palette.buttonBg, color: palette.text, cursor: 'pointer' }}
+          >
+            Unlink
+          </button>
         )}
         {isFixed && (
           <span style={{ fontSize: '10px', color: palette.constrained, fontStyle: 'italic' }}>

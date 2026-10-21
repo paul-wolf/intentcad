@@ -18,6 +18,7 @@ import { requestSave, getProjectId, getProjectName, setBackendId, setProjectCont
 import { createEmptyDocument, generateNumberedName } from '@/utils/document';
 import { addLog } from '@/stores/logStore';
 import { openCopyDialog } from '@/tools/openCopyDialog';
+import { applyHV, applyPointOnCurve, applySymmetric } from '@/tools/selectionPoints';
 import { api } from '@/api/cachedClient';
 import type { ToolType } from '@/types/editor';
 import type { ThemePalette } from '@/theme';
@@ -79,6 +80,15 @@ const MEASURE_TOOLS: { type: ToolType; label: string; icon?: ReactNode; shortcut
   { type: 'dimension', label: 'Dimension', icon: <ToolIcon><line x1="2" y1="4" x2="2" y2="12" /><line x1="14" y1="4" x2="14" y2="12" /><line x1="2" y1="8" x2="5" y2="8" /><line x1="11" y1="8" x2="14" y2="8" /><path d="M5 6l-3 2 3 2" fill="none" /><path d="M11 6l3 2-3 2" fill="none" /></ToolIcon>, shortcut: 'D' },
 ];
 
+const MODIFY_TOOLS: { type: ToolType; label: string; icon?: ReactNode; shortcut: string }[] = [
+  { type: 'fillet', label: 'Fillet: round corners (click a corner or drag a box, then type or drag the radius)', icon: <ToolIcon><path d="M2 14V8a6 6 0 0 1 6-6h6" /><path d="M2 2h4M2 2v4" strokeDasharray="1.5 1" strokeWidth="1" /></ToolIcon>, shortcut: '(' },
+  { type: 'trim', label: 'Trim: remove the piece of a curve between crossings (click, or drag across several)', icon: <ToolIcon><line x1="2" y1="8" x2="14" y2="8" strokeDasharray="2 1.5" /><line x1="5" y1="2" x2="5" y2="14" /><line x1="11" y1="2" x2="11" y2="14" /><line x1="6.5" y1="6" x2="9.5" y2="10" strokeWidth="1" /><line x1="9.5" y1="6" x2="6.5" y2="10" strokeWidth="1" /></ToolIcon>, shortcut: '-' },
+  { type: 'offset', label: 'Offset: a copy of a shape or chain a distance to one side, that follows it (click it, then drag out or type the distance)', icon: <ToolIcon><rect x="5" y="5" width="6" height="6" rx="1" /><rect x="2" y="2" width="12" height="12" rx="3" strokeDasharray="2 1.5" /></ToolIcon>, shortcut: 'O' },
+];
+
+/** Only while sketching on a part: there are no part edges in the 2D editor. */
+const PROJECT_TOOL = { type: 'project' as ToolType, label: "Project edges: click an edge of the part (dotted: the ones behind the face too) to add it as reference geometry that follows the part", icon: <ToolIcon><path d="M3 11l5-3 5 3-5 3z" strokeDasharray="1.5 1" strokeWidth="1" /><line x1="8" y1="2" x2="8" y2="9" /><path d="M6 7l2 2 2-2" /></ToolIcon>, shortcut: ';' };
+
 function Sep({ color }: { color: string }) {
   return <div style={{ width: '1px', background: color, margin: '2px 4px', alignSelf: 'stretch' }} />;
 }
@@ -132,6 +142,7 @@ export function Toolbar({ embedded = false }: ToolbarProps = {}) {
     embedded ? { style: { ...style, opacity: 0.35, cursor: 'default' }, disabled: true } : { style };
   const [showBuild, setShowBuild] = useState(false);
   const activeTool = useEditorStore((s) => s.activeTool);
+  const projecting = useEditorStore((s) => !!s.projectSource);
   const setActiveTool = useEditorStore((s) => s.setActiveTool);
   const drawerOpen = useUIStateStore((s) => s.drawerOpen);
   const toggleDrawer = useUIStateStore((s) => s.toggleDrawer);
@@ -246,6 +257,8 @@ export function Toolbar({ embedded = false }: ToolbarProps = {}) {
         <ToolButtons tools={ENTITY_TOOLS} activeTool={activeTool} setActiveTool={setActiveTool} palette={palette} />
         <Sep color={palette.border} />
         <ToolButtons tools={MEASURE_TOOLS} activeTool={activeTool} setActiveTool={setActiveTool} palette={palette} />
+        <Sep color={palette.border} />
+        <ToolButtons tools={projecting ? [...MODIFY_TOOLS, PROJECT_TOOL] : MODIFY_TOOLS} activeTool={activeTool} setActiveTool={setActiveTool} palette={palette} />
 
         <div style={{ flex: 1 }} />
 
@@ -422,35 +435,19 @@ export function Toolbar({ embedded = false }: ToolbarProps = {}) {
         </button>
         <button
           onClick={() => {
-            const es = useEditorStore.getState();
-            const ids = es.selectedEntityIds;
-            if (ids.size === 0) return;
-            const segs = es.selectedSegments.length > 0
-              ? es.selectedSegments.map((s) => ({ entityId: s.entityId, segmentIndex: s.segmentIndex }))
-              : undefined;
-            useDocumentStore.getState().beginTransaction('Toggle horizontal');
-            useDocumentStore.getState().toggleHorizontal([...ids], segs);
-            requestSave();
+            if (applyHV('horizontal')) requestSave();
           }}
           style={btn(palette)}
-          title="Horizontal constraint (H)"
+          title="Horizontal constraint (H) — a line or segment, or between two points (same height)"
         >
           <ToolIcon><line x1="2" y1="8" x2="14" y2="8" /></ToolIcon>
         </button>
         <button
           onClick={() => {
-            const es = useEditorStore.getState();
-            const ids = es.selectedEntityIds;
-            if (ids.size === 0) return;
-            const segs = es.selectedSegments.length > 0
-              ? es.selectedSegments.map((s) => ({ entityId: s.entityId, segmentIndex: s.segmentIndex }))
-              : undefined;
-            useDocumentStore.getState().beginTransaction('Toggle vertical');
-            useDocumentStore.getState().toggleVertical([...ids], segs);
-            requestSave();
+            if (applyHV('vertical')) requestSave();
           }}
           style={btn(palette)}
-          title="Vertical constraint (V)"
+          title="Vertical constraint (V) — a line or segment, or between two points (one above the other)"
         >
           <ToolIcon><line x1="8" y1="2" x2="8" y2="14" /></ToolIcon>
         </button>
@@ -466,6 +463,24 @@ export function Toolbar({ embedded = false }: ToolbarProps = {}) {
           title="Midpoint constraint (I)"
         >
           <ToolIcon><line x1="2" y1="8" x2="14" y2="8" /><line x1="8" y1="5" x2="8" y2="11" /><circle cx="8" cy="8" r="1.5" fill="currentColor" stroke="none" /></ToolIcon>
+        </button>
+        <button
+          onClick={() => {
+            if (applyPointOnCurve()) requestSave();
+          }}
+          style={btn(palette)}
+          title="Point on curve (@) — a point on a line (extended), an arc or a circle: select the point, then Shift-click the curve"
+        >
+          <ToolIcon><path d="M2 13 Q8 1 14 13" fill="none" /><circle cx="8" cy="7" r="1.8" fill="currentColor" stroke="none" /></ToolIcon>
+        </button>
+        <button
+          onClick={() => {
+            if (applySymmetric()) requestSave();
+          }}
+          style={btn(palette)}
+          title="Symmetric (/) — two points mirrored about a line: select the two points, then Shift-click the line"
+        >
+          <ToolIcon><line x1="8" y1="1.5" x2="8" y2="14.5" strokeDasharray="2 1.5" /><circle cx="3.5" cy="8" r="1.8" fill="currentColor" stroke="none" /><circle cx="12.5" cy="8" r="1.8" fill="currentColor" stroke="none" /></ToolIcon>
         </button>
         <button
           onClick={() => {

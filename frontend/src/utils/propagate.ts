@@ -1,6 +1,7 @@
 import type { Entity, LineEntity, RectangleEntity, SourceTransform, Point } from '@/types/document';
 import { reflectPoint, rotatePoint } from '@/utils/geometry';
 import { rectanglePath } from '@/utils/rectPath';
+import { offsetEntity, offsetSources } from '@/utils/offset';
 
 /**
  * A rectangle that a transform can no longer keep axis-aligned degrades to a
@@ -246,6 +247,26 @@ export function createTranslatedEntity(
   return null;
 }
 
+/** Ids of entities that follow something in `ids` (copies and offsets),
+ *  however many steps removed. */
+export function dependentsOf(entities: Entity[], ids: Iterable<string>): Set<string> {
+  const out = new Set<string>();
+  const gone = new Set(ids);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const e of entities) {
+      if (gone.has(e.id)) continue;
+      if (offsetSources(e).some((s) => gone.has(s))) {
+        gone.add(e.id);
+        out.add(e.id);
+        changed = true;
+      }
+    }
+  }
+  return out;
+}
+
 export function propagateDerived(entities: Entity[]): Entity[] {
   const byId = new Map<string, Entity>();
   for (const e of entities) byId.set(e.id, e);
@@ -265,6 +286,9 @@ export function propagateDerived(entities: Entity[]): Entity[] {
       updated = createRotatedEntity(source, transform, e.id);
     } else if (transform.type === 'translate') {
       updated = createTranslatedEntity(source, transform, e.id);
+    } else if (transform.type === 'offset') {
+      // too large for the source now: it stays as it was until it fits again
+      updated = offsetEntity(offsetSources(e), transform, e.id, (id) => byId.get(id), e);
     }
     if (!updated) return e;
 

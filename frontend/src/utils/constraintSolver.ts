@@ -1,8 +1,9 @@
-import type { Constraint, Entity, Point, EqualConstraint, CoincidentConstraint, HorizontalConstraint, VerticalConstraint, MidpointConstraint, ParallelConstraint, PerpendicularConstraint, TangentConstraint, BisectConstraint, LineEntity, CircleEntity, RectangleEntity } from '@/types/document';
+import type { Constraint, Entity, Point, EqualConstraint, CoincidentConstraint, HorizontalConstraint, VerticalConstraint, MidpointConstraint, ParallelConstraint, PerpendicularConstraint, TangentConstraint, BisectConstraint, PointOnCurveConstraint, SymmetricConstraint, LineEntity, CircleEntity, RectangleEntity } from '@/types/document';
 import { propagateDerived } from '@/utils/propagate';
-import { rotatePoint } from '@/utils/geometry';
+import { reflectPoint, rotatePoint } from '@/utils/geometry';
 import { getEntityPoint, setEntityPoint } from '@/utils/entityPoints';
-import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
+import { getEntitySegmentEndpoints, getSegmentBulge, getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
+import { arcFromBulge } from '@/utils/arcGeometry';
 import { liveConstraints } from '@/utils/brokenRefs';
 
 // --- Validation API ---
@@ -19,6 +20,9 @@ export function validateConstraint(
   existing: Constraint[],
   entities: Entity[],
 ): ValidationResult {
+  if (proposed.type === 'pointOnCurve') return validatePointOnCurve(proposed, existing, entities);
+  if (proposed.type === 'symmetric') return validateSymmetric(proposed, existing, entities);
+
   // Self-constraint check (same entity + same indices)
   if ('targetEntityId' in proposed) {
     const p = proposed as Constraint & { targetEntityId: string };
@@ -58,6 +62,17 @@ export function validateConstraint(
       const ec = c as Constraint & { targetEntityId: string };
       const ecSeg = 'segmentIndex' in ec ? (ec as any).segmentIndex as number | undefined : undefined;
       const ecTargetSeg = 'targetSegmentIndex' in ec ? (ec as any).targetSegmentIndex as number | undefined : undefined;
+      // For point-pair constraints, also compare the points
+      if ('pointIndex' in p && 'targetPointIndex' in p && 'pointIndex' in ec && 'targetPointIndex' in ec) {
+        const pp = p as Constraint & { targetEntityId: string; pointIndex: number; targetPointIndex: number };
+        const ep = ec as Constraint & { targetEntityId: string; pointIndex: number; targetPointIndex: number };
+        return (
+          (ep.entityId === pp.entityId && ep.pointIndex === pp.pointIndex &&
+           ep.targetEntityId === pp.targetEntityId && ep.targetPointIndex === pp.targetPointIndex) ||
+          (ep.entityId === pp.targetEntityId && ep.pointIndex === pp.targetPointIndex &&
+           ep.targetEntityId === pp.entityId && ep.targetPointIndex === pp.pointIndex)
+        );
+      }
       // For segment-based constraints, also compare segment indices
       if (pSeg !== undefined && pTargetSeg !== undefined) {
         return (
@@ -163,6 +178,9 @@ export function solveConstraints(
     enforceTangent(entityMap, constraints, fixedIds);
     enforceBisect(entityMap, constraints, fixedIds);
     enforceHorizontalVertical(entityMap, constraints, fixedIds);
+    enforcePointsHV(entityMap, constraints, fixedIds, movedIds);
+    enforcePointOnCurve(entityMap, constraints, fixedIds, movedIds);
+    enforceSymmetric(entityMap, constraints, fixedIds, movedIds);
 
     const after = snapshotPositions(entityMap);
     const maxDelta = computeMaxDelta(before, after);
@@ -894,6 +912,272 @@ function enforceHorizontalVertical(
         newPoints[hi2] = { x: pa.x, y: pa.y + len * dir };
       }
       entityMap.set(c.entityId, { ...entity, points: newPoints } as LineEntity);
+    }
+  }
+}
+
+/** Which side of a two-entity constraint gives way: never a fixed one, and
+ *  not the one the user just moved when the other wasn't (as coincident). */
+function movesTarget(entityId: string, targetEntityId: string, fixedIds: Set<string>, movedIds: Set<string>): boolean {
+  const e1Fixed = fixedIds.has(entityId);
+  const e2Fixed = fixedIds.has(targetEntityId);
+  if (e1Fixed) return true;
+  if (e2Fixed) return false;
+  return !(movedIds.has(targetEntityId) && !movedIds.has(entityId));
+}
+
+/** Two points level (horizontalPoints: same y) or one above the other
+ *  (verticalPoints: same x). One point moves along the other axis only. */
+function enforcePointsHV(
+  entityMap: Map<string, Entity>,
+  constraints: Constraint[],
+  fixedIds: Set<string>,
+  movedIds: Set<string>,
+): void {
+  for (const c of constraints) {
+    if (c.type !== 'horizontalPoints' && c.type !== 'verticalPoints') continue;
+    if (fixedIds.has(c.entityId) && fixedIds.has(c.targetEntityId)) continue;
+    const e1 = entityMap.get(c.entityId);
+    const e2 = entityMap.get(c.targetEntityId);
+    if (!e1 || !e2) continue;
+    const p1 = getEntityPoint(e1, c.pointIndex);
+    const p2 = getEntityPoint(e2, c.targetPointIndex);
+    if (!p1 || !p2) continue;
+    const horizontal = c.type === 'horizontalPoints';
+    if (Math.abs(horizontal ? p1.y - p2.y : p1.x - p2.x) < 1e-9) continue;
+
+    const moveTarget = movesTarget(c.entityId, c.targetEntityId, fixedIds, movedIds);
+    const [moveId, moveIdx, mover, anchor] = moveTarget
+      ? [c.targetEntityId, c.targetPointIndex, p2, p1]
+      : [c.entityId, c.pointIndex, p1, p2];
+    const to = horizontal ? { x: mover.x, y: anchor.y } : { x: anchor.x, y: mover.y };
+    const updated = movePointOf(entityMap.get(moveId)!, moveIdx, mover, to);
+    if (updated) entityMap.set(moveId, updated);
+  }
+}
+
+/** Move one of a shape's points for a point relation: a rectangle goes as a
+ *  whole (aligning a corner keeps its size, which its dimensions set); anything
+ *  else as setEntityPoint does (a vertex alone, a polygon whole). */
+function movePointOf(entity: Entity, pointIndex: number, from: Point, to: Point): Entity | null {
+  if (entity.type === 'rectangle') return translateEntity(entity, to.x - from.x, to.y - from.y);
+  return setEntityPoint(entity, pointIndex, to);
+}
+
+// --- Point on curve, symmetric ---
+
+export type Curve =
+  | { kind: 'line'; a: Point; b: Point }
+  | { kind: 'circle'; center: Point; radius: number };
+
+/** The curve a point can be put on: a straight segment's infinite line, a
+ *  circle (segmentIndex -1), or the circle an arc segment lies on. */
+export function curveOf(entity: Entity, segmentIndex: number): Curve | null {
+  if (entity.type === 'circle') return segmentIndex === -1 ? { kind: 'circle', center: entity.center, radius: entity.radius } : null;
+  const ends = getEntitySegmentEndpoints(entity, segmentIndex);
+  if (!ends) return null;
+  const [a, b] = ends;
+  const bulge = entity.type === 'line' ? getSegmentBulge(entity, segmentIndex) : 0;
+  if (bulge !== 0) {
+    const arc = arcFromBulge(a, b, bulge);
+    return arc.radius > 0 ? { kind: 'circle', center: arc.center, radius: arc.radius } : null;
+  }
+  if (Math.hypot(b.x - a.x, b.y - a.y) < 1e-12) return null;
+  return { kind: 'line', a, b };
+}
+
+/** The nearest point of a curve to p. */
+export function projectOnCurve(p: Point, c: Curve): Point {
+  if (c.kind === 'line') {
+    const dx = c.b.x - c.a.x, dy = c.b.y - c.a.y;
+    const t = ((p.x - c.a.x) * dx + (p.y - c.a.y) * dy) / (dx * dx + dy * dy);
+    return { x: c.a.x + t * dx, y: c.a.y + t * dy };
+  }
+  const dx = p.x - c.center.x, dy = p.y - c.center.y;
+  const d = Math.hypot(dx, dy);
+  if (d < 1e-12) return { x: c.center.x + c.radius, y: c.center.y };
+  return { x: c.center.x + (dx / d) * c.radius, y: c.center.y + (dy / d) * c.radius };
+}
+
+/** Whether point `pointIndex` of a shape is one of the ends of its own segment
+ *  (or the centre of its own circle), so already on it by definition. */
+function pointDefinesSegment(entity: Entity, pointIndex: number, segmentIndex: number): boolean {
+  if (entity.type === 'line') {
+    if (entity.polygonCenter) return true;   // a polygon moves whole: it can't hold itself
+    return getSegmentPointIndices(entity, segmentIndex).includes(pointIndex);
+  }
+  return true;   // a rectangle or circle on itself moves whole too
+}
+
+function validatePointOnCurve(p: PointOnCurveConstraint, existing: Constraint[], entities: Entity[]): ValidationResult {
+  const pointShape = entities.find((e) => e.id === p.entityId);
+  const curveShape = entities.find((e) => e.id === p.targetEntityId);
+  if (!pointShape || !curveShape) return { valid: false, reason: 'Entity not found' };
+  if (!getEntityPoint(pointShape, p.pointIndex)) return { valid: false, reason: 'That point is not on the shape' };
+  if (!curveOf(curveShape, p.segmentIndex)) return { valid: false, reason: 'Pick a line, an arc or a circle' };
+  if (p.entityId === p.targetEntityId && pointDefinesSegment(pointShape, p.pointIndex, p.segmentIndex)) {
+    return { valid: false, reason: 'The point is part of that curve already' };
+  }
+  const fixedIds = getFixedIds(existing);
+  if (fixedIds.has(p.entityId) && fixedIds.has(p.targetEntityId)) return { valid: false, reason: 'Both entities are fixed' };
+  const dup = existing.some((c) => c.type === 'pointOnCurve' && c.entityId === p.entityId && c.pointIndex === p.pointIndex
+    && c.targetEntityId === p.targetEntityId && c.segmentIndex === p.segmentIndex);
+  return dup ? { valid: false, reason: 'Duplicate constraint' } : { valid: true };
+}
+
+function validateSymmetric(p: SymmetricConstraint, existing: Constraint[], entities: Entity[]): ValidationResult {
+  const byId = (id: string) => entities.find((e) => e.id === id);
+  const e1 = byId(p.entityId), e2 = byId(p.entityId2), axis = byId(p.targetEntityId);
+  if (!e1 || !e2 || !axis) return { valid: false, reason: 'Entity not found' };
+  if (!getEntityPoint(e1, p.pointIndex) || !getEntityPoint(e2, p.pointIndex2)) return { valid: false, reason: 'That point is not on the shape' };
+  if (curveOf(axis, p.segmentIndex)?.kind !== 'line') return { valid: false, reason: 'Pick a straight line to be symmetric about' };
+  if (p.entityId === p.entityId2 && p.pointIndex === p.pointIndex2) return { valid: false, reason: 'Pick two different points' };
+  for (const [id, i] of [[p.entityId, p.pointIndex], [p.entityId2, p.pointIndex2]] as const) {
+    if (id === p.targetEntityId && pointDefinesSegment(axis, i, p.segmentIndex)) {
+      return { valid: false, reason: 'A point of the line itself can’t be mirrored about it' };
+    }
+  }
+  const fixedIds = getFixedIds(existing);
+  if (fixedIds.has(p.entityId) && fixedIds.has(p.entityId2) && fixedIds.has(p.targetEntityId)) {
+    return { valid: false, reason: 'All three are fixed' };
+  }
+  const same = (c: SymmetricConstraint) => c.targetEntityId === p.targetEntityId && c.segmentIndex === p.segmentIndex && (
+    (c.entityId === p.entityId && c.pointIndex === p.pointIndex && c.entityId2 === p.entityId2 && c.pointIndex2 === p.pointIndex2)
+    || (c.entityId === p.entityId2 && c.pointIndex === p.pointIndex2 && c.entityId2 === p.entityId && c.pointIndex2 === p.pointIndex));
+  return existing.some((c) => c.type === 'symmetric' && same(c)) ? { valid: false, reason: 'Duplicate constraint' } : { valid: true };
+}
+
+/** Whether `id` should stay put for a relation with `other`: fixed, or the one
+ *  being dragged while the other isn't. */
+function holds(id: string, other: string, fixedIds: Set<string>, movedIds: Set<string>): boolean {
+  if (fixedIds.has(id)) return true;
+  if (fixedIds.has(other)) return false;
+  return movedIds.has(id) && !movedIds.has(other);
+}
+
+/** Point on a curve: the point moves onto it (along the shortest way), unless
+ *  its shape holds (fixed or being dragged) — then the curve's shape moves. */
+function enforcePointOnCurve(
+  entityMap: Map<string, Entity>,
+  constraints: Constraint[],
+  fixedIds: Set<string>,
+  movedIds: Set<string>,
+): void {
+  for (const c of constraints) {
+    if (c.type !== 'pointOnCurve') continue;
+    if (fixedIds.has(c.entityId) && fixedIds.has(c.targetEntityId)) continue;
+    const shape = entityMap.get(c.entityId);
+    const curveShape = entityMap.get(c.targetEntityId);
+    if (!shape || !curveShape) continue;
+    const p = getEntityPoint(shape, c.pointIndex);
+    const curve = curveOf(curveShape, c.segmentIndex);
+    if (!p || !curve) continue;
+    const on = projectOnCurve(p, curve);
+    if (Math.hypot(on.x - p.x, on.y - p.y) < 1e-9) continue;
+    if (c.entityId !== c.targetEntityId && holds(c.entityId, c.targetEntityId, fixedIds, movedIds)) {
+      const moved = translateEntity(curveShape, p.x - on.x, p.y - on.y);
+      if (moved) entityMap.set(c.targetEntityId, moved);
+    } else {
+      // a point also kept level with (or above) another slides along that
+      // line onto the curve, so the two don't fight
+      const lock = axisLock(constraints, c.entityId, c.pointIndex);
+      const to = (lock && slideOnto(p, curve, lock)) || on;
+      const moved = movePointOf(shape, c.pointIndex, p, to);
+      if (moved) entityMap.set(c.entityId, moved);
+    }
+  }
+}
+
+/** 'h' if a point is in a horizontalPoints relation (it keeps its y), 'v' if
+ *  in a verticalPoints one; null for neither or both. */
+function axisLock(constraints: Constraint[], entityId: string, pointIndex: number): 'h' | 'v' | null {
+  let h = false, v = false;
+  for (const c of constraints) {
+    if (c.type !== 'horizontalPoints' && c.type !== 'verticalPoints') continue;
+    const mine = (c.entityId === entityId && c.pointIndex === pointIndex) || (c.targetEntityId === entityId && c.targetPointIndex === pointIndex);
+    if (!mine) continue;
+    if (c.type === 'horizontalPoints') h = true; else v = true;
+  }
+  return h === v ? null : h ? 'h' : 'v';
+}
+
+/** Where p meets the curve moving only across ('h': along x, keeping y) or
+ *  up/down ('v'); the nearer meeting point; null when it can't. */
+function slideOnto(p: Point, curve: Curve, lock: 'h' | 'v'): Point | null {
+  const along = lock === 'h' ? 'x' : 'y', keep = lock === 'h' ? 'y' : 'x';
+  if (curve.kind === 'line') {
+    const da = curve.b[along] - curve.a[along], dk = curve.b[keep] - curve.a[keep];
+    if (Math.abs(dk) < 1e-9 * Math.hypot(da, dk)) return null;   // the line runs that way: no meeting point
+    const t = (p[keep] - curve.a[keep]) / dk;
+    return { ...p, [along]: curve.a[along] + t * da } as Point;
+  }
+  const off = p[keep] - curve.center[keep];
+  if (Math.abs(off) > curve.radius) return null;
+  const h = Math.sqrt(curve.radius * curve.radius - off * off);
+  const c0 = curve.center[along];
+  const v = Math.abs(p[along] - (c0 + h)) <= Math.abs(p[along] - (c0 - h)) ? c0 + h : c0 - h;
+  return { ...p, [along]: v } as Point;
+}
+
+/** Two points symmetric about a line: one becomes the other's mirror image
+ *  (never a fixed one's, nor the one being dragged; with neither leading,
+ *  they meet half way). Both on one shape that
+ *  moves whole (a rectangle, a polygon): it slides so they're centred on the
+ *  line. Both held: the line moves (as a whole) onto their centre line. */
+function enforceSymmetric(
+  entityMap: Map<string, Entity>,
+  constraints: Constraint[],
+  fixedIds: Set<string>,
+  movedIds: Set<string>,
+): void {
+  for (const c of constraints) {
+    if (c.type !== 'symmetric') continue;
+    const e1 = entityMap.get(c.entityId), e2 = entityMap.get(c.entityId2), axisShape = entityMap.get(c.targetEntityId);
+    if (!e1 || !e2 || !axisShape) continue;
+    const p1 = getEntityPoint(e1, c.pointIndex), p2 = getEntityPoint(e2, c.pointIndex2);
+    const axis = curveOf(axisShape, c.segmentIndex);
+    if (!p1 || !p2 || axis?.kind !== 'line') continue;
+    const m2 = reflectPoint(p1, axis.a, axis.b);
+    if (Math.hypot(m2.x - p2.x, m2.y - p2.y) < 1e-9) continue;
+
+    const wholeShape = c.entityId === c.entityId2 && (e1.type === 'rectangle' || (e1.type === 'line' && !!e1.polygonCenter));
+    const hold1 = fixedIds.has(c.entityId) || (movedIds.has(c.entityId) && !movedIds.has(c.entityId2));
+    const hold2 = fixedIds.has(c.entityId2) || (movedIds.has(c.entityId2) && !movedIds.has(c.entityId));
+    const axisFree = !fixedIds.has(c.targetEntityId) && c.targetEntityId !== c.entityId && c.targetEntityId !== c.entityId2;
+
+    if (wholeShape || (hold1 && hold2)) {
+      // Slide the shape (or the line) so the points' midpoint is on the line,
+      // which is all a translation can do
+      const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+      const on = projectOnCurve(mid, axis);
+      if (wholeShape && !fixedIds.has(c.entityId)) {
+        const moved = translateEntity(e1, on.x - mid.x, on.y - mid.y);
+        if (moved) entityMap.set(c.entityId, moved);
+      } else if (axisFree) {
+        const moved = translateEntity(axisShape, mid.x - on.x, mid.y - on.y);
+        if (moved) entityMap.set(c.targetEntityId, moved);
+      }
+      continue;
+    }
+    if (!hold1 && !hold2 && !fixedIds.has(c.entityId) && !fixedIds.has(c.entityId2)) {
+      // neither one leads (both ends of one slot, say): both move half way, so
+      // the pair centres on the line keeping its size instead of flipping over
+      const m1 = reflectPoint(p2, axis.a, axis.b);
+      const q1 = { x: (p1.x + m1.x) / 2, y: (p1.y + m1.y) / 2 };
+      const q2 = reflectPoint(q1, axis.a, axis.b);
+      const moved1 = movePointOf(e1, c.pointIndex, p1, q1);
+      if (moved1) entityMap.set(c.entityId, moved1);
+      const e2now = entityMap.get(c.entityId2)!;
+      const moved2 = movePointOf(e2now, c.pointIndex2, getEntityPoint(e2now, c.pointIndex2)!, q2);
+      if (moved2) entityMap.set(c.entityId2, moved2);
+      continue;
+    }
+    if (hold2 && !fixedIds.has(c.entityId)) {
+      const moved = movePointOf(e1, c.pointIndex, p1, reflectPoint(p2, axis.a, axis.b));
+      if (moved) entityMap.set(c.entityId, moved);
+    } else if (!fixedIds.has(c.entityId2)) {
+      const moved = movePointOf(e2, c.pointIndex2, p2, m2);
+      if (moved) entityMap.set(c.entityId2, moved);
     }
   }
 }

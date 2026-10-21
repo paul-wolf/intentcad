@@ -637,6 +637,8 @@ export const RESERVED_KEYS: Record<string, string> = {
 export const SKETCH_KEYS = [
   '.', 'L', 'C', 'R', 'E', 'P', 'D', 'S', '?', 'A', 'G', 'M', 'K', '=', 'J', 'H', 'V', 'N', 'T', 'B', 'I', 'Y',
   'W', 'F', 'X', 'Q', 'Home', 'Escape', 'Delete', 'Backspace',
+  '@', '/',
+  '(', '-', 'O', ';',
 ];
 
 // ---- recent ----

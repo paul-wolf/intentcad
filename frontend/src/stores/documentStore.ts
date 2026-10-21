@@ -2,10 +2,11 @@ import { create } from 'zustand';
 import { patternCopies, prunePatterns } from '@/utils/copyPattern';
 import type { CopyPatternParams, Document, DocumentMetadata, Entity, OriginAlignMode, Point, Sketch, Constraint, HorizontalConstraint, VerticalConstraint } from '@/types/document';
 import { createEmptyDocument, createEmptySketch } from '@/utils/document';
-import { createMirroredEntity, propagateDerived } from '@/utils/propagate';
+import { createMirroredEntity, dependentsOf, propagateDerived } from '@/utils/propagate';
 import { rotatePoint } from '@/utils/geometry';
 import { getEntityPoints } from '@/utils/entityPoints';
 import { solveConstraints, validateConstraint } from '@/utils/constraintSolver';
+import { targetsOf } from '@/utils/brokenRefs';
 import { generateId } from '@/utils/id';
 import { addLog } from '@/stores/logStore';
 import type { SelectedPoint } from '@/stores/editorStore';
@@ -13,6 +14,9 @@ import { getSegmentCount } from '@/utils/lineSegments';
 import { BoundsBuilder } from '@/utils/bounds';
 import { evaluateExpression } from '@/utils/expression';
 import { dimensionEntities, resolveSketch } from '@/utils/resolveSketch';
+import { filletSketch, type Corner, type FilletOutcome } from '@/utils/fillet';
+import { trimSketch, type TrimOutcome } from '@/utils/trim';
+import { addOffset as addOffsetTo, unlinkOffset as unlinkOffsetIn } from '@/utils/offset';
 
 const UNDO_STACK_LIMIT = 100;
 
@@ -27,9 +31,7 @@ export interface HistoryEntry {
 
 /** Check if a constraint references any of the given entity IDs. */
 function constraintReferencesAny(c: Constraint, idSet: Set<string>): boolean {
-  if (idSet.has(c.entityId)) return true;
-  if ('targetEntityId' in c && idSet.has(c.targetEntityId)) return true;
-  return false;
+  return targetsOf(c).some((id) => idSet.has(id));
 }
 
 interface DocumentStore {
@@ -83,6 +85,23 @@ interface DocumentStore {
   // Mirror
   mirrorEntities(entityIds: string[], lineA: Point, lineB: Point): string[];
 
+  // Round corners of polylines / rectangles with radius r (each gets a radius
+  // dimension); null when none of the corners can be rounded.
+  filletCorners(corners: Corner[], r: number): FilletOutcome | null;
+
+  // Remove the piece of a curve around parameter s (see utils/trim.ts).
+  trimPiece(entityId: string, s: number): TrimOutcome | null;
+
+  // An offset of sourceIds that follows them, with its distance as a
+  // dimension (expression: a P / parameter expression on it). Null when it
+  // can't be made; else the new offset's id.
+  addOffset(sourceIds: string[], t: { distance: number; side: 1 | -1; join: 'arc' | 'miter' }, expression?: string): string | null;
+  // The offset stops following its source (its distance dimension goes).
+  unlinkOffset(id: string): boolean;
+  /** Add part edges projected onto the active sketch (build/projectEdges.ts),
+   *  each fixed where it is (it moves only with its part edge). */
+  addProjectedEdges(entities: Entity[]): void;
+
   // Grid or circular copy: makes the copies and keeps the pattern; given a
   // patternId, replaces that pattern's copies instead. Returns the new ids.
   copyPattern(sourceIds: string[], params: CopyPatternParams, patternId?: string | null): string[];
@@ -110,6 +129,12 @@ interface DocumentStore {
   toggleTangent(e1Id: string, seg1Idx: number, e2Id: string, seg2Idx: number): void;
   toggleBisect(seg1: {entityId: string, segmentIndex: number}, seg2: {entityId: string, segmentIndex: number}): void;
   toggleHorizontal(entityIds: string[], segments?: {entityId: string, segmentIndex: number}[]): void;
+  /** Two points level (horizontal) or one above the other (vertical); again to remove. */
+  togglePointsHV(type: 'horizontal' | 'vertical', pt1: SelectedPoint, pt2: SelectedPoint): void;
+  /** A point on a segment's line, an arc's or a circle's curve (segmentIndex -1: the circle). */
+  togglePointOnCurve(point: SelectedPoint, curve: { entityId: string; segmentIndex: number }): void;
+  /** Two points mirror images about a straight segment's line. */
+  toggleSymmetric(pt1: SelectedPoint, pt2: SelectedPoint, line: { entityId: string; segmentIndex: number }): void;
   toggleVertical(entityIds: string[], segments?: {entityId: string, segmentIndex: number}[]): void;
 
   // Arc segments
@@ -373,17 +398,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     // Build the full set of IDs to remove, cascading through derived entities
     const idSet = new Set(entityIds);
     if (sketch) {
-      let changed = true;
-      while (changed) {
-        changed = false;
-        for (const e of sketch.entities) {
-          if (idSet.has(e.id)) continue;
-          if ('sourceId' in e && e.sourceId && idSet.has(e.sourceId)) {
-            idSet.add(e.id);
-            changed = true;
-          }
-        }
-      }
+      for (const id of dependentsOf(sketch.entities, idSet)) idSet.add(id);
     }
     set({
       document: {
@@ -835,6 +850,54 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     return newEntities.map((e) => e.id);
   },
 
+  filletCorners(corners, r) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return null;
+    const out = filletSketch(sketch.entities, sketch.constraints, corners, r, () => generateId('dim'));
+    if (!out) return null;
+    set({ document: updateActiveSketch(document, () => ({ entities: propagateDerived(out.entities), constraints: out.constraints })) });
+    return out;
+  },
+
+  trimPiece(entityId, s) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return null;
+    const out = trimSketch(sketch.entities, sketch.constraints, entityId, s, () => crypto.randomUUID());
+    if (!out) return null;
+    set({ document: updateActiveSketch(document, () => ({ entities: propagateDerived(out.entities), constraints: out.constraints })) });
+    return out;
+  },
+
+  addOffset(sourceIds, t, expression) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return null;
+    const out = addOffsetTo(sketch.entities, sourceIds, t, () => generateId('off'), expression);
+    if (!out) return null;
+    set({ document: updateActiveSketch(document, (sk) => ({ entities: propagateDerived(out.entities), constraints: sk.constraints })) });
+    return out.offsetId;
+  },
+
+  unlinkOffset(id) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    const entities = sketch && unlinkOffsetIn(sketch.entities, id);
+    if (!entities) return false;
+    set({ document: updateActiveSketch(document, (sk) => ({ entities, constraints: sk.constraints })) });
+    return true;
+  },
+
+  addProjectedEdges(entities) {
+    const { document } = get();
+    if (!entities.length || !document.sketches.some((sk) => sk.id === document.activeSketchId)) return;
+    set({ document: updateActiveSketch(document, (sk) => ({
+      entities: [...sk.entities, ...entities],
+      constraints: [...sk.constraints, ...entities.map((e): Constraint => ({ id: generateId('c'), type: 'fixed', entityId: e.id }))],
+    })) });
+  },
+
   copyPattern(sourceIds, params, patternId = null) {
     const active = () => get().document.sketches.find((sk) => sk.id === get().document.activeSketchId);
     const before = active();
@@ -1165,6 +1228,116 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
       });
       addLog('info', 'Coincident constraint ON');
     }
+  },
+
+  togglePointsHV(type, pt1, pt2) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return;
+    const ctype = type === 'horizontal' ? 'horizontalPoints' as const : 'verticalPoints' as const;
+    const label = type === 'horizontal' ? 'Horizontal' : 'Vertical';
+
+    const e1 = sketch.entities.find((e) => e.id === pt1.entityId);
+    const e2 = sketch.entities.find((e) => e.id === pt2.entityId);
+    if (!e1 || !e2 || e1.type === 'dimension' || e2.type === 'dimension') return;
+
+    const same = (c: Constraint) => c.type === ctype &&
+      ((c.entityId === pt1.entityId && c.pointIndex === pt1.pointIndex &&
+        c.targetEntityId === pt2.entityId && c.targetPointIndex === pt2.pointIndex) ||
+       (c.entityId === pt2.entityId && c.pointIndex === pt2.pointIndex &&
+        c.targetEntityId === pt1.entityId && c.targetPointIndex === pt1.pointIndex));
+    const existing = sketch.constraints.find(same);
+    if (existing) {
+      set({
+        document: updateActiveSketch(document, () => ({
+          constraints: sketch.constraints.filter((c) => c.id !== existing.id),
+        })),
+      });
+      addLog('info', `${label} (two points) constraint OFF`);
+      return;
+    }
+
+    const proposed: Constraint = {
+      id: crypto.randomUUID(),
+      type: ctype,
+      entityId: pt1.entityId,
+      pointIndex: pt1.pointIndex,
+      targetEntityId: pt2.entityId,
+      targetPointIndex: pt2.pointIndex,
+    };
+    const validation = validateConstraint(proposed, sketch.constraints, sketch.entities);
+    if (!validation.valid) {
+      addLog('warn', `${label} constraint denied: ${validation.reason}`);
+      return;
+    }
+    const newConstraints = [...sketch.constraints, proposed];
+    const solved = solveConstraints(sketch.entities, newConstraints, { movedIds: new Set([pt1.entityId]) });
+    set({
+      document: updateActiveSketch(document, () => ({
+        constraints: newConstraints,
+        entities: solved.entities,
+      })),
+    });
+    addLog('info', `${label} (two points) constraint ON`);
+  },
+
+  togglePointOnCurve(point, curve) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return;
+    const existing = sketch.constraints.find((c) => c.type === 'pointOnCurve' && c.entityId === point.entityId
+      && c.pointIndex === point.pointIndex && c.targetEntityId === curve.entityId && c.segmentIndex === curve.segmentIndex);
+    if (existing) {
+      set({ document: updateActiveSketch(document, () => ({ constraints: sketch.constraints.filter((c) => c.id !== existing.id) })) });
+      addLog('info', 'Point on curve constraint OFF');
+      return;
+    }
+    const proposed: Constraint = {
+      id: crypto.randomUUID(), type: 'pointOnCurve',
+      entityId: point.entityId, pointIndex: point.pointIndex,
+      targetEntityId: curve.entityId, segmentIndex: curve.segmentIndex,
+    };
+    const validation = validateConstraint(proposed, sketch.constraints, sketch.entities);
+    if (!validation.valid) {
+      addLog('warn', `Point on curve denied: ${validation.reason}`);
+      return;
+    }
+    const newConstraints = [...sketch.constraints, proposed];
+    // the point goes onto the curve, unless its shape is fixed
+    const solved = solveConstraints(sketch.entities, newConstraints, { movedIds: new Set([curve.entityId]) });
+    set({ document: updateActiveSketch(document, () => ({ constraints: newConstraints, entities: solved.entities })) });
+    addLog('info', 'Point on curve constraint ON');
+  },
+
+  toggleSymmetric(pt1, pt2, line) {
+    const { document } = get();
+    const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
+    if (!sketch) return;
+    const existing = sketch.constraints.find((c) => c.type === 'symmetric'
+      && c.targetEntityId === line.entityId && c.segmentIndex === line.segmentIndex
+      && ((c.entityId === pt1.entityId && c.pointIndex === pt1.pointIndex && c.entityId2 === pt2.entityId && c.pointIndex2 === pt2.pointIndex)
+        || (c.entityId === pt2.entityId && c.pointIndex === pt2.pointIndex && c.entityId2 === pt1.entityId && c.pointIndex2 === pt1.pointIndex)));
+    if (existing) {
+      set({ document: updateActiveSketch(document, () => ({ constraints: sketch.constraints.filter((c) => c.id !== existing.id) })) });
+      addLog('info', 'Symmetric constraint OFF');
+      return;
+    }
+    const proposed: Constraint = {
+      id: crypto.randomUUID(), type: 'symmetric',
+      entityId: pt1.entityId, pointIndex: pt1.pointIndex,
+      entityId2: pt2.entityId, pointIndex2: pt2.pointIndex,
+      targetEntityId: line.entityId, segmentIndex: line.segmentIndex,
+    };
+    const validation = validateConstraint(proposed, sketch.constraints, sketch.entities);
+    if (!validation.valid) {
+      addLog('warn', `Symmetric denied: ${validation.reason}`);
+      return;
+    }
+    const newConstraints = [...sketch.constraints, proposed];
+    // the second point becomes the first one's mirror image
+    const solved = solveConstraints(sketch.entities, newConstraints, { movedIds: new Set([pt1.entityId]) });
+    set({ document: updateActiveSketch(document, () => ({ constraints: newConstraints, entities: solved.entities })) });
+    addLog('info', 'Symmetric constraint ON');
   },
 
   toggleMidpoint(point, segment) {
@@ -1839,17 +2012,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     // Remove old entities and their constraints/dimensions, add joined one
     const removeSet = new Set(lineEntities.map((e) => e.id));
     // Also remove derived entities whose source is being removed
-    let changed = true;
-    while (changed) {
-      changed = false;
-      for (const e of sketch.entities) {
-        if (removeSet.has(e.id)) continue;
-        if ('sourceId' in e && e.sourceId && removeSet.has(e.sourceId)) {
-          removeSet.add(e.id);
-          changed = true;
-        }
-      }
-    }
+    for (const id of dependentsOf(sketch.entities, removeSet)) removeSet.add(id);
 
     set({
       document: {

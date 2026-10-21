@@ -1,6 +1,6 @@
 import type { Point } from './document';
 
-export type ToolType = 'select' | 'line' | 'point' | 'circle' | 'rectangle' | 'rect2pt' | 'axisrect' | 'polygon' | 'dimension' | 'bezier';
+export type ToolType = 'select' | 'line' | 'point' | 'circle' | 'rectangle' | 'rect2pt' | 'axisrect' | 'polygon' | 'dimension' | 'bezier' | 'fillet' | 'trim' | 'offset' | 'project';
 
 export interface LineToolState {
   type: 'line';
@@ -55,7 +55,32 @@ export interface BezierToolState {
   points: Point[];
 }
 
-export type ToolState = LineToolState | SelectToolState | PointToolState | CircleToolState | RectangleToolState | Rect2ptToolState | AxisRectToolState | PolygonToolState | DimensionToolState | BezierToolState;
+export interface FilletToolState {
+  type: 'fillet';
+  /** the corners picked: a polyline vertex, or a rectangle corner (0=TL…3=BL) */
+  corners: { entityId: string; index: number }[];
+  radius: number;
+}
+
+export interface TrimToolState {
+  type: 'trim';
+}
+
+export interface OffsetToolState {
+  type: 'offset';
+  /** what is offset: one closed shape or circle, or lines that chain end to end */
+  sourceIds: string[];
+  distance: number;
+  /** 1 = outside a closed shape / left of an open chain */
+  side: 1 | -1;
+  join: 'arc' | 'miter';
+}
+
+export interface ProjectToolState {
+  type: 'project';
+}
+
+export type ToolState = LineToolState | SelectToolState | PointToolState | CircleToolState | RectangleToolState | Rect2ptToolState | AxisRectToolState | PolygonToolState | DimensionToolState | BezierToolState | FilletToolState | TrimToolState | OffsetToolState | ProjectToolState;
 
 export interface EditorState {
   activeTool: ToolType;

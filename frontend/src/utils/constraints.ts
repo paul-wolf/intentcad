@@ -1,4 +1,7 @@
 import type { Constraint, Entity, Point } from '@/types/document';
+import { getEntityPoint } from '@/utils/entityPoints';
+import { getEntitySegmentEndpoints, getSegmentBulge } from '@/utils/lineSegments';
+import { arcMidpoint } from '@/utils/arcGeometry';
 
 export interface ConstraintLink {
   constraintId: string;
@@ -21,6 +24,10 @@ export const CONSTRAINT_SYMBOLS: Record<string, string> = {
   coincident: '\u2022',    // •
   midpoint: '\u25C6',      // ◆
   bisect: '\u2020',        // †
+  horizontalPoints: 'H',
+  verticalPoints: 'V',
+  pointOnCurve: '\u2208',  // ∈
+  symmetric: '\u21D4',     // ⇔
 };
 
 /**
@@ -38,6 +45,12 @@ export function getConstraintPartners(
   for (const c of constraints) {
     // Skip single-entity constraints
     if (c.type === 'fixed' || c.type === 'horizontal' || c.type === 'vertical') continue;
+    if (c.type === 'symmetric') {
+      // three shapes: the two points' and the line's
+      const ids = [c.entityId, c.entityId2, c.targetEntityId];
+      if (ids.some((id) => selectedIds.has(id))) for (const id of ids) if (!selectedIds.has(id)) relatedIds.add(id);
+      continue;
+    }
 
     const hasEntity = selectedIds.has(c.entityId);
     const hasTarget = selectedIds.has(c.targetEntityId);
@@ -101,4 +114,52 @@ export function getEntityRepresentativePoint(entity: Entity): Point | null {
     case 'text':
       return entity.position;
   }
+}
+
+/** A constraint's glyph drawn between two points: from one point to the other. */
+export interface PointRelationMark {
+  a: Point;
+  b: Point;
+  symbol: string;
+}
+
+/**
+ * Point relations (two points level, ...) are marked between the points
+ * themselves, not the shapes' centres. null for other constraints.
+ */
+export function pointRelationMarks(c: Constraint, entities: Map<string, Entity>): PointRelationMark[] | null {
+  if (c.type === 'horizontalPoints' || c.type === 'verticalPoints') {
+    const e1 = entities.get(c.entityId);
+    const e2 = entities.get(c.targetEntityId);
+    const a = e1 && getEntityPoint(e1, c.pointIndex);
+    const b = e2 && getEntityPoint(e2, c.targetPointIndex);
+    return a && b ? [{ a, b, symbol: CONSTRAINT_SYMBOLS[c.type]! }] : [];
+  }
+  if (c.type === 'pointOnCurve') {
+    // from the point to the middle of its segment, or the circle's centre
+    const e1 = entities.get(c.entityId);
+    const e2 = entities.get(c.targetEntityId);
+    const a = e1 && getEntityPoint(e1, c.pointIndex);
+    const b = e2 && curveAnchor(e2, c.segmentIndex);
+    return a && b ? [{ a, b, symbol: CONSTRAINT_SYMBOLS.pointOnCurve! }] : [];
+  }
+  if (c.type === 'symmetric') {
+    // between the two points: the glyph sits on the line they mirror about
+    const e1 = entities.get(c.entityId);
+    const e2 = entities.get(c.entityId2);
+    const a = e1 && getEntityPoint(e1, c.pointIndex);
+    const b = e2 && getEntityPoint(e2, c.pointIndex2);
+    return a && b ? [{ a, b, symbol: CONSTRAINT_SYMBOLS.symmetric! }] : [];
+  }
+  return null;
+}
+
+/** Where a point-on-curve mark ends: a segment's middle (on the arc, for an
+ *  arc segment) or a circle's centre. */
+function curveAnchor(entity: Entity, segmentIndex: number): Point | null {
+  if (entity.type === 'circle') return entity.center;
+  const ends = getEntitySegmentEndpoints(entity, segmentIndex);
+  if (!ends) return null;
+  const bulge = entity.type === 'line' ? getSegmentBulge(entity, segmentIndex) : 0;
+  return bulge ? arcMidpoint(ends[0], ends[1], bulge) : { x: (ends[0].x + ends[1].x) / 2, y: (ends[0].y + ends[1].y) / 2 };
 }

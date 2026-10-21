@@ -6,7 +6,30 @@ export interface Point {
 export type SourceTransform =
   | { type: 'mirror'; lineA: Point; lineB: Point }
   | { type: 'rotate'; center: Point; angle: number }
-  | { type: 'translate'; dx: number; dy: number };
+  | { type: 'translate'; dx: number; dy: number }
+  /** a curve moved `distance` to one side: `side` 1 is outside a closed
+   *  shape (the left of an open chain), -1 inside (the right). Corners
+   *  that open up are joined with arcs or miters. `chain`: the polylines
+   *  followed when there are several, joined end to end (sourceId is the
+   *  first). */
+  | { type: 'offset'; distance: number; side: 1 | -1; join: 'arc' | 'miter'; chain?: string[] };
+
+type Vec3 = [number, number, number];
+
+/** A part's edge as the build describes it (api EdgeRefSpec, backend
+ *  modeling/edge_ref.describe): its two faces, kind, middle and length, and
+ *  its direction (a line) or centre, radius and axis (a circle or arc). */
+export interface ProjectedEdgeRef {
+  faces: { center: Vec3; normal: Vec3; area: number; kind?: string; hint?: string; box?: number[] }[];
+  kind: string;
+  midpoint: Vec3;
+  length: number;
+  direction?: Vec3;
+  center?: Vec3;
+  radius?: number;
+  axis?: Vec3;
+  hint?: string;
+}
 
 export interface LineEntity {
   id: string;
@@ -24,6 +47,10 @@ export interface LineEntity {
    *  changed): kept where it was so what uses it isn't lost, but the
    *  constraints on it are left out of the solve (see utils/brokenRefs.ts). */
   broken?: boolean;
+  /** A part edge projected onto the sketch (build/projectEdges.ts): the
+   *  edge as the build last described it, to find it again when the part
+   *  changes. */
+  edgeRef?: ProjectedEdgeRef;
   fill?: boolean;
   sourceId?: string;
   sourceTransform?: SourceTransform;
@@ -43,6 +70,10 @@ export interface CircleEntity {
    *  changed): kept where it was so what uses it isn't lost, but the
    *  constraints on it are left out of the solve (see utils/brokenRefs.ts). */
   broken?: boolean;
+  /** A part edge projected onto the sketch (build/projectEdges.ts): the
+   *  edge as the build last described it, to find it again when the part
+   *  changes. */
+  edgeRef?: ProjectedEdgeRef;
   fill?: boolean;
   sourceId?: string;
   sourceTransform?: SourceTransform;
@@ -96,6 +127,11 @@ export interface DimensionEntity {
   pointIndex2?: number;
   // Angle dimension between two non-parallel segments:
   angleMode?: boolean;
+  // Radius of an arc: arc segment `segmentIndex` of a line (a fillet), or a
+  // rectangle's corner radius (drawn at corner `segmentIndex`, 0=TL…3=BL):
+  radius?: boolean;
+  // The distance of an offset (the target is the offset entity):
+  offsetDistance?: boolean;
   // Expression that drives this dimension's value (e.g. "bolt_hole / 2"):
   expression?: string;
 }
@@ -188,6 +224,51 @@ export interface VerticalConstraint {
   segmentIndex: number;
 }
 
+/** Two points level with each other (same y), e.g. vertices, centres,
+ *  rectangle corners or point entities. */
+export interface HorizontalPointsConstraint {
+  id: string;
+  type: 'horizontalPoints';
+  entityId: string;
+  pointIndex: number;
+  targetEntityId: string;
+  targetPointIndex: number;
+}
+
+/** Two points one above the other (same x). */
+export interface VerticalPointsConstraint {
+  id: string;
+  type: 'verticalPoints';
+  entityId: string;
+  pointIndex: number;
+  targetEntityId: string;
+  targetPointIndex: number;
+}
+
+/** A point on a curve: on the infinite line through a straight segment, or
+ *  on a circle (segmentIndex -1) or the circle an arc segment (bulge) lies on. */
+export interface PointOnCurveConstraint {
+  id: string;
+  type: 'pointOnCurve';
+  entityId: string;       // whose point
+  pointIndex: number;
+  targetEntityId: string; // the curve's shape
+  segmentIndex: number;   // its segment; -1 for a circle
+}
+
+/** Two points mirror images of each other about a straight segment's line
+ *  (often a construction line or a reference edge). */
+export interface SymmetricConstraint {
+  id: string;
+  type: 'symmetric';
+  entityId: string;
+  pointIndex: number;
+  entityId2: string;
+  pointIndex2: number;
+  targetEntityId: string; // the line's shape
+  segmentIndex: number;
+}
+
 export interface MidpointConstraint {
   id: string;
   type: 'midpoint';
@@ -233,7 +314,7 @@ export interface BisectConstraint {
   targetSegmentIndex: number; // which segment is bisected
 }
 
-export type Constraint = FixedConstraint | EqualConstraint | CoincidentConstraint | HorizontalConstraint | VerticalConstraint | MidpointConstraint | ParallelConstraint | PerpendicularConstraint | TangentConstraint | BisectConstraint;
+export type Constraint = FixedConstraint | EqualConstraint | CoincidentConstraint | HorizontalConstraint | VerticalConstraint | HorizontalPointsConstraint | VerticalPointsConstraint | PointOnCurveConstraint | SymmetricConstraint | MidpointConstraint | ParallelConstraint | PerpendicularConstraint | TangentConstraint | BisectConstraint;
 
 /** A grid or circular copy, kept so it can be reopened and changed:
  *  what was copied, the copies it made, and how. */

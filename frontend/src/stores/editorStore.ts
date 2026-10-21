@@ -3,6 +3,13 @@ import type { Entity, Point } from '@/types/document';
 import type { ToolType, ToolState } from '@/types/editor';
 import type { SegmentHit } from '@/hittest/hitTest';
 import { addLog } from '@/stores/logStore';
+import type { RunEdge } from '@/api/client';
+import type { PlaneBasis } from '@/build/sketchPlane';
+
+/** What the project tool picks from: the part's edges, the plane the sketch
+ *  is on, and whether the part in front of that plane is cut away in the
+ *  view (a face sketch). */
+export interface ProjectSource { edges: RunEdge[]; plane: PlaneBasis; clipped: boolean }
 
 export interface SelectedPoint {
   entityId: string;
@@ -49,6 +56,10 @@ interface EditorStore {
    *  2D sketch editor. */
   partParams: Record<string, number> | null;
   setPartParams(params: Record<string, number> | null): void;
+  /** The part's edges and the sketch plane while sketching on a part, for
+   *  the project tool (build/projectEdges.ts). null in the 2D sketch editor. */
+  projectSource: ProjectSource | null;
+  setProjectSource(source: ProjectSource | null): void;
   pendingDxfImport: PendingDxfImport | null;
   viewportScale: number;
   viewportCommand: 'center-origin' | 'fit-entities' | null;
@@ -78,6 +89,14 @@ interface EditorStore {
   setViewportCommand(cmd: 'center-origin' | 'fit-entities' | null): void;
 }
 
+/** The fillet tool starts with the radius used last. */
+let lastFilletRadius = 2;
+export function rememberFilletRadius(r: number) { lastFilletRadius = r; }
+
+/** The offset tool starts with the distance and corner joins used last. */
+let lastOffset: { distance: number; join: 'arc' | 'miter' } = { distance: 1, join: 'arc' };
+export function rememberOffset(distance: number, join: 'arc' | 'miter') { lastOffset = { distance, join }; }
+
 function defaultToolState(tool: ToolType): ToolState {
   switch (tool) {
     case 'line':
@@ -100,6 +119,14 @@ function defaultToolState(tool: ToolType): ToolState {
       return { type: 'dimension' };
     case 'bezier':
       return { type: 'bezier', points: [] };
+    case 'fillet':
+      return { type: 'fillet', corners: [], radius: lastFilletRadius };
+    case 'trim':
+      return { type: 'trim' };
+    case 'offset':
+      return { type: 'offset', sourceIds: [], distance: lastOffset.distance, side: 1, join: lastOffset.join };
+    case 'project':
+      return { type: 'project' };
   }
 }
 
@@ -124,6 +151,7 @@ export const useEditorStore = create<EditorStore>((set) => ({
   copyPreviewCenter: null,
   copyPreviewHides: null,
   partParams: null,
+  projectSource: null,
   pendingDxfImport: null,
   viewportScale: 1,
   viewportCommand: null,
@@ -132,9 +160,18 @@ export const useEditorStore = create<EditorStore>((set) => ({
     set({ partParams });
   },
 
+  setProjectSource(projectSource) {
+    set({ projectSource });
+  },
+
   setActiveTool(tool) {
     addLog('info', `Tool: ${tool}`);
-    set({ activeTool: tool, toolState: defaultToolState(tool), selectedEntityIds: new Set(), selectedPoints: [], selectedSegments: [] });
+    set((s) => {
+      const toolState = defaultToolState(tool);
+      // offset what was selected, if anything
+      if (toolState.type === 'offset') toolState.sourceIds = [...s.selectedEntityIds];
+      return { activeTool: tool, toolState, selectedEntityIds: new Set(), selectedPoints: [], selectedSegments: [] };
+    });
   },
 
   setSelectedEntityIds(ids) {

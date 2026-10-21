@@ -568,7 +568,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const followSketches = (src: string, res: RunResponse, moved: Set<string>, profiles: Set<string>): boolean => {
     const st = useDocumentStore.getState();
     const f = followPartSketches(st.document.sketches, res.sketches,
-                                 sketchVars(src, st.document.parameters, res.params));
+                                 sketchVars(src, st.document.parameters, res.params), res.edges, res.planes);
     profiles.clear();
     if (!f.changed.length) return false;
     useDocumentStore.setState({ document: { ...st.document, sketches: f.sketches } });

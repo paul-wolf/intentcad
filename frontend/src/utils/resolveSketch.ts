@@ -12,11 +12,17 @@ import { getSegmentCount, getSegmentPointIndices, getEntitySegmentEndpoints } fr
 import { evaluateExpression, expressionNames } from '@/utils/expression';
 import { resolveDimensionEndpoints } from '@/utils/dimensionGeom';
 import { brokenIds, onBroken } from '@/utils/brokenRefs';
+import { setArcRadius, filletRectangle } from '@/utils/fillet';
+import { offsetEntity, offsetSources } from '@/utils/offset';
 
 /** What dimension `dim` measures now (mm, or degrees for an angle); null
  *  when its targets are gone. */
 export function measureDimension(dim: Entity, entities: Entity[]): number | null {
   if (dim.type !== 'dimension') return null;
+  if (dim.offsetDistance) {
+    const t = entities.find((e) => e.id === dim.targetEntityId);
+    return t && 'sourceTransform' in t && t.sourceTransform?.type === 'offset' ? t.sourceTransform.distance : null;
+  }
   if (dim.angleMode && dim.targetEntityId2 != null) {
     const t1 = entities.find((e) => e.id === dim.targetEntityId);
     const t2 = entities.find((e) => e.id === dim.targetEntityId2);
@@ -69,6 +75,28 @@ export function dimensionEntities(sketch: Sketch, dimId: string, newValue: numbe
 
   const target = sketch.entities.find((e) => e.id === dim.targetEntityId);
   if (!target) return null;
+
+  // An offset's distance: the offset follows its source at the new distance
+  if (dim.offsetDistance) {
+    if (!('sourceTransform' in target) || target.sourceTransform?.type !== 'offset') return null;
+    const transform = { ...target.sourceTransform, distance: newValue };
+    const byId = new Map(sketch.entities.map((e) => [e.id, e]));
+    const next = offsetEntity(offsetSources(target), transform, target.id, (id) => byId.get(id), target);
+    if (!next) return null; // doesn't fit
+    const updated = sketch.entities.map((e) => (e.id === target.id ? next : e));
+    return solveConstraints(updated, sketch.constraints, { movedIds: new Set([target.id]) }).entities;
+  }
+
+  // Radius of a fillet or other arc segment, or of a rectangle's corners
+  if (dim.radius) {
+    if ('sourceId' in target && target.sourceId) return null;
+    let next: Entity | null = null;
+    if (target.type === 'line') next = setArcRadius(target, dim.segmentIndex, newValue);
+    if (target.type === 'rectangle') next = filletRectangle(target, newValue).entity;
+    if (!next) return null;
+    const updated = sketch.entities.map((e) => (e.id === target.id ? next! : e));
+    return solveConstraints(updated, sketch.constraints, { movedIds: new Set([target.id]) }).entities;
+  }
 
   // Point-to-point dimension editing
   if (dim.pointIndex != null && dim.pointIndex2 != null) {
