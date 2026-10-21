@@ -61,6 +61,7 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
       ['Ctrl + Shift + Z', 'Redo (also Ctrl + Y)'],
       ['History panel', 'Click a step to go back to just after it; Start: before any'],
       ['Home', 'Center on origin'],
+      ['Axes button', "Hide/show the sketch's axes: H and V lines through the origin (on a face sketch the world origin projected onto the face) and a face's own centre lines. Click one to use it as a mirror line (M), for symmetric, point on line or a dimension; the cursor snaps onto them. Constraints on them keep working when hidden"],
       ['Shift + F', 'Fit all entities'],
       ['Alt (hold)', 'Show all dimensions / free draw (no snap)'],
       ['?', 'This help'],

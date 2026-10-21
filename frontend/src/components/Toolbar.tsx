@@ -148,6 +148,8 @@ export function Toolbar({ embedded = false }: ToolbarProps = {}) {
   const toggleDrawer = useUIStateStore((s) => s.toggleDrawer);
   const propertiesOpen = useUIStateStore((s) => s.propertiesOpen);
   const toggleProperties = useUIStateStore((s) => s.toggleProperties);
+  const axesShown = useUIStateStore((s) => s.axesShown);
+  const toggleAxes = useUIStateStore((s) => s.toggleAxes);
   const doc = useDocumentStore((s) => s.document);
   const palette = useThemeStore((s) => s.palette);
   const theme = useThemeStore((s) => s.theme);
@@ -652,6 +654,13 @@ export function Toolbar({ embedded = false }: ToolbarProps = {}) {
         <div style={{ flex: 1 }} />
 
         {/* Viewport */}
+        <button
+          onClick={toggleAxes}
+          style={btn(palette, axesShown)}
+          title={`${axesShown ? 'Hide' : 'Show'} the sketch axes (H / V through the origin, and a face's centre lines); constraints on them keep working when hidden`}
+        >
+          Axes
+        </button>
         <button
           onClick={() => useEditorStore.getState().setViewportCommand('center-origin')}
           style={btn(palette)}

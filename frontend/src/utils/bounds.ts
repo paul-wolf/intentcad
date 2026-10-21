@@ -1,4 +1,5 @@
 import type { Entity, Point } from '@/types/document';
+import { isAxis } from './sketchAxes';
 
 export interface Bounds {
   min: Point;
@@ -26,6 +27,7 @@ export class BoundsBuilder {
    *  geometry but sit outside the part and would otherwise skew the box. */
   expandEntity(entity: Entity, skipReference = false) {
     if (skipReference && 'reference' in entity && entity.reference) return;
+    if (isAxis(entity)) return;   // a sketch's axes run across the whole view
     switch (entity.type) {
       case 'line':
         for (const pt of entity.points) this.expandPoint(pt);

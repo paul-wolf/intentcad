@@ -17,6 +17,7 @@ import { dimensionEntities, resolveSketch } from '@/utils/resolveSketch';
 import { filletSketch, type Corner, type FilletOutcome } from '@/utils/fillet';
 import { trimSketch, type TrimOutcome } from '@/utils/trim';
 import { addOffset as addOffsetTo, unlinkOffset as unlinkOffsetIn } from '@/utils/offset';
+import { docWithAxes, isAxis, isAxisConstraint, notAxes } from '@/utils/sketchAxes';
 
 const UNDO_STACK_LIMIT = 100;
 
@@ -214,7 +215,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   redoStack: [],
 
   setDocument(doc) {
-    set({ document: doc, undoStack: [], redoStack: [] });
+    set({ document: docWithAxes(doc), undoStack: [], redoStack: [] });
   },
 
   setDocumentName(name) {
@@ -393,6 +394,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   },
 
   removeEntities(entityIds) {
+    entityIds = notAxes(entityIds);   // the sketch's axes stay as they are
     const { document } = get();
     const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
     // Build the full set of IDs to remove, cascading through derived entities
@@ -424,6 +426,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   },
 
   moveEntities(entityIds, delta) {
+    entityIds = notAxes(entityIds);   // the sketch's axes stay as they are
     const idSet = new Set(entityIds);
     const { document } = get();
     set({
@@ -497,6 +500,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   },
 
   movePoint(entityId, pointIndex, delta) {
+    if (isAxis(entityId)) return;   // the sketch's axes stay as they are
     const { document } = get();
     set({
       document: {
@@ -610,6 +614,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   },
 
   extendPolyline(entityId, point, end) {
+    if (isAxis(entityId)) return;   // the sketch's axes stay as they are
     const { document } = get();
     set({
       document: {
@@ -643,6 +648,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   },
 
   deleteSegmentFromPolyline(entityId, segmentIndex) {
+    if (isAxis(entityId)) return;   // the sketch's axes stay as they are
     const { document } = get();
     const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
     if (!sketch) return;
@@ -719,6 +725,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   },
 
   deleteVertexFromPolyline(entityId, pointIndex) {
+    if (isAxis(entityId)) return;   // the sketch's axes stay as they are
     const { document } = get();
     const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
     if (!sketch) return;
@@ -775,6 +782,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   },
 
   toggleConstruction(entityIds) {
+    entityIds = notAxes(entityIds);   // the sketch's axes stay as they are
     const idSet = new Set(entityIds);
     const { document } = get();
     set({
@@ -800,6 +808,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   },
 
   toggleReference(entityIds) {
+    entityIds = notAxes(entityIds);   // the sketch's axes stay as they are
     const idSet = new Set(entityIds);
     const { document } = get();
     get().beginTransaction('Toggle reference');
@@ -823,6 +832,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   },
 
   mirrorEntities(entityIds, lineA, lineB) {
+    entityIds = notAxes(entityIds);   // the sketch's axes stay as they are
     const { document } = get();
     const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
     if (!sketch) return [];
@@ -899,6 +909,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   },
 
   copyPattern(sourceIds, params, patternId = null) {
+    sourceIds = notAxes(sourceIds);
     const active = () => get().document.sketches.find((sk) => sk.id === get().document.activeSketchId);
     const before = active();
     if (!before) return [];
@@ -951,7 +962,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     const geomIds: string[] = [];
     let sawReference = false;
     for (const e of sketch.entities) {
-      if (e.type === 'dimension') continue;
+      if (e.type === 'dimension' || isAxis(e)) continue;
       if (subset && !subset.has(e.id)) continue;
       geomIds.push(e.id);
       if ('reference' in e && e.reference) sawReference = true;
@@ -1002,7 +1013,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
         ...document,
         sketches: document.sketches.map((sk) =>
           sk.id === document.activeSketchId
-            ? { ...sk, constraints: sk.constraints.filter((c) => !constraintReferencesAny(c, idSet)) }
+            ? { ...sk, constraints: sk.constraints.filter((c) => isAxisConstraint(c) || !constraintReferencesAny(c, idSet)) }
             : sk,
         ),
       },
@@ -1010,6 +1021,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   },
 
   toggleFixed(entityIds) {
+    entityIds = notAxes(entityIds);   // the sketch's axes stay as they are
     const { document } = get();
     const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
     if (!sketch) return;
@@ -1814,6 +1826,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   },
 
   toggleArc(entityId, segmentIndex) {
+    if (isAxis(entityId)) return;   // the sketch's axes stay as they are
     const { document } = get();
     const DEFAULT_BULGE = 0.4142; // tan(π/8) → 45° arc
     set({
@@ -1848,6 +1861,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   },
 
   setArcBulge(entityId, segmentIndex, bulge) {
+    if (isAxis(entityId)) return;   // the sketch's axes stay as they are
     const { document } = get();
     set({
       document: {
@@ -1877,6 +1891,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   },
 
   toggleClosed(entityIds) {
+    entityIds = notAxes(entityIds);
     const idSet = new Set(entityIds);
     const { document } = get();
     set({
@@ -1923,6 +1938,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   },
 
   joinEntities(entityIds) {
+    entityIds = notAxes(entityIds);
     const { document } = get();
     const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
     if (!sketch) return null;
@@ -2042,6 +2058,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   },
 
   updateEntity(entityId, updatedEntity) {
+    if (isAxis(entityId)) return;   // the sketch's axes stay as they are
     const { document } = get();
     const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
     if (!sketch) return;
@@ -2162,3 +2179,11 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     return document.sketches.find((sk) => sk.id === document.activeSketchId);
   },
 }));
+
+// Every sketch has its built-in axes (utils/sketchAxes.ts): derived, not
+// saved, so put back whenever a sketch arrives without them (a new sketch, a
+// document or history step loaded) or something changed them.
+useDocumentStore.subscribe((s) => {
+  const doc = docWithAxes(s.document);
+  if (doc !== s.document) useDocumentStore.setState({ document: doc });
+});

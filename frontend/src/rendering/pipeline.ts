@@ -20,6 +20,7 @@ import { arcFromBulge, arcMidpoint } from '@/utils/arcGeometry';
 import { rectanglePath, rectangleOutline, rectangleCorners } from '@/utils/rectPath';
 import { renderToolpathOverlay, renderSimulatorOverlay } from '@/components/ToolpathOverlay';
 import { useCamStore } from '@/stores/camStore';
+import { AXIS_H, AXIS_V, axesShown, axisLabel, axisPoint, isAxis } from '@/utils/sketchAxes';
 
 export interface RenderContext {
   renderer: Renderer;
@@ -122,7 +123,46 @@ function renderGrid(ctx: RenderContext) {
   }
 }
 
-/** Step 2b: Draw origin axes and point */
+/** Step 2b: Draw the active sketch's axes (utils/sketchAxes.ts) across the
+ *  whole view, faint, each labelled at the view's edge: H and V through the
+ *  origin, and a face sketch's centre lines; a selected one stands out. */
+function renderAxes(ctx: RenderContext) {
+  const { renderer, viewport, palette, document: doc } = ctx;
+  const sk = doc.sketches.find((s) => s.id === doc.activeSketchId);
+  const axes = (sk && !sk.suppressed ? sk.entities.filter(isAxis) : []) as LineEntity[];
+  if (!axes.length) { renderOrigin(ctx); return; }
+  if (!axesShown()) return;
+  const styles = getStyles(palette, ctx.lineWidthScale, ctx.fontSizeScale);
+  const W = viewport.width, H = viewport.height, M = 6;
+  for (const a of axes) {
+    const at = viewport.worldToScreen(axisPoint(a));
+    const horizontal = Math.abs(a.points[0]!.y - a.points[1]!.y) < 1e-9;
+    if (horizontal ? at.y < 0 || at.y > H : at.x < 0 || at.x > W) continue;
+    const selected = ctx.selectedEntityIds.has(a.id);
+    const origin = a.id === AXIS_H || a.id === AXIS_V;
+    const color = selected ? palette.lineSelected : origin ? (a.id === AXIS_H ? palette.axisX : palette.axisY) : palette.origin;
+    const style: LineStyle = selected ? { ...styles.constructionSelected, color } : { color, width: 1, dash: origin ? [8, 4] : [2, 4] };
+    if (!selected) renderer.setGlobalAlpha(AXIS_OPACITY + 0.15);
+    if (horizontal) renderer.drawLine({ x: 0, y: at.y }, { x: W, y: at.y }, style);
+    else renderer.drawLine({ x: at.x, y: 0 }, { x: at.x, y: H }, style);
+    renderer.resetGlobalAlpha();
+    // origin's labels at the right and top edges, the face's at the left and bottom
+    const text = { color, fontSize: 11 * (ctx.fontSizeScale ?? 1) };
+    if (horizontal) {
+      const right = a.id === AXIS_H;
+      renderer.drawText(axisLabel(a.id), { x: right ? W - M : M, y: at.y - 3 },
+        { ...text, textAlign: right ? 'right' : 'left', textBaseline: 'bottom' });
+    } else {
+      const top = a.id === AXIS_V;
+      renderer.drawText(axisLabel(a.id), { x: at.x + 4, y: top ? M : H - M },
+        { ...text, textAlign: 'left', textBaseline: top ? 'top' : 'bottom' });
+    }
+  }
+  const h = axes.find((a) => a.id === AXIS_H);
+  if (h) renderer.fillCircle(viewport.worldToScreen(axisPoint(h)), ORIGIN_RADIUS, palette.origin);
+}
+
+/** Origin axes and point, for a view with no sketch axes to draw. */
 function renderOrigin(ctx: RenderContext) {
   const { renderer, viewport, palette } = ctx;
   const origin = viewport.worldToScreen({ x: 0, y: 0 });
@@ -193,7 +233,7 @@ function renderGhostedSketches(ctx: RenderContext) {
         // Non-selected sketches in CAM: very faint disabled look
         renderer.setGlobalAlpha(0.15);
         for (const entity of sketch.entities) {
-          if (entity.type === 'dimension') continue;
+          if (entity.type === 'dimension' || isAxis(entity)) continue;
           renderEntity(renderer, viewport, entity, styles.ghosted, false, ctx.exportMode);
         }
         renderer.resetGlobalAlpha();
@@ -201,6 +241,7 @@ function renderGhostedSketches(ctx: RenderContext) {
     } else {
       renderer.setGlobalAlpha(GHOSTED_OPACITY);
       for (const entity of sketch.entities) {
+        if (isAxis(entity)) continue;   // only the active sketch's axes are drawn
         const ghostStyle: LineStyle = 'construction' in entity && entity.construction
           ? { ...styles.ghosted, dash: [6, 4] }
           : styles.ghosted;
@@ -271,7 +312,7 @@ function renderActiveSketch(ctx: RenderContext) {
     if (!camActiveSketchSelected) {
       renderer.setGlobalAlpha(0.15);
       for (const entity of activeSketch.entities) {
-        if (entity.type === 'dimension') continue;
+        if (entity.type === 'dimension' || isAxis(entity)) continue;
         renderEntity(renderer, viewport, entity, styles.ghosted, false, ctx.exportMode);
       }
       renderer.resetGlobalAlpha();
@@ -289,6 +330,7 @@ function renderActiveSketch(ctx: RenderContext) {
 
   for (const entity of activeSketch.entities) {
     if (ctx.copyPreviewHides?.has(entity.id)) continue;   // being replaced (see renderCopyPreview)
+    if (isAxis(entity)) continue;   // drawn across the view by renderAxes
     // In CAM mode, skip construction entities and dimensions
     if (ctx.camMode) {
       if (entity.type === 'dimension') continue;
@@ -933,7 +975,7 @@ export function renderFrame(ctx: RenderContext): void {
   renderBackground(ctx);
   if (!ctx.exportMode) {
     if (ctx.showGrid !== false) renderGrid(ctx);
-    renderOrigin(ctx);
+    renderAxes(ctx);
   }
   renderGhostedSketches(ctx);
   renderActiveSketch(ctx);

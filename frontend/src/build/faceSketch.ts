@@ -15,6 +15,7 @@ import { bezierPoint } from '@/utils/bezierGeometry';
 import { add, dot, len, scale, sub, type Vec3 } from './dragHandle';
 import { planeBasis, planeForFace, sketchToWorld, worldToSketch, type PlaneBasis } from './sketchPlane';
 import { isRef } from '@/utils/brokenRefs';
+import { isAxis } from '@/utils/sketchAxes';
 import { followRefs, type OutlineEdge } from './sketchRefs';
 import { matchProjected } from './projectEdges';
 
@@ -347,6 +348,7 @@ function arcPoints(p1: Point, p2: Point, bulge: number): Point[] {
 /** An entity as sketch-space polylines (construction geometry only when asked). */
 export function entityPolylines(e: Entity, withConstruction = false): Point[][] {
   if ('construction' in e && e.construction && !withConstruction) return [];
+  if (isAxis(e)) return [];   // the sketch's axes: drawn across the view, never part of its shape
   switch (e.type) {
     case 'line': {
       const out: Point[] = [];

@@ -2,11 +2,17 @@ import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useThemeStore } from '@/theme';
 import { requestSave } from '@/api/autoSave';
+import type { LineEntity } from '@/types/document';
+import { AXIS_H, AXIS_V, FACE_AXIS_H, FACE_AXIS_V } from '@/utils/sketchAxes';
+
+// the sketch's axes the dialog offers, by name
+const AXES: [string, string][] = [[AXIS_H, 'H axis'], [AXIS_V, 'V axis'], [FACE_AXIS_H, 'Face H centre line'], [FACE_AXIS_V, 'Face V centre line']];
 
 export function MirrorDialog() {
   const mirrorEntityIds = useEditorStore((s) => s.mirrorEntityIds);
   const mirrorPickingLine = useEditorStore((s) => s.mirrorPickingLine);
   const palette = useThemeStore((s) => s.palette);
+  const sketch = useDocumentStore((s) => s.getActiveSketch());
 
   if (!mirrorEntityIds || mirrorPickingLine) return null;
 
@@ -66,12 +72,14 @@ export function MirrorDialog() {
       <div style={{ color: palette.text, fontSize: '14px', fontWeight: 600, marginBottom: '4px' }}>
         Mirror
       </div>
-      <button style={btnStyle} onClick={() => mirrorAxis({ x: -1, y: 0 }, { x: 1, y: 0 })}>
-        X Axis
-      </button>
-      <button style={btnStyle} onClick={() => mirrorAxis({ x: 0, y: -1 }, { x: 0, y: 1 })}>
-        Y Axis
-      </button>
+      {AXES.map(([id, label]) => {
+        const axis = sketch?.entities.find((e) => e.id === id) as LineEntity | undefined;
+        return axis && (
+          <button key={id} style={btnStyle} onClick={() => mirrorAxis(axis.points[0]!, axis.points[1]!)}>
+            {label}
+          </button>
+        );
+      })}
       <button style={btnStyle} onClick={pickLine}>
         Pick Line…
       </button>

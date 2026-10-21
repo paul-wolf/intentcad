@@ -3,16 +3,19 @@ import { GRID_SPACING_MM, SNAP_RADIUS } from '@/config';
 import { distance, snapToGrid, segmentSegmentIntersection } from '@/utils/geometry';
 import { getSegmentCount, getSegmentPointIndices } from '@/utils/lineSegments';
 import type { Viewport } from '@/types/renderer';
+import { axisPoint, hiddenAxis, isAxis } from '@/utils/sketchAxes';
 
 export interface SnapResult {
   point: Point;
-  type: 'endpoint' | 'intersection' | 'circumference' | 'grid';
+  type: 'endpoint' | 'intersection' | 'circumference' | 'axis' | 'grid';
   entityId?: string;
   pointIndex?: number;
 }
 
 /**
- * Snap position with priority: endpoint > grid.
+ * Snap position with priority: endpoint (a sketch's origin among them) >
+ * intersection (an axis crossing a line too) > circumference > on an axis >
+ * grid. Hidden axes (utils/sketchAxes.ts) aren't snapped to.
  * Distances are compared in screen space.
  * @param excludeEntityIds - Optional set of entity IDs to exclude from snap targets (e.g., when moving entities)
  */
@@ -35,6 +38,18 @@ export function snapPosition(
     for (const entity of sketch.entities) {
       // Skip excluded entities (e.g., entities being moved)
       if (excludeEntityIds?.has(entity.id)) continue;
+      if (isAxis(entity)) {
+        if (hiddenAxis(entity) || entity.type !== 'line' || sketch.id !== document.activeSketchId) continue;
+        const pt = axisPoint(entity);
+        const d = distance(viewport.worldToScreen(pt), screenPos);
+        if (d < bestDist) {
+          bestDist = d;
+          bestEndpoint = pt;
+          bestEntityId = undefined;
+          bestPointIndex = undefined;
+        }
+        continue;
+      }
       if (entity.type === 'line') {
         for (let i = 0; i < entity.points.length; i++) {
           const pt = entity.points[i]!;
@@ -116,6 +131,8 @@ export function snapPosition(
     for (const entity of sketch.entities) {
       // Skip excluded entities (e.g., entities being moved)
       if (excludeEntityIds?.has(entity.id)) continue;
+      // only the active sketch's axes are drawn, so only they are snapped to
+      if (isAxis(entity) && (hiddenAxis(entity) || sketch.id !== document.activeSketchId)) continue;
       if (entity.type === 'line') {
         const count = getSegmentCount(entity);
         for (let s = 0; s < count; s++) {
@@ -181,6 +198,26 @@ export function snapPosition(
   if (bestCircSnap) {
     return { point: bestCircSnap, type: 'circumference', entityId: bestCircEntityId };
   }
+
+  // Onto an axis: the nearest point on it
+  let bestAxis: { point: Point; entityId: string } | null = null;
+  let bestAxisDist = SNAP_RADIUS;
+  for (const sketch of document.sketches) {
+    if (!sketch.visible || sketch.suppressed) continue;
+    for (const entity of sketch.entities) {
+      if (!isAxis(entity) || hiddenAxis(entity) || entity.type !== 'line' || excludeEntityIds?.has(entity.id)) continue;
+      if (sketch.id !== document.activeSketchId) continue;
+      const at = axisPoint(entity);
+      const horizontal = Math.abs(entity.points[0]!.y - entity.points[1]!.y) < 1e-9;
+      const point = horizontal ? { x: snapToGrid(worldPos.x, GRID_SPACING_MM), y: at.y } : { x: at.x, y: snapToGrid(worldPos.y, GRID_SPACING_MM) };
+      const d = horizontal ? Math.abs(viewport.worldToScreen(at).y - screenPos.y) : Math.abs(viewport.worldToScreen(at).x - screenPos.x);
+      if (d < bestAxisDist) {
+        bestAxisDist = d;
+        bestAxis = { point, entityId: entity.id };
+      }
+    }
+  }
+  if (bestAxis) return { point: bestAxis.point, type: 'axis', entityId: bestAxis.entityId };
 
   // Fall back to grid snap
   return {
