@@ -192,6 +192,16 @@ faces of a part:
 - Attach datasheets (PDF) and photos to a part or a whole project.
 - The AI reads them when designing, and cites the page or photo each dimension came
   from.
+- To add one while you chat, click the paperclip left of the message box, or drop or
+  paste a file into the chat. On a phone, the paperclip offers the camera.
+- The files go with your next message; they show as chips above the box, and the sent
+  message lists them after 📎. Click × on a chip to leave a file out.
+- If you send while a file is still uploading, the message waits for it.
+- When the AI asks you a question, an **Attach a file** button shows under it: answer
+  with a photo, a drawing or a datasheet if that's easier than typing. Pick the file,
+  add a sentence and send.
+- The **Context** tab lists all the files, and lets you choose which PDF pages the AI
+  sees.
 
 ### Import and export
 
