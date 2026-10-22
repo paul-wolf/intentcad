@@ -123,3 +123,10 @@ export function spendLine(u: Pick<User, 'is_staff' | 'is_superuser'> | null | un
   const { document: d, all_time: a } = usage;
   return `AI spend · this model $${d.cost_usd.toFixed(3)} (${d.edits}) · all-time $${a.cost_usd.toFixed(2)} (${a.edits})`;
 }
+
+/** Whether the AI's question asks for something the user would answer with a
+ *  file: a photo, a drawing, a datasheet, a scan (not an error message). */
+export function asksForFile(text: string): boolean {
+  if (text.startsWith('⚠')) return false;
+  return /\b(photos?|pictures?|images?|drawings?|datasheets?|data sheets?|screenshots?|scans?|pdfs?|attach\w*|upload\w*)\b/i.test(text);
+}

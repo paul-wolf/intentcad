@@ -79,7 +79,7 @@ import {
 import { OperationsPanel, Kbd } from './OperationsPanel';
 import { OpIcon, OPS_GRID_ICON } from './OpIcons';
 import { ContextChips, ContextPane, useContextFiles, type CtxColors } from './ContextPane';
-import { acceptable, chatUsageNote, filesToSend, seesSpend, skipList, spendLine, spendNote, usageLabel } from '@/build/contextFiles';
+import { acceptable, asksForFile, chatUsageNote, filesToSend, seesSpend, skipList, spendLine, spendNote, usageLabel } from '@/build/contextFiles';
 import { chooseModel, modelsStale } from '@/build/modelList';
 
 // the view buttons, in key order (1–6, then 0)
@@ -962,6 +962,13 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const [skipCtx, setSkipCtx] = useState<ReadonlySet<string>>(new Set());
   const ctxPick = useRef<(() => void) | null>(null);
   const [chatUploading, setChatUploading] = useState('');
+  // a message sent while its file was still uploading: sent once the upload is in
+  const [sendQueued, setSendQueued] = useState<string | null>(null);
+  const [chatDragging, setChatDragging] = useState(false);
+  const chatFileRef = useRef<HTMLInputElement | null>(null);
+  // the message box's width, for a placeholder that fits
+  const [chatInputW, setChatInputW] = useState(0);
+  const chatInputObs = useRef<ResizeObserver | null>(null);
   // what the window shows beside the 3D view: the script, the chat, or nothing
   // (the 3D view maximised); the parameters are shown or hidden separately
   // (or the Operations grid); the keys reach it through refs, and the
@@ -2753,6 +2760,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const sendChat = async (text?: string) => {
     const instruction = (text ?? ask).trim();
     if (!instruction || asking) return;
+    // a file still uploading goes with this message: wait for it (see the effect below)
+    if (chatUploading) { setSendQueued(instruction); return; }
     setAsking(true);
     const sent = filesToSend(ctxStore.files, skipCtx);
     const userMsg: ChatMessage = { role: 'user', text: instruction, at: Date.now(),
@@ -2793,6 +2802,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       setAsking(false);
     }
   };
+
+  // the upload is in and the skip set updated (same render): now send
+  useEffect(() => {
+    if (chatUploading || sendQueued === null) return;
+    setSendQueued(null);
+    void sendChat(sendQueued);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatUploading, sendQueued]);
 
   const rebuild = () => { setParamReject(null); saveDraft(code); build(code, 'build'); };
   const [exporting, setExporting] = useState<'stl' | 'step' | 'stl-parts' | 'dxf' | 'dxf-views' | null>(null);
@@ -2966,6 +2983,13 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                      modal: showHelp || showVersions || showProduction };
   // "or ask: …" on the help card: into the chat box, not sent
   const chatInputRef = useRef<HTMLInputElement | null>(null);
+  const setChatInputEl = useCallback((el: HTMLInputElement | null) => {
+    chatInputRef.current = el;
+    chatInputObs.current?.disconnect();
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    chatInputObs.current = new ResizeObserver(() => setChatInputW(el.offsetWidth));
+    chatInputObs.current.observe(el);
+  }, []);
   const putInChat = (text: string) => {
     setAsk(text);
     setLayout('chat');
@@ -3155,6 +3179,12 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     setChatUploading('');
     chatInputRef.current?.focus();
   };
+  const pickChatFiles = () => chatFileRef.current?.click();
+  const paperclip = (size: number) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+    </svg>
+  );
   const chatHistory = (
     <div ref={chatScrollRef} style={{ ...(layout === 'chat' ? { flex: 1, minHeight: 0 } : { maxHeight: '30vh' }), overflowY: 'auto', padding: '10px 16px',
                                       display: 'flex', flexDirection: 'column', gap: '7px' }}>
@@ -3184,6 +3214,15 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                 </span>
               )}
             </div>
+            {!mine && isQ && asksForFile(m.text) && (
+              <button onClick={pickChatFiles} disabled={!!chatUploading}
+                title="Answer with a photo, drawing or datasheet; add a sentence before you send"
+                style={{ marginTop: 4, display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px',
+                         background: 'none', color: palette.accent ?? palette.text, border: `1px solid ${palette.border}`,
+                         borderRadius: '4px', fontSize: '12px', cursor: 'pointer' }}>
+                {paperclip(12)} Attach a file
+              </button>
+            )}
             {chatUsageNote(user, m.usage) && (
               <div title="This call: input tokens (of them, read from the prompt cache) · output tokens · cost"
                 style={{ fontSize: '10.5px', color: palette.textSecondary, marginTop: 2, paddingLeft: 4 }}>
@@ -3199,20 +3238,39 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     </div>
   );
   const chatInput = (
-  <div onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) e.preventDefault(); }}
-    onDrop={(e) => { const l = [...e.dataTransfer.files]; if (l.length) { e.preventDefault(); void attachToChat(l); } }}>
+  <div onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setChatDragging(true); } }}
+    onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setChatDragging(false); }}
+    onDrop={(e) => { setChatDragging(false); const l = [...e.dataTransfer.files]; if (l.length) { e.preventDefault(); void attachToChat(l); } }}
+    style={{ position: 'relative', outline: chatDragging ? `2px dashed ${palette.accent ?? palette.border}` : 'none', outlineOffset: -3 }}>
+  {chatDragging && (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 2, pointerEvents: 'none', display: 'flex', alignItems: 'center',
+                  justifyContent: 'center', gap: 6, background: `${palette.background}d9`, color: palette.accent ?? palette.text,
+                  fontSize: '13px', fontWeight: 600 }}>
+      {paperclip(14)} Drop to attach
+    </div>
+  )}
+  <input ref={chatFileRef} type="file" multiple accept="image/*,application/pdf" style={{ display: 'none' }}
+    onChange={(e) => { const l = [...(e.target.files ?? [])]; e.target.value = ''; if (l.length) void attachToChat(l); }} />
   <ContextChips files={filesToSend(ctxStore.files, new Set())} skipped={skipCtx} c={ctxColors}
     onOpen={() => setLayout('context')}
     onSkip={(id, skip) => setSkipCtx((cur) => { const n = new Set(cur); if (skip) n.add(id); else n.delete(id); return n; })} />
   {(chatUploading || (ctxStore.error && layout !== 'context')) && (
     <div onClick={() => ctxStore.setError('')}
       style={{ padding: '4px 16px 0', fontSize: '12px', color: chatUploading ? palette.textSecondary : palette.danger }}>
-      {chatUploading ? `Attaching ${chatUploading}…` : ctxStore.error}
+      {chatUploading ? `Attaching ${chatUploading}…${sendQueued !== null ? ' Your message goes once it’s attached.' : ''}` : ctxStore.error}
     </div>
   )}
   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px' }}>
+  <button onClick={pickChatFiles} disabled={!!chatUploading} aria-label="Attach a file"
+    title="Attach a photo, drawing or datasheet (or drop or paste one here); the AI reads it with your message"
+    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, flex: 'none',
+             background: 'none', color: palette.textSecondary, border: `1px solid ${palette.inputBorder}`,
+             borderRadius: '4px', cursor: !chatUploading ? 'pointer' : 'default',
+             opacity: !chatUploading ? 1 : 0.5 }}>
+    {paperclip(15)}
+  </button>
   <input
-    ref={chatInputRef}
+    ref={setChatInputEl}
     value={ask}
     onChange={(e) => setAsk(e.target.value)}
     onKeyDown={(e) => { if (e.key === 'Enter') void sendChat(); }}
@@ -3221,7 +3279,9 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       const l = [...e.clipboardData.files];
       if (l.length) { e.preventDefault(); void attachToChat(l); }
     }}
-    placeholder={sel.length ? 'e.g. chamfer this edge 2mm  (targets your selection)' : 'Describe a change — e.g. add four M4 corner bolt holes'}
+    placeholder={sel.length ? 'e.g. chamfer this edge 2mm  (targets your selection)'
+                 : chatInputW >= 560 ? 'Describe a change — e.g. add four M4 corner bolt holes — or attach a photo or datasheet'
+                 : chatInputW >= 330 ? 'Describe a change — or attach a photo or datasheet' : 'Describe a change'}
     disabled={asking}
     style={{ flex: 1, padding: '6px 10px', background: palette.inputBg,
              border: `1px solid ${palette.inputBorder}`, borderRadius: '4px',
