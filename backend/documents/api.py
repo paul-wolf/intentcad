@@ -10,6 +10,8 @@ from django.utils.dateparse import parse_datetime
 from ninja import File, Router
 from ninja.files import UploadedFile
 
+from accounts.events import record_event
+from accounts.models import UserEvent
 from projects.access import can_access_project, require_auth
 from projects.models import Project, ProjectShare
 
@@ -110,6 +112,7 @@ def create_document(request, payload: DocumentCreateIn):
         created_by=request.user,
     )
     _snapshot(doc, request.user, payload.data, "created")
+    record_event(UserEvent.DOCUMENT_CREATED, request, document=doc)
     return 201, doc
 
 

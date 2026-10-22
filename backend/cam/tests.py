@@ -2,7 +2,7 @@ import json
 
 from django.test import Client, TestCase
 
-from accounts.models import Organisation, User
+from accounts.models import Organisation, User, UserEvent
 from documents.models import Document
 from projects.models import Project
 
@@ -348,6 +348,10 @@ class CamChatAPITests(TestCase):
         self.assertTrue(any("postProcessor" in n for n in body["notes"]))
         self.assertFalse({"tokens_in", "cost_usd"} & body.keys())   # not staff
         self.assertEqual(AiEdit.objects.get(user=self.user).instruction, "fix the tabs")
+        event = UserEvent.objects.get(kind="ai_call")
+        self.assertEqual((event.user, event.text, event.document_name), (self.user, "fix the tabs", "Part"))
+        self.assertEqual((event.detail["source"], event.detail["model"]), ("CAM chat", "claude-opus-test"))
+        self.assertGreater(event.cost_usd, 0)
         prompt = self.calls[0]["user"]
         self.assertIn("id=e1", prompt)
         self.assertNotIn("id=k1", prompt)

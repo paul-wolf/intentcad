@@ -119,3 +119,51 @@ class UpdateMeSchema(Schema):
 class PasswordResetSchema(Schema):
     token: str
     password: str
+
+
+class UserEventSchema(Schema):
+    id: int
+    kind: str
+    at: str
+    user_id: str | None = None
+    user_email: str
+    user_name: str
+    ip_address: str | None = None
+    user_agent: str = ""
+    document_id: str
+    document_name: str
+    document_kind: str
+    text: str
+    cost_usd: float
+    detail: dict
+
+
+class EventSpendSchema(Schema):
+    cost_usd: float
+    ai_calls: int
+
+
+class UserEventTotalsSchema(Schema):
+    user_id: str
+    email: str
+    name: str
+    organisation: str
+    ai_calls: int
+    cost_usd: float
+    logins: int
+    documents_created: int
+    last_at: str | None = None
+
+
+class EventUserSchema(Schema):
+    id: str
+    email: str
+    name: str
+
+
+class UserEventListSchema(Schema):
+    total: int
+    events: list[UserEventSchema]
+    spend: EventSpendSchema
+    by_user: list[UserEventTotalsSchema]
+    users: list[EventUserSchema]

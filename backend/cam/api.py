@@ -273,10 +273,13 @@ def suggest_plan(request, payload: AdvisorRequestIn):
 SPEND_KEYS = ("tokens_in", "tokens_out", "cache_read_tokens", "cache_write_tokens")
 
 
-def _log_chat(request, payload: CamChatIn, r: dict) -> None:
-    """Record one CAM chat turn's spend in the AI edit log."""
+def _log_chat(request, payload: CamChatIn, r: dict, failed: bool = False) -> None:
+    """Record one CAM chat turn's spend in the AI edit log (and the user's event)."""
+    from accounts.events import record_ai_call
     from modeling.models import AiEdit
 
+    record_ai_call(request, "CAM chat", str(payload.document_id),
+                   payload.message.strip() or "Plan this job", r, failed)
     AiEdit.objects.create(
         user=request.user, document_id=str(payload.document_id),
         instruction=(payload.message.strip() or "Plan this job")[:500],
@@ -303,7 +306,7 @@ def cam_chat_endpoint(request, payload: CamChatIn):
                      payload.model or None)
     except AssistantError as exc:
         if exc.usage:
-            _log_chat(request, payload, exc.usage)
+            _log_chat(request, payload, exc.usage, failed=True)
         spend = (exc.usage or {}) if sees_spend(request.user) else {}
         return JsonResponse({"message": str(exc), **spend}, status=422)
     _log_chat(request, payload, r)

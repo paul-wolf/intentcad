@@ -696,6 +696,7 @@ def edit_script(
             "tokens_out": tok["output"],
             "cache_read_tokens": tok["cache_read"], "cache_write_tokens": tok["cache_write"],
             "cost_usd": round(usd[0], 4),
+            "model": model,
         }
 
     def validate(script: str) -> None:

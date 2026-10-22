@@ -39,8 +39,12 @@ export function TopNav() {
           <button onClick={() => navigate('/manage/users')}
             style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: MONO, fontSize: '11.5px', color: t.textDim }}>Users</button>
           {user?.is_superuser && (
-            <button onClick={() => navigate('/manage/organisations')}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: MONO, fontSize: '11.5px', color: t.textDim }}>Orgs</button>
+            <>
+              <button onClick={() => navigate('/manage/organisations')}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: MONO, fontSize: '11.5px', color: t.textDim }}>Orgs</button>
+              <button onClick={() => navigate('/manage/events')}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: MONO, fontSize: '11.5px', color: t.textDim }}>Events</button>
+            </>
           )}
         </>
       )}

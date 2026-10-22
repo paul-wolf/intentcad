@@ -2,6 +2,7 @@ import uuid
 
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django.utils import timezone
 
 
 class Organisation(models.Model):
@@ -128,3 +129,51 @@ class LoginLog(models.Model):
 
     def __str__(self):
         return f"{self.user.username} - {self.login_at}"
+
+
+class UserEvent(models.Model):
+    """Something a user did: signed in or out, made a part or sketch, called the AI.
+    AI calls carry what they cost, so spend can be added up per user. The email
+    is kept on the row, so the history outlives a deleted user."""
+
+    LOGIN = "login"
+    LOGIN_FAILED = "login_failed"
+    LOGOUT = "logout"
+    DOCUMENT_CREATED = "document_created"
+    AI_CALL = "ai_call"
+    KINDS = [
+        (LOGIN, "Signed in"),
+        (LOGIN_FAILED, "Failed sign-in"),
+        (LOGOUT, "Signed out"),
+        (DOCUMENT_CREATED, "Created a part or sketch"),
+        (AI_CALL, "AI call"),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True,
+                             related_name="events")
+    user_email = models.CharField(max_length=254, blank=True)
+    kind = models.CharField(max_length=32, choices=KINDS)
+    # a default, not auto_now_add, so history copied in keeps its own times
+    created_at = models.DateTimeField(default=timezone.now)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.CharField(max_length=500, blank=True)
+    document_id = models.CharField(max_length=64, blank=True)
+    document_name = models.CharField(max_length=255, blank=True)
+    document_kind = models.CharField(max_length=16, blank=True)   # 'part' | 'sketch'
+    # what was asked of the AI, or the name tried in a failed sign-in (searchable)
+    text = models.TextField(blank=True)
+    cost_usd = models.FloatField(default=0.0)
+    # AI calls: source, model and token counts
+    detail = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        db_table = "user_events"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["created_at"]),
+            models.Index(fields=["user", "created_at"]),
+            models.Index(fields=["kind", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.user_email or '?'} {self.kind} {self.created_at:%Y-%m-%d %H:%M}"

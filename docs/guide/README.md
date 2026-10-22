@@ -319,6 +319,31 @@ The AI never changes the machine's settings, its post-processor or its safe heig
 What it changes in the job waits for you to accept or confirm it, and goes through the
 same checks as your own operations.
 
+### Events and AI spend (superusers)
+
+The Events page shows what users have done: signing in and out (and failed sign-ins),
+making a part or sketch, and each AI call with what it cost. Use it to see who spends
+how much on the AI.
+
+Click **Events** in the top bar (only superusers see it). The line under the title adds
+up the events and the AI spend for the filters you've set.
+
+- **AI spend by user** lists each user's AI calls, spend, sign-ins, parts and sketches
+  made, and when they were last seen. Click a user to see only their events; click
+  again to see everyone.
+- The events list is newest first. An AI call shows its part or sketch (click to open
+  it), what was asked, the model, the tokens and the cost. A sign-in shows the address
+  and browser. **Load more** shows older events.
+- Filter with the search box (a user, a part or sketch name, or words from an AI
+  request), the event kind, the user, and the period: **Today**, **7 days**,
+  **30 days** (the default), **All**, or your own **From** and **To** dates. The page
+  keeps the filters in its address, so you can bookmark or share a view.
+
+Events from before the page existed were copied in from the earlier sign-in and AI
+logs; those have no sign-outs.
+
+![The Events page](images/events.png)
+
 ---
 
 ## What IntentCAD deliberately doesn't do
