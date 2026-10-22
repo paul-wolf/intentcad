@@ -209,6 +209,25 @@ faces of a part:
 The 2D editor exports DXF, PDF and images, imports DXF, and generates CNC toolpaths
 (profile, pocket, drill, facing) with G-code and a simulator.
 
+Click **CAM** in the toolbar to open the CAM panels. Add an operation, select the shapes
+it cuts, and set its options:
+
+![CAM mode: a pocket round an island, a hole and the outline cut out with tabs](images/cam.png)
+
+- **Profile** cuts along a shape, inside, outside or on the line. Sharp outside corners
+  are cut round, and inside corners stay as sharp as the tool allows. **Direction**
+  chooses climb or conventional milling; the hint under it says whether the tool goes
+  clockwise or counter-clockwise round the shape.
+- **Tabs** keeps the part joined to the stock. Tick it and set the number of tabs, their
+  width and their height. On the deepest passes the tool lifts over each tab.
+- **Pocket** clears everything inside a closed shape. Select several shapes to cut
+  several pockets in one operation. A shape inside another is an island and is left
+  standing. If part of a pocket is too narrow for the tool, a warning says so.
+
+Under **Stock**, **Z Top** is the height of the top of the stock; all depths are
+measured down from it. Set the machine's Z zero there. An operation as deep as the stock
+gets a note to put a spoilboard under it. A cut deeper than the stock gets a warning.
+
 ---
 
 ## What IntentCAD deliberately doesn't do

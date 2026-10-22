@@ -53,7 +53,7 @@ Return a JSON object with this exact structure:
     "machine": {{"spindleSpeed": <rpm>, "feedRate": <mm/min>, "plungeRate": <mm/min>, "safeZ": <mm>, "useFloodCoolant": false}},
     "stock": {{"thickness": <mm>, "zTop": 0}},
     "depth": {{"totalDepth": <mm>, "depthPerPass": <mm>, "finalPassAllowance": 0}},
-    "postProcessor": {{"dialect": "grbl", "decimalPlaces": 3, "arcOutput": "arcs", "linearizeTolerance": 0.01, "header": "", "footer": ""}},
+    "postProcessor": {{"dialect": "grbl", "decimalPlaces": 3, "header": "", "footer": ""}},
     "operations": [
       {{"kind": "profile"|"drill"|"pocket", "entityIds": [], "sketchId": "...", ...}}
     ]

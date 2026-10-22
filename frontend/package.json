@@ -12,6 +12,7 @@
     "prepare": "cd .. && husky"
   },
   "dependencies": {
+    "clipper2-ts": "2.0.1-18",
     "dexie": "^4.4.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

@@ -46,7 +46,11 @@ export interface ProfileOperation {
   entityIds: string[];
   sketchId: string;
   cutSide: CutSide;
+  /** Climb or conventional milling (clockwise spindle). */
+  cutDirection: 'climb' | 'conventional';
+  /** Bridges left uncut on the deepest passes, to hold the part in the stock. */
   tabs: boolean;
+  tabCount: number;
   tabWidth: number;
   tabHeight: number;
   cutting: OperationCuttingParams;
@@ -86,8 +90,6 @@ export type CamOperation = ProfileOperation | DrillOperation | PocketOperation |
 export interface PostProcessorSettings {
   dialect: 'grbl';
   decimalPlaces: number;
-  arcOutput: 'arcs' | 'linearize';
-  linearizeTolerance: number;
   header: string;
   footer: string;
 }
@@ -207,8 +209,6 @@ export const DEFAULT_CUTTING: OperationCuttingParams = {
 export const DEFAULT_POST: PostProcessorSettings = {
   dialect: 'grbl',
   decimalPlaces: 3,
-  arcOutput: 'arcs',
-  linearizeTolerance: 0.01,
   header: '',
   footer: '',
 };
@@ -270,7 +270,7 @@ export function migrateCamJobConfig(raw: any): CamJobConfig {
         }))
       : [];
 
-    return {
+    return normalise({
       profileId: raw.profileId ?? null,
       stock: raw.stock ?? { ...DEFAULT_STOCK },
       postProcessor: raw.postProcessor ?? { ...DEFAULT_POST },
@@ -278,8 +278,26 @@ export function migrateCamJobConfig(raw: any): CamJobConfig {
       selectedSketchIds: raw.selectedSketchIds ?? [],
       operations,
       origin: raw.origin ?? { x: 0, y: 0 },
-    };
+    });
   }
 
-  return raw as CamJobConfig;
+  return normalise(raw as CamJobConfig);
+}
+
+/** Fill in settings added since a job was saved, and drop ones that are gone. */
+function normalise(config: CamJobConfig): CamJobConfig {
+  // Arcs are always written as G2/G3 now (GRBL interpolates them itself).
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { arcOutput, linearizeTolerance, ...post } = (config.postProcessor ?? DEFAULT_POST) as PostProcessorSettings & {
+    arcOutput?: unknown;
+    linearizeTolerance?: unknown;
+  };
+  return {
+    ...config,
+    postProcessor: { ...DEFAULT_POST, ...post },
+    operations: (config.operations ?? []).map((op) =>
+      op.kind === 'profile'
+        ? { ...op, cutDirection: op.cutDirection ?? 'climb', tabCount: op.tabCount ?? 4 }
+        : op),
+  };
 }

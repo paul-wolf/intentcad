@@ -8,6 +8,7 @@ from ninja import Schema
 class CamProfileCreateIn(Schema):
     name: str
     config: dict[str, Any]
+    document_id: UUID
 
 
 class CamProfileUpdateIn(Schema):

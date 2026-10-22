@@ -68,7 +68,7 @@ export const camApi = {
     return request(`${CAM_BASE}/profiles/`);
   },
 
-  createProfile(data: { name: string; config: Record<string, unknown> }) {
+  createProfile(data: { name: string; config: Record<string, unknown>; document_id: string }) {
     return request(`${CAM_BASE}/profiles/`, {
       method: 'POST',
       body: JSON.stringify(data),

@@ -51,12 +51,20 @@ def create_profile(request, payload: CamProfileCreateIn):
     err = require_auth(request)
     if err:
         return err
+    # A profile belongs to the project of the document it was made from;
+    # without one, nobody's profile list would show it.
+    doc = get_object_or_404(Document, id=payload.document_id)
+    if not doc.project:
+        return JsonResponse({"message": "The document is not in a project"}, status=400)
+    if not can_access_project(request.user, doc.project):
+        return JsonResponse({"message": "Access denied"}, status=403)
     errors = validate_cam_profile_config(payload.config)
     if errors:
         return JsonResponse({"errors": errors}, status=422)
     profile = CamProfile.objects.create(
         name=payload.name,
         config=payload.config,
+        project=doc.project,
         created_by=request.user,
     )
     return 201, profile

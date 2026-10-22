@@ -23,6 +23,8 @@ export interface EmitterOptions {
   /** Height to start from, retract to for tool changes, and end at: the job's highest safe Z. */
   safeZ: number;
   floodCoolant: boolean;
+  /** Z of the top of the stock (where Z zero is set, normally 0). */
+  stockTop?: number;
 }
 
 const sameTool = (a: CamTool, b: CamTool) =>
@@ -41,6 +43,7 @@ export function gcodeEmitter(
   const moveStartLines: number[] = [];
   const { decimalPlaces, header, footer } = settings;
   const { safeZ, floodCoolant } = options;
+  const stockTop = options.stockTop ?? 0;
 
   const fmt = (n: number) => n.toFixed(decimalPlaces);
   const seconds = (s: number) => String(Number(s.toFixed(3)));
@@ -53,6 +56,7 @@ export function gcodeEmitter(
   lines.push(`; Dialect: ${settings.dialect}`);
   const firstTool = operationBoundaries[0]?.tool;
   if (firstTool) lines.push(`; Tool: ${toolLabel(firstTool)}`);
+  lines.push(`; Stock top: Z${fmt(stockTop)} (set Z there with the tool touching the top of the stock)`);
   lines.push('');
 
   // GRBL initialization
@@ -104,9 +108,9 @@ export function gcodeEmitter(
         retract();
         lines.push('M5 ; spindle off');
         if (floodCoolant) lines.push('M9 ; coolant off');
-        lines.push(`; Change to ${toolLabel(boundary.tool!)}, set Z zero again, then resume`);
+        lines.push(`; Change to ${toolLabel(boundary.tool!)}, set Z${fmt(stockTop)} at the stock top again, then resume`);
         lines.push('M0 ; pause for tool change');
-        // Z zero was just set with the new tool touching the stock: lift
+        // Z was just set with the new tool touching the stock: lift
         // before anything moves, and forget where we were.
         lines.push(`G0 Z${fmt(safeZ)} ; safe height`);
         lastX = undefined;
@@ -176,27 +180,15 @@ export function gcodeEmitter(
         break;
       }
       case 'arc': {
-        if (settings.arcOutput === 'linearize') {
-          const linearized = linearizeArc(move, settings.linearizeTolerance);
-          for (const lm of linearized) {
-            const lx = lm.to.x - origin.x;
-            const ly = -(lm.to.y - origin.y);
-            lines.push(`G1 X${fmt(lx)} Y${fmt(ly)} Z${fmt(lm.z)} F${fmt(lm.feed)}`);
-            lastX = lx;
-            lastY = ly;
-            lastZ = lm.z;
-          }
-        } else {
-          // `clockwise` is as seen on screen, which matches the machine seen
-          // from above once Y is flipped: clockwise is G2.
-          const gcode = move.clockwise ? 'G2' : 'G3';
-          const i = fmt(move.center.x);
-          const j = fmt(-move.center.y); // Invert J for Y flip
-          lines.push(`${gcode} X${fmt(x)} Y${fmt(y)} Z${fmt(z)} I${i} J${j} F${fmt(move.feed)}`);
-          lastX = x;
-          lastY = y;
-          lastZ = z;
-        }
+        // `clockwise` is as seen on screen, which matches the machine seen
+        // from above once Y is flipped: clockwise is G2.
+        const gcode = move.clockwise ? 'G2' : 'G3';
+        const i = fmt(move.center.x);
+        const j = fmt(-move.center.y); // Invert J for Y flip
+        lines.push(`${gcode} X${fmt(x)} Y${fmt(y)} Z${fmt(z)} I${i} J${j} F${fmt(move.feed)}`);
+        lastX = x;
+        lastY = y;
+        lastZ = z;
         break;
       }
     }
@@ -222,20 +214,4 @@ export function gcodeEmitter(
   lines.push('M30 ; program end');
 
   return { lines, moveStartLines };
-}
-
-/**
- * Linearize an arc move into small linear moves.
- * NOTE: still a stub (one straight line to the end point); the option isn't in
- * the UI. Phase 2 implements it with the chord tolerance.
- */
-function linearizeArc(
-  move: ToolpathMove & { kind: 'arc' },
-  _tolerance: number,
-): { to: { x: number; y: number }; z: number; feed: number }[] {
-  return [{
-    to: move.to,
-    z: move.z,
-    feed: move.feed,
-  }];
 }

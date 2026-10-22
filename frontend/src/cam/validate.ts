@@ -143,6 +143,16 @@ export function validateCamJob(
       });
     }
 
+    // Per-operation: cutting right through, as when cutting a part out.
+    const thickness = config.stock.thickness;
+    if (thickness > 0 && c.depth.totalDepth >= thickness - 1e-9) {
+      issues.push({
+        severity: 'info',
+        message: `Operation ${i + 1}: cuts right through the stock (${c.depth.totalDepth}mm deep, stock ${thickness}mm): put a spoilboard or sacrificial layer under it`,
+        operationIndex: i,
+      });
+    }
+
     // Per-operation: depth per pass vs flute length
     if (c.depth.depthPerPass > c.tool.fluteLength) {
       issues.push({
@@ -170,24 +180,17 @@ export function validateCamJob(
     }
   }
 
-  if (config.postProcessor.arcOutput === 'linearize') {
-    issues.push({
-      severity: 'error',
-      message: 'Arc output "linearize" is not implemented yet (it would cut arcs as straight chords); use "arcs"',
-    });
-  }
-
   issues.push(...checkToolpathSafety(config, toolpath));
   return issues;
 }
 
 /**
- * Safety check on the finished toolpath, whatever produced it. Z 0 is the
- * stock top. Errors block G-code output; each rule reports its first offence.
+ * Safety check on the finished toolpath, whatever produced it. Heights are
+ * measured against the stock top, config.stock.zTop. Errors block G-code output; each rule reports its first offence.
  */
 export function checkToolpathSafety(config: CamJobConfig, toolpath: ToolpathMove[]): CamIssue[] {
   const issues: CamIssue[] = [];
-  const TOP = 0;
+  const TOP = config.stock.zTop;
   const EPS = 1e-6;
   let rapidReported = false;
   let entryReported = false;
@@ -231,7 +234,7 @@ export function checkToolpathSafety(config: CamJobConfig, toolpath: ToolpathMove
   if (thickness > 0 && minZ < TOP - thickness - 0.001) {
     issues.push({
       severity: 'warning',
-      message: `Cuts ${(-(minZ) - thickness).toFixed(2)}mm below the stock (thickness ${thickness}mm), into whatever is under it`,
+      message: `Cuts ${(TOP - minZ - thickness).toFixed(2)}mm below the stock (thickness ${thickness}mm), into whatever is under it`,
     });
   }
 
