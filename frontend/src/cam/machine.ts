@@ -105,6 +105,7 @@ export function normalizeMachine(raw: unknown, name?: string): CamMachine {
     spoilboardAllowance: num(m.spoilboardAllowance, 0, 5, base.spoilboardAllowance),
     tools,
     presets: normalizePresets(m.presets, new Set(tools.map((t) => t.id))),
+    defaultMaterial: isMaterial(m.defaultMaterial) ? m.defaultMaterial : base.defaultMaterial,
   };
 }
 

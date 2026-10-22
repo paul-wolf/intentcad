@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import type { CamMachine, CoolantOutput, DialSetting, ToolChangeMethod } from '@/cam/setup';
-import { TYPICAL_DIAL } from '@/cam/setup';
+import type { CamMachine, CoolantOutput, DialSetting, MaterialId, ToolChangeMethod } from '@/cam/setup';
+import { MATERIALS, TYPICAL_DIAL } from '@/cam/setup';
 import { machineProblems } from '@/cam/machine';
 import { useCamStore } from '@/stores/camStore';
 import { Btn, Dialog, GroupLabel, NumInput, Row, Segmented, Select, inputStyle, useTokens, SANS } from './ui';
@@ -47,6 +47,9 @@ export function MachineDialog({ onClose }: { onClose: () => void }) {
       )}
       <Row label="Name">
         <input value={m.name} onChange={(e) => patch({ name: e.target.value })} style={{ ...inputStyle(t, 260), fontFamily: SANS }} />
+      </Row>
+      <Row label="Default material" hint="new jobs start with it">
+        <Select<MaterialId> value={m.defaultMaterial} options={MATERIALS.map((x) => ({ value: x.id, label: x.name }))} onChange={(v) => patch({ defaultMaterial: v })} />
       </Row>
 
       <GroupLabel>CONTROLLER</GroupLabel>

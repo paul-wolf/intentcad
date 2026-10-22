@@ -221,14 +221,24 @@ CAM** (or Esc) goes back to drawing. **Fit** (Shift+F) frames the stock.
   the spindle speed is set (by the program, or by hand on a dial with a table of
   settings), rapid speed, tool changes (a pause, M6 or an automatic changer), safe and
   clearance heights, where it parks, coolant, and the **spoilboard allowance**: how far
-  a through cut goes past the stock (0.3 mm unless you change it).
+  a through cut goes past the stock (0.3 mm unless you change it). **Default material**
+  is the material new jobs start with (birch ply until you change it): set it once and
+  click **Save**. A new job starts on the machine you saved last, so it takes that
+  material too. Jobs you already have keep theirs.
 - **Tool library**: the machine's bits. **Manage tools** adds and edits them. Each bit
   has cutting data per material: chip load, depth per pass, stepover, plunge speed and
-  ramp angle. Birch ply, MDF, hardwood, acrylic and aluminium 6061 come filled in, and
-  you can change them. The feed is always worked out (chip load × flutes × rpm), never
-  typed.
+  ramp angle. Birch ply, MDF, hardwood, acrylic, aluminium 6061 and carbon fibre come
+  filled in, and you can change them. The feed is always worked out (chip load × flutes
+  × rpm), never typed.
 - **Stock**: width, height, thickness and material. Leave width and height empty to fit
   the shapes plus 10 mm a side.
+- **Carbon fibre**: pick *Carbon fibre (CFRP)* as the material. Its cutting data uses a
+  small chip, shallow passes (a quarter of the bit: 0.8 mm for a 3 mm bit, 1.5 mm for a
+  6 mm one) and a ramp in, to keep the edges from splintering. Setup shows a reminder:
+  the dust is harmful and conducts electricity, so run the dust extraction or cut wet
+  and wear a mask, and use carbide or diamond-coated bits. Run's steps at the machine
+  start with the same reminder. To start every new job in carbon fibre, set it as the
+  machine's **Default material**.
 - **Origin**: where X0 Y0 is: a corner, an edge's middle or the centre of the stock, or
   **Pick a point on the sketch** (it snaps to shape ends and centres). **Z0 at** is the
   stock top or the spoilboard.
@@ -238,6 +248,10 @@ CAM** (or Esc) goes back to drawing. **Fit** (Shift+F) frames the stock.
 - **Fill in with AI** fills these in from the drawing. Whatever the AI set has a violet
   dot. Its changes wait for you: **Confirm** keeps them, **Undo** puts back what was
   there. Nothing downloads until you've chosen.
+
+![CAM Setup for 2 mm carbon fibre plate: the material picked, with the dust and tool reminder under it](images/cam-carbon-fibre.png)
+
+![CAM Edit machine: the default material set to carbon fibre, so new jobs start in it](images/cam-machine.png)
 
 **2 Plan** lists the operations, in the order they run, with the number of tool changes
 and the time:

@@ -212,6 +212,12 @@ describe('machines', () => {
     expect(normalizeMachine('garbage')).toEqual(createDefaultMachine());
   });
 
+  it('keeps the material new jobs start with, and birch ply when it is unknown', () => {
+    expect(normalizeMachine({ version: 2, machine: { defaultMaterial: 'carbon-fibre' } }).defaultMaterial).toBe('carbon-fibre');
+    expect(normalizeMachine({ version: 2, machine: { defaultMaterial: 'balsa' } }).defaultMaterial).toBe('birch-ply');
+    expect(normalizeMachine({ version: 2, machine: {} }).defaultMaterial).toBe('birch-ply');
+  });
+
   it('says what stops a machine being saved', () => {
     const m = createDefaultMachine();
     m.clearanceZ = 2;
@@ -244,5 +250,17 @@ describe('the steps at the machine', () => {
     expect(steps[1]).toMatch(/Z0 on the spoilboard \(the stock top is then Z12\)/);
     expect(steps.find((s) => /Before operation 2/.test(s))).toMatch(/set Z0 on the spoilboard again/);
     expect(steps.join('\n')).not.toMatch(/on the top of the stock/);
+  });
+
+  it('starts with dust extraction and a mask in carbon fibre, and only there', () => {
+    const j = job();
+    j.operations = [newPlanOperation('profile', 's', ['r'], 'outside')];
+    const r = resolveJob(j, createDefaultMachine(), entities);
+    const n = (id: string) => j.operations.findIndex((o) => o.id === id) + 1;
+    const cf = operatorSteps(r.ops, 'M0', 'the centre of the stock', 'stock-top', 2, n, 'carbon-fibre');
+    expect(cf[0]).toMatch(/^Carbon fibre: switch on the dust extraction.*mask/);
+    expect(cf[1]).toMatch(/^Fit T/);
+    const ply = operatorSteps(r.ops, 'M0', 'the centre of the stock', 'stock-top', 2, n, 'birch-ply');
+    expect(ply.join('\n')).not.toMatch(/dust|mask/);
   });
 });

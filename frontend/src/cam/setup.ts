@@ -10,7 +10,7 @@ import { DEFAULT_POST } from '@/types/cam';
 
 // ── Materials ──
 
-export type MaterialId = 'birch-ply' | 'mdf' | 'hardwood' | 'acrylic' | 'aluminium-6061';
+export type MaterialId = 'birch-ply' | 'mdf' | 'hardwood' | 'acrylic' | 'aluminium-6061' | 'carbon-fibre';
 
 export const MATERIALS: { id: MaterialId; name: string }[] = [
   { id: 'birch-ply', name: 'Birch ply' },
@@ -18,10 +18,20 @@ export const MATERIALS: { id: MaterialId; name: string }[] = [
   { id: 'hardwood', name: 'Hardwood' },
   { id: 'acrylic', name: 'Acrylic' },
   { id: 'aluminium-6061', name: 'Aluminium 6061' },
+  { id: 'carbon-fibre', name: 'Carbon fibre (CFRP)' },
 ];
 
 export const materialName = (id: MaterialId) => MATERIALS.find((m) => m.id === id)?.name ?? id;
 export const isMaterial = (v: unknown): v is MaterialId => MATERIALS.some((m) => m.id === v);
+
+/** What to know before cutting a material, shown in Setup; null when there's nothing special. */
+export function materialNote(id: MaterialId): string | null {
+  if (id === 'carbon-fibre') {
+    return 'Carbon fibre dust is harmful to breathe and conducts electricity: run the dust extraction or cut wet, '
+      + 'wear an FFP3 or P100 mask, and keep the dust off the electronics. It wears bits fast: use carbide or diamond-coated bits.';
+  }
+  return null;
+}
 
 // ── Machine ──
 
@@ -88,6 +98,8 @@ export interface CamMachine {
   tools: LibraryTool[];
   /** Presets the user edited; the others come from shippedPreset(). */
   presets: MaterialPreset[];
+  /** The material new jobs on this machine start with. */
+  defaultMaterial: MaterialId;
 }
 
 export const DEFAULT_TOOLS: LibraryTool[] = [
@@ -113,6 +125,7 @@ export function createDefaultMachine(): CamMachine {
     spoilboardAllowance: 0.3,
     tools: DEFAULT_TOOLS.map((t) => ({ ...t })),
     presets: [],
+    defaultMaterial: 'birch-ply',
   };
 }
 
@@ -145,6 +158,8 @@ const MATERIAL_DATA: Record<MaterialId, MaterialData> = {
   hardwood: { chipPerMm: 0.016, rpm: 18000, docPerD: 0.4, stepover: 0.4, plungePercent: 25, rampAngle: 4 },
   acrylic: { chipPerMm: 0.02, rpm: 16000, docPerD: 0.4, stepover: 0.4, plungePercent: 30, rampAngle: 3 },
   'aluminium-6061': { chipPerMm: 0.008, rpm: 18000, docPerD: 0.15, stepover: 0.3, plungePercent: 20, rampAngle: 2 },
+  // Abrasive, and splinters at the edges: a small chip, shallow passes, a gentle ramp.
+  'carbon-fibre': { chipPerMm: 0.008, rpm: 18000, docPerD: 0.25, stepover: 0.3, plungePercent: 20, rampAngle: 3 },
 };
 
 const round = (v: number, step: number) => Math.round(v / step) * step;

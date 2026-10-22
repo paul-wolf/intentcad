@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useCamStore } from '@/stores/camStore';
 import { useDocumentStore } from '@/stores/documentStore';
-import { MATERIALS, materialName, type JobOrigin, type MaterialId, type SetupField, type StockPoint } from '@/cam/setup';
+import { MATERIALS, materialName, materialNote, type JobOrigin, type MaterialId, type SetupField, type StockPoint } from '@/cam/setup';
 import { allTools, toolTag } from '@/cam/resolve';
 import { Btn, Card, Chip, NumInput, Pill, Row, Segmented, Select, SourceDot, fmt, panelStyle, useTokens, MONO } from './ui';
 import { MachineDialog } from './MachineDialog';
@@ -101,6 +101,9 @@ export function CamSetupStep() {
           <Row label="Material" dot={dotFor('material', true)}>
             <Select<MaterialId> value={setup.material} options={MATERIALS.map((m) => ({ value: m.id, label: m.name }))} onChange={(v) => updateSetup({ material: v }, ['material'])} />
           </Row>
+          {materialNote(setup.material) && (
+            <div style={{ fontSize: 11.5, color: t.text, background: t.partSoft, border: `1px solid ${t.part}`, borderRadius: 6, padding: '6px 8px', lineHeight: 1.5, margin: '2px 0 8px' }}>{materialNote(setup.material)}</div>
+          )}
           {(['width', 'height'] as const).map((k) => {
             const own = setup.stock[k];
             const shown = k === 'width' ? resolved.stock.width : resolved.stock.height;
