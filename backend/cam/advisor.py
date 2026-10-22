@@ -42,6 +42,7 @@ Rules:
 - "pocket" clears the inside of one closed shape to a depth.
 - "drill" drills circles at their centre with a drill of the circle's diameter or smaller.
 - Holes go before the outside profile that frees the part. Use one operation per tool and depth.
+- An outside profile cut right through the stock should have tabs so the part stays put.
 - Depths are positive numbers in mm below the stock top. Through cuts go to the stock thickness.
 
 Return a JSON object with this exact structure:
@@ -55,7 +56,9 @@ Return a JSON object with this exact structure:
         "entityIds": ["<shape id>", ...],
         "cutSide": "outside" | "inside" | "on",        (profile only)
         "stepover": <fraction of tool diameter, e.g. 0.4>, (pocket only)
-        "cutDirection": "climb" | "conventional",      (pocket only)
+        "cutDirection": "climb" | "conventional",      (profile and pocket)
+        "tabs": true | false,                           (profile only: holding tabs on a through cut)
+        "tabCount": <n>, "tabWidth": <mm>, "tabHeight": <mm>, (profile only, when tabs is true)
         "peckDepth": <mm, 0 for a single plunge>,      (drill only)
         "dwell": <seconds>,                            (drill only)
         "cutting": {{

@@ -1,13 +1,17 @@
 import type { Entity } from '@/types/document';
 import type { CamJobConfig, CamIssue, CamTool, ToolpathMove } from '@/types/cam';
-import { entityToSegments, type CncSegment } from './entityToSegments';
+import { entityToSegments } from './entityToSegments';
 import { toolpathProfile } from './toolpathProfile';
 import { toolpathDrill } from './toolpathDrill';
 import { toolpathPocket } from './toolpathPocket';
 import { toolpathFacing } from './toolpathFacing';
 import { depthPasses } from './depthPasses';
+import { groupContours, isClosed, nestingDepths, orientCounterClockwise } from './contours';
+import { pathLength, splitAtTabs } from './tabs';
 import { gcodeEmitter } from './gcodeEmitter';
 import { validateCamJob } from './validate';
+
+export { signedArea, orientCounterClockwise } from './contours';
 
 export interface GenerateResult {
   gcode: string;
@@ -44,17 +48,32 @@ export function generateGcode(
 
         // Every closed loop runs counter-clockwise (in sketch coordinates), so
         // "outside" is always to the right of travel, however it was drawn.
-        const contours = groupContours(segments).map(orientCounterClockwise);
+        // A loop inside another is a hole in the part (or, inside a hole, a
+        // part again), so it's cut on the other side; inner loops go first,
+        // so the part isn't cut free before its holes are.
+        const grouped = groupContours(segments).map(orientCounterClockwise);
+        const depths = nestingDepths(grouped);
+        const contours = grouped
+          .map((contour, i) => ({
+            contour,
+            depth: depths[i]!,
+            side: op.cutSide === 'on' || depths[i]! % 2 === 0 ? op.cutSide : op.cutSide === 'outside' ? 'inside' as const : 'outside' as const,
+          }))
+          .sort((a, b) => b.depth - a.depth);
 
-        for (const contour of contours) {
+        const tabProblem = op.tabs ? checkTabs(op.tabCount, op.tabWidth, op.tabHeight, c.depth.totalDepth) : null;
+        if (tabProblem) {
+          buildIssues.push({ severity: 'error', message: `Operation ${opIndex + 1}: ${tabProblem}`, operationIndex: opIndex });
+          break;
+        }
+
+        for (const { contour, side } of contours) {
           const { moves, startPosition, problem } = toolpathProfile(
             contour,
             c.tool.diameter,
-            op.cutSide,
+            side,
+            op.cutDirection,
             c.feedRate,
-            op.tabs,
-            op.tabWidth,
-            op.tabHeight,
           );
           if (problem) {
             buildIssues.push({
@@ -67,8 +86,26 @@ export function generateGcode(
           }
           if (moves.length === 0) continue;
 
-          const withDepth = depthPasses(moves, c.depth, c.safeZ, c.plungeRate, startPosition);
-          allToolpathMoves.push(...withDepth);
+          let tabs: { moves: ToolpathMove[]; overTab: boolean[] } | null = null;
+          if (op.tabs && isClosed(contour)) {
+            const tabLength = op.tabWidth + c.tool.diameter;
+            const length = pathLength(moves, startPosition);
+            if (op.tabCount * tabLength >= length) {
+              buildIssues.push({
+                severity: 'error',
+                message: `Operation ${opIndex + 1}: ${op.tabCount} tabs of ${op.tabWidth}mm don't fit round a ${length.toFixed(1)}mm path (each takes the tab width plus the tool diameter)`,
+                operationIndex: opIndex,
+                position: startPosition,
+              });
+              continue;
+            }
+            tabs = splitAtTabs(moves, startPosition, op.tabCount, tabLength);
+          }
+
+          const withDepth = tabs
+            ? depthPasses(tabs.moves, c.depth, c.safeZ, c.plungeRate, startPosition, { overTab: tabs.overTab, height: op.tabHeight })
+            : depthPasses(moves, c.depth, c.safeZ, c.plungeRate, startPosition);
+          for (const m of withDepth) allToolpathMoves.push(m);
         }
         break;
       }
@@ -89,23 +126,33 @@ export function generateGcode(
           c.safeZ,
           config.origin,
         );
-        allToolpathMoves.push(...drillMoves);
+        for (const m of drillMoves) allToolpathMoves.push(m);
         break;
       }
       case 'pocket': {
         const segments = entityToSegments(opEntities, op.entityIds);
         if (segments.length === 0) break;
 
-        const singlePass = toolpathPocket(
-          segments,
-          c.tool.diameter,
-          op.stepover,
-          op.cutDirection,
-          c.feedRate,
-        );
+        const pocket = toolpathPocket(segments, c.tool.diameter, op.stepover, op.cutDirection, c.feedRate);
+        if (pocket.problem) {
+          buildIssues.push({
+            severity: 'error',
+            message: `Operation ${opIndex + 1}: ${pocket.problem}`,
+            operationIndex: opIndex,
+            position: pocket.startPosition,
+          });
+          break;
+        }
 
-        const withDepth = depthPasses(singlePass, c.depth, c.safeZ, c.plungeRate);
-        allToolpathMoves.push(...withDepth);
+        if (pocket.warning) {
+          buildIssues.push({
+            severity: 'warning',
+            message: `Operation ${opIndex + 1}: ${pocket.warning}`,
+            operationIndex: opIndex,
+          });
+        }
+        const withDepth = depthPasses(pocket.moves, c.depth, c.safeZ, c.plungeRate, pocket.startPosition);
+        for (const m of withDepth) allToolpathMoves.push(m);
         break;
       }
       case 'facing': {
@@ -148,7 +195,7 @@ export function generateGcode(
 
         if (facingMoves.length > 0) {
           const withDepth = depthPasses(facingMoves, c.depth, c.safeZ, c.plungeRate);
-          allToolpathMoves.push(...withDepth);
+          for (const m of withDepth) allToolpathMoves.push(m);
         }
         break;
       }
@@ -160,6 +207,12 @@ export function generateGcode(
     }
   }
 
+  // Toolpaths are built with Z 0 at the stock top; move them to where it is.
+  const zTop = config.stock.zTop;
+  if (zTop !== 0) {
+    for (const [i, m] of allToolpathMoves.entries()) allToolpathMoves[i] = { ...m, z: m.z + zTop };
+  }
+
   // Validate
   const issues = [...buildIssues, ...validateCamJob(config, allEntities, allToolpathMoves)];
 
@@ -169,10 +222,11 @@ export function generateGcode(
   let moveToLine: number[] = [];
 
   if (!hasErrors && allToolpathMoves.length > 0) {
-    const safeZ = Math.max(...config.operations.map((op) => op.cutting.safeZ));
+    const safeZ = zTop + Math.max(...config.operations.map((op) => op.cutting.safeZ));
     const result = gcodeEmitter(allToolpathMoves, config.postProcessor, config.origin, operationBoundaries, {
       safeZ,
       floodCoolant: config.useFloodCoolant,
+      stockTop: zTop,
     });
     gcode = result.lines.join('\n');
     moveToLine = result.moveStartLines;
@@ -181,114 +235,11 @@ export function generateGcode(
   return { gcode, issues, toolpath: allToolpathMoves, moveToLine };
 }
 
-const CHAIN_TOL = 0.5; // endpoint matching tolerance when chaining segments
-
-/**
- * Signed area of a contour in sketch coordinates, arcs included (shoelace over
- * the chords plus each arc's circular segment). Positive = counter-clockwise in
- * the sketch's own (x, y) coordinates.
- */
-export function signedArea(contour: CncSegment[]): number {
-  let area = 0;
-  for (const s of contour) {
-    area += (s.from.x * s.to.y - s.to.x * s.from.y) / 2;
-    if (s.bulge !== 0) {
-      const theta = 4 * Math.atan(Math.abs(s.bulge)); // the arc's sweep
-      const chord = Math.hypot(s.to.x - s.from.x, s.to.y - s.from.y);
-      const r = chord / (2 * Math.sin(theta / 2));
-      // A positive bulge turns counter-clockwise, so its arc lies to the right
-      // of the chord and adds area on a counter-clockwise loop.
-      area += Math.sign(s.bulge) * (r * r / 2) * (theta - Math.sin(theta));
-    }
-  }
-  return area;
-}
-
-/** Reverse a closed contour that runs clockwise; open contours are left as drawn. */
-export function orientCounterClockwise(contour: CncSegment[]): CncSegment[] {
-  if (contour.length === 0) return contour;
-  const head = contour[0]!.from;
-  const tail = contour[contour.length - 1]!.to;
-  const closed = Math.hypot(head.x - tail.x, head.y - tail.y) < CHAIN_TOL;
-  if (!closed || signedArea(contour) >= 0) return contour;
-  return [...contour].reverse().map((s) => ({ from: s.to, to: s.from, bulge: -s.bulge }));
-}
-
-/**
- * Group segments into connected contours by tracing endpoint connectivity.
- * Segments are chained so that seg[i].to ≈ seg[i+1].from within each group.
- * Segments may be reversed if needed to maintain chain continuity.
- */
-function groupContours(segments: CncSegment[]): CncSegment[][] {
-  if (segments.length === 0) return [];
-
-  const TOL = CHAIN_TOL;
-  const used = new Array(segments.length).fill(false);
-  const groups: CncSegment[][] = [];
-
-  for (let start = 0; start < segments.length; start++) {
-    if (used[start]) continue;
-    used[start] = true;
-    const chain: CncSegment[] = [segments[start]!];
-
-    // Extend forward: find a segment whose start matches chain tail
-    let changed = true;
-    while (changed) {
-      changed = false;
-      const tail = chain[chain.length - 1]!.to;
-      for (let i = 0; i < segments.length; i++) {
-        if (used[i]) continue;
-        const s = segments[i]!;
-        const dxF = s.from.x - tail.x;
-        const dyF = s.from.y - tail.y;
-        if (dxF * dxF + dyF * dyF < TOL * TOL) {
-          chain.push(s);
-          used[i] = true;
-          changed = true;
-          break;
-        }
-        // Try reversed
-        const dxR = s.to.x - tail.x;
-        const dyR = s.to.y - tail.y;
-        if (dxR * dxR + dyR * dyR < TOL * TOL) {
-          chain.push({ from: s.to, to: s.from, bulge: -s.bulge });
-          used[i] = true;
-          changed = true;
-          break;
-        }
-      }
-    }
-
-    // Extend backward: find a segment whose end matches chain head
-    changed = true;
-    while (changed) {
-      changed = false;
-      const head = chain[0]!.from;
-      for (let i = 0; i < segments.length; i++) {
-        if (used[i]) continue;
-        const s = segments[i]!;
-        const dxT = s.to.x - head.x;
-        const dyT = s.to.y - head.y;
-        if (dxT * dxT + dyT * dyT < TOL * TOL) {
-          chain.unshift(s);
-          used[i] = true;
-          changed = true;
-          break;
-        }
-        // Try reversed
-        const dxR = s.from.x - head.x;
-        const dyR = s.from.y - head.y;
-        if (dxR * dxR + dyR * dyR < TOL * TOL) {
-          chain.unshift({ from: s.to, to: s.from, bulge: -s.bulge });
-          used[i] = true;
-          changed = true;
-          break;
-        }
-      }
-    }
-
-    groups.push(chain);
-  }
-
-  return groups;
+/** Why these tab settings can't work, or null. */
+function checkTabs(count: number, width: number, height: number, totalDepth: number): string | null {
+  if (!Number.isInteger(count) || count < 1) return 'the number of tabs must be a whole number, at least 1';
+  if (!(width > 0)) return 'the tab width must be more than 0';
+  if (!(height > 0)) return 'the tab height must be more than 0';
+  if (height >= totalDepth) return `tabs ${height}mm tall would stop a ${totalDepth}mm deep cut from cutting at all`;
+  return null;
 }

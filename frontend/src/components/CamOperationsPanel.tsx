@@ -148,7 +148,7 @@ export function CamOperationsPanel({ onShowCutting }: { onShowCutting?: () => vo
                     const kind = e.target.value as 'profile' | 'drill' | 'pocket' | 'facing';
                     const base = { entityIds: op.entityIds, sketchId: op.sketchId, cutting: op.cutting };
                     if (kind === 'profile') {
-                      updateOperation(i, { ...base, kind: 'profile', cutSide: 'on', tabs: false, tabWidth: 5, tabHeight: 1 });
+                      updateOperation(i, { ...base, kind: 'profile', cutSide: 'on', cutDirection: 'climb', tabs: false, tabCount: 4, tabWidth: 5, tabHeight: 1 });
                     } else if (kind === 'drill') {
                       updateOperation(i, { ...base, kind: 'drill', peckDepth: 0, dwell: 0 });
                     } else if (kind === 'facing') {
@@ -378,8 +378,57 @@ export function CamOperationsPanel({ onShowCutting }: { onShowCutting?: () => vo
                     <option value="inside">Inside</option>
                     <option value="outside">Outside</option>
                   </select>
-                  {/* Tabs are hidden until toolpathProfile implements them: the option
-                      used to be shown but did nothing, so parts were cut loose. */}
+                  <label style={labelStyle}>Direction</label>
+                  <select
+                    value={op.cutDirection}
+                    onChange={(e) => updateOperation(i, { cutDirection: e.target.value as 'climb' | 'conventional' })}
+                    style={inputStyle}
+                  >
+                    <option value="climb">Climb</option>
+                    <option value="conventional">Conventional</option>
+                  </select>
+                  <div style={{ fontSize: '10px', color: palette.textMuted, marginTop: '2px' }}>
+                    {profileDirectionHint(op.cutSide, op.cutDirection)}
+                  </div>
+                  <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
+                    <input
+                      type="checkbox"
+                      checked={op.tabs}
+                      onChange={(e) => updateOperation(i, { tabs: e.target.checked })}
+                    />
+                    Tabs (hold the part in the stock)
+                  </label>
+                  {op.tabs && (
+                    <>
+                      <label style={labelStyle}>Number of tabs</label>
+                      <input
+                        type="number"
+                        value={op.tabCount}
+                        onChange={(e) => updateOperation(i, { tabCount: +e.target.value })}
+                        style={inputStyle}
+                        min={1}
+                        step={1}
+                      />
+                      <label style={labelStyle}>Tab width (mm)</label>
+                      <input
+                        type="number"
+                        value={op.tabWidth}
+                        onChange={(e) => updateOperation(i, { tabWidth: +e.target.value })}
+                        style={inputStyle}
+                        min={0.5}
+                        step={0.5}
+                      />
+                      <label style={labelStyle}>Tab height (mm)</label>
+                      <input
+                        type="number"
+                        value={op.tabHeight}
+                        onChange={(e) => updateOperation(i, { tabHeight: +e.target.value })}
+                        style={inputStyle}
+                        min={0.1}
+                        step={0.1}
+                      />
+                    </>
+                  )}
                 </>
               )}
 
@@ -467,7 +516,9 @@ export function CamOperationsPanel({ onShowCutting }: { onShowCutting?: () => vo
               entityIds: [],
               sketchId: jobConfig.selectedSketchIds[0]!,
               cutSide: 'on',
+              cutDirection: 'climb',
               tabs: false,
+              tabCount: 4,
               tabWidth: 5,
               tabHeight: 1,
             });
@@ -587,4 +638,12 @@ export function CamOperationsPanel({ onShowCutting }: { onShowCutting?: () => vo
       )}
     </div>
   );
+}
+
+/** The profile cut direction in plain words, as seen from above the machine. */
+function profileDirectionHint(cutSide: CutSide, direction: 'climb' | 'conventional'): string {
+  // Clockwise spindle: climb keeps the part on the right of the tool's travel.
+  // "On line" runs like an outside cut.
+  const clockwise = (cutSide !== 'inside') === (direction === 'climb');
+  return `Goes ${clockwise ? 'clockwise' : 'counter-clockwise'} round closed shapes, seen from above`;
 }

@@ -46,7 +46,11 @@ export interface ProfileOperation {
   entityIds: string[];
   sketchId: string;
   cutSide: CutSide;
+  /** Climb or conventional milling (clockwise spindle). */
+  cutDirection: 'climb' | 'conventional';
+  /** Bridges left uncut on the deepest passes, to hold the part in the stock. */
   tabs: boolean;
+  tabCount: number;
   tabWidth: number;
   tabHeight: number;
   cutting: OperationCuttingParams;
@@ -86,8 +90,6 @@ export type CamOperation = ProfileOperation | DrillOperation | PocketOperation |
 export interface PostProcessorSettings {
   dialect: 'grbl';
   decimalPlaces: number;
-  arcOutput: 'arcs' | 'linearize';
-  linearizeTolerance: number;
   header: string;
   footer: string;
 }
@@ -207,8 +209,6 @@ export const DEFAULT_CUTTING: OperationCuttingParams = {
 export const DEFAULT_POST: PostProcessorSettings = {
   dialect: 'grbl',
   decimalPlaces: 3,
-  arcOutput: 'arcs',
-  linearizeTolerance: 0.01,
   header: '',
   footer: '',
 };
@@ -270,7 +270,7 @@ export function migrateCamJobConfig(raw: any): CamJobConfig {
         }))
       : [];
 
-    return {
+    return normalise({
       profileId: raw.profileId ?? null,
       stock: raw.stock ?? { ...DEFAULT_STOCK },
       postProcessor: raw.postProcessor ?? { ...DEFAULT_POST },
@@ -278,10 +278,28 @@ export function migrateCamJobConfig(raw: any): CamJobConfig {
       selectedSketchIds: raw.selectedSketchIds ?? [],
       operations,
       origin: raw.origin ?? { x: 0, y: 0 },
-    };
+    });
   }
 
-  return raw as CamJobConfig;
+  return normalise(raw as CamJobConfig);
+}
+
+/** Fill in settings added since a job was saved, and drop ones that are gone. */
+function normalise(config: CamJobConfig): CamJobConfig {
+  // Arcs are always written as G2/G3 now (GRBL interpolates them itself).
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { arcOutput, linearizeTolerance, ...post } = (config.postProcessor ?? DEFAULT_POST) as PostProcessorSettings & {
+    arcOutput?: unknown;
+    linearizeTolerance?: unknown;
+  };
+  return {
+    ...config,
+    postProcessor: { ...DEFAULT_POST, ...post },
+    operations: (config.operations ?? []).map((op) =>
+      op.kind === 'profile'
+        ? { ...op, cutDirection: op.cutDirection ?? 'climb', tabCount: op.tabCount ?? 4 }
+        : op),
+  };
 }
 
 // ── Normalising configs from outside (saved jobs, AI suggestions) ──
@@ -289,6 +307,7 @@ export function migrateCamJobConfig(raw: any): CamJobConfig {
 type Raw = Record<string, unknown>;
 const isObj = (v: unknown): v is Raw => !!v && typeof v === 'object' && !Array.isArray(v);
 const num = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
+const positive = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : fallback);
 
 /** Fill a possibly partial cutting block from defaults, so every field the UI reads exists. */
 export function normalizeCutting(raw: unknown, base: OperationCuttingParams = createDefaultCutting()): OperationCuttingParams {
@@ -341,7 +360,11 @@ export function normalizeOperation(
       return {
         ...common, kind: 'profile',
         cutSide: raw.cutSide === 'inside' || raw.cutSide === 'on' ? raw.cutSide : 'outside',
-        tabs: false, tabWidth: num(raw.tabWidth, 5), tabHeight: num(raw.tabHeight, 1),
+        cutDirection: dir,
+        tabs: raw.tabs === true,
+        tabCount: Number.isInteger(raw.tabCount) && (raw.tabCount as number) >= 1 ? raw.tabCount as number : 4,
+        tabWidth: positive(raw.tabWidth, 5),
+        tabHeight: positive(raw.tabHeight, 1),
       };
     case 'pocket':
       return { ...common, kind: 'pocket', stepover: num(raw.stepover, 0.4), cutDirection: dir };

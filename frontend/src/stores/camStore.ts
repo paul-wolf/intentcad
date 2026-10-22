@@ -85,13 +85,13 @@ interface CamStore {
   clearJob(): void;
 }
 
-/** Get the max safeZ across all operations (for simulator initial position). */
+/**
+ * Where the program starts: the highest safe Z of any operation, above the
+ * stock top (as in the G-code).
+ */
 function getMaxSafeZ(config: CamJobConfig): number {
-  let max = 5;
-  for (const op of config.operations) {
-    if (op.cutting.safeZ > max) max = op.cutting.safeZ;
-  }
-  return max;
+  if (config.operations.length === 0) return config.stock.zTop + 5;
+  return config.stock.zTop + Math.max(...config.operations.map((op) => op.cutting.safeZ));
 }
 
 export const useCamStore = create<CamStore>((set, get) => ({
@@ -491,7 +491,7 @@ export const useCamStore = create<CamStore>((set, get) => ({
     const clampedDt = Math.min(dtMs, 50);
 
     let startPos = { ...origin };
-    let startZ = get().jobConfig.operations[0]?.cutting.safeZ ?? 5;
+    let startZ = getMaxSafeZ(get().jobConfig);
     for (let i = 0; i < simMoveIndex; i++) {
       startPos = toolpath[i]!.to;
       startZ = toolpath[i]!.z;
@@ -511,6 +511,22 @@ export const useCamStore = create<CamStore>((set, get) => ({
 
     while (remainingTime > 0 && moveIdx < toolpath.length) {
       const move = toolpath[moveIdx]!;
+      if (move.kind === 'dwell') {
+        // A pause: progress is the share of its time gone by.
+        const duration = move.seconds / simSpeed;
+        const left = duration * (1 - progress);
+        if (duration <= 0 || remainingTime >= left) {
+          remainingTime -= Math.max(left, 0);
+          moveIdx++;
+          progress = 0;
+          from = move.to;
+          fromZ = move.z;
+        } else {
+          progress += remainingTime / duration;
+          remainingTime = 0;
+        }
+        continue;
+      }
       let feedRate = move.kind === 'linear' || move.kind === 'arc' ? move.feed : rapidRate;
       if (feedRate <= 0) feedRate = rapidRate;
       const speed = (feedRate / 60) * simSpeed;

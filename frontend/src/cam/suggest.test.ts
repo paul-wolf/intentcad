@@ -29,7 +29,48 @@ describe('applyCamSuggestion', () => {
     // What the user set is kept; the post-processor is never taken from the AI.
     expect(config.selectedSketchIds).toEqual(['s1']);
     expect(config.origin).toEqual({ x: 5, y: 5 });
-    expect(config.postProcessor.arcOutput).toBe('arcs');
+    expect(config.postProcessor).toEqual(current().postProcessor);
+    expect('arcOutput' in config.postProcessor).toBe(false);
+  });
+
+  it('carries the profile direction and tabs', () => {
+    const raw = {
+      operations: [{
+        kind: 'profile', entityIds: ['r1'], cutSide: 'outside', cutDirection: 'conventional',
+        tabs: true, tabCount: 6, tabWidth: 4, tabHeight: 1.5,
+      }],
+    };
+    const op = applyCamSuggestion(current(), raw, known).config.operations[0]!;
+    expect(op).toMatchObject({ kind: 'profile', cutDirection: 'conventional', tabs: true, tabCount: 6, tabWidth: 4, tabHeight: 1.5 });
+  });
+
+  it('gives a profile without those fields climb, no tabs and 4 tabs ready', () => {
+    const op = applyCamSuggestion(current(), { operations: [{ kind: 'profile', entityIds: ['r1'] }] }, known).config.operations[0]!;
+    expect(op).toMatchObject({ kind: 'profile', cutSide: 'outside', cutDirection: 'climb', tabs: false, tabCount: 4, tabWidth: 5, tabHeight: 1 });
+  });
+
+  it('replaces nonsense tab and direction values with defaults', () => {
+    const raw = {
+      operations: [{
+        kind: 'profile', entityIds: ['r1'], cutDirection: 'sideways',
+        tabs: 'yes', tabCount: 2.5, tabWidth: -3, tabHeight: 'tall',
+      }],
+    };
+    const op = applyCamSuggestion(current(), raw, known).config.operations[0]!;
+    expect(op).toMatchObject({ cutDirection: 'climb', tabs: false, tabCount: 4, tabWidth: 5, tabHeight: 1 });
+  });
+
+  it('never takes the post-processor or the stock top from the AI', () => {
+    const c = current();
+    c.stock.zTop = 12;
+    const raw = {
+      postProcessor: { dialect: 'marlin', header: 'M3 S30000', footer: '' },
+      stock: { thickness: 9, zTop: -40 },
+      operations: [{ kind: 'drill', entityIds: ['c1'] }],
+    };
+    const { config } = applyCamSuggestion(c, raw, known);
+    expect(config.postProcessor).toEqual(c.postProcessor);
+    expect(config.stock).toEqual({ thickness: 9, zTop: 12 });
   });
 
   it('drops shapes that do not exist and operations left with none', () => {
@@ -69,5 +110,28 @@ describe('normalizeCamJobConfig', () => {
     expect(cfg.operations[0]!.cutting.tool.diameter).toBe(3);
     expect(cfg.stock.thickness).toBe(3);
     expect(cfg.postProcessor.dialect).toBe('grbl');
+  });
+
+  it('keeps a saved profile\'s tabs and direction', () => {
+    const cfg = normalizeCamJobConfig({
+      selectedSketchIds: ['s1'],
+      operations: [{
+        kind: 'profile', entityIds: ['r1'], sketchId: 's1', cutSide: 'outside', cutDirection: 'conventional',
+        tabs: true, tabCount: 3, tabWidth: 6, tabHeight: 2,
+      }],
+    });
+    expect(cfg.operations[0]).toMatchObject({ cutDirection: 'conventional', tabs: true, tabCount: 3, tabWidth: 6, tabHeight: 2 });
+  });
+
+  it('migrates a job saved before phase 2 (arc output setting, no direction or tab count)', () => {
+    const cfg = normalizeCamJobConfig({
+      selectedSketchIds: ['s1'],
+      stock: { thickness: 6 },
+      postProcessor: { dialect: 'grbl', decimalPlaces: 3, header: '', footer: '', arcOutput: 'linearize', linearizeTolerance: 0.01 },
+      operations: [{ kind: 'profile', entityIds: ['r1'], sketchId: 's1', cutSide: 'inside', tabs: true, tabWidth: 5, tabHeight: 1 }],
+    });
+    expect(cfg.postProcessor).toEqual({ dialect: 'grbl', decimalPlaces: 3, header: '', footer: '' });
+    expect(cfg.stock).toEqual({ thickness: 6, zTop: 0 });
+    expect(cfg.operations[0]).toMatchObject({ cutDirection: 'climb', tabs: true, tabCount: 4 });
   });
 });

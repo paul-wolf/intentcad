@@ -18,6 +18,7 @@ export function depthPasses(
   safeZ: number,
   plungeRate: number,
   startPosition?: Point,
+  tabs?: { overTab: boolean[]; height: number },
 ): ToolpathMove[] {
   if (moves.length === 0) return [];
 
@@ -28,12 +29,21 @@ export function depthPasses(
 
   for (const passDepth of passes) {
     const z = -passDepth;
+    const tabTop = tabs && passDepth > totalDepth - tabs.height + 1e-9 ? -(totalDepth - tabs.height) : null;
     result.push({ kind: 'rapid', to: start, z: safeZ });
     result.push({ kind: 'linear', to: start, z, feed: plungeRate });
 
     let cur = start;
-    for (const move of moves) {
-      if (move.kind === 'rapid') {
+    let lifted = false;
+    for (const [i, move] of moves.entries()) {
+      const over = tabTop !== null && tabs!.overTab[i] === true && move.kind !== 'rapid';
+      if (over !== lifted) {
+        result.push({ kind: 'linear', to: cur, z: over ? tabTop! : z, feed: plungeRate });
+        lifted = over;
+      }
+      if (over) {
+        result.push({ ...move, z: tabTop! });
+      } else if (move.kind === 'rapid') {
         if (samePoint(move.to, cur)) continue;
         result.push({ kind: 'rapid', to: cur, z: safeZ });
         result.push({ kind: 'rapid', to: move.to, z: safeZ });
