@@ -1,4 +1,4 @@
-import type { ToolpathMove, PostProcessorSettings, CamTool } from '@/types/cam';
+import type { ToolpathMove, PostProcessorSettings, CamTool, DialSetting } from '@/types/cam';
 import type { Point } from '@/types/document';
 
 /**
@@ -25,12 +25,29 @@ export interface EmitterOptions {
   floodCoolant: boolean;
   /** Z of the top of the stock (where Z zero is set, normally 0). */
   stockTop?: number;
+  /** Height for the start, tool changes and the end (above clamps); safeZ when not given. */
+  travelZ?: number;
+  /** Machine coordinates (G53) for tool changes and the end; X0 Y0 at the end when not given. */
+  park?: { x: number; y: number } | null;
+  /** M0 pause (the default), T… M6 for a sender or controller that handles it, or ATC (T… M6, no pause). */
+  toolChange?: 'M0' | 'M6' | 'ATC';
+  /** Coolant or dust output; overrides floodCoolant. */
+  coolant?: 'none' | 'M7' | 'M8';
+  /** A router with a speed dial: pause for the operator to set it. */
+  dial?: DialSetting[] | null;
+}
+
+/** The dial setting nearest a speed. */
+export function nearestDial(dial: DialSetting[], rpm: number): DialSetting | null {
+  let best: DialSetting | null = null;
+  for (const d of dial) if (!best || Math.abs(d.rpm - rpm) < Math.abs(best.rpm - rpm)) best = d;
+  return best;
 }
 
 const sameTool = (a: CamTool, b: CamTool) =>
   a.id === b.id && a.diameter === b.diameter && a.type === b.type;
 
-const toolLabel = (t: CamTool) => `${t.name} (${t.diameter} mm ${t.type})`;
+const toolLabel = (t: CamTool) => `${t.number ? `T${t.number} ` : ''}${t.name} (${t.diameter} mm ${t.type})`;
 
 export function gcodeEmitter(
   moves: ToolpathMove[],
@@ -42,8 +59,12 @@ export function gcodeEmitter(
   const lines: string[] = [];
   const moveStartLines: number[] = [];
   const { decimalPlaces, header, footer } = settings;
-  const { safeZ, floodCoolant } = options;
+  const { safeZ } = options;
   const stockTop = options.stockTop ?? 0;
+  const travelZ = Math.max(options.travelZ ?? safeZ, safeZ);
+  const coolant = options.coolant ?? (options.floodCoolant ? 'M8' : 'none');
+  const toolChange = options.toolChange ?? 'M0';
+  const dial = options.dial && options.dial.length > 0 ? options.dial : null;
 
   const fmt = (n: number) => n.toFixed(decimalPlaces);
   const seconds = (s: number) => String(Number(s.toFixed(3)));
@@ -56,7 +77,11 @@ export function gcodeEmitter(
   lines.push(`; Dialect: ${settings.dialect}`);
   const firstTool = operationBoundaries[0]?.tool;
   if (firstTool) lines.push(`; Tool: ${toolLabel(firstTool)}`);
-  lines.push(`; Stock top: Z${fmt(stockTop)} (set Z there with the tool touching the top of the stock)`);
+  // Z0 on the spoilboard puts the stock top above zero: zero on the spoilboard, not the stock.
+  const zeroOnSpoilboard = stockTop > 0;
+  if (zeroOnSpoilboard) lines.push(`; Z0: the spoilboard (set Z0 with the tool touching the spoilboard; the stock top is Z${fmt(stockTop)})`);
+  else lines.push(`; Z0: the stock top (set Z0 with the tool touching the top of the stock)`);
+  const rezero = zeroOnSpoilboard ? 'set Z0 on the spoilboard again' : 'set Z0 on the top of the stock again';
   lines.push('');
 
   // GRBL initialization
@@ -73,29 +98,39 @@ export function gcodeEmitter(
     lines.push('');
   }
 
-  // Up to safe height before anything moves sideways.
-  lines.push(`G0 Z${fmt(safeZ)} ; safe height`);
+  // Up before anything moves sideways.
+  lines.push(travelZ > safeZ ? `G0 Z${fmt(travelZ)} ; clearance height` : `G0 Z${fmt(safeZ)} ; safe height`);
+  if (toolChange !== 'M0' && firstTool?.number) lines.push(`T${firstTool.number} M6 ; ${toolLabel(firstTool)}`);
 
   const initialSpeed = operationBoundaries.length > 0 ? operationBoundaries[0]!.spindleSpeed : 12000;
+  const askDial = (speed: number) => {
+    const d = dial && nearestDial(dial, speed);
+    if (d) lines.push(`M0 ; set the router's speed dial to ${d.setting} (about ${d.rpm} rpm), then resume`);
+  };
+  const coolantLabel = coolant === 'M7' ? 'mist coolant or dust extraction on' : 'flood coolant or dust extraction on';
   const spindleOn = (speed: number) => {
+    askDial(speed);
     lines.push(`M3 S${speed} ; spindle on`);
     lines.push('G4 P2 ; dwell 2s for spindle spin-up');
-    if (floodCoolant) lines.push('M8 ; flood coolant on');
+    if (coolant !== 'none') lines.push(`${coolant} ; ${coolantLabel}`);
   };
   spindleOn(initialSpeed);
   lines.push('');
 
   let lastX: number | undefined;
   let lastY: number | undefined;
-  let lastZ: number | undefined = safeZ;
+  let lastZ: number | undefined = travelZ;
   let currentSpindleSpeed = initialSpeed;
   let currentTool = firstTool;
 
-  const retract = () => {
-    if (lastZ === undefined || lastZ < safeZ) {
-      lines.push(`G0 Z${fmt(safeZ)}`);
-      lastZ = safeZ;
+  const retract = (to = safeZ) => {
+    if (lastZ === undefined || lastZ < to) {
+      lines.push(`G0 Z${fmt(to)}`);
+      lastZ = to;
     }
+  };
+  const park = () => {
+    if (options.park) lines.push(`G53 G0 X${fmt(options.park.x)} Y${fmt(options.park.y)} ; park`);
   };
 
   for (let mi = 0; mi < moves.length; mi++) {
@@ -105,17 +140,26 @@ export function gcodeEmitter(
       if (toolChanged) {
         lines.push('');
         lines.push('; --- Tool change ---');
-        retract();
+        retract(travelZ);
+        park();
         lines.push('M5 ; spindle off');
-        if (floodCoolant) lines.push('M9 ; coolant off');
-        lines.push(`; Change to ${toolLabel(boundary.tool!)}, set Z${fmt(stockTop)} at the stock top again, then resume`);
-        lines.push('M0 ; pause for tool change');
-        // Z was just set with the new tool touching the stock: lift
-        // before anything moves, and forget where we were.
-        lines.push(`G0 Z${fmt(safeZ)} ; safe height`);
+        if (coolant !== 'none') lines.push('M9 ; coolant off');
+        const next = boundary.tool!;
+        if (toolChange === 'ATC' && next.number) {
+          lines.push(`T${next.number} M6 ; ${toolLabel(next)}`);
+        } else if (toolChange === 'M6' && next.number) {
+          lines.push(`; Change to ${toolLabel(next)}, ${rezero}, then resume`);
+          lines.push(`T${next.number} M6 ; tool change`);
+        } else {
+          lines.push(`; Change to ${toolLabel(next)}, ${rezero}, then resume`);
+          lines.push('M0 ; pause for tool change');
+        }
+        // Z may just have been set with the new tool touching the stock:
+        // lift before anything moves, and forget where we were.
+        lines.push(`G0 Z${fmt(travelZ)} ; ${travelZ > safeZ ? 'clearance' : 'safe'} height`);
         lastX = undefined;
         lastY = undefined;
-        lastZ = safeZ;
+        lastZ = travelZ;
         spindleOn(boundary.spindleSpeed);
         lines.push('');
         currentTool = boundary.tool;
@@ -123,6 +167,10 @@ export function gcodeEmitter(
       } else if (boundary.spindleSpeed !== currentSpindleSpeed) {
         lines.push('');
         lines.push('; --- Spindle speed change ---');
+        if (dial && nearestDial(dial, boundary.spindleSpeed)?.setting !== nearestDial(dial, currentSpindleSpeed)?.setting) {
+          retract();
+          askDial(boundary.spindleSpeed);
+        }
         lines.push(`M3 S${boundary.spindleSpeed}`);
         lines.push('G4 P2 ; dwell for speed change');
         lines.push('');
@@ -203,9 +251,9 @@ export function gcodeEmitter(
   lines.push('');
 
   // End program: lift clear first, then stop spindle and coolant.
-  retract();
+  retract(travelZ);
   lines.push('M5 ; spindle off');
-  if (floodCoolant) lines.push('M9 ; coolant off');
+  if (coolant !== 'none') lines.push('M9 ; coolant off');
 
   // Custom footer
   if (footer) {
@@ -216,7 +264,8 @@ export function gcodeEmitter(
     lines.push('');
   }
 
-  lines.push('G0 X0 Y0 ; return home');
+  if (options.park) park();
+  else lines.push('G0 X0 Y0 ; return home');
   lines.push('M30 ; program end');
 
   return { lines, moveStartLines };

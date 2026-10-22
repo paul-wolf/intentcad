@@ -110,7 +110,7 @@ function arcShape(m: Extract<ToolpathMove, { kind: 'arc' }>, from: Point): ArcSh
   return { c, r, a0, sweep, dir };
 }
 
-function moveLength(m: ToolpathMove, from: Point): number {
+export function moveLength(m: ToolpathMove, from: Point): number {
   if (m.kind === 'arc') {
     const a = arcShape(m, from);
     return a.r * a.sweep;
@@ -123,7 +123,7 @@ function moveLength(m: ToolpathMove, from: Point): number {
  * The part of move m (which starts at `start`) from `from` to distance `s`
  * along it, or to its end when s is null.
  */
-function pieceOf(m: ToolpathMove, start: Point, from: Point, s: number | null): ToolpathMove {
+export function pieceOf(m: ToolpathMove, start: Point, from: Point, s: number | null): ToolpathMove {
   if (m.kind === 'arc') {
     const a = arcShape(m, start);
     let to = m.to;

@@ -36,6 +36,7 @@ operations cost nothing to support, they just don't get UI.
 - Overhang highlight (H, Inspect): faces past a threshold (30–70°, default 45°) shaded steep or ceiling by angle, per fragment; hover for the angle; a print bed face other than Z (stored in the part, matched each build, also used by auto_round's bed protection); panel with projected areas and region count; Ask AI to fix puts a request with the flagged regions in the chat box
 - Context files: datasheets and photos the AI reads, with cited dimensions (step 1 of 3)
 - Sketcher gaps: H/V between any two points; point on line / circle and symmetric about a line; corner fillet (radius a dimension, clamped when too large); trim (splits polylines and circles, keeps the constraints that still apply); offset of a closed shape, circle or chain (arcs or miters, follows its source, distance a dimension, unlink); project part edges onto a face/plane sketch (follow the part, broken when the edge goes)
+- CAM for sketches (2D editor): Setup (machine, tool library with cutting data per material, stock, origin, clamps), Plan (operations with defaults worked out from the setup, AI proposals with reasons to accept, per-value sources), Run (checks, simulator, steps at the machine, G-code)
 
 ## Foundation: edge selection ✓ done
 

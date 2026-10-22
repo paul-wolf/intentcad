@@ -206,30 +206,85 @@ faces of a part:
 
 ### Beyond 3D: 2D and CNC
 
-The 2D editor exports DXF, PDF and images, imports DXF, and generates CNC toolpaths
-(profile, pocket, drill, facing) with G-code and a simulator.
+The 2D editor exports DXF, PDF and images, imports DXF, and turns sketches into G-code
+for a CNC router.
 
-Click **CAM** in the toolbar to open the CAM panels. Add an operation, select the shapes
-it cuts, and set its options:
+Click **CAM** in a sketch's toolbar. CAM has three steps along the top: **Setup**,
+**Plan** and **Run**. **Job** picks a job or adds one; jobs save by themselves. **Exit
+CAM** (or Esc) goes back to drawing. **Fit** (Shift+F) frames the stock.
 
-![CAM mode: a pocket round an island, a hole and the outline cut out with tabs](images/cam.png)
+![CAM Plan: three operations, the outside profile selected with its tabs, the stock and a clamp](images/cam-plan.png)
 
-- **Profile** cuts along a shape, inside, outside or on the line. Sharp outside corners
-  are cut round, and inside corners stay as sharp as the tool allows. Select a part's
-  outline and its holes together: a shape inside another is a hole and is cut on its
-  inside, and holes are cut before the outline. **Direction**
-  chooses climb or conventional milling; the hint under it says whether the tool goes
-  clockwise or counter-clockwise round the shape.
-- **Tabs** keeps the part joined to the stock. Tick it and set the number of tabs, their
-  width and their height. On the deepest passes the tool lifts over each tab. Tabs are
-  spread round the shape and kept off its corners.
-- **Pocket** clears everything inside a closed shape. Select several shapes to cut
-  several pockets in one operation. A shape inside another is an island and is left
-  standing. If part of a pocket is too narrow for the tool, a warning says so.
+**1 Setup** says what you cut on, once per job:
 
-Under **Stock**, **Z Top** is the height of the top of the stock; all depths are
-measured down from it. Set the machine's Z zero there. An operation as deep as the stock
-gets a note to put a spoilboard under it. A cut deeper than the stock gets a warning.
+- **Machine**: the router. **Edit machine** sets its controller, travel, top speed, how
+  the spindle speed is set (by the program, or by hand on a dial with a table of
+  settings), rapid speed, tool changes (a pause, M6 or an automatic changer), safe and
+  clearance heights, where it parks, coolant, and the **spoilboard allowance**: how far
+  a through cut goes past the stock (0.3 mm unless you change it).
+- **Tool library**: the machine's bits. **Manage tools** adds and edits them. Each bit
+  has cutting data per material: chip load, depth per pass, stepover, plunge speed and
+  ramp angle. Birch ply, MDF, hardwood, acrylic and aluminium 6061 come filled in, and
+  you can change them. The feed is always worked out (chip load × flutes × rpm), never
+  typed.
+- **Stock**: width, height, thickness and material. Leave width and height empty to fit
+  the shapes plus 10 mm a side.
+- **Origin**: where X0 Y0 is: a corner, an edge's middle or the centre of the stock, or
+  **Pick a point on the sketch** (it snaps to shape ends and centres). **Z0 at** is the
+  stock top or the spoilboard.
+- **Clamps**: click **Draw on the sketch**, drag a box where the clamp is, and set how
+  tall it stands. A rapid move that would pass a clamp rises to the clearance height to
+  cross it. A cut into a clamp is an error.
+- **Fill in with AI** fills these in from the drawing. Whatever the AI set has a violet
+  dot. Its changes wait for you: **Confirm** keeps them, **Undo** puts back what was
+  there. Nothing downloads until you've chosen.
+
+**2 Plan** lists the operations, in the order they run, with the number of tool changes
+and the time:
+
+- **Plan with AI** proposes the operations, each with its reason. Proposed ones have a
+  violet **Proposed** label: click **Accept**, or **Accept all**.
+- **+ Add an operation** adds one yourself. Click shapes on the sketch to add them to the
+  selected operation or take them out; double-click picks a whole outline.
+- Selecting an operation shows its shapes in blue and its toolpath in orange, with tabs
+  marked. The stock, the clamps (hatched red) and X0 Y0 show on the sketch.
+- The defaults come from the setup: an outside profile cuts right through (the stock
+  thickness plus the allowance) with tabs, holes use a drill bit (or a helix with an end
+  mill), pockets use the largest bit that fits, bits long enough for the depth and bits
+  already in use come first. A drill bit also goes its point's length further, so the
+  hole is full size at the bottom.
+  **Order** puts inside cuts first, then groups by tool, with the cut that frees the part
+  last.
+- A problem shows on its operation; **Fix with AI** asks the AI to fix it.
+- The box at the bottom talks to the AI: "add a chamfer pass", "use the 6 mm bit for the
+  pockets", "why two passes?". Its changes come back as proposed. If it changes an
+  operation you had accepted, **Reject** puts it back as it was. It can remove only its
+  own proposals; it asks you to remove the rest.
+
+**Open** an operation to change it. Its settings are grouped as What, Tool, Depth,
+Speeds and feeds, and How it cuts. A dot beside each value says where it comes from:
+grey is inherited from the setup and tool, amber is set here (with what it was, and
+**Reset**), violet was set by the AI. A diagram shows the passes. **Ask AI about this
+operation** asks about just this one; **Done** goes back to the plan.
+
+- **Profile** cuts along a shape, inside, outside or on the line. A shape inside
+  another is a hole and is cut on its inside, before the outline. **Direction** picks
+  climb or conventional.
+- **Tabs** keep the part joined to the stock; set their number, width and height.
+- **Pocket** clears inside a closed shape and leaves islands standing.
+- **Drill** drills holes, pecking if you set a peck depth.
+
+**3 Run** checks the job before you cut: errors (such as a proposed operation not yet
+accepted, AI setup changes not confirmed, a cut into a clamp, deeper than the bit
+reaches, or further below the stock than the spoilboard allowance) block the download
+and hide the G-code, and warnings say what to check.
+**Play** runs the simulator; the line running is highlighted in the G-code. **At the
+machine** lists what to do there: the bit to fit, where to zero, and each tool change
+and dial setting. **Download .nc** saves the G-code.
+
+The AI never changes the machine's settings, its post-processor or its safe heights.
+What it changes in the job waits for you to accept or confirm it, and goes through the
+same checks as your own operations.
 
 ---
 

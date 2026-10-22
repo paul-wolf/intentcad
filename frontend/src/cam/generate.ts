@@ -6,6 +6,8 @@ import { toolpathDrill } from './toolpathDrill';
 import { toolpathPocket } from './toolpathPocket';
 import { toolpathFacing } from './toolpathFacing';
 import { depthPasses } from './depthPasses';
+import { toolpathHelix } from './toolpathHelix';
+import { avoidClamps, checkClamps } from './clamps';
 import { groupContours, isClosed, nestingDepths, orientCounterClockwise } from './contours';
 import { pathLength, splitAtTabs } from './tabs';
 import { gcodeEmitter } from './gcodeEmitter';
@@ -18,6 +20,8 @@ export interface GenerateResult {
   issues: CamIssue[];
   toolpath: ToolpathMove[];
   moveToLine: number[];
+  /** Where each operation's moves start in the toolpath (operations with no moves are left out). */
+  opStarts: { operationIndex: number; moveStart: number }[];
 }
 
 /**
@@ -34,7 +38,7 @@ export function generateGcode(
   /** Problems found while building toolpaths (reported with the validation issues). */
   const buildIssues: CamIssue[] = [];
   /** Per-operation spindle speed and tool, for spindle changes and tool-change pauses. */
-  const operationBoundaries: { moveStart: number; spindleSpeed: number; tool: CamTool }[] = [];
+  const operationBoundaries: { moveStart: number; spindleSpeed: number; tool: CamTool; operationIndex: number }[] = [];
 
   for (const [opIndex, op] of config.operations.entries()) {
     const opEntities = allEntities.filter((e) => op.entityIds.includes(e.id));
@@ -102,9 +106,10 @@ export function generateGcode(
             tabs = splitAtTabs(moves, startPosition, op.tabCount, tabLength);
           }
 
+          const ramp = op.rampAngle && op.rampAngle > 0 ? { angle: op.rampAngle } : undefined;
           const withDepth = tabs
-            ? depthPasses(tabs.moves, c.depth, c.safeZ, c.plungeRate, startPosition, { overTab: tabs.overTab, height: op.tabHeight })
-            : depthPasses(moves, c.depth, c.safeZ, c.plungeRate, startPosition);
+            ? depthPasses(tabs.moves, c.depth, c.safeZ, c.plungeRate, startPosition, { overTab: tabs.overTab, height: op.tabHeight }, ramp)
+            : depthPasses(moves, c.depth, c.safeZ, c.plungeRate, startPosition, undefined, ramp);
           for (const m of withDepth) allToolpathMoves.push(m);
         }
         break;
@@ -115,6 +120,19 @@ export function generateGcode(
           .map((e) => ({ center: e.center, radius: e.radius }));
 
         if (circles.length === 0) break;
+
+        if (op.method === 'helix') {
+          const helix = toolpathHelix(
+            circles, c.tool.diameter, c.depth.totalDepth, c.depth.depthPerPass, op.rampAngle ?? 3,
+            c.feedRate, c.plungeRate, c.safeZ, true,
+          );
+          if (helix.problem) {
+            buildIssues.push({ severity: 'error', message: `Operation ${opIndex + 1}: ${helix.problem}`, operationIndex: opIndex });
+            break;
+          }
+          for (const m of helix.moves) allToolpathMoves.push(m);
+          break;
+        }
 
         const drillMoves = toolpathDrill(
           circles,
@@ -169,11 +187,16 @@ export function generateGcode(
           return [];
         });
 
-        // Use entity bounds if available, otherwise use a reasonable default
+        // The shapes' bounds if there are any, else the stock, else a default square
         let stockW = 100;
         let stockH = 100;
         let areaCenter = { x: 0, y: 0 };
-        if (allPts.length > 0) {
+        const area = config.stock.area;
+        if (allPts.length === 0 && area) {
+          stockW = area.width + c.tool.diameter;
+          stockH = area.height + c.tool.diameter;
+          areaCenter = { x: area.x + area.width / 2, y: area.y + area.height / 2 };
+        } else if (allPts.length > 0) {
           const xs = allPts.map((p) => p.x);
           const ys = allPts.map((p) => p.y);
           const minX = Math.min(...xs), maxX = Math.max(...xs);
@@ -203,8 +226,24 @@ export function generateGcode(
 
     // Record operation boundary for spindle speed changes in G-code
     if (allToolpathMoves.length > moveStart) {
-      operationBoundaries.push({ moveStart, spindleSpeed: c.spindleSpeed, tool: c.tool });
+      operationBoundaries.push({ moveStart, spindleSpeed: c.spindleSpeed, tool: c.tool, operationIndex: opIndex });
     }
+  }
+
+  // Keep out of the clamps: over them at clearance height, never into them.
+  const clamps = config.clamps ?? [];
+  const clearanceZ = config.machine?.clearanceZ ?? 15;
+  if (clamps.length > 0) {
+    buildIssues.push(...checkClamps(clamps, clearanceZ));
+    const avoided = avoidClamps(
+      allToolpathMoves,
+      clamps,
+      operationBoundaries.map((b) => ({ moveStart: b.moveStart, radius: b.tool.diameter / 2, operationIndex: b.operationIndex })),
+      clearanceZ,
+    );
+    allToolpathMoves.splice(0, allToolpathMoves.length, ...avoided.moves);
+    for (const b of operationBoundaries) b.moveStart = avoided.indexMap[b.moveStart] ?? b.moveStart;
+    buildIssues.push(...avoided.issues);
   }
 
   // Toolpaths are built with Z 0 at the stock top; move them to where it is.
@@ -223,16 +262,19 @@ export function generateGcode(
 
   if (!hasErrors && allToolpathMoves.length > 0) {
     const safeZ = zTop + Math.max(...config.operations.map((op) => op.cutting.safeZ));
+    const m = config.machine;
     const result = gcodeEmitter(allToolpathMoves, config.postProcessor, config.origin, operationBoundaries, {
       safeZ,
       floodCoolant: config.useFloodCoolant,
       stockTop: zTop,
+      ...(m ? { travelZ: zTop + Math.max(m.clearanceZ, safeZ - zTop), park: m.park, toolChange: m.toolChange, coolant: m.coolant, dial: m.dial } : {}),
     });
     gcode = result.lines.join('\n');
     moveToLine = result.moveStartLines;
   }
 
-  return { gcode, issues, toolpath: allToolpathMoves, moveToLine };
+  const opStarts = operationBoundaries.map((b) => ({ operationIndex: b.operationIndex, moveStart: b.moveStart }));
+  return { gcode, issues, toolpath: allToolpathMoves, moveToLine, opStarts };
 }
 
 /** Why these tab settings can't work, or null. */

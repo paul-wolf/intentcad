@@ -137,4 +137,19 @@ export const camApi = {
       body: JSON.stringify(data),
     });
   },
+
+  /** One turn with the CAM assistant. The reply is outside data: cam/chat.ts checks it before use. */
+  chat(data: {
+    document_id: string;
+    message: string;
+    model?: string;
+    document_data: Record<string, unknown>;
+    context: Record<string, unknown>;
+    history: { role: string; text: string }[];
+  }) {
+    return request<{ reply: unknown; notes?: unknown[] }>(`${CAM_BASE}/chat`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
 };

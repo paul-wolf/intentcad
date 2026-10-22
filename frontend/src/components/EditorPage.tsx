@@ -1,10 +1,8 @@
-import { useMemo, useEffect, useState, useRef, useCallback } from 'react';
+import { useMemo, useEffect, useRef, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { DocumentDrawer } from './DocumentDrawer';
-import { GcodePanel } from './GcodePanel';
-import { CamOperationsPanel } from './CamOperationsPanel';
-import { OperationCuttingPanel } from './OperationCuttingPanel';
 import { SketchWorkspace } from './SketchWorkspace';
+import { CamCanvasHint, CamHeader, CamStepPanel } from './cam/CamMode';
 import { useEditorStore } from '@/stores/editorStore';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useCamStore, setCamDocumentId } from '@/stores/camStore';
@@ -157,27 +155,9 @@ function SimDepthIndicator() {
   );
 }
 
-function CamRightPanel() {
-  const palette = useThemeStore((s) => s.palette);
-  return (
-    <div style={{
-      width: '240px',
-      background: palette.panelBg,
-      borderLeft: `1px solid ${palette.border}`,
-      display: 'flex',
-      flexDirection: 'column',
-      overflowY: 'auto',
-    }}>
-      <GcodePanel />
-    </div>
-  );
-}
-
 export function EditorPage() {
   const { id } = useParams<{ id: string }>();
   const camPanelOpen = useCamStore((s) => s.camPanelOpen);
-  const focusedOperationIndex = useCamStore((s) => s.focusedOperationIndex);
-  const [showCuttingPanel, setShowCuttingPanel] = useState(true);
 
   // Load document from backend if navigated directly and backendId not set
   useEffect(() => {
@@ -240,12 +220,16 @@ export function EditorPage() {
       const camState = useCamStore.getState();
       if (!camState.camPanelOpen) return;
 
-      // Escape: stop simulator first, then exit CAM
+      // Escape: cancel a pick on the canvas, or stop the simulator, or close
+      // the open operation, and only then exit CAM
       if (e.key === 'Escape') {
+        if (camState.pickingOrigin) { camState.setPickingOrigin(false); return; }
+        if (camState.drawingClamp) { camState.setDrawingClamp(false); return; }
         if (camState.simState !== 'idle') {
           camState.simStop();
           return;
         }
+        if (camState.openedOpId) { camState.openOperation(null); return; }
         camState.toggleCamPanel();
         return;
       }
@@ -296,16 +280,10 @@ export function EditorPage() {
         // In CAM mode, force select tool
         toolOverride={camPanelOpen ? 'select' : undefined}
         keys={camPanelOpen ? 'viewport' : 'all'}
-        left={camPanelOpen ? (
-          <>
-            <CamOperationsPanel onShowCutting={() => setShowCuttingPanel(true)} />
-            {showCuttingPanel && focusedOperationIndex !== null && (
-              <OperationCuttingPanel onClose={() => setShowCuttingPanel(false)} />
-            )}
-          </>
-        ) : undefined}
-        overlay={camPanelOpen ? <SimDepthIndicator /> : undefined}
-        right={camPanelOpen ? <CamRightPanel /> : undefined}
+        toolbar={camPanelOpen ? <CamHeader /> : undefined}
+        left={camPanelOpen ? <CamStepPanel /> : undefined}
+        overlay={camPanelOpen ? <><SimDepthIndicator /><CamCanvasHint /></> : undefined}
+        right={camPanelOpen ? <></> : undefined}
       />
       <DocumentDrawer />
     </>

@@ -1,6 +1,10 @@
 import type { Entity } from '@/types/document';
 import type { CamJobConfig, CamIssue, ToolpathMove } from '@/types/cam';
 import { entityToSegments } from './entityToSegments';
+import { moveLength } from './simulatorInterp';
+
+/** The steepest a cut may go down into the material while moving sideways (a ramp), degrees. */
+export const MAX_RAMP_ANGLE = 20;
 
 /**
  * Validate a CAM job config and toolpath for issues before G-code generation.
@@ -153,6 +157,20 @@ export function validateCamJob(
       });
     }
 
+    // Per-operation: no deeper than the spoilboard allowance past the stock (and a drill bit's point).
+    const allowance = config.machine?.spoilboardAllowance;
+    if (thickness > 0 && allowance !== undefined) {
+      const point = op.kind === 'drill' && c.tool.type === 'drill' ? 0.3 * c.tool.diameter : 0;
+      const past = c.depth.totalDepth - thickness;
+      if (past > allowance + point + 0.01) {
+        issues.push({
+          severity: 'error',
+          message: `Operation ${i + 1}: cuts ${past.toFixed(2)}mm below the stock (thickness ${thickness}mm), more than the machine's ${allowance}mm spoilboard allowance${point ? ` and the drill's point` : ''}: cut less deep`,
+          operationIndex: i,
+        });
+      }
+    }
+
     // Per-operation: depth per pass vs flute length
     if (c.depth.depthPerPass > c.tool.fluteLength) {
       issues.push({
@@ -215,11 +233,14 @@ export function checkToolpathSafety(config: CamJobConfig, toolpath: ToolpathMove
 
     if ((move.kind === 'linear' || move.kind === 'arc') && !entryReported) {
       const enters = (prev === null || prev.z >= TOP - EPS) && z < TOP - EPS;
-      // With no previous move we can't know it plunged first: refuse it too.
-      if (enters && (movesXY || prev === null)) {
+      // A shallow ramp is a proper way in; anything steeper must plunge
+      // straight down. With no previous move we can't know: refuse it too.
+      const run = prev ? moveLength({ x: prev.x, y: prev.y }, move) : 0;
+      const ramp = prev !== null && movesXY && prev.z - z <= run * Math.tan((MAX_RAMP_ANGLE * Math.PI) / 180) + EPS;
+      if (enters && (movesXY || prev === null) && !ramp) {
         issues.push({
           severity: 'error',
-          message: 'Enters the material while moving sideways: it must plunge straight down first',
+          message: `Enters the material while moving sideways, steeper than a ${MAX_RAMP_ANGLE}° ramp: it must plunge straight down or ramp in gently`,
           position: move.to,
         });
         entryReported = true;
@@ -231,10 +252,12 @@ export function checkToolpathSafety(config: CamJobConfig, toolpath: ToolpathMove
   }
 
   const thickness = config.stock.thickness;
-  if (thickness > 0 && minZ < TOP - thickness - 0.001) {
+  // With a spoilboard allowance, each operation's depth is checked against it instead.
+  const past = TOP - minZ - thickness;
+  if (thickness > 0 && config.machine?.spoilboardAllowance === undefined && past > 0.001) {
     issues.push({
       severity: 'warning',
-      message: `Cuts ${(TOP - minZ - thickness).toFixed(2)}mm below the stock (thickness ${thickness}mm), into whatever is under it`,
+      message: `Cuts ${past.toFixed(2)}mm below the stock (thickness ${thickness}mm), into whatever is under it`,
     });
   }
 
