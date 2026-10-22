@@ -205,6 +205,11 @@ class NormalizeReplyTests(TestCase):
                     "thickness", "width", "steel", "floor"):
             self.assertTrue(any(key in n for n in notes), key)
 
+    def test_carbon_fibre_is_a_material(self):
+        reply, notes = self.norm({"summary": "x", "setup": {"material": "carbon-fibre", "thickness": 2}})
+        self.assertEqual(notes, [])
+        self.assertEqual(reply["setup"], {"material": "carbon-fibre", "thickness": 2})
+
     def test_machine_post_and_feed_keys_are_refused(self):
         reply, notes = self.norm({
             "summary": "x", "safeZ": 2, "postProcessor": {"dialect": "fanuc"}, "machine": {"maxRpm": 1},

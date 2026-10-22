@@ -77,6 +77,17 @@ describe('inheritance', () => {
     expect(edited.feed).toBeCloseTo(0.05 * 2 * 16000, 6);
   });
 
+  it('cuts 2 mm carbon fibre plate in shallow passes, ramping in', () => {
+    const r = one(outside(), [rect('r')], setupJob(2, 'carbon-fibre'));
+    expect(r.fields.chipLoad).toMatchObject({ value: 0.024, source: 'Carbon fibre (CFRP) × T1' });
+    expect(r.feed).toBeCloseTo(0.024 * 2 * 18000, 6);
+    expect(r.fields.depth.value).toBe(2.3);
+    expect(r.fields.depthPerPass.value).toBe(0.8);
+    expect(r.fields.entry.value).toBe('ramp');
+    expect(r.cam).toMatchObject({ rampAngle: 3 });
+    expect(r.problem).toBeFalsy();
+  });
+
   it('caps the speed at the machine maximum, and the feed at its rapid rate', () => {
     const machine = createDefaultMachine();
     machine.maxRpm = 15000;

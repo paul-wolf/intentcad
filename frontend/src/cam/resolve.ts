@@ -312,7 +312,7 @@ function deriveDepth(op: PlanOperation, ctx: ResolveContext, tool?: LibraryTool 
 }
 
 /** Ramp in by default where plunging is hard on the bit. */
-const rampsByDefault = (m: MaterialId) => m === 'acrylic' || m === 'aluminium-6061';
+const rampsByDefault = (m: MaterialId) => m === 'acrylic' || m === 'aluminium-6061' || m === 'carbon-fibre';
 
 // ── Resolving one operation ──
 

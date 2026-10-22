@@ -19,7 +19,7 @@ from modeling.llm_models import call_cost, is_known, list_models
 
 from .advisor import describe_entities
 
-MATERIALS = ["birch-ply", "mdf", "hardwood", "acrylic", "aluminium-6061"]
+MATERIALS = ["birch-ply", "mdf", "hardwood", "acrylic", "aluminium-6061", "carbon-fibre"]
 ORIGINS = ["front-left", "front-centre", "front-right", "centre", "back-left", "back-centre", "back-right"]
 Z_ZEROS = ["stock-top", "spoilboard"]
 KINDS = ["profile", "pocket", "drill", "facing"]
@@ -449,6 +449,9 @@ helix ("holeMethod": "helix"), with an end mill between half the hole's size and
 or the machine's limits: the reply has no place for them, and the user sets them on the machine.
 - Copy shape ids, tool ids and operation ids exactly as they are listed.
 - Only remove operations that you proposed and the user has not accepted, or when the user asks.
+- Carbon fibre is abrasive and splinters at the edges: keep the presets' shallow passes and ramp \
+entries, keep tabs on parts cut free, and drill holes before the outside cut. Its dust is harmful and \
+conducts electricity: if the user asks about cutting it, say to use dust extraction or cut wet.
 
 How to reply:
 - "summary": one or two sentences on what the plan does, or what changed.

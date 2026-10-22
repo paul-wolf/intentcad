@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useCamStore } from '@/stores/camStore';
 import { toolTag, type ResolvedOp } from '@/cam/resolve';
+import type { MaterialId } from '@/cam/setup';
 import { formatDuration } from '@/cam/estimate';
 import { GcodePreview } from '../GcodePreview';
 import { Btn, Card, panelStyle, useTokens, MONO, fmt } from './ui';
@@ -29,7 +30,7 @@ export function CamRunStep() {
   const warnings = issues.filter((i) => i.severity === 'warning');
   const pendingSetup = !!job.setup.aiPending;
   const blocked = proposed > 0 || pendingSetup || errors.length > 0 || !gcode;
-  const steps = operatorSteps(resolved.ops.filter((r) => r.cam), machine.toolChange, originWords(job.setup.origin), job.setup.zZero, job.setup.stock.thickness, (id) => job.operations.findIndex((o) => o.id === id) + 1);
+  const steps = operatorSteps(resolved.ops.filter((r) => r.cam), machine.toolChange, originWords(job.setup.origin), job.setup.zZero, job.setup.stock.thickness, (id) => job.operations.findIndex((o) => o.id === id) + 1, job.setup.material);
 
   return (
     <div style={panelStyle(t)}>
@@ -123,11 +124,12 @@ function SimControls() {
 
 /** What the operator does, in order: fit the first tool, zero, and each tool change and dial setting. */
 export function operatorSteps(
-  ops: ResolvedOp[], toolChange: 'M0' | 'M6' | 'ATC', origin: string, zZero: 'stock-top' | 'spoilboard', thickness: number, number: (opId: string) => number,
+  ops: ResolvedOp[], toolChange: 'M0' | 'M6' | 'ATC', origin: string, zZero: 'stock-top' | 'spoilboard', thickness: number, number: (opId: string) => number, material?: MaterialId,
 ): string[] {
   const first = ops[0];
   if (!first?.tool) return [];
   const steps: string[] = [];
+  if (material === 'carbon-fibre') steps.push('Carbon fibre: switch on the dust extraction (or cut wet) and put on an FFP3 or P100 mask. The dust is harmful to breathe and conducts electricity.');
   const zWord = zZero === 'stock-top' ? 'the top of the stock' : 'the spoilboard';
   if (toolChange !== 'ATC') steps.push(`Fit ${toolTag(first.tool)}, the ${first.tool.name}.`);
   steps.push(`Set X0 Y0 at ${origin}, and Z0 on ${zWord}${zZero === 'spoilboard' ? ` (the stock top is then Z${fmt(thickness)})` : ''}.`);
