@@ -136,7 +136,11 @@ export interface ArcMove {
   kind: 'arc';
   to: Point;
   z: number;
+  /** Arc centre relative to the move's start point (I, J), in sketch coordinates. */
   center: Point;
+  /** Clockwise as seen on screen, which is also clockwise seen from above the
+   *  machine (Y up): the sketch is Y down, and the G-code flips Y, so the two
+   *  views match. G2 when true, G3 when false. */
   clockwise: boolean;
   feed: number;
 }
@@ -147,7 +151,15 @@ export interface RapidMove {
   z: number;
 }
 
-export type ToolpathMove = LinearMove | ArcMove | RapidMove;
+/** Stay where the tool is for a time (G4). `to` and `z` are the current position. */
+export interface DwellMove {
+  kind: 'dwell';
+  to: Point;
+  z: number;
+  seconds: number;
+}
+
+export type ToolpathMove = LinearMove | ArcMove | RapidMove | DwellMove;
 
 // ── Server response types ──
 

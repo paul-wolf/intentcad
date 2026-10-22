@@ -20,7 +20,9 @@ function arcSweep(from: Point, move: ToolpathMove & { kind: 'arc' }): { radius: 
   }
 
   const endAngle = Math.atan2(move.to.y - absCenter.y, move.to.x - absCenter.x);
-  let sweep = move.clockwise ? startAngle - endAngle : endAngle - startAngle;
+  // Sketch coordinates are Y down, so a clockwise arc on screen has an
+  // increasing atan2 angle.
+  let sweep = move.clockwise ? endAngle - startAngle : startAngle - endAngle;
   if (sweep <= 0) sweep += 2 * Math.PI;
   return { radius, startAngle, sweep };
 }
@@ -31,6 +33,8 @@ function arcSweep(from: Point, move: ToolpathMove & { kind: 'arc' }): { radius: 
  */
 export function moveLength(from: Point, move: ToolpathMove, fromZ?: number): number {
   switch (move.kind) {
+    case 'dwell':
+      return 0;
     case 'rapid':
     case 'linear': {
       const dx = move.to.x - from.x;
@@ -50,6 +54,8 @@ export function moveLength(from: Point, move: ToolpathMove, fromZ?: number): num
  */
 export function interpolateMove(from: Point, move: ToolpathMove, t: number): Point {
   switch (move.kind) {
+    case 'dwell':
+      return { ...move.to };
     case 'rapid':
     case 'linear':
       return {
@@ -60,8 +66,8 @@ export function interpolateMove(from: Point, move: ToolpathMove, t: number): Poi
       const absCenter = { x: from.x + move.center.x, y: from.y + move.center.y };
       const { radius, startAngle, sweep } = arcSweep(from, move);
       const angle = move.clockwise
-        ? startAngle - t * sweep
-        : startAngle + t * sweep;
+        ? startAngle + t * sweep
+        : startAngle - t * sweep;
       return {
         x: absCenter.x + radius * Math.cos(angle),
         y: absCenter.y + radius * Math.sin(angle),

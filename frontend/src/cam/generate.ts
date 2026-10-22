@@ -1,5 +1,5 @@
 import type { Entity } from '@/types/document';
-import type { CamJobConfig, CamIssue, ToolpathMove } from '@/types/cam';
+import type { CamJobConfig, CamIssue, CamTool, ToolpathMove } from '@/types/cam';
 import { entityToSegments, type CncSegment } from './entityToSegments';
 import { toolpathProfile } from './toolpathProfile';
 import { toolpathDrill } from './toolpathDrill';
@@ -27,10 +27,12 @@ export function generateGcode(
   allEntities: Entity[],
 ): GenerateResult {
   const allToolpathMoves: ToolpathMove[] = [];
-  /** Per-operation spindle speeds for G-code emission. */
-  const operationBoundaries: { moveStart: number; spindleSpeed: number }[] = [];
+  /** Problems found while building toolpaths (reported with the validation issues). */
+  const buildIssues: CamIssue[] = [];
+  /** Per-operation spindle speed and tool, for spindle changes and tool-change pauses. */
+  const operationBoundaries: { moveStart: number; spindleSpeed: number; tool: CamTool }[] = [];
 
-  for (const op of config.operations) {
+  for (const [opIndex, op] of config.operations.entries()) {
     const opEntities = allEntities.filter((e) => op.entityIds.includes(e.id));
     const c = op.cutting;
     const moveStart = allToolpathMoves.length;
@@ -40,10 +42,12 @@ export function generateGcode(
         const segments = entityToSegments(opEntities, op.entityIds);
         if (segments.length === 0) break;
 
-        const contours = groupContours(segments);
+        // Every closed loop runs counter-clockwise (in sketch coordinates), so
+        // "outside" is always to the right of travel, however it was drawn.
+        const contours = groupContours(segments).map(orientCounterClockwise);
 
         for (const contour of contours) {
-          const { moves, startPosition } = toolpathProfile(
+          const { moves, startPosition, problem } = toolpathProfile(
             contour,
             c.tool.diameter,
             op.cutSide,
@@ -52,9 +56,18 @@ export function generateGcode(
             op.tabWidth,
             op.tabHeight,
           );
+          if (problem) {
+            buildIssues.push({
+              severity: 'error',
+              message: `Operation ${opIndex + 1}: ${problem}`,
+              operationIndex: opIndex,
+              position: startPosition,
+            });
+            continue;
+          }
           if (moves.length === 0) continue;
 
-          const withDepth = depthPasses(moves, c.depth, c.safeZ, startPosition);
+          const withDepth = depthPasses(moves, c.depth, c.safeZ, c.plungeRate, startPosition);
           allToolpathMoves.push(...withDepth);
         }
         break;
@@ -91,7 +104,7 @@ export function generateGcode(
           c.feedRate,
         );
 
-        const withDepth = depthPasses(singlePass, c.depth, c.safeZ);
+        const withDepth = depthPasses(singlePass, c.depth, c.safeZ, c.plungeRate);
         allToolpathMoves.push(...withDepth);
         break;
       }
@@ -134,11 +147,7 @@ export function generateGcode(
         );
 
         if (facingMoves.length > 0) {
-          const withDepth = depthPasses(
-            facingMoves.filter((m) => m.kind === 'linear'),
-            c.depth,
-            c.safeZ,
-          );
+          const withDepth = depthPasses(facingMoves, c.depth, c.safeZ, c.plungeRate);
           allToolpathMoves.push(...withDepth);
         }
         break;
@@ -147,12 +156,12 @@ export function generateGcode(
 
     // Record operation boundary for spindle speed changes in G-code
     if (allToolpathMoves.length > moveStart) {
-      operationBoundaries.push({ moveStart, spindleSpeed: c.spindleSpeed });
+      operationBoundaries.push({ moveStart, spindleSpeed: c.spindleSpeed, tool: c.tool });
     }
   }
 
   // Validate
-  const issues = validateCamJob(config, allEntities, allToolpathMoves);
+  const issues = [...buildIssues, ...validateCamJob(config, allEntities, allToolpathMoves)];
 
   // Generate G-code only if no errors (warnings are OK)
   const hasErrors = issues.some((i) => i.severity === 'error');
@@ -160,12 +169,49 @@ export function generateGcode(
   let moveToLine: number[] = [];
 
   if (!hasErrors && allToolpathMoves.length > 0) {
-    const result = gcodeEmitter(allToolpathMoves, config.postProcessor, config.origin, operationBoundaries);
+    const safeZ = Math.max(...config.operations.map((op) => op.cutting.safeZ));
+    const result = gcodeEmitter(allToolpathMoves, config.postProcessor, config.origin, operationBoundaries, {
+      safeZ,
+      floodCoolant: config.useFloodCoolant,
+    });
     gcode = result.lines.join('\n');
     moveToLine = result.moveStartLines;
   }
 
   return { gcode, issues, toolpath: allToolpathMoves, moveToLine };
+}
+
+const CHAIN_TOL = 0.5; // endpoint matching tolerance when chaining segments
+
+/**
+ * Signed area of a contour in sketch coordinates, arcs included (shoelace over
+ * the chords plus each arc's circular segment). Positive = counter-clockwise in
+ * the sketch's own (x, y) coordinates.
+ */
+export function signedArea(contour: CncSegment[]): number {
+  let area = 0;
+  for (const s of contour) {
+    area += (s.from.x * s.to.y - s.to.x * s.from.y) / 2;
+    if (s.bulge !== 0) {
+      const theta = 4 * Math.atan(Math.abs(s.bulge)); // the arc's sweep
+      const chord = Math.hypot(s.to.x - s.from.x, s.to.y - s.from.y);
+      const r = chord / (2 * Math.sin(theta / 2));
+      // A positive bulge turns counter-clockwise, so its arc lies to the right
+      // of the chord and adds area on a counter-clockwise loop.
+      area += Math.sign(s.bulge) * (r * r / 2) * (theta - Math.sin(theta));
+    }
+  }
+  return area;
+}
+
+/** Reverse a closed contour that runs clockwise; open contours are left as drawn. */
+export function orientCounterClockwise(contour: CncSegment[]): CncSegment[] {
+  if (contour.length === 0) return contour;
+  const head = contour[0]!.from;
+  const tail = contour[contour.length - 1]!.to;
+  const closed = Math.hypot(head.x - tail.x, head.y - tail.y) < CHAIN_TOL;
+  if (!closed || signedArea(contour) >= 0) return contour;
+  return [...contour].reverse().map((s) => ({ from: s.to, to: s.from, bulge: -s.bulge }));
 }
 
 /**
@@ -176,7 +222,7 @@ export function generateGcode(
 function groupContours(segments: CncSegment[]): CncSegment[][] {
   if (segments.length === 0) return [];
 
-  const TOL = 0.5; // matching tolerance
+  const TOL = CHAIN_TOL;
   const used = new Array(segments.length).fill(false);
   const groups: CncSegment[][] = [];
 
