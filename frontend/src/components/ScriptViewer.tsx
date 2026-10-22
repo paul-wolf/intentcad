@@ -79,7 +79,7 @@ import {
 import { OperationsPanel, Kbd } from './OperationsPanel';
 import { OpIcon, OPS_GRID_ICON } from './OpIcons';
 import { ContextChips, ContextPane, useContextFiles, type CtxColors } from './ContextPane';
-import { acceptable, asksForFile, chatUsageNote, filesToSend, seesSpend, skipList, spendLine, spendNote, usageLabel } from '@/build/contextFiles';
+import { acceptable, chatUsageNote, filesToSend, seesSpend, skipList, spendLine, spendNote, usageLabel } from '@/build/contextFiles';
 import { chooseModel, modelsStale } from '@/build/modelList';
 
 // the view buttons, in key order (1–6, then 0)
@@ -3214,9 +3214,9 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                 </span>
               )}
             </div>
-            {!mine && isQ && asksForFile(m.text) && (
+            {!mine && isQ && i === chat.length - 1 && !m.text.startsWith('⚠') && (
               <button onClick={pickChatFiles} disabled={!!chatUploading}
-                title="Answer with a photo, drawing or datasheet; add a sentence before you send"
+                title="Answer with a photo, drawing or datasheet (or type your answer below); add a sentence before you send"
                 style={{ marginTop: 4, display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px',
                          background: 'none', color: palette.accent ?? palette.text, border: `1px solid ${palette.border}`,
                          borderRadius: '4px', fontSize: '12px', cursor: 'pointer' }}>

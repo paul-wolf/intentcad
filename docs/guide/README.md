@@ -197,8 +197,9 @@ faces of a part:
 - The files go with your next message; they show as chips above the box, and the sent
   message lists them after 📎. Click × on a chip to leave a file out.
 - If you send while a file is still uploading, the message waits for it.
-- When the AI asks for a photo, a drawing or a datasheet, an **Attach a file** button
-  shows under its question. Pick the file, add a sentence and send.
+- When the AI asks you a question, an **Attach a file** button shows under it: answer
+  with a photo, a drawing or a datasheet if that's easier than typing. Pick the file,
+  add a sentence and send.
 - The **Context** tab lists all the files, and lets you choose which PDF pages the AI
   sees.
 

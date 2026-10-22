@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ContextFile, ContextFiles } from '@/api/client';
 import {
-  acceptable, asksForFile, chatUsageNote, detailLabel, seesSpend, spendLine, spendNote, usageLabel, fileTokens, filesToSend,
+  acceptable, chatUsageNote, detailLabel, seesSpend, spendLine, spendNote, usageLabel, fileTokens, filesToSend,
   includedPages, pageRanges, skipList, togglePage, tokensLabel,
 } from './contextFiles';
 
@@ -123,17 +123,5 @@ describe('the AI spend', () => {
   it('notes an edit’s spend only when the response carries it', () => {
     expect(spendNote({ tokens_in: 900, tokens_out: 80, cost_usd: 0.004 })).toBe('900 in · 80 out · $0.004');
     expect(spendNote({})).toBeUndefined();   // a normal user's response: no spend fields
-  });
-});
-
-describe('a question that asks for a file', () => {
-  it('spots a request for a photo, drawing or datasheet', () => {
-    expect(asksForFile('Could you send a photo of the board from above?')).toBe(true);
-    expect(asksForFile('Do you have a drawing or the datasheet with the hole positions?')).toBe(true);
-    expect(asksForFile('Can you attach an image showing the measurements?')).toBe(true);
-  });
-  it('leaves other questions and errors alone', () => {
-    expect(asksForFile('Should the holes be M3 or M4?')).toBe(false);
-    expect(asksForFile('⚠ The photo upload failed')).toBe(false);
   });
 });
