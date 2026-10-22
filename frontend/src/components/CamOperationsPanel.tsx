@@ -103,8 +103,11 @@ export function CamOperationsPanel({ onShowCutting }: { onShowCutting?: () => vo
   };
 
   const handleAiSuggest = () => {
+    // Only the sketches in this job (all of them if none is selected yet).
+    const selected = new Set(jobConfig.selectedSketchIds);
+    const sketches = selected.size > 0 ? doc.sketches.filter((s) => selected.has(s.id)) : doc.sketches;
     requestAiSuggestion(
-      doc as unknown as Record<string, unknown>,
+      { name: doc.name, sketches } as unknown as Record<string, unknown>,
       jobConfig.profileId ?? undefined,
     );
   };

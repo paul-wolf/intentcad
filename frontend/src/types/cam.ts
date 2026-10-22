@@ -283,3 +283,143 @@ export function migrateCamJobConfig(raw: any): CamJobConfig {
 
   return raw as CamJobConfig;
 }
+
+// ── Normalising configs from outside (saved jobs, AI suggestions) ──
+
+type Raw = Record<string, unknown>;
+const isObj = (v: unknown): v is Raw => !!v && typeof v === 'object' && !Array.isArray(v);
+const num = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
+
+/** Fill a possibly partial cutting block from defaults, so every field the UI reads exists. */
+export function normalizeCutting(raw: unknown, base: OperationCuttingParams = createDefaultCutting()): OperationCuttingParams {
+  const r = isObj(raw) ? raw : {};
+  const tool = isObj(r.tool) ? r.tool : {};
+  const depth = isObj(r.depth) ? r.depth : {};
+  const toolType = ['flat', 'ball', 'vbit', 'drill'].includes(tool.type as string)
+    ? (tool.type as CamTool['type']) : base.tool.type;
+  return {
+    tool: {
+      id: typeof tool.id === 'string' ? tool.id : base.tool.id,
+      name: typeof tool.name === 'string' ? tool.name : base.tool.name,
+      diameter: num(tool.diameter, base.tool.diameter),
+      type: toolType,
+      fluteCount: num(tool.fluteCount, base.tool.fluteCount),
+      fluteLength: num(tool.fluteLength, base.tool.fluteLength),
+    },
+    spindleSpeed: num(r.spindleSpeed, base.spindleSpeed),
+    feedRate: num(r.feedRate, base.feedRate),
+    plungeRate: num(r.plungeRate, base.plungeRate),
+    safeZ: num(r.safeZ, base.safeZ),
+    depth: {
+      totalDepth: num(depth.totalDepth, base.depth.totalDepth),
+      depthPerPass: num(depth.depthPerPass, base.depth.depthPerPass),
+      finalPassAllowance: num(depth.finalPassAllowance, base.depth.finalPassAllowance),
+    },
+  };
+}
+
+/**
+ * Turn one operation from outside into a complete CamOperation, or null when
+ * its kind is unknown. Entity ids are kept only when `knownIds` has them.
+ */
+export function normalizeOperation(
+  raw: unknown,
+  fallbackSketchId: string,
+  knownIds?: Set<string>,
+  baseCutting?: OperationCuttingParams,
+): CamOperation | null {
+  if (!isObj(raw)) return null;
+  const ids = Array.isArray(raw.entityIds) ? raw.entityIds.filter((id): id is string => typeof id === 'string') : [];
+  const common = {
+    entityIds: knownIds ? ids.filter((id) => knownIds.has(id)) : ids,
+    sketchId: typeof raw.sketchId === 'string' && raw.sketchId ? raw.sketchId : fallbackSketchId,
+    cutting: normalizeCutting(raw.cutting, baseCutting),
+  };
+  const dir = raw.cutDirection === 'conventional' ? 'conventional' as const : 'climb' as const;
+  switch (raw.kind) {
+    case 'profile':
+      return {
+        ...common, kind: 'profile',
+        cutSide: raw.cutSide === 'inside' || raw.cutSide === 'on' ? raw.cutSide : 'outside',
+        tabs: false, tabWidth: num(raw.tabWidth, 5), tabHeight: num(raw.tabHeight, 1),
+      };
+    case 'pocket':
+      return { ...common, kind: 'pocket', stepover: num(raw.stepover, 0.4), cutDirection: dir };
+    case 'facing':
+      return { ...common, kind: 'facing', stepover: num(raw.stepover, 0.4), cutDirection: dir };
+    case 'drill':
+      return { ...common, kind: 'drill', peckDepth: num(raw.peckDepth, 0), dwell: num(raw.dwell, 0) };
+    default:
+      return null;
+  }
+}
+
+/** A saved job config, migrated and with every operation complete. */
+export function normalizeCamJobConfig(raw: unknown): CamJobConfig {
+  const migrated = migrateCamJobConfig(raw);
+  const base = createDefaultJobConfig();
+  const sketchIds = Array.isArray(migrated.selectedSketchIds) ? migrated.selectedSketchIds : [];
+  const ops = Array.isArray(migrated.operations) ? migrated.operations : [];
+  return {
+    ...base,
+    ...migrated,
+    stock: { ...base.stock, ...(isObj(migrated.stock) ? migrated.stock : {}) },
+    postProcessor: { ...base.postProcessor, ...(isObj(migrated.postProcessor) ? migrated.postProcessor : {}) },
+    origin: isObj(migrated.origin) ? migrated.origin as unknown as CamJobConfig['origin'] : base.origin,
+    selectedSketchIds: sketchIds,
+    operations: ops
+      .map((op) => normalizeOperation(op, sketchIds[0] ?? ''))
+      .filter((op): op is CamOperation => op !== null),
+  };
+}
+
+export interface AppliedSuggestion {
+  config: CamJobConfig;
+  /** What was dropped or changed, for the log. */
+  notes: string[];
+}
+
+/**
+ * Apply an AI-suggested config to the current job. The suggestion may use the
+ * old format (tool and feeds at the top level). Only operations, stock and
+ * coolant are taken from it; sketches, origin, profile and the post-processor
+ * stay as the user set them. Operations must name entities that exist.
+ */
+export function applyCamSuggestion(current: CamJobConfig, raw: unknown, knownIds: Set<string>): AppliedSuggestion {
+  const notes: string[] = [];
+  const r = isObj(raw) ? raw : {};
+  // Old format: one tool / machine / depth for every operation.
+  const machine = isObj(r.machine) ? r.machine : {};
+  const shared = normalizeCutting({ ...machine, tool: r.tool, depth: r.depth });
+  const fallbackSketch = current.selectedSketchIds[0] ?? '';
+
+  const rawOps = Array.isArray(r.operations) ? r.operations : [];
+  const operations: CamOperation[] = [];
+  for (const rawOp of rawOps) {
+    const op = normalizeOperation(rawOp, fallbackSketch, knownIds, shared);
+    if (!op) {
+      notes.push('Skipped a suggested operation of an unknown kind');
+      continue;
+    }
+    if (op.entityIds.length === 0 && op.kind !== 'facing') {
+      notes.push(`Skipped a suggested ${op.kind} operation: it named no shapes in the selected sketches`);
+      continue;
+    }
+    operations.push(op);
+  }
+
+  const stock = isObj(r.stock) ? r.stock : {};
+  const coolant = isObj(r.machine) && typeof r.machine.useFloodCoolant === 'boolean'
+    ? r.machine.useFloodCoolant
+    : typeof r.useFloodCoolant === 'boolean' ? r.useFloodCoolant : current.useFloodCoolant;
+
+  return {
+    config: {
+      ...current,
+      stock: { thickness: num(stock.thickness, current.stock.thickness), zTop: current.stock.zTop },
+      useFloodCoolant: coolant,
+      operations: operations.length > 0 ? operations : current.operations,
+    },
+    notes: operations.length > 0 ? notes : [...notes, 'No usable operations in the suggestion; kept your operations'],
+  };
+}
