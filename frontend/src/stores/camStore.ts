@@ -256,14 +256,21 @@ export const useCamStore = create<CamStore>((set, get) => {
     async createJob(documentId: string, name: string) {
       try {
         const job = createDefaultJob();
-        // A new job starts on the machine and sketch the user was last using.
-        const prev = get().job.setup;
-        job.setup.machineId = get().activeJobId ? prev.machineId : null;
+        // A new job starts on the machine and sketch the user was last using:
+        // the open job's machine, else the machine saved most recently.
+        if (get().activeJobId) {
+          job.setup.machineId = get().job.setup.machineId;
+        } else {
+          if (!get().profiles.length) await get().loadProfiles();
+          job.setup.machineId = get().profiles[0]?.id ?? null;
+        }
+        const machine = job.setup.machineId ? await fetchMachine(job.setup.machineId).catch(() => null) : createDefaultMachine();
+        if (!machine) job.setup.machineId = null;
+        job.setup.material = (machine ?? createDefaultMachine()).defaultMaterial;
         const doc = useDocumentStore.getState().document;
         job.setup.selectedSketchIds = doc.activeSketchId ? [doc.activeSketchId] : doc.sketches.slice(0, 1).map((s) => s.id);
         const result = await camApi.createJob({ document_id: documentId, name, config: job as unknown as Record<string, unknown> });
-        const machine = job.setup.machineId ? await fetchMachine(job.setup.machineId).catch(() => createDefaultMachine()) : createDefaultMachine();
-        set({ activeJobId: result.id as string, jobName: name, machine, step: 'setup', focusedOpId: null, openedOpId: null, ...SIM_RESET });
+        set({ activeJobId: result.id as string, jobName: name, machine: machine ?? createDefaultMachine(), step: 'setup', focusedOpId: null, openedOpId: null, ...SIM_RESET });
         setJob(job);
         await get().loadJobs(documentId);
         addLog('info', `Created CAM job: ${name}`);

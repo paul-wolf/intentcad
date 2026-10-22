@@ -18,8 +18,7 @@ from modeling.assistant import AssistantError, _anthropic_call
 from modeling.llm_models import call_cost, is_known, list_models
 
 from .advisor import describe_entities
-
-MATERIALS = ["birch-ply", "mdf", "hardwood", "acrylic", "aluminium-6061", "carbon-fibre"]
+from .validators import MATERIALS
 ORIGINS = ["front-left", "front-centre", "front-right", "centre", "back-left", "back-centre", "back-right"]
 Z_ZEROS = ["stock-top", "spoilboard"]
 KINDS = ["profile", "pocket", "drill", "facing"]

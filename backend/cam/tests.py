@@ -83,6 +83,7 @@ class ValidatorV2Tests(TestCase):
     def test_a_v2_profile_is_accepted(self):
         from cam.validators import validate_cam_profile_config
         self.assertEqual(validate_cam_profile_config({"version": 2, "machine": MACHINE_V2}), [])
+        self.assertEqual(validate_cam_profile_config({"version": 2, "machine": {**MACHINE_V2, "defaultMaterial": "carbon-fibre"}}), [])
 
     def test_a_v2_profile_with_a_bad_dialect_tool_change_or_tool_is_refused(self):
         from cam.validators import validate_cam_profile_config
@@ -95,6 +96,7 @@ class ValidatorV2Tests(TestCase):
             ({"safeZ": 10, "clearanceZ": 5}, "clearanceZ"),
             ({"spoilboardAllowance": 9}, "spoilboardAllowance"),
             ({"maxRpm": "fast"}, "maxRpm"),
+            ({"defaultMaterial": "balsa"}, "defaultMaterial"),
         ):
             errors = validate_cam_profile_config({"version": 2, "machine": {**MACHINE_V2, **change}})
             self.assertTrue(any(field in e for e in errors), (change, errors))

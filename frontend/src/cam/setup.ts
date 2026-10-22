@@ -98,6 +98,8 @@ export interface CamMachine {
   tools: LibraryTool[];
   /** Presets the user edited; the others come from shippedPreset(). */
   presets: MaterialPreset[];
+  /** The material new jobs on this machine start with. */
+  defaultMaterial: MaterialId;
 }
 
 export const DEFAULT_TOOLS: LibraryTool[] = [
@@ -123,6 +125,7 @@ export function createDefaultMachine(): CamMachine {
     spoilboardAllowance: 0.3,
     tools: DEFAULT_TOOLS.map((t) => ({ ...t })),
     presets: [],
+    defaultMaterial: 'birch-ply',
   };
 }
 

@@ -1,5 +1,6 @@
 OP_KINDS = ("profile", "drill", "pocket", "facing")
 TOOL_TYPES = ("flat", "ball", "vbit", "drill")
+MATERIALS = ["birch-ply", "mdf", "hardwood", "acrylic", "aluminium-6061", "carbon-fibre"]
 
 
 def _is_number(v) -> bool:
@@ -42,6 +43,8 @@ def _validate_machine_v2(machine) -> list[str]:
         errors.append("config.machine.toolChange must be one of: M0, M6, ATC")
     if machine.get("coolant") is not None and machine["coolant"] not in ("none", "M7", "M8"):
         errors.append("config.machine.coolant must be one of: none, M7, M8")
+    if machine.get("defaultMaterial") is not None and machine["defaultMaterial"] not in MATERIALS:
+        errors.append("config.machine.defaultMaterial must be one of: " + ", ".join(MATERIALS))
     tools = machine.get("tools")
     if tools is not None:
         if not isinstance(tools, list):

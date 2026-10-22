@@ -212,6 +212,12 @@ describe('machines', () => {
     expect(normalizeMachine('garbage')).toEqual(createDefaultMachine());
   });
 
+  it('keeps the material new jobs start with, and birch ply when it is unknown', () => {
+    expect(normalizeMachine({ version: 2, machine: { defaultMaterial: 'carbon-fibre' } }).defaultMaterial).toBe('carbon-fibre');
+    expect(normalizeMachine({ version: 2, machine: { defaultMaterial: 'balsa' } }).defaultMaterial).toBe('birch-ply');
+    expect(normalizeMachine({ version: 2, machine: {} }).defaultMaterial).toBe('birch-ply');
+  });
+
   it('says what stops a machine being saved', () => {
     const m = createDefaultMachine();
     m.clearanceZ = 2;
