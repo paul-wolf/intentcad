@@ -6,10 +6,11 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { Entity } from '@/types/document';
-import type { CamJobConfig, CamOperation, OperationCuttingParams, ProfileOperation, ToolpathMove } from '@/types/cam';
-import { createDefaultCutting, createDefaultJobConfig, migrateCamJobConfig, DEFAULT_POST } from '@/types/cam';
+import type { CamJobConfig, CamOperation, ClampZone, OperationCuttingParams, ProfileOperation, ToolpathMove } from '@/types/cam';
+import { createDefaultCutting, createDefaultJobConfig, migrateCamJobConfig, DEFAULT_POST, DEFAULT_TOOL } from '@/types/cam';
 import { generateGcode } from './generate';
 import { validateCamJob } from './validate';
+import { TYPICAL_DIAL } from './setup';
 
 // ── Shapes ──
 
@@ -868,5 +869,186 @@ describe('validateCamJob safety check', () => {
       { kind: 'rapid', to: { x: 10, y: 0 }, z: 5 },
     ]);
     expect(issues).toEqual([]);
+  });
+});
+
+// ── Ramp entry ──
+
+describe('ramp entry', () => {
+  const ramped = (over: Partial<ProfileOperation> = {}) =>
+    ({ ...profile(['r'], 'outside'), rampAngle: 5, ...over }) as CamOperation;
+  const tan5 = Math.tan((5 * Math.PI) / 180);
+
+  it('never goes down into new material steeper than the ramp angle', () => {
+    const { motions } = run([rect('r')], [ramped()]).parsed;
+    const floors = new Set<number>([0]);
+    for (const m of motions.filter((mm) => mm.g !== 0 && known(mm.from))) {
+      const drop = m.from.z - m.to.z;
+      if (drop > 1e-6) {
+        if (movesXY(m)) expect(drop / pathLength(m), `line ${m.line}`).toBeLessThanOrEqual(tan5 + 1e-4);
+        // Straight down only into what an earlier pass already cut.
+        else expect([...floors].some((f) => near(f, m.to.z)), `line ${m.line}`).toBe(true);
+      }
+      if (near(m.from.z, m.to.z) && movesXY(m)) floors.add(m.to.z);
+    }
+  });
+
+  it('cuts the whole outline at the full depth, the same as plunging', () => {
+    const atBottom = (ms: Motion[]) => cutBox(ms.filter((m) => near(m.from.z, -3) && near(m.to.z, -3)));
+    const plain = atBottom(run([rect('r')], [profile(['r'], 'outside')]).parsed.motions);
+    const ramp = atBottom(run([rect('r')], [ramped()]).parsed.motions);
+    expect(ramp.minX).toBeCloseTo(plain.minX, 3);
+    expect(ramp.maxX).toBeCloseTo(plain.maxX, 3);
+    expect(ramp.minY).toBeCloseTo(plain.minY, 3);
+    expect(ramp.maxY).toBeCloseTo(plain.maxY, 3);
+  });
+
+  it('still lifts over the tabs', () => {
+    const { motions } = run([rect('r')], [ramped({ tabs: true, tabCount: 4, tabWidth: 5, tabHeight: 1.5 })]).parsed;
+    const overTabs = motions.filter((m) => m.g !== 0 && near(m.from.z, -1.5) && near(m.to.z, -1.5) && movesXY(m));
+    expect(overTabs.length).toBeGreaterThanOrEqual(4);
+  });
+});
+
+// ── Helical boring ──
+
+describe('helical bore', () => {
+  const helix = (ids: string[], c = cutting()): CamOperation =>
+    ({ kind: 'drill', sketchId: 's', entityIds: ids, peckDepth: 0, dwell: 0, method: 'helix', rampAngle: 3, cutting: c });
+
+  it('spirals down a tool radius in from the wall, counter-clockwise (climb), to a flat floor', () => {
+    const { motions } = run([circle('h', 10, 0, 3)], [helix(['h'])]).parsed;
+    const below = motions.filter((m) => m.g !== 0 && m.to.z < 0);
+    for (const m of below.filter((mm) => mm.g === 2 || mm.g === 3)) {
+      expect(m.g).toBe(3);
+      expect(Math.hypot(m.to.x - 10, m.to.y)).toBeCloseTo(1.5, 3);
+      expect(arcMid(m).r).toBeCloseTo(1.5, 3);
+    }
+    expect(Math.min(...below.map((m) => m.to.z))).toBeCloseTo(-3, 6);
+    expect(below.filter((m) => m.g === 3 && near(m.from.z, -3) && near(m.to.z, -3)).length).toBe(2);
+  });
+
+  it('goes down no more than one depth per pass a turn, and no steeper than its angle', () => {
+    const { motions } = run([circle('h', 0, 0, 3)], [helix(['h'])]).parsed;
+    for (const m of motions.filter((mm) => mm.g === 3)) {
+      const drop = m.from.z - m.to.z;
+      expect(drop * 2).toBeLessThanOrEqual(1 + 1e-6);
+      expect(drop / pathLength(m)).toBeLessThanOrEqual(Math.tan((3 * Math.PI) / 180) + 1e-4);
+    }
+  });
+
+  it('refuses holes too small for the tool, and holes so big they would leave a loose core', () => {
+    const issues = (r: number) => {
+      const c = createDefaultJobConfig();
+      c.selectedSketchIds = ['s'];
+      c.operations = [helix(['h'])];
+      return generateGcode(c, [circle('h', 0, 0, r)]).issues.filter((i) => i.severity === 'error').map((i) => i.message).join('\n');
+    };
+    expect(issues(1.5)).toMatch(/too small/);
+    expect(issues(4)).toMatch(/loose core/);
+  });
+});
+
+// ── Clamps ──
+
+describe('clamps', () => {
+  /** Clamp corners in machine coordinates (Y up). */
+  const zone = (c: ClampZone, grow: number) => ({ x0: c.x - grow, x1: c.x + c.width + grow, y0: -(c.y + c.height) - grow, y1: -c.y + grow });
+  const crosses = (m: Motion, z: ReturnType<typeof zone>) => {
+    for (let k = 0; k <= 200; k++) {
+      const x = m.from.x + ((m.to.x - m.from.x) * k) / 200, y = m.from.y + ((m.to.y - m.from.y) * k) / 200;
+      if (x > z.x0 && x < z.x1 && y > z.y0 && y < z.y1) return true;
+    }
+    return false;
+  };
+  const withClamps = (clamps: ClampZone[], clearanceZ = 15) => (c: CamJobConfig) => {
+    c.clamps = clamps;
+    c.machine = { clearanceZ, park: null, toolChange: 'M0', coolant: 'none', dial: null };
+  };
+  // Holes either side of a clamp, below the middle of the sketch (sketch y 15 → machine y −15).
+  const clamp: ClampZone = { id: 'c1', x: -5, y: 10, width: 10, height: 10, zHeight: 8 };
+  const holes = [circle('a', -30, 15, 1.5), circle('b', 30, 15, 1.5)];
+
+  it('crosses a clamp at clearance height, never lower than its top', () => {
+    const { motions } = run(holes, [drill(['a', 'b'], 0, 0)], withClamps([clamp])).parsed;
+    const over = motions.filter((m) => known(m.from) && movesXY(m) && crosses(m, zone(clamp, 1.5)));
+    expect(over.length).toBeGreaterThan(0);
+    for (const m of over) {
+      expect(m.g, `line ${m.line}`).toBe(0);
+      expect(Math.min(m.from.z, m.to.z), `line ${m.line}`).toBeGreaterThanOrEqual(15);
+    }
+  });
+
+  it('keeps the usual safe height away from the clamps', () => {
+    const { motions } = run(holes, [drill(['a', 'b'], 0, 0)], withClamps([{ ...clamp, y: -60 }])).parsed;
+    expect(motions.some((m) => m.g === 0 && movesXY(m) && near(m.to.z, 5))).toBe(true);
+  });
+
+  it('refuses a cut that runs into a clamp', () => {
+    const c = createDefaultJobConfig();
+    c.selectedSketchIds = ['s'];
+    c.operations = [profile(['r'], 'outside')];
+    withClamps([{ id: 'c2', x: 19, y: -2, width: 10, height: 4, zHeight: 5 }])(c);
+    const result = generateGcode(c, [rect('r')]);
+    expect(result.gcode).toBe('');
+    expect(result.issues.some((i) => i.severity === 'error' && /Operation 1 runs into a clamp/.test(i.message))).toBe(true);
+  });
+
+  it('refuses a clamp taller than the clearance height allows', () => {
+    const c = createDefaultJobConfig();
+    c.selectedSketchIds = ['s'];
+    c.operations = [drill(['a', 'b'], 0, 0)];
+    withClamps([{ ...clamp, zHeight: 14 }], 15)(c);
+    const result = generateGcode(c, holes);
+    expect(result.issues.some((i) => i.severity === 'error' && /clearance height/.test(i.message))).toBe(true);
+  });
+
+  it('measures clamp heights from the stock top when Z zero is on the spoilboard', () => {
+    const { motions } = run(holes, [drill(['a', 'b'], 0, 0)], (c) => {
+      withClamps([clamp])(c);
+      c.stock = { thickness: 3, zTop: 3 };
+    }).parsed;
+    for (const m of motions.filter((mm) => known(mm.from) && movesXY(mm) && crosses(mm, zone(clamp, 1.5)))) {
+      expect(Math.min(m.from.z, m.to.z), `line ${m.line}`).toBeGreaterThanOrEqual(18);
+    }
+  });
+});
+
+// ── Machine settings in the program ──
+
+describe('machine settings', () => {
+  const t1 = { ...DEFAULT_TOOL, number: 1 };
+  const t2 = { ...tool6, number: 2 };
+  const job = (machine: NonNullable<CamJobConfig['machine']>) =>
+    run([rect('r'), circle('h', 30, 0, 3.5)],
+      [profile(['r'], 'outside', cutting({ tool: t1 })), drill(['h'], 0, 0, cutting({ tool: t2 }))],
+      (c) => { c.machine = machine; }).parsed;
+
+  it('rises to the clearance height first, changes tools with T… M6, parks, and asks for the dial setting', () => {
+    const { lines, motions } = job({ clearanceZ: 20, park: { x: -10, y: -10 }, toolChange: 'M6', coolant: 'M8', dial: TYPICAL_DIAL });
+    expect(lines[motions[0]!.line]).toMatch(/^G0 Z20\.000/);
+    const first = lines.findIndex((l) => /^T1 M6/.test(l));
+    const m3 = lines.findIndex((l) => /^M3\b/.test(l));
+    expect(first).toBeGreaterThan(-1);
+    expect(first).toBeLessThan(m3);
+    // 12000 rpm is setting 2 on the dial.
+    expect(lines.slice(first, m3).some((l) => /^M0 ; set the router's speed dial to 2\b/.test(l))).toBe(true);
+    expect(lines.findIndex((l) => /^M8\b/.test(l))).toBeGreaterThan(m3);
+    const change = lines.findIndex((l) => /^T2 M6/.test(l));
+    expect(change).toBeGreaterThan(m3);
+    const park = lines.findIndex((l, i) => i < change && /^G53 G0 X-10\.000 Y-10\.000/.test(l));
+    expect(park).toBeGreaterThan(-1);
+    const beforePark = motions.filter((m) => m.line < park);
+    expect(beforePark[beforePark.length - 1]!.to.z).toBe(20);
+    expect(lines.filter((l) => /^G53 G0/.test(l)).length).toBe(2);
+    expect(lines.some((l) => /^M0 ; pause for tool change/.test(l))).toBe(false);
+  });
+
+  it('never pauses with an automatic tool changer and a G-code spindle', () => {
+    const { lines } = job({ clearanceZ: 15, park: null, toolChange: 'ATC', coolant: 'none', dial: null });
+    expect(lines.some((l) => /^M0\b/.test(l))).toBe(false);
+    expect(lines.some((l) => /^T2 M6/.test(l))).toBe(true);
+    const last = lines.filter((l) => /^G0 /.test(l)).slice(-1)[0];
+    expect(last).toMatch(/^G0 X0 Y0\b/);
   });
 });

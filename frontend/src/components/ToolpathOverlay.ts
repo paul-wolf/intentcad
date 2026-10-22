@@ -101,6 +101,50 @@ function renderIssueHighlights(
   }
 }
 
+/**
+ * One operation's toolpath in orange, the rest faint, with its tabs marked:
+ * what the Plan shows for the selected operation card.
+ */
+export function renderToolpathFocus(
+  renderer: Renderer,
+  viewport: Viewport,
+  toolpath: ToolpathMove[],
+  palette: ThemePalette,
+  origin: Point,
+  range: { start: number; end: number },
+): void {
+  const faintRapid: LineStyle = { color: palette.textSecondary, width: 1, dash: [4, 4], opacity: 0.15 };
+  const faintFeed: LineStyle = { color: TOOLPATH_COLOR, width: 1, opacity: 0.15 };
+  const rapid: LineStyle = { color: palette.textSecondary, width: 1, dash: [4, 4], opacity: 0.55 };
+  const feed: LineStyle = { color: TOOLPATH_COLOR, width: 2 };
+  const tabStyle: LineStyle = { color: palette.background, width: 4 };
+  const tabEdge: LineStyle = { color: TOOLPATH_COLOR, width: 1 };
+
+  let pos = { x: origin.x, y: origin.y };
+  let z = Infinity;
+  let cutZ = Infinity;
+  for (let i = 0; i < toolpath.length; i++) {
+    const move = toolpath[i]!;
+    const inside = i >= range.start && i < range.end;
+    drawMove(renderer, viewport, pos, move, inside ? rapid : faintRapid, inside ? feed : faintFeed, inside ? feed : faintFeed);
+    if (inside && move.kind !== 'rapid' && move.kind !== 'dwell') {
+      // A tab: the tool feeds up off the cutting depth and along, over the tab.
+      if (move.z < cutZ) cutZ = move.z;
+      if (move.kind === 'linear' && move.z > z + 1e-6 && move.z > cutZ + 1e-6) {
+        const p = viewport.worldToScreen(move.to);
+        renderer.drawCircle(p, 4.5, tabEdge);
+      }
+      if (move.kind === 'linear' && Math.abs(move.z - z) < 1e-6 && move.z > cutZ + 1e-6 && move.feed > 0) {
+        // Along the top of a tab: a gap in the orange line.
+        renderer.drawLine(viewport.worldToScreen(pos), viewport.worldToScreen(move.to), tabStyle);
+        renderer.drawLine(viewport.worldToScreen(pos), viewport.worldToScreen(move.to), { ...tabEdge, dash: [2, 2] });
+      }
+    }
+    pos = move.to;
+    z = move.z;
+  }
+}
+
 export interface SimulatorState {
   simMoveIndex: number;
   simProgress: number;

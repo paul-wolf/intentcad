@@ -9,6 +9,8 @@ export interface CamTool {
   type: 'flat' | 'ball' | 'vbit' | 'drill';
   fluteCount: number;
   fluteLength: number;
+  /** Tool number on the machine (T1, T2…), for M6 tool changes. */
+  number?: number;
 }
 
 // ── Stock ──
@@ -16,6 +18,8 @@ export interface CamTool {
 export interface Stock {
   thickness: number;
   zTop: number;
+  /** Where the stock lies on the sketch (lowest corner, size), when known: facing with no shapes covers it. */
+  area?: { x: number; y: number; width: number; height: number };
 }
 
 // ── Depth Strategy ──
@@ -53,6 +57,8 @@ export interface ProfileOperation {
   tabCount: number;
   tabWidth: number;
   tabHeight: number;
+  /** Ramp into each pass along a closed path at this angle (degrees) instead of plunging. */
+  rampAngle?: number;
   cutting: OperationCuttingParams;
 }
 
@@ -62,6 +68,10 @@ export interface DrillOperation {
   sketchId: string;
   peckDepth: number;
   dwell: number;
+  /** drill: plunge at the centre (a drill bit the hole's size). helix: bore it with a smaller end mill, spiralling down. */
+  method?: 'drill' | 'helix';
+  /** Helix only: the descent angle, degrees. */
+  rampAngle?: number;
   cutting: OperationCuttingParams;
 }
 
@@ -101,6 +111,36 @@ export interface CamProfileConfig {
   postProcessor: PostProcessorSettings;
 }
 
+// ── Machine options and clamps ──
+
+/** One position of a router's speed dial and the speed it gives. */
+export interface DialSetting { setting: string; rpm: number }
+
+/** How the G-code handles the parts of the machine that resolve.ts takes from the machine settings. */
+export interface JobMachineOptions {
+  /** Height above the stock top for the start, tool changes, the end, and moves over clamps. */
+  clearanceZ: number;
+  /** Machine coordinates (G53) to go to for tool changes and at the end, or null for X0 Y0. */
+  park: { x: number; y: number } | null;
+  /** M0: pause for the operator. M6: T… M6 for the sender or controller. ATC: T… M6, no pause. */
+  toolChange: 'M0' | 'M6' | 'ATC';
+  coolant: 'none' | 'M7' | 'M8';
+  /** A router with a speed dial: the operator is asked to set it. Null: the spindle takes S. */
+  dial: DialSetting[] | null;
+  /** How far a through cut may go past the bottom of the stock; deeper is an error. Unset: deeper only warns. */
+  spoilboardAllowance?: number;
+}
+
+/** An area the tool keeps out of: a clamp, as a rectangle on the sketch (top-left x, y), standing zHeight above the stock top. */
+export interface ClampZone {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  zHeight: number;
+}
+
 // ── Job Config ──
 
 export interface CamJobConfig {
@@ -111,6 +151,9 @@ export interface CamJobConfig {
   selectedSketchIds: string[];
   operations: CamOperation[];
   origin: Point;
+  /** Set when built from machine settings (resolve.ts); older configs use safe Z for everything. */
+  machine?: JobMachineOptions;
+  clamps?: ClampZone[];
 }
 
 // ── Validation ──

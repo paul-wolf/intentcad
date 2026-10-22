@@ -2,6 +2,7 @@ import { useRef, useEffect, useCallback, useMemo, useState, type RefObject } fro
 import { useDocumentStore } from '@/stores/documentStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { useUIStateStore } from '@/stores/uiStateStore';
+import { useCamStore } from '@/stores/camStore';
 import { useThemeStore } from '@/theme';
 import { useCanvasRenderer, type InitialViewport } from './useCanvasRenderer';
 import { useMouseHandlers } from './useMouseHandlers';
@@ -469,6 +470,14 @@ export function CanvasContainer({ activeTool, docId, transparent, grid, soloActi
           }
           hasGeometry = true;
         }
+      }
+
+      // In CAM, fit the stock: it holds the job's shapes, clamps and origin.
+      const cam = useCamStore.getState();
+      const stock = cam.camPanelOpen ? cam.resolved.stock : null;
+      if (stock && stock.width > 0 && stock.height > 0) {
+        minX = stock.x; minY = stock.y; maxX = stock.x + stock.width; maxY = stock.y + stock.height;
+        hasGeometry = true;
       }
 
       if (!hasGeometry) {

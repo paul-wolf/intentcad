@@ -584,6 +584,9 @@ def _anthropic_call(system: str, user: str | list[dict], tools: list[dict], mode
         if block.type == "tool_use" and block.name == "ask_clarification":
             out = dict(block.input); out["kind"] = "question"; out["usage"] = usage
             return out
+        if block.type == "tool_use" and block.name == "cam_reply":   # the CAM chat (cam/chat.py)
+            out = dict(block.input); out["kind"] = "cam"; out["usage"] = usage
+            return out
         if block.type == "text":
             text += block.text
     # No tool call — don't hard-fail. Surface what the model actually said (an
@@ -596,7 +599,8 @@ def _anthropic_call(system: str, user: str | list[dict], tools: list[dict], mode
         return {"kind": "question", "question": text.strip() or msg, "usage": usage}
     if text.strip():
         return {"kind": "question", "question": text.strip(), "usage": usage}
-    raise AssistantError("the model did not return a script")
+    wanted = "a reply" if any(t.get("name") == "cam_reply" for t in tools) else "a script"
+    raise AssistantError(f"the model did not return {wanted}")
 
 
 def edit_script(

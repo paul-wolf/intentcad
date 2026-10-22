@@ -5,6 +5,7 @@ from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404
 from ninja import Router
 
+from documents.api import document_or_error
 from documents.models import Document
 from projects.access import can_access_project, require_auth
 from projects.models import ProjectShare
@@ -13,6 +14,8 @@ from .models import CamJob, CamProfile
 from .schemas import (
     AdvisorOut,
     AdvisorRequestIn,
+    CamChatIn,
+    CamChatOut,
     CamJobCreateIn,
     CamJobListOut,
     CamJobOut,
@@ -265,3 +268,44 @@ def suggest_plan(request, payload: AdvisorRequestIn):
         payload.material,
     )
     return result
+
+
+SPEND_KEYS = ("tokens_in", "tokens_out", "cache_read_tokens", "cache_write_tokens")
+
+
+def _log_chat(request, payload: CamChatIn, r: dict) -> None:
+    """Record one CAM chat turn's spend in the AI edit log."""
+    from modeling.models import AiEdit
+
+    AiEdit.objects.create(
+        user=request.user, document_id=str(payload.document_id),
+        instruction=(payload.message.strip() or "Plan this job")[:500],
+        cost_usd=r.get("cost_usd", 0.0), **{k: r.get(k, 0) for k in SPEND_KEYS},
+    )
+
+
+@router.post("/chat", response=CamChatOut, exclude_none=True)
+def cam_chat_endpoint(request, payload: CamChatIn):
+    """One turn of the CAM chat: the AI plans the job, edits its operations
+    (as overrides) or answers a question. Its reply never touches the machine
+    or the post-processor; what it can't change comes back in `notes`."""
+    from modeling.api import sees_spend
+    from modeling.assistant import AssistantError
+
+    from .chat import cam_chat
+
+    _, err = document_or_error(request, payload.document_id)
+    if err:
+        return err
+    history = [{"role": t.role, "text": t.text} for t in payload.history]
+    try:
+        r = cam_chat(payload.message, payload.context, payload.document_data, history,
+                     payload.model or None)
+    except AssistantError as exc:
+        if exc.usage:
+            _log_chat(request, payload, exc.usage)
+        spend = (exc.usage or {}) if sees_spend(request.user) else {}
+        return JsonResponse({"message": str(exc), **spend}, status=422)
+    _log_chat(request, payload, r)
+    spend = {k: r.get(k) for k in (*SPEND_KEYS, "cost_usd")} if sees_spend(request.user) else {}
+    return CamChatOut(reply=r["reply"], notes=r["notes"], **spend)

@@ -140,7 +140,14 @@ export function createSelectTool(): Tool {
     return true;
   };
 
+  /** The corner a clamp box is being dragged from. */
+  let clampStart: Point | null = null;
+  const boxBetween = (a: Point, b: Point) => ({
+    x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y),
+  });
+
   const resetDrag = () => {
+    clampStart = null;
     mouseDownScreen = null;
     dragStartWorld = null;
     dragEndWorld = null;
@@ -195,6 +202,13 @@ export function createSelectTool(): Tool {
         return;
       }
 
+      // CAM clamp mode: drag out a box
+      if (useCamStore.getState().drawingClamp) {
+        clampStart = worldPos;
+        useCamStore.getState().setDrawingClampRect({ x: worldPos.x, y: worldPos.y, width: 0, height: 0 });
+        return;
+      }
+
       // CAM origin pick mode
       if (useCamStore.getState().pickingOrigin) {
         const doc = useDocumentStore.getState().document;
@@ -234,6 +248,10 @@ export function createSelectTool(): Tool {
       if (es.circularCopyPickingCenter && es.circularCopyEntityIds) {
         const snap = snapPosition(worldPos, ctx.viewport, useDocumentStore.getState().document);
         es.setCircularCopyHover(snap.point);
+        return;
+      }
+      if (clampStart) {
+        useCamStore.getState().setDrawingClampRect(boxBetween(clampStart, worldPos));
         return;
       }
       if (!mouseDownScreen) return;
@@ -422,6 +440,14 @@ export function createSelectTool(): Tool {
     },
 
     onMouseUp(worldPos: Point, screenPos: Point, ctx: ToolContext) {
+      if (clampStart) {
+        const box = boxBetween(clampStart, worldPos);
+        clampStart = null;
+        // A click without a drag isn't a clamp: keep waiting for a box.
+        if (box.width >= 1 && box.height >= 1) useCamStore.getState().addClamp(box);
+        else useCamStore.getState().setDrawingClampRect(null);
+        return;
+      }
       if (dragMode === 'box-select' && dragStartWorld) {
         // Box select
         const minX = Math.min(dragStartWorld.x, worldPos.x);

@@ -18,7 +18,7 @@ import { targetsOf } from '@/utils/brokenRefs';
 import { getSegmentCount, getSegmentPointIndices, getSegmentBulge, getEntitySegmentEndpoints } from '@/utils/lineSegments';
 import { arcFromBulge, arcMidpoint } from '@/utils/arcGeometry';
 import { rectanglePath, rectangleOutline, rectangleCorners } from '@/utils/rectPath';
-import { renderToolpathOverlay, renderSimulatorOverlay } from '@/components/ToolpathOverlay';
+import { renderToolpathOverlay, renderSimulatorOverlay, renderToolpathFocus } from '@/components/ToolpathOverlay';
 import { useCamStore } from '@/stores/camStore';
 import { AXIS_H, AXIS_V, axesShown, axisLabel, axisPoint, isAxis } from '@/utils/sketchAxes';
 
@@ -200,18 +200,10 @@ function renderGhostedSketches(ctx: RenderContext) {
 
   // In CAM mode, get selected sketch IDs and operation map for differentiated rendering
   let camSelectedSketchIds: Set<string> | null = null;
-  let camEntityOpMap: Map<string, number> | null = null;
-  let camFocusedOpIndex: number | null = null;
+  let camStyles: Map<string, LineStyle> | null = null;
   if (ctx.camMode) {
-    const camState = useCamStore.getState();
-    camSelectedSketchIds = new Set(camState.jobConfig.selectedSketchIds);
-    camEntityOpMap = new Map();
-    camFocusedOpIndex = camState.focusedOperationIndex;
-    for (let i = 0; i < camState.jobConfig.operations.length; i++) {
-      for (const eid of camState.jobConfig.operations[i]!.entityIds) {
-        camEntityOpMap.set(eid, i);
-      }
-    }
+    camSelectedSketchIds = new Set(useCamStore.getState().job.setup.selectedSketchIds);
+    camStyles = camEntityStyles();
   }
 
   for (const sketch of doc.sketches) {
@@ -225,13 +217,7 @@ function renderGhostedSketches(ctx: RenderContext) {
         for (const entity of sketch.entities) {
           if (entity.type === 'dimension') continue;
           if ('construction' in entity && entity.construction) continue;
-          let style: LineStyle = styles.line;
-          const opIdx = camEntityOpMap!.get(entity.id);
-          if (opIdx !== undefined) {
-            const color = CAM_OP_COLORS[opIdx % CAM_OP_COLORS.length]!;
-            style = { color, width: opIdx === camFocusedOpIndex ? 2.5 : 1.5 };
-          }
-          renderEntity(renderer, viewport, entity, style, false, ctx.exportMode);
+          renderEntity(renderer, viewport, entity, camStyles!.get(entity.id) ?? styles.line, false, ctx.exportMode);
         }
       } else {
         // Non-selected sketches in CAM: very faint disabled look
@@ -287,8 +273,27 @@ function pickStyle(
   return styles.line;
 }
 
-/** CAM operation colors for entity highlighting */
-const CAM_OP_COLORS = ['#ff8c00', '#00bcd4', '#8bc34a', '#e91e63', '#9c27b0', '#ff5722'];
+/** CAM operation colours for the shapes an operation cuts (not orange: that's the toolpath). */
+const CAM_OP_COLORS = ['#00a3b8', '#7cb342', '#d81b60', '#8e24aa', '#6d4c41', '#3949ab'];
+const CAM_FOCUS_COLOR = '#2f6fed';
+
+/** In CAM mode: each shape an operation cuts, in that operation's colour.
+ *  With an operation selected, its shapes are blue and the others fade. */
+function camEntityStyles(): Map<string, LineStyle> {
+  const { job, focusedOpId, step } = useCamStore.getState();
+  const focus = step === 'plan' ? focusedOpId : null;
+  const out = new Map<string, LineStyle>();
+  job.operations.forEach((op, i) => {
+    const style: LineStyle = op.id === focus
+      ? { color: CAM_FOCUS_COLOR, width: 2.75 }
+      : { color: CAM_OP_COLORS[i % CAM_OP_COLORS.length]!, width: 1.5, ...(focus ? { opacity: 0.45 } : {}) };
+    for (const id of op.entityIds) {
+      // A shape in the selected operation stays blue even if another one cuts it too.
+      if (op.id === focus || !out.has(id)) out.set(id, style);
+    }
+  });
+  return out;
+}
 
 /** Step 4: Draw active sketch entities */
 function renderActiveSketch(ctx: RenderContext) {
@@ -298,19 +303,11 @@ function renderActiveSketch(ctx: RenderContext) {
   if (!activeSketch || activeSketch.suppressed) return;
 
   // In CAM mode, build a map of entity -> operation index for coloring
-  let camEntityOpMap: Map<string, number> | undefined;
-  let camFocusedOpIndex: number | null = null;
+  let camStyles: Map<string, LineStyle> | undefined;
   let camActiveSketchSelected = true;
   if (ctx.camMode) {
-    const camState = useCamStore.getState();
-    camActiveSketchSelected = camState.jobConfig.selectedSketchIds.includes(activeSketch.id);
-    camEntityOpMap = new Map();
-    camFocusedOpIndex = camState.focusedOperationIndex;
-    for (let i = 0; i < camState.jobConfig.operations.length; i++) {
-      for (const eid of camState.jobConfig.operations[i]!.entityIds) {
-        camEntityOpMap.set(eid, i);
-      }
-    }
+    camActiveSketchSelected = useCamStore.getState().job.setup.selectedSketchIds.includes(activeSketch.id);
+    camStyles = camEntityStyles();
 
     // If active sketch is not CAM-selected, render it faded and return
     if (!camActiveSketchSelected) {
@@ -347,15 +344,7 @@ function renderActiveSketch(ctx: RenderContext) {
     const isReference = 'reference' in entity && !!entity.reference;
 
     // In CAM mode, override style for entities assigned to operations
-    let camStyle: LineStyle | undefined;
-    if (ctx.camMode && camEntityOpMap) {
-      const opIdx = camEntityOpMap.get(entity.id);
-      if (opIdx !== undefined) {
-        const color = CAM_OP_COLORS[opIdx % CAM_OP_COLORS.length]!;
-        const isFocused = opIdx === camFocusedOpIndex;
-        camStyle = { color, width: isFocused ? 2.5 : 1.5 };
-      }
-    }
+    const camStyle: LineStyle | undefined = camStyles?.get(entity.id);
 
     switch (entity.type) {
       case 'line': {
@@ -908,15 +897,66 @@ function renderConstraintLinks(ctx: RenderContext) {
   }
 }
 
+/** A rectangle on the sketch, in screen coordinates: top left and size. */
+function screenRect(viewport: Viewport, r: { x: number; y: number; width: number; height: number }) {
+  const a = viewport.worldToScreen({ x: r.x, y: r.y });
+  const b = viewport.worldToScreen({ x: r.x + r.width, y: r.y + r.height });
+  return { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y) };
+}
+
+const CAM_CLAMP_COLOR = '#d64545';
+const CAM_STOCK_COLOR = '#b7791f';
+
+/** Step 2b: the stock under the shapes, and the clamps on it (hatched, with their height). */
+function renderCamStock(ctx: RenderContext) {
+  if (!ctx.camMode) return;
+  const { renderer, viewport } = ctx;
+  const { resolved, job, drawingClampRect } = useCamStore.getState();
+  const s = screenRect(viewport, resolved.stock);
+  renderer.setGlobalAlpha(0.08);
+  renderer.drawRect({ x: s.x, y: s.y }, { x: s.w, y: s.h }, CAM_STOCK_COLOR);
+  renderer.resetGlobalAlpha();
+  renderer.drawRect({ x: s.x, y: s.y }, { x: s.w, y: s.h }, 'transparent', { color: CAM_STOCK_COLOR, width: 1.25, opacity: 0.8 });
+  const t = job.setup.stock;
+  renderer.drawText(`stock ${round1(resolved.stock.width)} × ${round1(resolved.stock.height)} × ${round1(t.thickness)}`, { x: s.x + 4, y: s.y - 7 }, {
+    color: CAM_STOCK_COLOR, fontSize: 10.5, textAlign: 'left', textBaseline: 'middle',
+  });
+
+  const clamps = [...job.setup.clamps, ...(drawingClampRect ? [{ ...drawingClampRect, id: '', zHeight: NaN }] : [])];
+  for (const c of clamps) {
+    const r = screenRect(viewport, c);
+    renderer.setGlobalAlpha(0.12);
+    renderer.drawRect({ x: r.x, y: r.y }, { x: r.w, y: r.h }, CAM_CLAMP_COLOR);
+    renderer.resetGlobalAlpha();
+    // Diagonal hatching, clipped to the box.
+    const hatch: LineStyle = { color: CAM_CLAMP_COLOR, width: 1, opacity: 0.55 };
+    for (let k = -r.h; k < r.w; k += 8) {
+      const t0 = Math.max(0, -k), t1 = Math.min(r.h, r.w - k);
+      if (t1 <= t0) continue;
+      renderer.drawLine({ x: r.x + k + t0, y: r.y + t0 }, { x: r.x + k + t1, y: r.y + t1 }, hatch);
+    }
+    renderer.drawRect({ x: r.x, y: r.y }, { x: r.w, y: r.h }, 'transparent', { color: CAM_CLAMP_COLOR, width: 1.5 });
+    if (Number.isFinite(c.zHeight)) {
+      renderer.drawText(`clamp ${round1(c.zHeight)} mm high`, { x: r.x + 3, y: r.y + r.h + 9 }, {
+        color: CAM_CLAMP_COLOR, fontSize: 10, textAlign: 'left', textBaseline: 'middle',
+      });
+    }
+  }
+}
+
+function round1(n: number) {
+  return String(Math.round(n * 10) / 10);
+}
+
 /** Step 6: Draw CAM origin marker */
 function renderCamOrigin(ctx: RenderContext) {
   if (!ctx.camMode) return;
   const camState = useCamStore.getState();
-  const origin = camState.jobConfig.origin;
+  const origin = camState.resolved.origin;
   const screenPos = ctx.viewport.worldToScreen(origin);
   const size = 10;
   const picking = camState.pickingOrigin;
-  const color = picking ? '#ff4444' : '#00cc66';
+  const color = picking ? '#ff4444' : '#00a85a';
 
   // Crosshair
   ctx.renderer.drawLine(
@@ -933,7 +973,7 @@ function renderCamOrigin(ctx: RenderContext) {
   ctx.renderer.drawCircle(screenPos, size * 0.7, { color, width: 1.5 });
 
   // Label
-  ctx.renderer.drawText('WCS', { x: screenPos.x + size + 3, y: screenPos.y - 3 }, {
+  ctx.renderer.drawText('X0 Y0', { x: screenPos.x + size + 3, y: screenPos.y - 3 }, {
     color,
     fontSize: 10,
     textAlign: 'left',
@@ -945,23 +985,32 @@ function renderCamOrigin(ctx: RenderContext) {
 function renderCamToolpath(ctx: RenderContext) {
   if (!ctx.camMode) return;
   const camState = useCamStore.getState();
-  if (!camState.showToolpathPreview || !camState.toolpath) return;
+  if (!camState.showToolpathPreview || !camState.toolpath || camState.step === 'setup') return;
+  const origin = camState.jobConfig.origin;
 
   if (camState.simState !== 'idle') {
+    // The tool drawn is the one cutting now.
+    const range = camState.opRanges.find((r) => camState.simMoveIndex >= r.start && camState.simMoveIndex < r.end);
+    const k = range ? camState.resolved.configOpIds.indexOf(range.opId) : 0;
     renderSimulatorOverlay(
       ctx.renderer,
       ctx.viewport,
       camState.toolpath,
       camState.issues,
       ctx.palette,
-      camState.jobConfig.origin,
+      origin,
       {
         simMoveIndex: camState.simMoveIndex,
         simProgress: camState.simProgress,
         simPosition: camState.simPosition,
       },
-      camState.jobConfig.operations[0]?.cutting.tool.diameter ?? 3,
+      camState.jobConfig.operations[Math.max(k, 0)]?.cutting.tool.diameter ?? 3,
     );
+    return;
+  }
+  const focus = camState.step === 'plan' ? camState.opRanges.find((r) => r.opId === camState.focusedOpId) : undefined;
+  if (focus) {
+    renderToolpathFocus(ctx.renderer, ctx.viewport, camState.toolpath, ctx.palette, origin, focus);
   } else {
     renderToolpathOverlay(
       ctx.renderer,
@@ -969,7 +1018,7 @@ function renderCamToolpath(ctx: RenderContext) {
       camState.toolpath,
       camState.issues,
       ctx.palette,
-      camState.jobConfig.origin,
+      origin,
     );
   }
 }
@@ -981,6 +1030,7 @@ export function renderFrame(ctx: RenderContext): void {
     if (ctx.showGrid !== false) renderGrid(ctx);
     renderAxes(ctx);
   }
+  renderCamStock(ctx);
   renderGhostedSketches(ctx);
   renderActiveSketch(ctx);
   if (!ctx.exportMode) renderCopyPreview(ctx);
