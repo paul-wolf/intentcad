@@ -10,7 +10,7 @@ import type {
   CamProfileConfig,
   OperationCuttingParams,
 } from '@/types/cam';
-import { createDefaultJobConfig, createDefaultCutting, migrateCamJobConfig } from '@/types/cam';
+import { createDefaultJobConfig, createDefaultCutting, normalizeCamJobConfig, applyCamSuggestion } from '@/types/cam';
 import { generateGcode } from '@/cam/generate';
 import { moveLength, interpolateMove } from '@/cam/simulatorInterp';
 import { downloadGcode } from '@/export/gcode';
@@ -159,7 +159,7 @@ export const useCamStore = create<CamStore>((set, get) => ({
   async openJob(jobId: string) {
     try {
       const result = await camApi.getJob(jobId);
-      const config = migrateCamJobConfig(result.config ?? createDefaultJobConfig());
+      const config = normalizeCamJobConfig(result.config ?? createDefaultJobConfig());
       set({
         activeJobId: jobId,
         jobConfig: config,
@@ -570,11 +570,15 @@ export const useCamStore = create<CamStore>((set, get) => ({
         profile_config: profileConfig,
       });
       if (result.config && Object.keys(result.config).length > 0) {
-        const suggestedConfig = result.config as unknown as Partial<CamJobConfig>;
-        set((s) => ({
-          jobConfig: { ...s.jobConfig, ...suggestedConfig },
-        }));
-        addLog('info', 'AI suggestion applied to job config');
+        // The suggestion is outside data: complete and check it before it
+        // reaches the UI (a raw merge left operations without cutting
+        // parameters and crashed the operations panel).
+        const sketches = Array.isArray(documentData.sketches) ? documentData.sketches as { entities?: { id: string }[] }[] : [];
+        const knownIds = new Set(sketches.flatMap((s) => (s.entities ?? []).map((e) => e.id)));
+        const applied = applyCamSuggestion(get().jobConfig, result.config, knownIds);
+        set({ jobConfig: applied.config });
+        for (const note of applied.notes) addLog('warn', note);
+        addLog('info', `AI suggestion applied: ${applied.config.operations.length} operation(s)`);
       }
       for (const note of result.notes) {
         addLog('info', `AI: ${note}`);
