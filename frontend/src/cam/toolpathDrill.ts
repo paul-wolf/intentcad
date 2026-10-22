@@ -70,14 +70,7 @@ export function toolpathDrill(
 
         // Retract to safe height (except on last peck, we'll dwell first)
         if (nextDepth >= totalDepth && dwell > 0) {
-          // Dwell at bottom is represented as a zero-length move at feed rate
-          // The G-code emitter will add G4 for dwell
-          moves.push({
-            kind: 'linear',
-            to: center,
-            z: -nextDepth,
-            feed: 0, // Signal for dwell
-          });
+          moves.push({ kind: 'dwell', to: center, z: -nextDepth, seconds: dwell });
         }
 
         // Retract
@@ -95,12 +88,7 @@ export function toolpathDrill(
       });
 
       if (dwell > 0) {
-        moves.push({
-          kind: 'linear',
-          to: center,
-          z: -totalDepth,
-          feed: 0,
-        });
+        moves.push({ kind: 'dwell', to: center, z: -totalDepth, seconds: dwell });
       }
 
       // Retract

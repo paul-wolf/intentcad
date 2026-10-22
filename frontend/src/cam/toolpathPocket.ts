@@ -184,16 +184,23 @@ export function toolpathPocket(
     prevArea = nextArea;
   }
 
-  // Build toolpath: traverse rings from outermost to innermost
-  // For climb milling with CCW boundary, we go CW (outermost first, inward)
+  // Build toolpath: traverse rings from outermost to innermost.
+  // Rings run counter-clockwise in sketch (x, y), which is clockwise on the
+  // machine seen from above (Y flipped). With a clockwise spindle (M3), climb
+  // milling inside a pocket needs counter-clockwise travel on the machine, so
+  // climb reverses the rings.
   const moves: ToolpathMove[] = [];
   const isClimb = direction === 'climb';
 
   for (let ri = 0; ri < rings.length; ri++) {
     const ring = rings[ri]!;
-    const pts = isClimb ? ring : [...ring].reverse();
+    const pts = isClimb ? [...ring].reverse() : ring;
 
-    // Rapid to start of ring
+    // Each ring starts with a rapid: depthPasses turns it into lift, travel at
+    // safe Z, plunge. A straight feed from one ring's start to the next is not
+    // safe: rings don't start at matching corners, so on a concave pocket that
+    // line can run through uncut material or out through the wall. (Linking
+    // inside the cleared area is phase 2, with the new offsetting.)
     moves.push({ kind: 'rapid', to: pts[0]!, z: 0 });
 
     // Trace the ring
@@ -206,7 +213,7 @@ export function toolpathPocket(
 
   // Final wall finishing pass (the outermost ring, traced again for clean walls)
   if (rings.length > 1) {
-    const wall = isClimb ? wallContour : [...wallContour].reverse();
+    const wall = isClimb ? [...wallContour].reverse() : wallContour;
     moves.push({ kind: 'rapid', to: wall[0]!, z: 0 });
     for (let i = 1; i < wall.length; i++) {
       moves.push({ kind: 'linear', to: wall[i]!, z: 0, feed: feedRate });

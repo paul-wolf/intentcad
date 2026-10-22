@@ -66,5 +66,7 @@ export function entityToSegments(entities: Entity[], entityIds: string[]): CncSe
     }
   }
 
-  return segments;
+  // Zero-length segments (repeated points) carry no direction: drop them, so
+  // corner checks compare each edge with its real neighbours.
+  return segments.filter((s) => Math.hypot(s.to.x - s.from.x, s.to.y - s.from.y) > 1e-9);
 }

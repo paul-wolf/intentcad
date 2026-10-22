@@ -13,6 +13,8 @@ import { arcFromBulge } from '@/utils/arcGeometry';
 export interface ProfileResult {
   moves: ToolpathMove[];
   startPosition: Point;
+  /** Set when this contour can't be offset safely; `moves` is then empty. */
+  problem?: string;
 }
 
 export function toolpathProfile(
@@ -29,8 +31,19 @@ export function toolpathProfile(
   const moves: ToolpathMove[] = [];
   const toolRadius = toolDiameter / 2;
 
-  // For 'on' cutting or when tool radius is negligible, follow segments directly
-  const offsetSegments = cutSide === 'on' ? segments : offsetContour(segments, toolRadius, cutSide);
+  // For 'on' cutting, follow segments directly
+  let offsetSegments = segments;
+  if (cutSide !== 'on') {
+    const offset = offsetContour(segments, toolRadius, cutSide);
+    if (offset.problem || offset.segments.length === 0) {
+      return {
+        moves: [],
+        startPosition: segments[0]!.from,
+        problem: offset.problem ?? 'the shape is too small for this tool',
+      };
+    }
+    offsetSegments = offset.segments;
+  }
 
   const startPosition = offsetSegments[0]!.from;
 
@@ -51,6 +64,7 @@ export function toolpathProfile(
         to: seg.to,
         z: 0,
         center,
+        // Clockwise as seen on screen (see ArcMove).
         clockwise: !arc.counterClockwise,
         feed: feedRate,
       });
@@ -80,19 +94,49 @@ function offsetContour(
   segments: CncSegment[],
   offset: number,
   side: 'inside' | 'outside',
-): CncSegment[] {
+): { segments: CncSegment[]; problem?: string } {
   const sign = side === 'outside' ? 1 : -1;
   const raw: CncSegment[] = [];
 
-  for (const seg of segments) {
+  // Corners joined at an angle where an arc is involved can't be offset by the
+  // simple joins below without gouging (they need a proper corner join; phase 2).
+  // Refuse them rather than cut into the part.
+  const closedInput = segments.length >= 2 &&
+    distSq(segments[0]!.from, segments[segments.length - 1]!.to) < CLOSED_TOL_SQ;
+  for (let i = 0; i < segments.length; i++) {
+    if (i === segments.length - 1 && !closedInput) break;
+    const a = segments[i]!;
+    const b = segments[(i + 1) % segments.length]!;
+    if (a.bulge === 0 && b.bulge === 0) continue;
+    if (!isTangent(endDirection(a), startDirection(b))) {
+      return {
+        segments: [],
+        problem: 'an arc meets another edge at a sharp corner; inside/outside cuts need arcs to join smoothly (tangent) for now',
+      };
+    }
+  }
+
+  for (let si = 0; si < segments.length; si++) {
+    const seg = segments[si]!;
     if (seg.bulge !== 0) {
       // For arc segments, adjust the radius
       const arc = arcFromBulge(seg.from, seg.to, seg.bulge);
-      const adjustedRadius = arc.radius + sign * offset;
+      // The contour runs counter-clockwise (generate.ts), so an arc with a
+      // positive bulge is convex and grows outward; a negative one is concave.
+      const adjustedRadius = arc.radius + sign * offset * (seg.bulge > 0 ? 1 : -1);
 
-      if (adjustedRadius <= 0) {
-        // Arc collapses — skip or replace with point
-        continue;
+      if (adjustedRadius <= 1e-6) {
+        // A fillet no bigger than the tool between two straight edges (a
+        // rounded corner cut from the inside, say): the tool can't follow it,
+        // so drop the arc and let the two offset lines meet in a corner. That
+        // leaves the tool's radius in the corner, never a gouge.
+        const prev = si > 0 ? segments[si - 1] : closedInput ? segments[segments.length - 1] : undefined;
+        const next = si < segments.length - 1 ? segments[si + 1] : closedInput ? segments[0] : undefined;
+        if (prev && next && prev.bulge === 0 && next.bulge === 0) continue;
+        return {
+          segments: [],
+          problem: `an arc of radius ${arc.radius.toFixed(2)}mm is too tight for a ${(offset * 2).toFixed(2)}mm tool`,
+        };
       }
 
       // Compute new endpoints on the offset arc
@@ -127,14 +171,13 @@ function offsetContour(
     }
   }
 
-  if (raw.length < 2) return raw;
+  if (raw.length < 2) return { segments: raw };
 
   // Join adjacent segments at corners: for two consecutive line segments
   // whose endpoints don't meet, find the intersection of the two lines
   // and adjust both endpoints to the intersection point.
   // For a closed contour, also join last→first.
-  const isClosed = segments.length >= 2 &&
-    distSq(segments[0]!.from, segments[segments.length - 1]!.to) < 1e-4;
+  const isClosed = closedInput;
 
   const n = raw.length;
   for (let i = 0; i < n; i++) {
@@ -155,7 +198,8 @@ function offsetContour(
         b.from = ix;
       }
     } else {
-      // For mixed line/arc corners, use the midpoint as a simple approximation
+      // Tangent line/arc joins (checked above) offset to the same point, up to
+      // rounding; close the tiny gap.
       const mid = {
         x: (a.to.x + b.from.x) / 2,
         y: (a.to.y + b.from.y) / 2,
@@ -165,7 +209,33 @@ function offsetContour(
     }
   }
 
-  return raw;
+  return { segments: raw };
+}
+
+/** Same tolerance generate.ts uses to decide a chained contour is closed. */
+const CLOSED_TOL_SQ = 0.5 * 0.5;
+
+/** Direction of travel at a segment's start, in sketch (x, y). */
+function startDirection(seg: CncSegment): Point {
+  return seg.bulge === 0 ? { x: seg.to.x - seg.from.x, y: seg.to.y - seg.from.y } : arcTangent(seg, seg.from);
+}
+
+/** Direction of travel at a segment's end, in sketch (x, y). */
+function endDirection(seg: CncSegment): Point {
+  return seg.bulge === 0 ? { x: seg.to.x - seg.from.x, y: seg.to.y - seg.from.y } : arcTangent(seg, seg.to);
+}
+
+/** Tangent of an arc segment at one of its ends: a positive bulge turns counter-clockwise in (x, y). */
+function arcTangent(seg: CncSegment, p: Point): Point {
+  const { center } = arcFromBulge(seg.from, seg.to, seg.bulge);
+  const rx = p.x - center.x, ry = p.y - center.y;
+  return seg.bulge > 0 ? { x: -ry, y: rx } : { x: ry, y: -rx };
+}
+
+function isTangent(u: Point, v: Point): boolean {
+  const lu = Math.hypot(u.x, u.y), lv = Math.hypot(v.x, v.y);
+  if (lu < 1e-12 || lv < 1e-12) return true;
+  return (u.x * v.x + u.y * v.y) / (lu * lv) > Math.cos(Math.PI / 180); // within 1°
 }
 
 function distSq(a: Point, b: Point): number {

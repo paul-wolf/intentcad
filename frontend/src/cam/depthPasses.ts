@@ -1,50 +1,57 @@
-import type { ToolpathMove } from '@/types/cam';
-import type { DepthSettings } from '@/types/cam';
+import type { Point } from '@/types/document';
+import type { ToolpathMove, DepthSettings } from '@/types/cam';
 
 /**
- * Replicate a single-depth toolpath across multiple Z depth passes.
- * Input moves should have z=0 as reference depth.
- * Output moves have Z adjusted for each pass, with rapid retracts between passes.
+ * Replicate a single-depth toolpath across Z depth passes.
+ *
+ * Input moves are a 2D pattern (their z is ignored). Each pass:
+ *   rapid to the start at safe Z → plunge straight down at the plunge rate →
+ *   the pattern's feed moves at the pass depth → rapid straight up to safe Z.
+ *
+ * A rapid inside the pattern never runs at depth: the tool goes straight up to
+ * safe Z, across, and plunges again. (A rapid to where the tool already is, such
+ * as a pattern's leading "go to the start", is dropped.)
  */
 export function depthPasses(
   moves: ToolpathMove[],
   depth: DepthSettings,
   safeZ: number,
-  startPosition?: { x: number; y: number },
+  plungeRate: number,
+  startPosition?: Point,
 ): ToolpathMove[] {
   if (moves.length === 0) return [];
 
   const { totalDepth, depthPerPass, finalPassAllowance } = depth;
   const passes = computePassDepths(totalDepth, depthPerPass, finalPassAllowance);
   const result: ToolpathMove[] = [];
-
-  // Use explicit start position (contour entry point) if provided,
-  // otherwise fall back to first move's destination (legacy behavior)
-  const startPoint = startPosition ?? getMoveTo(moves[0]!);
+  const start = startPosition ?? moves[0]!.to;
 
   for (const passDepth of passes) {
-    // Rapid to safe height at the contour entry point
-    result.push({ kind: 'rapid', to: startPoint, z: safeZ });
+    const z = -passDepth;
+    result.push({ kind: 'rapid', to: start, z: safeZ });
+    result.push({ kind: 'linear', to: start, z, feed: plungeRate });
 
-    // Plunge to pass depth at the start position
-    result.push({
-      kind: 'linear',
-      to: startPoint,
-      z: -passDepth,
-      feed: 0, // Will use plunge rate (handled by caller)
-    });
-
-    // Replay all moves with Z adjusted to this pass depth
+    let cur = start;
     for (const move of moves) {
-      result.push(adjustMoveZ(move, -passDepth));
+      if (move.kind === 'rapid') {
+        if (samePoint(move.to, cur)) continue;
+        result.push({ kind: 'rapid', to: cur, z: safeZ });
+        result.push({ kind: 'rapid', to: move.to, z: safeZ });
+        result.push({ kind: 'linear', to: move.to, z, feed: plungeRate });
+      } else {
+        result.push({ ...move, z });
+      }
+      cur = move.to;
     }
 
-    // Retract after pass
-    const lastMove = moves[moves.length - 1]!;
-    result.push({ kind: 'rapid', to: getMoveTo(lastMove), z: safeZ });
+    result.push({ kind: 'rapid', to: cur, z: safeZ });
   }
 
   return result;
+}
+
+function samePoint(a: Point, b: Point): boolean {
+  return Math.abs(a.x - b.x) < 1e-9 && Math.abs(a.y - b.y) < 1e-9;
 }
 
 /**
@@ -58,9 +65,11 @@ function computePassDepths(
   const depths: number[] = [];
   const roughTarget = totalDepth - finalPassAllowance;
 
+  // A zero or negative step would never reach the target (validate.ts reports it).
+  const step = depthPerPass > 0 ? depthPerPass : Math.max(roughTarget, 0.001);
   let current = 0;
   while (current < roughTarget - 0.001) {
-    current = Math.min(current + depthPerPass, roughTarget);
+    current = Math.min(current + step, roughTarget);
     depths.push(current);
   }
 
@@ -75,19 +84,4 @@ function computePassDepths(
   }
 
   return depths;
-}
-
-function getMoveTo(move: ToolpathMove): { x: number; y: number } {
-  return move.to;
-}
-
-function adjustMoveZ(move: ToolpathMove, z: number): ToolpathMove {
-  switch (move.kind) {
-    case 'rapid':
-      return { ...move, z };
-    case 'linear':
-      return { ...move, z };
-    case 'arc':
-      return { ...move, z };
-  }
 }

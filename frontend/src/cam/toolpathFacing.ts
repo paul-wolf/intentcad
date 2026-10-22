@@ -29,13 +29,17 @@ export function toolpathFacing(
 
   let y = minY;
   let leftToRight = direction === 'climb';
+  let first = true;
 
   while (y <= maxY + 1e-6) {
     const fromX = leftToRight ? minX : maxX;
     const toX = leftToRight ? maxX : minX;
 
-    // Rapid to start of line
-    moves.push({ kind: 'rapid', to: { x: fromX, y }, z: 0 });
+    // The first row's start is where depthPasses plunges; each later row is
+    // reached by a stepover at feed, staying in the cut.
+    if (first) moves.push({ kind: 'rapid', to: { x: fromX, y }, z: 0 });
+    else moves.push({ kind: 'linear', to: { x: fromX, y }, z: 0, feed: feedRate });
+    first = false;
     // Cut across
     moves.push({ kind: 'linear', to: { x: toX, y }, z: 0, feed: feedRate });
 

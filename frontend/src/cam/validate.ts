@@ -9,7 +9,7 @@ import { entityToSegments } from './entityToSegments';
 export function validateCamJob(
   config: CamJobConfig,
   entities: Entity[],
-  _toolpath: ToolpathMove[],
+  toolpath: ToolpathMove[],
 ): CamIssue[] {
   const issues: CamIssue[] = [];
 
@@ -119,6 +119,30 @@ export function validateCamJob(
       }
     }
 
+    if (!(c.safeZ > 0)) {
+      issues.push({
+        severity: 'error',
+        message: `Operation ${i + 1}: safe Z must be above the stock top (greater than 0)`,
+        operationIndex: i,
+      });
+    }
+
+    // Per-operation: rates and steps that would produce no motion or never finish
+    if (!(c.feedRate > 0) || !(c.plungeRate > 0)) {
+      issues.push({
+        severity: 'error',
+        message: `Operation ${i + 1}: feed rate and plunge rate must be greater than 0`,
+        operationIndex: i,
+      });
+    }
+    if (op.kind !== 'drill' && !(c.depth.depthPerPass > 0)) {
+      issues.push({
+        severity: 'error',
+        message: `Operation ${i + 1}: depth per pass must be greater than 0`,
+        operationIndex: i,
+      });
+    }
+
     // Per-operation: depth per pass vs flute length
     if (c.depth.depthPerPass > c.tool.fluteLength) {
       issues.push({
@@ -144,6 +168,71 @@ export function validateCamJob(
         operationIndex: i,
       });
     }
+  }
+
+  if (config.postProcessor.arcOutput === 'linearize') {
+    issues.push({
+      severity: 'error',
+      message: 'Arc output "linearize" is not implemented yet (it would cut arcs as straight chords); use "arcs"',
+    });
+  }
+
+  issues.push(...checkToolpathSafety(config, toolpath));
+  return issues;
+}
+
+/**
+ * Safety check on the finished toolpath, whatever produced it. Z 0 is the
+ * stock top. Errors block G-code output; each rule reports its first offence.
+ */
+export function checkToolpathSafety(config: CamJobConfig, toolpath: ToolpathMove[]): CamIssue[] {
+  const issues: CamIssue[] = [];
+  const TOP = 0;
+  const EPS = 1e-6;
+  let rapidReported = false;
+  let entryReported = false;
+  let prev: { x: number; y: number; z: number } | null = null;
+  let minZ = Infinity;
+
+  for (const move of toolpath) {
+    const z = move.z;
+    const movesXY = prev !== null && (Math.abs(move.to.x - prev.x) > EPS || Math.abs(move.to.y - prev.y) > EPS);
+
+    if (move.kind === 'rapid' && !rapidReported) {
+      const below = z < TOP - EPS || (prev !== null && prev.z < TOP - EPS && movesXY);
+      if (below) {
+        issues.push({
+          severity: 'error',
+          message: 'Rapid move below the stock top: the tool would race through material',
+          position: move.to,
+        });
+        rapidReported = true;
+      }
+    }
+
+    if ((move.kind === 'linear' || move.kind === 'arc') && !entryReported) {
+      const enters = (prev === null || prev.z >= TOP - EPS) && z < TOP - EPS;
+      // With no previous move we can't know it plunged first: refuse it too.
+      if (enters && (movesXY || prev === null)) {
+        issues.push({
+          severity: 'error',
+          message: 'Enters the material while moving sideways: it must plunge straight down first',
+          position: move.to,
+        });
+        entryReported = true;
+      }
+    }
+
+    minZ = Math.min(minZ, z);
+    prev = { x: move.to.x, y: move.to.y, z };
+  }
+
+  const thickness = config.stock.thickness;
+  if (thickness > 0 && minZ < TOP - thickness - 0.001) {
+    issues.push({
+      severity: 'warning',
+      message: `Cuts ${(-(minZ) - thickness).toFixed(2)}mm below the stock (thickness ${thickness}mm), into whatever is under it`,
+    });
   }
 
   return issues;

@@ -499,7 +499,7 @@ export const useCamStore = create<CamStore>((set, get) => ({
 
     let maxFeed = 0;
     for (const m of toolpath) {
-      if (m.kind !== 'rapid' && m.feed > maxFeed) maxFeed = m.feed;
+      if ((m.kind === 'linear' || m.kind === 'arc') && m.feed > maxFeed) maxFeed = m.feed;
     }
     const rapidRate = Math.min(Math.max(maxFeed * 3, 1500), 5000);
 
@@ -511,7 +511,7 @@ export const useCamStore = create<CamStore>((set, get) => ({
 
     while (remainingTime > 0 && moveIdx < toolpath.length) {
       const move = toolpath[moveIdx]!;
-      let feedRate = move.kind === 'rapid' ? rapidRate : move.feed;
+      let feedRate = move.kind === 'linear' || move.kind === 'arc' ? move.feed : rapidRate;
       if (feedRate <= 0) feedRate = rapidRate;
       const speed = (feedRate / 60) * simSpeed;
 

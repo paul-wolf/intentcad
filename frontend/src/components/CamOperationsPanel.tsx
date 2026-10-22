@@ -375,14 +375,8 @@ export function CamOperationsPanel({ onShowCutting }: { onShowCutting?: () => vo
                     <option value="inside">Inside</option>
                     <option value="outside">Outside</option>
                   </select>
-                  <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
-                    <input
-                      type="checkbox"
-                      checked={op.tabs}
-                      onChange={(e) => updateOperation(i, { tabs: e.target.checked })}
-                    />
-                    Tabs
-                  </label>
+                  {/* Tabs are hidden until toolpathProfile implements them: the option
+                      used to be shown but did nothing, so parts were cut loose. */}
                 </>
               )}
 
