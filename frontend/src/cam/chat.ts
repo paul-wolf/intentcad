@@ -117,6 +117,19 @@ export interface ChatApplied {
  * Apply an assistant reply to the job. Anything malformed is left out, never
  * thrown: a garbage reply gives the job back unchanged with a note.
  */
+/**
+ * The AI's summary and answer as one message, without saying a thing twice:
+ * an answer sentence the summary already has is left out.
+ */
+export function replyText(summary: string, answer: string): string {
+  const key = (s: string) => s.toLowerCase().replace(/[^a-z0-9.]+/g, ' ').trim();
+  const sentences = (s: string) => s.match(/[^.!?]+[.!?]*\s*/g) ?? [];
+  const said = new Set(sentences(summary).map(key));
+  if (key(answer).includes(key(summary))) return answer;
+  const rest = sentences(answer).filter((x) => !said.has(key(x))).join('').trim();
+  return [summary, rest].filter(Boolean).join('\n\n');
+}
+
 export function applyCamChat(
   job: CamJobV2,
   raw: unknown,
@@ -126,11 +139,9 @@ export function applyCamChat(
   const reply = isObj(raw) ? raw : {};
   if (!isObj(raw)) notes.push("The assistant's reply couldn't be read");
 
-  const summary = text(reply.summary, 1500);
-  const answer = text(reply.answer, 4000);
   const turn: ChatTurn = {
     role: 'ai',
-    text: [summary, answer].filter(Boolean).join('\n\n') || 'No answer.',
+    text: replyText(text(reply.summary, 1500), text(reply.answer, 4000)) || 'No answer.',
     ...(texts(reply.choices, 10, 300).length ? { choices: texts(reply.choices, 10, 300) } : {}),
     ...(texts(reply.assumptions, 10, 300).length ? { assumptions: texts(reply.assumptions, 10, 300) } : {}),
   };
@@ -230,9 +241,25 @@ export function applyCamChat(
       const n = next.operations.indexOf(op) + 1;
       const ov = overridesFrom(e.overrides, `Edit to operation ${n}`);
       const reset = Array.isArray(e.reset) ? e.reset.filter((k): k is OverrideKey => (OVERRIDE_KEYS as unknown[]).includes(k)) : [];
-      if (Object.keys(ov).length === 0 && reset.length === 0) continue;
+      // New shapes for it: all of them, replacing the ones it has.
+      let shapes: string[] | null = null;
+      if (Array.isArray(e.entityIds)) {
+        const ids = e.entityIds.filter((x): x is string => typeof x === 'string');
+        const good = [...new Set(ids.filter((id) => known.has(id)))];
+        const unknown = new Set(ids.filter((id) => !known.has(id))).size;
+        if (unknown) notes.push(`Edit to operation ${n}: ${unknown} shape(s) aren't in the job's sketches; left out`);
+        if (good.length) shapes = good;
+        else notes.push(`Edit to operation ${n}: none of the new shapes exist; kept its shapes`);
+      }
+      if (Object.keys(ov).length === 0 && reset.length === 0 && !shapes) continue;
       // An accepted operation keeps how it was, so Reject can put it back.
-      if (op.status === 'accepted' && !op.aiPrev) op.aiPrev = { overrides: { ...op.overrides }, ai: [...op.ai], ...(op.reason ? { reason: op.reason } : {}) };
+      if (op.status === 'accepted' && !op.aiPrev) {
+        op.aiPrev = { overrides: { ...op.overrides }, ai: [...op.ai], ...(op.reason ? { reason: op.reason } : {}), entityIds: [...op.entityIds], sketchId: op.sketchId };
+      }
+      if (shapes) {
+        op.entityIds = shapes;
+        op.sketchId = ctx.sketchOf.get(shapes[0]!) ?? op.sketchId;
+      }
       for (const k of reset) { delete op.overrides[k]; op.ai = op.ai.filter((x) => x !== k); }
       Object.assign(op.overrides, ov);
       op.ai = [...new Set([...op.ai, ...(Object.keys(ov) as OverrideKey[])])];
@@ -265,7 +292,15 @@ export function applyCamChat(
 export function rejectAiEdit(op: PlanOperation): PlanOperation {
   const { aiPrev, reason: _, ...rest } = op;
   if (!aiPrev) return op;
-  return { ...rest, overrides: { ...aiPrev.overrides }, ai: [...aiPrev.ai], ...(aiPrev.reason ? { reason: aiPrev.reason } : {}), status: 'accepted' };
+  return {
+    ...rest,
+    overrides: { ...aiPrev.overrides },
+    ai: [...aiPrev.ai],
+    ...(aiPrev.reason ? { reason: aiPrev.reason } : {}),
+    ...(aiPrev.entityIds ? { entityIds: [...aiPrev.entityIds] } : {}),
+    ...(aiPrev.sketchId !== undefined ? { sketchId: aiPrev.sketchId } : {}),
+    status: 'accepted',
+  };
 }
 
 /** The setup with the AI's unconfirmed changes put back. */

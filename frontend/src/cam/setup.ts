@@ -311,7 +311,7 @@ export interface PlanOperation {
   /** Overrides the AI chose (shown violet until changed). */
   ai: OverrideKey[];
   /** An accepted operation the AI has since edited: how it was, for Reject. */
-  aiPrev?: { overrides: OpOverrides; ai: OverrideKey[]; reason?: string };
+  aiPrev?: { overrides: OpOverrides; ai: OverrideKey[]; reason?: string; entityIds?: string[]; sketchId?: string };
 }
 
 export interface ChatTurn {

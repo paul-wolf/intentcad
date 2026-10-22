@@ -1,6 +1,7 @@
 import type { Entity } from '@/types/document';
 import type { CamJobConfig, CamIssue, ToolpathMove } from '@/types/cam';
 import { entityToSegments } from './entityToSegments';
+import { groupContours, isClosed } from './contours';
 import { moveLength } from './simulatorInterp';
 
 /** The steepest a cut may go down into the material while moving sideways (a ramp), degrees. */
@@ -34,18 +35,22 @@ export function validateCamJob(
     const opEntities = entities.filter((e) => op.entityIds.includes(e.id));
 
     if (op.kind === 'profile') {
-      // Check for unclosed profile used for inside/outside cut
+      // An inside or outside cut needs closed outlines. Lines that meet end to
+      // end count as one outline, as the toolpath joins them (groupContours).
       if (op.cutSide !== 'on') {
-        for (const e of opEntities) {
-          if (e.type === 'line' && !e.closed) {
-            issues.push({
-              severity: 'error',
-              message: `Operation ${i + 1}: inside/outside cut requires a closed profile, but entity is open`,
-              operationIndex: i,
-              entityId: e.id,
-              position: e.points[0],
-            });
-          }
+        for (const contour of groupContours(entityToSegments(opEntities, op.entityIds))) {
+          if (isClosed(contour)) continue;
+          const a = contour[0]!.from;
+          const b = contour[contour.length - 1]!.to;
+          const what = contour.length === 1 ? 'A line' : `${contour.length} lines`;
+          issues.push({
+            severity: 'error',
+            message: `Operation ${i + 1}: ${what} that ${contour.length === 1 ? "doesn't" : "don't"} make a closed outline `
+              + `(the ends are ${Math.hypot(b.x - a.x, b.y - a.y).toFixed(1)} mm apart). `
+              + 'Double-click a line to pick its whole outline, or cut on the line',
+            operationIndex: i,
+            position: a,
+          });
         }
       }
 

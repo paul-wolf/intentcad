@@ -410,3 +410,29 @@ describe('normalising saved and AI values', () => {
     expect(job.thread).toEqual([{ role: 'ai', text: 'hello' }]);
   });
 });
+
+describe('depth against the stock', () => {
+  it('warns when an outside cut is too shallow to free the part, and says so for blind holes', () => {
+    const machine = createDefaultMachine();
+    const job = setupJob(12);
+    const profile = newPlanOperation('profile', 's', ['r'], 'outside');
+    const holes = newPlanOperation('drill', 's', ['h'], 'on');
+    profile.overrides = { depth: 6 };
+    holes.overrides = { depth: 6 };
+    job.operations = [holes, profile];
+    const issues = resolveJob(job, machine, [rect('r'), circle('h', 5, 5, 2)]).issues;
+    const allowance = Number((12 + machine.spoilboardAllowance).toFixed(2));
+    expect(issues).toContainEqual({
+      severity: 'warning', opId: profile.id,
+      message: `Operation 2: 6 mm deep in 12 mm stock, so this outside cut won't free the part. Reset the depth to cut through (${allowance} mm)`,
+    });
+    expect(issues).toContainEqual({
+      severity: 'info', opId: holes.id,
+      message: "Operation 1: the holes are 6 mm deep in 12 mm stock, so they won't go through. Reset the depth if they should",
+    });
+    // Through by default: nothing to say.
+    profile.overrides = {};
+    holes.overrides = {};
+    expect(resolveJob(job, machine, [rect('r'), circle('h', 5, 5, 2)]).issues.filter((i) => /deep in/.test(i.message))).toEqual([]);
+  });
+});

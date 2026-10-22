@@ -861,6 +861,21 @@ describe('validateCamJob safety check', () => {
   });
 
 
+  it('takes lines that meet end to end as one closed outline, and flags one that is open once', () => {
+    const corners = [{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 50, y: 30 }, { x: 0, y: 30 }];
+    const sides = corners.map((p, k) => ({ id: `s${k}`, type: 'line', closed: false, points: [p, corners[(k + 1) % 4]!] }) as Entity);
+    const c = createDefaultJobConfig();
+    const outlineIssues = (ids: string[]) => {
+      c.operations = [profile(ids, 'outside')];
+      return validateCamJob(c, sides, []).filter((i) => /closed outline/.test(i.message));
+    };
+    expect(outlineIssues(['s0', 's1', 's2', 's3'])).toEqual([]);
+    const open = outlineIssues(['s0', 's1', 's2']);
+    expect(open).toHaveLength(1);
+    expect(open[0]!.message).toMatch(/3 lines that don't make a closed outline \(the ends are 30\.0 mm apart\)/);
+    expect(outlineIssues(['s1'])[0]!.message).toMatch(/A line that doesn't/);
+  });
+
   it('accepts a clean plunge and cut', () => {
     const issues = check([
       { kind: 'rapid', to: { x: 0, y: 0 }, z: 5 },
