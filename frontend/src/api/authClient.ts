@@ -1,4 +1,4 @@
-import type { User, UserDetail, OrganisationDetail } from '@/types/auth';
+import type { User, UserDetail, OrganisationDetail, UserEventList, UserEventQuery } from '@/types/auth';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8951/api';
 const AUTH_BASE = `${API_BASE}/auth`;
@@ -153,5 +153,15 @@ export const authApi = {
 
   deleteOrganisation(id: string): Promise<void> {
     return authRequest(`/manage/organisations/${id}`, { method: 'DELETE' });
+  },
+
+  // ── User events (superuser only) ──
+
+  listEvents(query: UserEventQuery): Promise<UserEventList> {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(query)) {
+      if (v !== undefined && v !== '') params.set(k, String(v));
+    }
+    return authRequest(`/manage/events?${params}`);
   },
 };

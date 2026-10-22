@@ -439,7 +439,7 @@ def edit_model(request, payload: EditRequest):
         # a failed edit can still have been billed (a script that didn't build,
         # then a retry): log that spend and report it with the error
         if exc.usage:
-            _log_ai_edit(request, payload, exc.usage)
+            _log_ai_edit(request, payload, exc.usage, failed=True)
         spend = (exc.usage or {}) if sees_spend(request.user) else {}
         return JsonResponse({"message": str(exc), **spend}, status=422)
     usage = _log_ai_edit(request, payload, r)
@@ -480,8 +480,11 @@ def sees_spend(user) -> bool:
     return bool(user.is_staff or user.is_superuser)
 
 
-def _log_ai_edit(request, payload, r: dict) -> dict:
-    """Record one AI edit's spend; returns its token counts."""
+def _log_ai_edit(request, payload, r: dict, failed: bool = False) -> dict:
+    """Record one AI edit's spend (and the user's event); returns its token counts."""
+    from accounts.events import record_ai_call
+
+    record_ai_call(request, "part chat", payload.document_id, payload.instruction, r, failed)
     usage = {k: r.get(k, 0) for k in ("tokens_in", "tokens_out", "cache_read_tokens",
                                       "cache_write_tokens")}
     AiEdit.objects.create(

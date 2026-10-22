@@ -1,9 +1,15 @@
+from datetime import datetime, time
+
 from django.conf import settings
 from django.contrib.auth import authenticate, login, logout
+from django.db.models import Count, Max, Q, Sum
+from django.utils import timezone
+from django.utils.dateparse import parse_date, parse_datetime
 from django.middleware.csrf import get_token
 from ninja import Router
 
-from .models import LoginLog, Organisation, User
+from .events import record_event
+from .models import LoginLog, Organisation, User, UserEvent
 from .schemas import (
     ChangePasswordSchema,
     CreateUserSchema,
@@ -19,6 +25,7 @@ from .schemas import (
     UpdateMeSchema,
     UpdateUserSchema,
     UserDetailSchema,
+    UserEventListSchema,
     UserSchema,
 )
 
@@ -113,10 +120,13 @@ def login_user(request, credentials: LoginSchema):
         else:
             existing_user = User.objects.get(username=credentials.username)
     except User.DoesNotExist:
+        record_event(UserEvent.LOGIN_FAILED, request, text=credentials.username[:254])
         return 401, {"message": "Invalid credentials"}
 
     if existing_user.is_locked():
         from django.utils import timezone
+
+        record_event(UserEvent.LOGIN_FAILED, request, user=existing_user, text="account locked")
 
         remaining = int(
             (existing_user.locked_until - timezone.now()).total_seconds() // 60
@@ -137,6 +147,7 @@ def login_user(request, credentials: LoginSchema):
             user_agent=user_agent,
             success=False,
         )
+        record_event(UserEvent.LOGIN_FAILED, request, user=existing_user, text="wrong password")
         return 401, {"message": "Invalid credentials"}
 
     user.clear_failed_logins()
@@ -147,11 +158,14 @@ def login_user(request, credentials: LoginSchema):
         success=True,
     )
     login(request, user)
+    record_event(UserEvent.LOGIN, request, user=user)
     return 200, {"user": user_to_schema(user), "message": "Login successful"}
 
 
 @router.post("/logout", response=MessageSchema)
 def logout_user(request):
+    if request.user.is_authenticated:
+        record_event(UserEvent.LOGOUT, request)
     logout(request)
     return {"message": "Logged out successfully"}
 
@@ -621,3 +635,129 @@ def delete_organisation(request, org_id: str):
 
     org.delete()
     return 204, None
+
+
+# ── User events (superuser only) ──
+
+
+def _display_name(user) -> str:
+    return f"{user.first_name} {user.last_name}".strip() or user.username
+
+
+def _parse_when(value: str | None) -> datetime | None:
+    """An ISO date-time, or a date meaning the start of that day (server time)."""
+    if not value:
+        return None
+    try:
+        dt = parse_datetime(value)
+        if dt is None:
+            d = parse_date(value)
+            if d is None:
+                return None
+            dt = datetime.combine(d, time.min)
+    except ValueError:
+        return None
+    return timezone.make_aware(dt) if timezone.is_naive(dt) else dt
+
+
+@router.get(
+    "/manage/events",
+    response={200: UserEventListSchema, 400: MessageSchema, 401: MessageSchema, 403: MessageSchema},
+)
+def list_events(request, q: str = "", kind: str = "", user: str = "", since: str = "", until: str = "",
+                offset: int = 0, limit: int = 100):
+    """Events, newest first, with the AI spend over the filter and the totals per
+    user (those ignore the kind and user filters). `until` is exclusive."""
+    if not request.user.is_authenticated:
+        return 401, {"message": "Authentication required"}
+    if not request.user.is_superuser:
+        return 403, {"message": "Superuser access required"}
+    if kind and kind not in dict(UserEvent.KINDS):
+        return 400, {"message": f"Unknown kind: {kind}"}
+    start, end = _parse_when(since), _parse_when(until)
+    if (since and start is None) or (until and end is None):
+        return 400, {"message": "since and until must be ISO dates"}
+
+    qs = UserEvent.objects.all()
+    if start:
+        qs = qs.filter(created_at__gte=start)
+    if end:
+        qs = qs.filter(created_at__lt=end)
+    for word in q.split():
+        qs = qs.filter(
+            Q(user_email__icontains=word) | Q(user__username__icontains=word)
+            | Q(user__first_name__icontains=word) | Q(user__last_name__icontains=word)
+            | Q(document_name__icontains=word) | Q(text__icontains=word)
+        )
+    everyone = qs
+    if user:
+        qs = qs.filter(user_id=user)
+    if kind:
+        qs = qs.filter(kind=kind)
+
+    ai = Q(kind=UserEvent.AI_CALL)
+    spend = qs.aggregate(cost=Sum("cost_usd", filter=ai), calls=Count("id", filter=ai))
+    totals = (
+        everyone.exclude(user=None)
+        .values("user_id")
+        .annotate(
+            ai_calls=Count("id", filter=ai),
+            cost=Sum("cost_usd", filter=ai),
+            logins=Count("id", filter=Q(kind=UserEvent.LOGIN)),
+            created=Count("id", filter=Q(kind=UserEvent.DOCUMENT_CREATED)),
+            last=Max("created_at"),
+        )
+    )
+    people = {u.id: u for u in User.objects.select_related("organisation").filter(id__in=[t["user_id"] for t in totals])}
+    by_user = sorted(
+        (
+            {
+                "user_id": str(t["user_id"]),
+                "email": people[t["user_id"]].email,
+                "name": _display_name(people[t["user_id"]]),
+                "organisation": people[t["user_id"]].organisation.name if people[t["user_id"]].organisation else "",
+                "ai_calls": t["ai_calls"],
+                "cost_usd": t["cost"] or 0.0,
+                "logins": t["logins"],
+                "documents_created": t["created"],
+                "last_at": t["last"].isoformat() if t["last"] else None,
+            }
+            for t in totals
+            if t["user_id"] in people
+        ),
+        key=lambda r: (-r["cost_usd"], -r["ai_calls"], r["email"]),
+    )
+
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    page = qs.select_related("user").order_by("-created_at", "-id")[offset:offset + limit]
+    events = [
+        {
+            "id": e.id,
+            "kind": e.kind,
+            "at": e.created_at.isoformat(),
+            "user_id": str(e.user_id) if e.user_id else None,
+            "user_email": e.user_email,
+            "user_name": _display_name(e.user) if e.user else "",
+            "ip_address": e.ip_address,
+            "user_agent": e.user_agent,
+            "document_id": e.document_id,
+            "document_name": e.document_name,
+            "document_kind": e.document_kind,
+            "text": e.text,
+            "cost_usd": e.cost_usd,
+            "detail": e.detail or {},
+        }
+        for e in page
+    ]
+    users = [
+        {"id": str(u.id), "email": u.email, "name": _display_name(u)}
+        for u in User.objects.order_by("email")
+    ]
+    return 200, {
+        "total": qs.count(),
+        "events": events,
+        "spend": {"cost_usd": spend["cost"] or 0.0, "ai_calls": spend["calls"]},
+        "by_user": by_user,
+        "users": users,
+    }

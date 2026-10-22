@@ -694,6 +694,7 @@ def cam_chat(
         "tokens_out": tok["output"],
         "cache_read_tokens": tok["cache_read"], "cache_write_tokens": tok["cache_write"],
         "cost_usd": round(call_cost(model, tok), 4),
+        "model": model,
     }
     if out.get("kind") == "cam":
         raw = {k: v for k, v in out.items() if k not in ("kind", "usage")}

@@ -11,6 +11,7 @@ import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { ProfilePage } from '@/components/ProfilePage';
 import { UsersPage } from '@/components/UsersPage';
 import { OrganisationsPage } from '@/components/OrganisationsPage';
+import { EventsPage } from '@/components/EventsPage';
 
 export function App() {
   const checkAuth = useAuthStore((s) => s.checkAuth);
@@ -31,6 +32,7 @@ export function App() {
         <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
         <Route path="/manage/users" element={<ProtectedRoute requireStaff><UsersPage /></ProtectedRoute>} />
         <Route path="/manage/organisations" element={<ProtectedRoute requireSuperuser><OrganisationsPage /></ProtectedRoute>} />
+        <Route path="/manage/events" element={<ProtectedRoute requireSuperuser><EventsPage /></ProtectedRoute>} />
       </Routes>
     </BrowserRouter>
   );

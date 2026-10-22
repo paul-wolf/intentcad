@@ -34,3 +34,55 @@ export interface UserDetail extends User {
   failed_login_attempts: number;
   locked_until: string | null;
 }
+
+export type UserEventKind = 'login' | 'login_failed' | 'logout' | 'document_created' | 'ai_call';
+
+export interface UserEvent {
+  id: number;
+  kind: UserEventKind;
+  at: string;
+  user_id: string | null;
+  user_email: string;
+  user_name: string;
+  ip_address: string | null;
+  user_agent: string;
+  document_id: string;
+  document_name: string;
+  document_kind: '' | 'part' | 'sketch';
+  text: string;
+  cost_usd: number;
+  detail: {
+    source?: string; model?: string; failed?: boolean; backfilled?: boolean;
+    tokens_in?: number; tokens_out?: number; cache_read_tokens?: number; cache_write_tokens?: number;
+  };
+}
+
+export interface UserEventTotals {
+  user_id: string;
+  email: string;
+  name: string;
+  organisation: string;
+  ai_calls: number;
+  cost_usd: number;
+  logins: number;
+  documents_created: number;
+  last_at: string | null;
+}
+
+export interface UserEventList {
+  total: number;
+  events: UserEvent[];
+  spend: { cost_usd: number; ai_calls: number };
+  by_user: UserEventTotals[];
+  users: { id: string; email: string; name: string }[];
+}
+
+export interface UserEventQuery {
+  q?: string;
+  kind?: string;
+  user?: string;
+  since?: string;
+  until?: string;
+  offset?: number;
+  limit?: number;
+}
