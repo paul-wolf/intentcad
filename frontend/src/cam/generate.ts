@@ -6,7 +6,7 @@ import { toolpathDrill } from './toolpathDrill';
 import { toolpathPocket } from './toolpathPocket';
 import { toolpathFacing } from './toolpathFacing';
 import { depthPasses } from './depthPasses';
-import { groupContours, isClosed, orientCounterClockwise } from './contours';
+import { groupContours, isClosed, nestingDepths, orientCounterClockwise } from './contours';
 import { pathLength, splitAtTabs } from './tabs';
 import { gcodeEmitter } from './gcodeEmitter';
 import { validateCamJob } from './validate';
@@ -48,7 +48,18 @@ export function generateGcode(
 
         // Every closed loop runs counter-clockwise (in sketch coordinates), so
         // "outside" is always to the right of travel, however it was drawn.
-        const contours = groupContours(segments).map(orientCounterClockwise);
+        // A loop inside another is a hole in the part (or, inside a hole, a
+        // part again), so it's cut on the other side; inner loops go first,
+        // so the part isn't cut free before its holes are.
+        const grouped = groupContours(segments).map(orientCounterClockwise);
+        const depths = nestingDepths(grouped);
+        const contours = grouped
+          .map((contour, i) => ({
+            contour,
+            depth: depths[i]!,
+            side: op.cutSide === 'on' || depths[i]! % 2 === 0 ? op.cutSide : op.cutSide === 'outside' ? 'inside' as const : 'outside' as const,
+          }))
+          .sort((a, b) => b.depth - a.depth);
 
         const tabProblem = op.tabs ? checkTabs(op.tabCount, op.tabWidth, op.tabHeight, c.depth.totalDepth) : null;
         if (tabProblem) {
@@ -56,11 +67,11 @@ export function generateGcode(
           break;
         }
 
-        for (const contour of contours) {
+        for (const { contour, side } of contours) {
           const { moves, startPosition, problem } = toolpathProfile(
             contour,
             c.tool.diameter,
-            op.cutSide,
+            side,
             op.cutDirection,
             c.feedRate,
           );

@@ -2,10 +2,12 @@ import type { Point } from '@/types/document';
 import type { ToolpathMove } from '@/types/cam';
 
 /**
- * Holding tabs on a closed profile path: `count` stretches, evenly spaced along
- * the path, where the deepest passes lift over the material instead of cutting
- * it. Each stretch is the tab width plus the tool diameter long, so the bridge
- * left standing is the tab width.
+ * Holding tabs on a closed profile path: `count` stretches, spaced about evenly
+ * along the path, where the deepest passes lift over the material instead of
+ * cutting it. Each stretch is the tab width plus the tool diameter long, so the
+ * bridge left standing is the tab width. A tab is moved along to sit on one
+ * straight move (or failing that one arc) of the path, so it doesn't wrap a
+ * corner, where the bridge would come out thinner.
  */
 export interface TabbedPath {
   /** The path, split at the start and end of every tab. */
@@ -27,10 +29,7 @@ export function pathLength(moves: ToolpathMove[], start: Point): number {
 
 export function splitAtTabs(moves: ToolpathMove[], start: Point, count: number, tabLength: number): TabbedPath {
   const total = pathLength(moves, start);
-  const tabs = Array.from({ length: count }, (_, i) => {
-    const centre = ((i + 0.5) * total) / count;
-    return [centre - tabLength / 2, centre + tabLength / 2] as const;
-  });
+  const tabs = placeTabs(moves, start, total, count, tabLength).map((centre) => [centre - tabLength / 2, centre + tabLength / 2] as const);
   const cuts = tabs.flat();
   const isTab = (s: number) => tabs.some(([a, b]) => s > a && s < b);
 
@@ -58,6 +57,38 @@ export function splitAtTabs(moves: ToolpathMove[], start: Point, count: number, 
     cur = m.to;
   }
   return { moves: out, overTab };
+}
+
+/** Tab centres (distances along the path), sorted. */
+function placeTabs(moves: ToolpathMove[], start: Point, total: number, count: number, tabLength: number): number[] {
+  // Stretches of single moves a whole tab fits on: [first, last] possible centre.
+  const spots: { lo: number; hi: number; arc: boolean }[] = [];
+  let along = 0;
+  let cur = start;
+  for (const m of moves) {
+    const len = moveLength(m, cur);
+    if (len >= tabLength && m.kind !== 'rapid') {
+      spots.push({ lo: along + tabLength / 2, hi: along + len - tabLength / 2, arc: m.kind === 'arc' });
+    }
+    along += len;
+    cur = m.to;
+  }
+  const spacing = total / count;
+  const placed: number[] = [];
+  const clear = (c: number) => placed.every((p) => Math.abs(p - c) >= tabLength);
+  for (let i = 0; i < count; i++) {
+    const target = (i + 0.5) * spacing;
+    let best: number | null = null;
+    let bestCost = Infinity;
+    for (const spot of spots) {
+      const c = Math.max(spot.lo, Math.min(spot.hi, target));
+      // A straight move within half a spacing beats any arc.
+      const cost = Math.abs(c - target) + (spot.arc ? spacing / 2 : 0);
+      if (cost < bestCost && clear(c)) { bestCost = cost; best = c; }
+    }
+    placed.push(best ?? target);
+  }
+  return placed.sort((a, b) => a - b);
 }
 
 // ── Geometry of single moves ──

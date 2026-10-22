@@ -207,7 +207,7 @@ export function OperationCuttingPanel({ onClose }: { onClose: () => void }) {
           min={0.1}
           step={0.25}
         />
-        <label style={labelStyle}>Finish Allowance (mm)</label>
+        <label style={labelStyle} title="Depth left for a last, thin pass at the full depth (0 for none)">Last Pass Depth (mm)</label>
         <input
           type="number"
           value={cutting.depth.finalPassAllowance}

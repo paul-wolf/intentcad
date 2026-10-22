@@ -215,11 +215,14 @@ it cuts, and set its options:
 ![CAM mode: a pocket round an island, a hole and the outline cut out with tabs](images/cam.png)
 
 - **Profile** cuts along a shape, inside, outside or on the line. Sharp outside corners
-  are cut round, and inside corners stay as sharp as the tool allows. **Direction**
+  are cut round, and inside corners stay as sharp as the tool allows. Select a part's
+  outline and its holes together: a shape inside another is a hole and is cut on its
+  inside, and holes are cut before the outline. **Direction**
   chooses climb or conventional milling; the hint under it says whether the tool goes
   clockwise or counter-clockwise round the shape.
 - **Tabs** keeps the part joined to the stock. Tick it and set the number of tabs, their
-  width and their height. On the deepest passes the tool lifts over each tab.
+  width and their height. On the deepest passes the tool lifts over each tab. Tabs are
+  spread round the shape and kept off its corners.
 - **Pocket** clears everything inside a closed shape. Select several shapes to cut
   several pockets in one operation. A shape inside another is an island and is left
   standing. If part of a pocket is too narrow for the tool, a warning says so.

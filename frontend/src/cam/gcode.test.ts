@@ -730,8 +730,8 @@ describe('tabs', () => {
     expect(tabs).toHaveLength(4);
     tabs.forEach((t, i) => {
       expect(t.to - t.from).toBeCloseTo(5 + 3, 2);
-      // Evenly spaced round the path.
-      expect((t.from + t.to) / 2).toBeCloseTo((i + 0.5) * pathLen / 4, 2);
+      // About evenly spaced round the path (moved along to keep off the corners).
+      expect(Math.abs((t.from + t.to) / 2 - (i + 0.5) * pathLen / 4)).toBeLessThan(pathLen / 8);
     });
   });
 

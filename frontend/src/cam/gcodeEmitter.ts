@@ -182,10 +182,16 @@ export function gcodeEmitter(
       case 'arc': {
         // `clockwise` is as seen on screen, which matches the machine seen
         // from above once Y is flipped: clockwise is G2.
-        const gcode = move.clockwise ? 'G2' : 'G3';
+        // An arc whose start and end print the same would be a full circle
+        // to the controller; toolpaths never mean one (circles come as two
+        // halves), so it's a straight move.
+        const closed = lastX !== undefined && lastY !== undefined && fmt(x) === fmt(lastX) && fmt(y) === fmt(lastY);
+        const gcode = closed ? 'G1' : move.clockwise ? 'G2' : 'G3';
         const i = fmt(move.center.x);
         const j = fmt(-move.center.y); // Invert J for Y flip
-        lines.push(`${gcode} X${fmt(x)} Y${fmt(y)} Z${fmt(z)} I${i} J${j} F${fmt(move.feed)}`);
+        lines.push(closed
+          ? `G1 X${fmt(x)} Y${fmt(y)} Z${fmt(z)} F${fmt(move.feed)}`
+          : `${gcode} X${fmt(x)} Y${fmt(y)} Z${fmt(z)} I${i} J${j} F${fmt(move.feed)}`);
         lastX = x;
         lastY = y;
         lastZ = z;

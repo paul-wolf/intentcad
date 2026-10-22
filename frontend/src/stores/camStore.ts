@@ -90,11 +90,8 @@ interface CamStore {
  * stock top (as in the G-code).
  */
 function getMaxSafeZ(config: CamJobConfig): number {
-  let max = 5;
-  for (const op of config.operations) {
-    if (op.cutting.safeZ > max) max = op.cutting.safeZ;
-  }
-  return config.stock.zTop + max;
+  if (config.operations.length === 0) return config.stock.zTop + 5;
+  return config.stock.zTop + Math.max(...config.operations.map((op) => op.cutting.safeZ));
 }
 
 export const useCamStore = create<CamStore>((set, get) => ({

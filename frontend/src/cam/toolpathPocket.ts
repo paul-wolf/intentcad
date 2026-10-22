@@ -27,10 +27,11 @@ import { groupContours, isClosed } from './contours';
  * every wall and island.
  *
  * Rings are linked inside material that's already been cleared: each ring starts
- * at its point nearest the end of the last one, and the link is a feed move only
- * when the whole link is over cleared floor and a tool radius clear of the walls.
- * Otherwise the link is a rapid, which depthPasses() turns into lift, travel and
- * plunge.
+ * at its point nearest the end of the last one, and the link is a feed move when
+ * it stays a tool radius clear of the walls and runs over cleared floor (apart
+ * from its last stepover). Otherwise the tool lifts (depthPasses() turns a rapid
+ * into lift, travel and plunge) and goes down where it has already cut, next to
+ * the ring, so it only plunges into solid material at the start of a pocket.
  *
  * Direction: Clipper gives outer loops counter-clockwise and holes clockwise in
  * sketch (x, y), so the material left standing is on the right of travel; seen
@@ -62,7 +63,7 @@ const CLEARANCE = 0.003;
 /** Rings drop points that are within this of the line through their neighbours (mm). */
 const SIMPLIFY = 0.0005;
 const INNER_SIMPLIFY = 0.005;
-/** Spacing of the points checked along a link (mm). */
+/** Spacing of the points checked along a link for cleared floor (mm). */
 const LINK_STEP = 0.25;
 
 export function toolpathPocket(
@@ -123,11 +124,14 @@ export function toolpathPocket(
   };
   const roots = level0.map((c) => build(c, 10000));
 
-  // Cut them one pocket at a time, nearest first; in each, nearest available
-  // ring first, preferring rings that can be reached by a feed move. A last
-  // pass round the walls gives a clean finish.
+  // Cut them one pocket at a time, nearest first. In each, a level's rings
+  // that border what's already cut (the outer wall ring, coming in) go first,
+  // then the levels inside it, then the rest of its rings (those round
+  // islands), which by then have cleared floor next to them. A last pass round
+  // the walls gives a clean finish.
   const tool: ToolState = {
     r,
+    step,
     wall: region,
     cut: [],
     moves: [],
@@ -146,15 +150,23 @@ export function toolpathPocket(
     }
     return nodes.splice(best, 1)[0]!;
   };
+  const cutNode = (node: Node) => {
+    const left = [...node.rings];
+    let started = false;
+    while (left.length > 0) {
+      const i = nearestFeedable(tool, left);
+      if (i < 0 && started) break;
+      cutRing(tool, left.splice(Math.max(i, 0), 1)[0]!);
+      started = true;
+    }
+    const children = [...node.children];
+    while (children.length > 0) cutNode(pick(children));
+    cutRings(tool, left);
+  };
   const pending = [...roots];
   while (pending.length > 0) {
     const root = pick(pending);
-    const available: Node[] = [root];
-    while (available.length > 0) {
-      const node = pick(available);
-      cutRings(tool, node.rings);
-      available.push(...node.children);
-    }
+    cutNode(root);
     if (root.children.length > 0) cutRings(tool, root.rings);
   }
 
@@ -180,6 +192,8 @@ export function toolpathPocket(
 
 interface ToolState {
   r: number;
+  /** The stepover (mm). */
+  step: number;
   /** The area to clear (the walls). */
   wall: PathsD;
   /** Every stretch cut so far. */
@@ -191,29 +205,48 @@ interface ToolState {
   reverse: boolean;
 }
 
-/** Cut these rings, each one nearest the tool next. */
+/** Index of the ring the tool can feed onto with the shortest link, or -1. */
+function nearestFeedable(tool: ToolState, rings: PathD[]): number {
+  if (!tool.at) return -1;
+  let best = -1;
+  let bestD = Infinity;
+  for (const [i, ring] of rings.entries()) {
+    const q = nearestOn(ring, tool.at).point;
+    const d = dist(tool.at, q);
+    if (d < bestD && canFeed(tool, tool.at, q)) { bestD = d; best = i; }
+  }
+  return best;
+}
+
+/** Cut these rings, each one nearest the tool next, preferring those it can feed onto. */
 function cutRings(tool: ToolState, rings: PathD[]) {
   const left = [...rings];
   while (left.length > 0) {
-    let best = 0;
-    if (tool.at) {
+    let best = nearestFeedable(tool, left);
+    if (best < 0 && tool.at) {
       let bestD = Infinity;
       for (const [i, ring] of left.entries()) {
-        const q = nearestOn(ring, tool.at).point;
-        const d = dist(tool.at, q) + (canFeed(tool, tool.at, q) ? 0 : 1e6);
+        const d = dist(tool.at, nearestOn(ring, tool.at).point);
         if (d < bestD) { bestD = d; best = i; }
       }
     }
-    cutRing(tool, left.splice(best, 1)[0]!);
+    cutRing(tool, left.splice(Math.max(best, 0), 1)[0]!);
   }
 }
 
 function cutRing(tool: ToolState, ring: PathD) {
   const path = tool.reverse ? [...ring].reverse() : ring;
-  // Start at the ring's point nearest the tool.
-  let pts: Point[];
+  // Start at the ring's point nearest the tool. When the tool can't feed
+  // there, go down somewhere already cut that it can feed onto the ring from,
+  // so it never plunges into solid material (except at the first ring).
+  let entry: { down: Point; onto: Point } | null = null;
   if (tool.at) {
-    const { index, point } = nearestOn(path, tool.at);
+    const q = nearestOn(path, tool.at).point;
+    entry = canFeed(tool, tool.at, q) ? { down: tool.at, onto: q } : findEntry(tool, path) ?? { down: q, onto: q };
+  }
+  let pts: Point[];
+  if (entry) {
+    const { index, point } = nearestOn(path, entry.onto);
     // `point` lies on the edge from path[index] to the next point.
     const n = path.length;
     pts = [point];
@@ -225,15 +258,14 @@ function cutRing(tool: ToolState, ring: PathD) {
   pts = pts.filter((p, i) => i === 0 || dist(p, pts[i - 1]!) > 1e-9);
 
   const start = pts[0]!;
-  if (tool.at && dist(tool.at, start) > 1e-9) {
-    if (canFeed(tool, tool.at, start)) {
-      tool.moves.push({ kind: 'linear', to: start, z: 0, feed: tool.feedRate });
-      tool.cut.push([tool.at, start]);
-    } else {
-      tool.moves.push({ kind: 'rapid', to: start, z: 0 });
-    }
-  } else if (!tool.at) {
+  if (!tool.at || !entry) {
     tool.moves.push({ kind: 'rapid', to: start, z: 0 });
+  } else {
+    if (dist(tool.at, entry.down) > 1e-9) tool.moves.push({ kind: 'rapid', to: entry.down, z: 0 });
+    if (dist(entry.down, start) > 1e-9) {
+      tool.moves.push({ kind: 'linear', to: start, z: 0, feed: tool.feedRate });
+      tool.cut.push([entry.down, start]);
+    }
   }
   for (let i = 1; i < pts.length; i++) {
     tool.moves.push({ kind: 'linear', to: pts[i]!, z: 0, feed: tool.feedRate });
@@ -243,15 +275,51 @@ function cutRing(tool: ToolState, ring: PathD) {
 }
 
 /**
- * A straight feed from a to b is safe: every point of it is over floor that's
- * already been cut and at least a tool radius inside the walls.
+ * A point already cut and a point on the ring with a safe feed between them,
+ * as close together as possible; null when there's none.
+ */
+function findEntry(tool: ToolState, ring: PathD): { down: Point; onto: Point } | null {
+  if (tool.cut.length === 0) return null;
+  // Points along the ring, no more than about a millimetre apart.
+  const samples: Point[] = [];
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i]!, b = ring[(i + 1) % ring.length]!;
+    const n = Math.max(1, Math.ceil(dist(a, b)));
+    for (let k = 0; k < n; k++) samples.push({ x: a.x + ((b.x - a.x) * k) / n, y: a.y + ((b.y - a.y) * k) / n });
+  }
+  const every = Math.max(1, Math.floor(samples.length / 400));
+  const pairs: { down: Point; onto: Point; d: number }[] = [];
+  for (let i = 0; i < samples.length; i += every) {
+    const q = samples[i]!;
+    let best: Point | null = null;
+    let bestD = Infinity;
+    for (const [a, b] of tool.cut) {
+      const c = closestOnSegment(q, a, b);
+      const d = dist(q, c);
+      if (d < bestD) { bestD = d; best = c; }
+    }
+    if (best) pairs.push({ down: best, onto: q, d: bestD });
+  }
+  pairs.sort((a, b) => a.d - b.d);
+  for (const pair of pairs.slice(0, 12)) {
+    if (canFeed(tool, pair.down, pair.onto)) return { down: pair.down, onto: pair.onto };
+  }
+  return null;
+}
+
+/**
+ * A straight feed from a to b is safe: it stays inside the walls and at least
+ * a tool radius from them, and runs over floor that's already been cut,
+ * except for its last stepover onto the next ring.
  */
 function canFeed(tool: ToolState, a: Point, b: Point): boolean {
+  if (!insideEvenOdd(tool.wall, a)) return false;
+  if (segmentToPaths(tool.wall, a, b) < tool.r + CLEARANCE / 4) return false;
+  const reach = Math.max(tool.step, tool.r) + 1e-9;
   const n = Math.max(1, Math.ceil(dist(a, b) / LINK_STEP));
   for (let k = 0; k <= n; k++) {
     const p = { x: a.x + ((b.x - a.x) * k) / n, y: a.y + ((b.y - a.y) * k) / n };
-    if (!insideEvenOdd(tool.wall, p)) return false;
-    if (distToPaths(tool.wall, p) < tool.r + CLEARANCE / 4) return false;
+    if (dist(p, b) <= reach) continue;
     if (!nearCut(tool.cut, p, tool.r)) return false;
   }
   return true;
@@ -305,14 +373,22 @@ function insideEvenOdd(paths: PathsD, p: Point): boolean {
   return inside;
 }
 
-function distToPaths(paths: PathsD, p: Point): number {
+/** The smallest distance between segment ab and the edges of the paths. */
+function segmentToPaths(paths: PathsD, a: Point, b: Point): number {
   let min = Infinity;
   for (const path of paths) {
     for (let i = 0, j = path.length - 1; i < path.length; j = i++) {
-      min = Math.min(min, distToSegment(p, path[j]!, path[i]!));
+      min = Math.min(min, segmentToSegment(a, b, path[j]!, path[i]!));
     }
   }
   return min;
+}
+
+function segmentToSegment(a: Point, b: Point, c: Point, d: Point): number {
+  const cross = (p: Point, q: Point, r: Point) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+  const d1 = cross(c, d, a), d2 = cross(c, d, b), d3 = cross(a, b, c), d4 = cross(a, b, d);
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return 0;
+  return Math.min(distToSegment(a, c, d), distToSegment(b, c, d), distToSegment(c, a, b), distToSegment(d, a, b));
 }
 
 /** The point of a closed path nearest p, and the index of the edge it's on. */

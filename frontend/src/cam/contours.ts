@@ -1,4 +1,5 @@
 import type { CncSegment } from './entityToSegments';
+import { arcFromBulge } from '@/utils/arcGeometry';
 
 const CHAIN_TOL = 0.5; // endpoint matching tolerance when chaining segments
 
@@ -119,4 +120,45 @@ export function groupContours(segments: CncSegment[]): CncSegment[][] {
   }
 
   return groups;
+}
+
+/**
+ * For each contour, how many of the other closed contours it lies inside (0 for
+ * an outer loop, 1 for a hole in it, 2 for a loop inside that hole, ...). Open
+ * contours count as 0.
+ */
+export function nestingDepths(contours: CncSegment[][]): number[] {
+  const closed = contours.map(isClosed);
+  const rings = contours.map((c, i) => (closed[i] ? polygon(c) : []));
+  return contours.map((c, i) => {
+    if (!closed[i]) return 0;
+    const p = c[0]!.from;
+    return rings.filter((ring, j) => j !== i && closed[j] && insidePolygon(ring, p)).length;
+  });
+}
+
+/** A closed contour's corners, arcs as 32 chords each. */
+function polygon(contour: CncSegment[]): { x: number; y: number }[] {
+  const pts: { x: number; y: number }[] = [];
+  for (const s of contour) {
+    pts.push(s.from);
+    if (s.bulge === 0) continue;
+    const theta = 4 * Math.atan(s.bulge); // counter-clockwise in (x, y) when positive
+    const { center: c, radius: r } = arcFromBulge(s.from, s.to, s.bulge);
+    const a0 = Math.atan2(s.from.y - c.y, s.from.x - c.x);
+    for (let k = 1; k < 32; k++) {
+      const a = a0 + (theta * k) / 32;
+      pts.push({ x: c.x + r * Math.cos(a), y: c.y + r * Math.sin(a) });
+    }
+  }
+  return pts;
+}
+
+function insidePolygon(ring: { x: number; y: number }[], p: { x: number; y: number }): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const a = ring[i]!, b = ring[j]!;
+    if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
 }

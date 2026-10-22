@@ -98,6 +98,13 @@ interface Elem {
 type Joint = 'meet' | 'cut';
 
 const TOUCH = 1e-7;
+/**
+ * Offset edges at a convex corner closer than this (mm) are extended to meet
+ * instead of joined by a rounding arc: the arc would be shorter than the
+ * G-code's resolution (and an arc whose start and end print the same is a
+ * full circle to GRBL). The extension is about half the gap.
+ */
+const MITER_GAP = 0.01;
 
 function pointAt(c: Curve, s: number): Point {
   if (c.kind === 'line') return { x: c.p.x + c.t.x * s, y: c.p.y + c.t.y * s };
@@ -251,7 +258,7 @@ function offsetContour(
     const sa = source[from]!, sb = source[to]!;
     const ta = tangentAt(sa.curve, sa.s1), tb = tangentAt(sb.curve, sb.s0);
     const turn = Math.atan2(ta.x * tb.y - ta.y * tb.x, ta.x * tb.x + ta.y * tb.y);
-    if (turn * side > 0) {
+    if (turn * side > 0 && gap >= MITER_GAP) {
       const v = pointAt(sa.curve, sa.s1);
       const p = pointAt(a.curve, a.s1);
       const sweep = Math.abs(turn);
@@ -267,11 +274,12 @@ function offsetContour(
   elems = withArcs;
   joints = withJoints;
 
-  // Trim at every cut; an edge trimmed away completely (it ran backwards) is
-  // dropped and its neighbours cut against each other instead. Repeat until
-  // nothing more drops out.
+  // Trim at every cut; an edge trimmed away completely (it ran backwards), or
+  // an arc that can't meet its neighbour, is dropped and its neighbours cut
+  // against each other instead. Repeat until nothing more drops out.
   for (let guard = 0; guard <= source.length * 4 + 8; guard++) {
     for (const e of elems) { e.s0 = e.base[0]; e.s1 = e.base[1]; }
+    let unreachable: number | null = null;
     if (elems.length === 1) break;
     for (let k = 0; k < elems.length; k++) {
       if (joints[k] !== 'cut') continue;
@@ -279,11 +287,22 @@ function offsetContour(
       const pa = pointAt(a.curve, a.s1), pb = pointAt(b.curve, b.s0);
       if (dist(pa, pb) < TOUCH) continue;
       const x = intersect(a.curve, b.curve, { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2 });
-      if (!x) return { segments: [], problem: 'two edges of the shape can\'t be joined at this tool size' };
-      a.s1 = paramOf(a, x);
-      b.s0 = paramOf(b, x);
+      if (x) {
+        a.s1 = paramOf(a, x);
+        b.s0 = paramOf(b, x);
+        continue;
+      }
+      // They never cross. Two parallel lines (either side of an arc too tight
+      // for the tool) are joined straight across; an arc that can't reach its
+      // neighbour (it would only fit part of the tool) is left out. The check
+      // at the end makes sure the joined path stays clear of the outline.
+      if (a.curve.kind === 'line' && b.curve.kind === 'line') continue;
+      unreachable = a.curve.kind === 'circle' && (b.curve.kind !== 'circle' || a.base[1] * a.curve.r <= b.base[1] * b.curve.r)
+        ? k
+        : (k + 1) % elems.length;
+      break;
     }
-    const gone = elems.findIndex((e) => e.s1 - e.s0 <= 1e-9);
+    const gone = unreachable ?? elems.findIndex((e) => e.s1 - e.s0 <= 1e-9);
     if (gone < 0) break;
     const prevJoint = (gone - 1 + elems.length) % elems.length;
     elems.splice(gone, 1);
