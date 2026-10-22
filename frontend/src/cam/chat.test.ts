@@ -4,7 +4,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import type { Entity } from '@/types/document';
-import { applyCamChat, buildChatContext, rejectAiEdit, undoAiSetup } from './chat';
+import { applyCamChat, buildChatContext, rejectAiEdit, replyText, undoAiSetup } from './chat';
 import { allTools, loadJob, newPlanOperation, resolveJob } from './resolve';
 import { normalizeMachine, machineProblems } from './machine';
 import { createDefaultJob, createDefaultMachine, type CamJobV2 } from './setup';
@@ -66,10 +66,37 @@ describe('applying a reply', () => {
     const twice = applyCamChat(once, { edits: [{ opId: op.id, overrides: { depthPerPass: 1 } }] }, ctx(once)).job;
     const e = twice.operations[0]!;
     expect(e.status).toBe('proposed');
-    expect(e.aiPrev).toEqual({ overrides: { tabCount: 6 }, ai: [], reason: 'Mine' });   // as it was before the first edit
+    expect(e.aiPrev).toEqual({ overrides: { tabCount: 6 }, ai: [], reason: 'Mine', entityIds: ['r'], sketchId: 's' });   // as it was before the first edit
     const back = rejectAiEdit(loadJob(JSON.parse(JSON.stringify(twice)), createDefaultMachine()).operations[0]!);
     expect(back).toMatchObject({ status: 'accepted', overrides: { tabCount: 6 }, ai: [], reason: 'Mine' });
     expect(back.aiPrev).toBeUndefined();
+  });
+
+  it('changes the shapes an operation cuts, and Reject puts the old ones back', () => {
+    const j = job();
+    const op = newPlanOperation('drill', 's', [], 'on');
+    op.status = 'accepted';
+    j.operations = [op];
+    const out = applyCamChat(j, { edits: [{ opId: op.id, entityIds: ['h1', 'h2', 'h1', 'gone'], reason: 'The two holes' }] }, ctx(j));
+    const e = out.job.operations[0]!;
+    expect(e.entityIds).toEqual(['h1', 'h2']);
+    expect(e.status).toBe('proposed');
+    expect(out.notes).toEqual(["Edit to operation 1: 1 shape(s) aren't in the job's sketches; left out"]);
+    const back = rejectAiEdit(loadJob(JSON.parse(JSON.stringify(out.job)), createDefaultMachine()).operations[0]!);
+    expect(back.entityIds).toEqual([]);
+    // Shapes that don't exist leave it as it is.
+    const none = applyCamChat(j, { edits: [{ opId: op.id, entityIds: ['gone'] }] }, ctx(j));
+    expect(none.job.operations[0]!.entityIds).toEqual([]);
+    expect(none.job.operations[0]!.status).toBe('accepted');
+    expect(none.notes).toContain('Edit to operation 1: none of the new shapes exist; kept its shapes');
+  });
+
+  it("doesn't say a thing twice when the answer repeats the summary", () => {
+    expect(replyText('Added the holes.', 'Added the holes. They use T1.')).toBe('Added the holes. They use T1.');
+    expect(replyText('Added the 28 holes. T1 bores them.', 'Added the 28 holes.  Check the depth.')).toBe('Added the 28 holes. T1 bores them.\n\nCheck the depth.');
+    expect(replyText('Planned.', '')).toBe('Planned.');
+    expect(replyText('', 'Yes.')).toBe('Yes.');
+    expect(replyText('Planned it.', 'It cuts in two steps.')).toBe('Planned it.\n\nIt cuts in two steps.');
   });
 
   it('proposes operations, as overrides with reasons, marked AI', () => {

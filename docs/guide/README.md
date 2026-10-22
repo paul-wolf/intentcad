@@ -246,6 +246,9 @@ and the time:
   violet **Proposed** label: click **Accept**, or **Accept all**.
 - **+ Add an operation** adds one yourself. Click shapes on the sketch to add them to the
   selected operation or take them out; double-click picks a whole outline.
+- Lines that meet end to end are one outline. Double-click any of them to pick them all;
+  the card then says, for example, "1 outline (12 lines)". A line that doesn't close an
+  outline is an error, unless you cut on the line.
 - Selecting an operation shows its shapes in blue and its toolpath in orange, with tabs
   marked. The stock, the clamps (hatched red) and X0 Y0 show on the sketch.
 - The defaults come from the setup: an outside profile cuts right through (the stock
@@ -255,11 +258,17 @@ and the time:
   hole is full size at the bottom.
   **Order** puts inside cuts first, then groups by tool, with the cut that frees the part
   last.
-- A problem shows on its operation; **Fix with AI** asks the AI to fix it.
+- A problem shows on its operation; **Fix with AI** asks the AI to fix it. It can change
+  the settings or the shapes the operation cuts; **Reject** puts them back.
+- An outside profile shallower than the stock won't free the part, so it warns; **Reset**
+  the depth in **Open** to cut right through.
 - The box at the bottom talks to the AI: "add a chamfer pass", "use the 6 mm bit for the
   pockets", "why two passes?". Its changes come back as proposed. If it changes an
   operation you had accepted, **Reject** puts it back as it was. It can remove only its
-  own proposals; it asks you to remove the rest.
+  own proposals; it asks you to remove the rest. It names shapes by their size and
+  place ("the Ø4 circle at (10, 10)") and operations by their number.
+
+![CAM Plan: the outline made of 12 lines picked as one, with the warning that a 6 mm cut won't free a 12 mm part](images/cam-plan-outline.png)
 
 **Open** an operation to change it. Its settings are grouped as What, Tool, Depth,
 Speeds and feeds, and How it cuts. A dot beside each value says where it comes from:

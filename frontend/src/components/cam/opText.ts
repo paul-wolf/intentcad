@@ -1,5 +1,9 @@
+import type { Entity } from '@/types/document';
 import type { ResolvedOp } from '@/cam/resolve';
+import type { PlanOperation } from '@/cam/setup';
 import { computePassDepths } from '@/cam/depthPasses';
+import { entityToSegments } from '@/cam/entityToSegments';
+import { groupContours } from '@/cam/contours';
 
 const fmt = (v: number) => String(Number(v.toFixed(2)));
 
@@ -13,6 +17,21 @@ export function opTitle(r: ResolvedOp): string {
     case 'drill': return `${r.fields.holeMethod.value === 'helix' ? 'Helix' : 'Drill'} ${n} hole${n === 1 ? '' : 's'}`;
     case 'facing': return 'Face the stock';
   }
+}
+
+/**
+ * What an operation cuts, counted the way the toolpath sees it: lines that
+ * meet end to end are one outline ("1 outline (16 lines)"). "" for holes and
+ * facing, whose title says it.
+ */
+export function shapesText(op: PlanOperation, entities: Entity[]): string {
+  if (op.kind === 'drill' || op.kind === 'facing') return '';
+  const n = op.entityIds.length;
+  const outlines = groupContours(entityToSegments(entities, op.entityIds)).length;
+  if (outlines === 0 || outlines >= n) return `${n} shape${n === 1 ? '' : 's'}`;
+  const ids = new Set(op.entityIds);
+  const allLines = entities.filter((e) => ids.has(e.id)).every((e) => e.type === 'line');
+  return `${outlines} outline${outlines === 1 ? '' : 's'} (${n} ${allLines ? 'lines' : 'shapes'})`;
 }
 
 export function passDepths(r: ResolvedOp): number[] {

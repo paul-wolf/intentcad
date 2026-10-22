@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useCamStore, type CamIssueWithOp } from '@/stores/camStore';
+import { jobEntities, useCamStore, type CamIssueWithOp } from '@/stores/camStore';
 import type { ResolvedOp } from '@/cam/resolve';
 import { toolTag } from '@/cam/resolve';
 import type { PlanKind } from '@/cam/setup';
@@ -8,7 +8,7 @@ import { Btn, Chip, Pill, panelStyle, useTokens, MONO } from './ui';
 import { SetupSummaryStrip } from './CamSetupStep';
 import { AiThread, Composer } from './AiThread';
 import { CamOperationEditor } from './CamOperationEditor';
-import { opSummary, opTitle } from './opText';
+import { opSummary, opTitle, shapesText } from './opText';
 
 const KINDS: { kind: PlanKind; label: string; hint: string }[] = [
   { kind: 'profile', label: 'Profile', hint: 'cut along or round shapes' },
@@ -132,6 +132,7 @@ function OpCard({ r, n, focused, issues }: { r: ResolvedOp; n: number; focused: 
   const removeOperation = useCamStore((s) => s.removeOperation);
   const rejectOperation = useCamStore((s) => s.rejectOperation);
   const moveOperation = useCamStore((s) => s.moveOperation);
+  const job = useCamStore((s) => s.job);
   const sendChat = useCamStore((s) => s.sendChat);
   const aiBusy = useCamStore((s) => s.aiBusy);
   const count = useCamStore((s) => s.job.operations.length);
@@ -153,7 +154,7 @@ function OpCard({ r, n, focused, issues }: { r: ResolvedOp; n: number; focused: 
         {op.status === 'proposed' ? <Pill tone="proposed">Proposed</Pill> : <Pill tone="accepted">Accepted</Pill>}
       </div>
       <div style={{ fontSize: 12, color: t.textDim, marginTop: 5, paddingLeft: 27 }}>
-        {op.kind !== 'facing' && <>{op.entityIds.length} shape{op.entityIds.length === 1 ? '' : 's'} · </>}{opSummary(r)}
+        {[shapesText(op, jobEntities(job)), opSummary(r)].filter(Boolean).join(' · ')}
       </div>
       {op.aiPrev && <div style={{ fontSize: 11.5, color: t.violet, marginTop: 4, paddingLeft: 27 }}>The AI changed this accepted operation: accept the change, or reject it to put it back.</div>}
       {op.reason && <div style={{ fontSize: 11.5, color: t.textMute, marginTop: 4, paddingLeft: 27, fontStyle: 'italic' }}>{op.reason}</div>}

@@ -7,6 +7,9 @@ import { Btn, Card, Chip, NumInput, Pill, Row, Segmented, Select, SourceDot, fmt
 import { MachineDialog } from './MachineDialog';
 import { ToolsDialog } from './ToolsDialog';
 
+/** A stock size to 0.1 mm, as fitted to the shapes. */
+const mm1 = (v: number) => String(Number(v.toFixed(1)));
+
 const POINT_LABEL: Record<StockPoint, string> = {
   'back-left': 'back left', 'back-centre': 'back centre', 'back-right': 'back right', centre: 'centre',
   'front-left': 'front left', 'front-centre': 'front centre', 'front-right': 'front right',
@@ -231,7 +234,7 @@ export function SetupSummaryStrip() {
       <span style={{ fontWeight: 600, color: t.text }}>{machine.name}</span>
       <span>·</span>
       <span>{materialName(setup.material)}</span>
-      <span style={{ fontFamily: MONO }}>{fmt(resolved.stock.width)}×{fmt(resolved.stock.height)}×{fmt(setup.stock.thickness)}</span>
+      <span style={{ fontFamily: MONO }}>{mm1(resolved.stock.width)}×{mm1(resolved.stock.height)}×{fmt(setup.stock.thickness)}</span>
       <span>·</span>
       <span>origin {o.kind === 'stock' ? POINT_LABEL[o.point] : 'picked'}, Z0 {setup.zZero === 'stock-top' ? 'top' : 'spoilboard'}</span>
       {setup.clamps.length > 0 && <><span>·</span><span>{setup.clamps.length} clamp{setup.clamps.length > 1 ? 's' : ''}</span></>}

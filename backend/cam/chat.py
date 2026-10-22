@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from typing import Any, Callable
 
 from modeling.assistant import AssistantError, _anthropic_call
@@ -70,7 +71,8 @@ CAM_TOOL = {
             "summary": {"type": "string",
                         "description": "One or two sentences: what the plan does, or what changed."},
             "answer": {"type": "string",
-                       "description": "The reply to the user's message in plain words (\"\" if none)."},
+                       "description": "The reply to the user's message in plain words, without repeating "
+                                      "the summary (\"\" if the summary says it all)."},
             "choices": {"type": "array", "items": {"type": "string"},
                         "description": "Decisions made, each with its reason."},
             "assumptions": {"type": "array", "items": {"type": "string"},
@@ -107,6 +109,9 @@ CAM_TOOL = {
                     "type": "object",
                     "properties": {
                         "opId": {"type": "string"},
+                        "entityIds": {"type": "array", "items": {"type": "string"},
+                                      "description": "Only to change the shapes it cuts: all of them, "
+                                                     "replacing the current ones."},
                         "overrides": {"type": "object"},
                         "reset": {"type": "array", "items": {"type": "string"},
                                   "description": "Override keys to remove (back to the default)."},
@@ -291,18 +296,7 @@ def _operations(raw: Any, entity_ids: set[str], tool_ids: set[str], notes: list[
             notes.append(f"Ignored {where}: unknown kind {_name(kind)}")
             continue
         where = f"the new {kind} ({i + 1})"
-        ids = op.get("entityIds")
-        if ids is None:
-            ids = []
-        elif not isinstance(ids, list):
-            ids = [ids]
-        kept: list[str] = []
-        for e in ids:
-            if isinstance(e, (str, int)) and not isinstance(e, bool) and str(e) in entity_ids:
-                if str(e) not in kept:
-                    kept.append(str(e))
-            else:
-                notes.append(f"Dropped shape {_name(e)} from {where}: no shape has that id")
+        kept = _shape_ids(op.get("entityIds"), entity_ids, notes, where)
         if not kept and kind != "facing":
             notes.append(f"Ignored {where}: none of its shapes exist")
             continue
@@ -325,7 +319,24 @@ def _operations(raw: Any, entity_ids: set[str], tool_ids: set[str], notes: list[
     return out
 
 
-def _edits(raw: Any, op_ids: set[str], tool_ids: set[str], notes: list[str]) -> list[dict]:
+def _shape_ids(ids: Any, entity_ids: set[str], notes: list[str], where: str) -> list[str]:
+    """The known shape ids among `ids`, in order and once each; the rest get a note."""
+    if ids is None:
+        ids = []
+    elif not isinstance(ids, list):
+        ids = [ids]
+    kept: list[str] = []
+    for e in ids:
+        if isinstance(e, (str, int)) and not isinstance(e, bool) and str(e) in entity_ids:
+            if str(e) not in kept:
+                kept.append(str(e))
+        else:
+            notes.append(f"Dropped shape {_name(e)} from {where}: no shape has that id")
+    return kept
+
+
+def _edits(raw: Any, op_ids: dict[str, str], entity_ids: set[str], tool_ids: set[str],
+           notes: list[str]) -> list[dict]:
     if raw is None:
         return []
     if not isinstance(raw, list):
@@ -341,12 +352,19 @@ def _edits(raw: Any, op_ids: set[str], tool_ids: set[str], notes: list[str]) -> 
             notes.append(f"Ignored an edit of operation {_name(op_id)}: no operation has that id")
             continue
         op_id = str(op_id)
-        where = f"operation {op_id}"
+        where = op_ids[op_id]
         given = ed.get("overrides")
         if given is not None and not isinstance(given, dict):
             notes.append(f"Ignored the overrides of {where}: not a set of values")
             given = None
-        merged = {**_fold(ed, {"opId", "overrides", "reset", "reason"}, notes, where), **(given or {})}
+        merged = {**_fold(ed, {"opId", "entityIds", "overrides", "reset", "reason"}, notes, where),
+                  **(given or {})}
+        shapes = None
+        if ed.get("entityIds") is not None:
+            shapes = _shape_ids(ed.get("entityIds"), entity_ids, notes, where)
+            if not shapes:
+                notes.append(f"Kept the shapes of {where}: none of the new ones exist")
+                shapes = None
         reset_raw = ed.get("reset")
         if reset_raw is None:
             reset_raw = []
@@ -360,10 +378,13 @@ def _edits(raw: Any, op_ids: set[str], tool_ids: set[str], notes: list[str]) -> 
             else:
                 notes.append(f"Ignored resetting {_name(k)} on {where}: not a setting it can reset")
         overrides = _overrides(merged, tool_ids, notes, where)
-        if not overrides and not reset:
+        if not overrides and not reset and shapes is None:
             continue
-        out.append({"opId": op_id, "overrides": overrides, "reset": reset,
-                    "reason": _text(ed.get("reason"), MAX_ITEM)})
+        edit = {"opId": op_id, "overrides": overrides, "reset": reset,
+                "reason": _text(ed.get("reason"), MAX_ITEM)}
+        if shapes is not None:
+            edit["entityIds"] = shapes
+        out.append(edit)
         if len(out) == MAX_LIST:
             if len(raw) > i + 1:
                 notes.append(f"Kept the first {MAX_LIST} edits")
@@ -371,7 +392,7 @@ def _edits(raw: Any, op_ids: set[str], tool_ids: set[str], notes: list[str]) -> 
     return out
 
 
-def _remove(raw: Any, op_ids: set[str], notes: list[str]) -> list[str]:
+def _remove(raw: Any, op_ids: dict[str, str], notes: list[str]) -> list[str]:
     if raw is None:
         return []
     if not isinstance(raw, list):
@@ -386,18 +407,32 @@ def _remove(raw: Any, op_ids: set[str], notes: list[str]) -> list[str]:
     return out[:MAX_LIST]
 
 
+def _readable(text: str, words: dict[str, str]) -> str:
+    """`text` with each id in `words` (shape or operation ids) put in words."""
+    if not text:
+        return text
+    pattern = re.compile(r"(?<![\w-])(?:" + "|".join(re.escape(k) for k in sorted(words, key=len, reverse=True))
+                         + r")(?![\w-])")
+    text = pattern.sub(lambda m: words[m.group(0)], text)
+    return re.sub(r"\b([Oo])perations? (?:id )?(operation \d+)", lambda m: m.group(1) + m.group(2)[1:], text)
+
+
 REPLY_KEYS = {"summary", "answer", "choices", "assumptions", "setup", "operations", "edits", "remove"}
 
 
 def normalize_reply(raw: Any, known_entity_ids, known_tool_ids, known_op_ids,
-                    materials=None) -> tuple[dict, list[str]]:
+                    materials=None, labels: dict[str, str] | None = None) -> tuple[dict, list[str]]:
     """The model's cam_reply input made safe for the client: (reply, notes).
 
     Never raises. Every field is checked against the schema and the job (shape,
-    tool and operation ids); what doesn't fit is dropped and a note says why."""
+    tool and operation ids); what doesn't fit is dropped and a note says why.
+    `known_op_ids` is in cutting order, so notes and text name an operation by
+    its number; `labels` (shape id → words) replaces shape ids left in the text."""
     entity_ids = {str(e) for e in known_entity_ids or []}
     tool_ids = {str(t) for t in known_tool_ids or []}
-    op_ids = {str(o) for o in known_op_ids or []}
+    op_ids: dict[str, str] = {}
+    for o in known_op_ids or []:
+        op_ids.setdefault(str(o), f"operation {len(op_ids) + 1}")
     materials = list(materials or MATERIALS)
     notes: list[str] = []
     if not isinstance(raw, dict):
@@ -413,9 +448,17 @@ def normalize_reply(raw: Any, known_entity_ids, known_tool_ids, known_op_ids,
         "assumptions": _texts(raw.get("assumptions"), "assumptions", notes),
         "setup": _setup(raw.get("setup"), materials, notes),
         "operations": _operations(raw.get("operations"), entity_ids, tool_ids, notes),
-        "edits": _edits(raw.get("edits"), op_ids, tool_ids, notes),
+        "edits": _edits(raw.get("edits"), op_ids, entity_ids, tool_ids, notes),
         "remove": _remove(raw.get("remove"), op_ids, notes),
     }
+    words = {**{k: v for k, v in (labels or {}).items() if k in entity_ids}, **op_ids}
+    if words:
+        reply["summary"] = _readable(reply["summary"], words)
+        reply["answer"] = _readable(reply["answer"], words)
+        reply["choices"] = [_readable(c, words) for c in reply["choices"]]
+        reply["assumptions"] = [_readable(a, words) for a in reply["assumptions"]]
+        for item in reply["operations"] + reply["edits"]:
+            item["reason"] = _readable(item["reason"], words)
     seen: list[str] = []
     for n in notes:
         if n not in seen:
@@ -448,11 +491,18 @@ helix ("holeMethod": "helix"), with an end mill between half the hole's size and
 - Never change anything about the post-processor, the safe or clearance heights, the park position \
 or the machine's limits: the reply has no place for them, and the user sets them on the machine.
 - Copy shape ids, tool ids and operation ids exactly as they are listed.
+- Lines that join end to end make one outline (see OUTLINES): an inside or outside cut of it takes \
+all of its lines.
+- An operation with the wrong shapes, or none, gets them in an edit: "entityIds" lists all the shapes \
+it should cut.
 - Only remove operations that you proposed and the user has not accepted, or when the user asks.
 
 How to reply:
 - "summary": one or two sentences on what the plan does, or what changed.
-- "answer": the reply to the user's message, in plain, short sentences ("" if the summary says it all).
+- "answer": the reply to the user's message, in plain, short sentences; don't repeat the summary \
+("" if the summary says it all).
+- The user never sees ids: name shapes by size and place ("the 28 Ø3.4 holes", "the outer outline") \
+and operations by their number in the plan ("operation 2").
 - "choices": each decision with its reason, e.g. "T2 6mm end mill for the pocket: the largest that fits".
 - "assumptions": what you assumed that the user should check.
 - To fix an issue, edit the operation it names.
@@ -487,12 +537,86 @@ def known_entity_ids(sketches: Any) -> list[str]:
     return out
 
 
+CHAIN_TOL = 0.5   # mm: line ends this close meet (as in the frontend's contours.ts)
+
+
+def _point(p: Any) -> tuple[float, float] | None:
+    p = _dict(p)
+    x, y = _number(p.get("x")), _number(p.get("y"))
+    return None if x is None or y is None else (x, y)
+
+
+def entity_labels(sketches: Any) -> dict[str, str]:
+    """Each cuttable shape's id → words for it, to put in the AI's text in place of the id."""
+    out: dict[str, str] = {}
+    for s in _list(sketches):
+        for e in _list(_dict(s).get("entities")):
+            if not isinstance(e, dict) or e.get("id") is None or e.get("construction"):
+                continue
+            t = e.get("type")
+            c = _point(e.get("center"))
+            if t == "circle" and c and _number(e.get("radius")):
+                out[str(e["id"])] = f"the Ø{2 * _number(e['radius']):g} circle at ({c[0]:.1f}, {c[1]:.1f})"
+            elif t == "rectangle" and c:
+                out[str(e["id"])] = (f"the {_number(e.get('width')) or 0:g} x {_number(e.get('height')) or 0:g} "
+                                     f"rectangle at ({c[0]:.1f}, {c[1]:.1f})")
+            elif t == "line":
+                pts = [q for q in (_point(p) for p in _list(e.get("points"))) if q]
+                if len(pts) >= 2:
+                    out[str(e["id"])] = f"the line from ({pts[0][0]:.1f}, {pts[0][1]:.1f})"
+    return out
+
+
+def describe_outlines(sketches: Any) -> list[str]:
+    """Lines that meet end to end, as the outlines the toolpath cuts (one line each).
+
+    An inside or outside cut of such an outline needs all of its lines."""
+    ends: list[tuple[str, tuple[float, float], tuple[float, float], list]] = []
+    for s in _list(sketches):
+        for e in _list(_dict(s).get("entities")):
+            if not isinstance(e, dict) or e.get("type") != "line" or e.get("construction") or e.get("closed"):
+                continue
+            pts = [q for q in (_point(p) for p in _list(e.get("points"))) if q]
+            if len(pts) >= 2 and e.get("id") is not None:
+                ends.append((str(e["id"]), pts[0], pts[-1], pts))
+    near = lambda a, b: math.hypot(a[0] - b[0], a[1] - b[1]) <= CHAIN_TOL
+    parent = list(range(len(ends)))
+
+    def root(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    for i in range(len(ends)):
+        for j in range(i + 1, len(ends)):
+            if any(near(a, b) for a in ends[i][1:3] for b in ends[j][1:3]):
+                parent[root(i)] = root(j)
+    groups: dict[int, list[int]] = {}
+    for i in range(len(ends)):
+        groups.setdefault(root(i), []).append(i)
+    lines = []
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        # Closed when every end meets another line's end.
+        closed = all(any(near(p, q) for j in members if j != i for q in ends[j][1:3])
+                     for i in members for p in ends[i][1:3])
+        pts = [p for i in members for p in ends[i][3]]
+        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+        ids = [ends[i][0] for i in members]
+        lines.append(f"- lines {_js(ids)} join end to end into one {'closed' if closed else 'open'} outline, "
+                     f"bounding box {max(xs) - min(xs):.2f} x {max(ys) - min(ys):.2f} "
+                     f"from ({min(xs):.2f}, {min(ys):.2f})")
+    return lines
+
+
 def _prompt(message: str, context: dict, sketches: list, history: list) -> str:
     setup = _dict(context.get("setup"))
     material = setup.get("material")
     presets = [p for p in _list(context.get("presets"))
                if isinstance(p, dict) and (not material or p.get("material") == material)]
     shapes = describe_entities([s for s in sketches if isinstance(s, dict)])
+    outlines = describe_outlines(sketches)
 
     tools = []
     for t in _list(context.get("tools")):
@@ -501,14 +625,13 @@ def _prompt(message: str, context: dict, sketches: list, history: list) -> str:
                          f"{t.get('type')} diameter {t.get('diameter')} mm, {t.get('flutes')} flutes, "
                          f"flute length {t.get('fluteLength')} mm")
     plan = []
-    for op in _list(context.get("plan")):
-        if isinstance(op, dict):
-            line = (f"- id={_js(op.get('id'))} {op.get('kind')} shapes={_js(op.get('entityIds'))} "
-                    f"cutSide={op.get('cutSide')} status={op.get('status')} "
-                    f"overrides={_js(op.get('overrides') or {})} resolved={_js(op.get('resolved') or {})}")
-            if op.get("problem"):
-                line += f" problem: {op['problem']}"
-            plan.append(line)
+    for op in [o for o in _list(context.get("plan")) if isinstance(o, dict)]:
+        line = (f"- operation {len(plan) + 1}: id={_js(op.get('id'))} {op.get('kind')} "
+                f"shapes={_js(op.get('entityIds'))} cutSide={op.get('cutSide')} status={op.get('status')} "
+                f"overrides={_js(op.get('overrides') or {})} resolved={_js(op.get('resolved') or {})}")
+        if op.get("problem"):
+            line += f" problem: {op['problem']}"
+        plan.append(line)
     issues = []
     for i in _list(context.get("issues")):
         if isinstance(i, dict):
@@ -524,6 +647,7 @@ def _prompt(message: str, context: dict, sketches: list, history: list) -> str:
     focus = context.get("focus_op_id")
     parts = [
         "SHAPES (id, type, size; mm, Y down):\n" + ("\n".join(shapes) if shapes else "(no shapes)"),
+        *(["OUTLINES MADE OF LINES:\n" + "\n".join(outlines)] if outlines else []),
         "SETUP: " + _js(setup),
         "MACHINE (read-only): " + _js(_dict(context.get("machine"))),
         "MATERIALS: " + _js(_list(context.get("materials")) or MATERIALS),
@@ -579,5 +703,6 @@ def cam_chat(
     op_ids = [str(o["id"]) for o in _list(context.get("plan"))
               if isinstance(o, dict) and o.get("id") is not None]
     materials = [m for m in _list(context.get("materials")) if isinstance(m, str)] or MATERIALS
-    reply, notes = normalize_reply(raw, known_entity_ids(sketches), tool_ids, op_ids, materials)
+    reply, notes = normalize_reply(raw, known_entity_ids(sketches), tool_ids, op_ids, materials,
+                                   entity_labels(sketches))
     return {"reply": reply, "notes": notes, **spend}

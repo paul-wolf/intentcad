@@ -521,6 +521,25 @@ export function resolveJob(job: CamJobV2, machine: CamMachine, entities: Entity[
     if (r.feedCapped) {
       issues.push({ severity: 'info', message: `Operation ${i + 1}: the feed is capped at the machine's ${machine.rapidRate} mm/min`, opId: r.op.id });
     }
+    // Set shallower than the stock: an outside cut leaves the part attached, holes stop short.
+    const t = job.setup.stock.thickness;
+    const depth = r.fields.depth.value;
+    if (r.cam && t > 0 && depth < t) {
+      const through = `${fmtMm(t + machine.spoilboardAllowance)} mm`;
+      if (r.op.kind === 'profile' && r.op.cutSide === 'outside') {
+        issues.push({
+          severity: 'warning',
+          message: `Operation ${i + 1}: ${fmtMm(depth)} mm deep in ${fmtMm(t)} mm stock, so this outside cut won't free the part. Reset the depth to cut through (${through})`,
+          opId: r.op.id,
+        });
+      } else if (r.op.kind === 'drill') {
+        issues.push({
+          severity: 'info',
+          message: `Operation ${i + 1}: the holes are ${fmtMm(depth)} mm deep in ${fmtMm(t)} mm stock, so they won't go through. Reset the depth if they should`,
+          opId: r.op.id,
+        });
+      }
+    }
   });
   const firstFreeing = ops.findIndex((r) => r.partFreeing);
   if (firstFreeing >= 0) {
@@ -664,6 +683,8 @@ function normalizeAiPrev(raw: Record<string, unknown>): NonNullable<PlanOperatio
     overrides,
     ai: Array.isArray(raw.ai) ? raw.ai.filter((k): k is OverrideKey => (OVERRIDE_KEYS as unknown[]).includes(k) && k in overrides) : [],
     ...(typeof raw.reason === 'string' ? { reason: raw.reason.slice(0, 500) } : {}),
+    ...(Array.isArray(raw.entityIds) ? { entityIds: raw.entityIds.filter((x): x is string => typeof x === 'string') } : {}),
+    ...(typeof raw.sketchId === 'string' ? { sketchId: raw.sketchId } : {}),
   };
 }
 

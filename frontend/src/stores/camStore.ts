@@ -600,11 +600,15 @@ export const useCamStore = create<CamStore>((set, get) => {
         const ids = new Set(job.setup.selectedSketchIds);
         const sketches = (ids.size > 0 ? doc.sketches.filter((s) => ids.has(s.id)) : doc.sketches).filter((s) => !s.suppressed);
         const tools = allTools(machine, job.setup);
+        // With no sketch chosen yet, the AI gets every sketch: fit the stock it's told about to them.
+        const sentResolved = ids.size > 0 ? resolved : resolveJob(
+          { ...job, setup: { ...job.setup, selectedSketchIds: sketches.map((s) => s.id) } }, machine, sketches.flatMap((s) => s.entities),
+        );
         const result = await camApi.chat({
           document_id: docId ?? '',
           message: userTurn.text,
           document_data: { name: doc.name, sketches } as unknown as Record<string, unknown>,
-          context: buildChatContext(job, machine, tools, resolved, issues, focusOpId) as unknown as Record<string, unknown>,
+          context: buildChatContext(job, machine, tools, sentResolved, issues, focusOpId) as unknown as Record<string, unknown>,
           history: job.thread.slice(-12).map((t) => ({ role: t.role, text: t.text })),
         });
         const entities = sketches.flatMap((s) => s.entities.filter((e) => e.type !== 'dimension' && !('construction' in e && e.construction)));
