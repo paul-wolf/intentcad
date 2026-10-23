@@ -213,6 +213,14 @@ faces of a part:
 
 - Organise parts and sketches in projects; share projects with others.
 - Every successful build is a version; restore any of them.
+- **Duplicate** makes a copy of a part or sketch in the same project. Hover over its
+  card in the project and click the two-squares button (between Rename and Move). The
+  copy is called "Copy of <name>", its name is ready to edit, and Enter keeps it. It
+  has the model as it is now (script, sketches, parameters, print bed face, chat),
+  the STEP files it imports, the part's own context files and its CAM jobs (generate
+  the G-code again). Its version history starts fresh.
+
+![Duplicate: the copy of Shelf bracket, its name ready to edit, and the hover buttons on the original](images/duplicate.png)
 
 ### Beyond 3D: 2D and CNC
 

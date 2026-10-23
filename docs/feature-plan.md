@@ -38,6 +38,7 @@ operations cost nothing to support, they just don't get UI.
 - Sketcher gaps: H/V between any two points; point on line / circle and symmetric about a line; corner fillet (radius a dimension, clamped when too large); trim (splits polylines and circles, keeps the constraints that still apply); offset of a closed shape, circle or chain (arcs or miters, follows its source, distance a dimension, unlink); project part edges onto a face/plane sketch (follow the part, broken when the edge goes)
 - CAM for sketches (2D editor): Setup (machine with a default material, tool library with cutting data per material, carbon fibre included, stock, origin, clamps), Plan (operations with defaults worked out from the setup, AI proposals with reasons to accept, per-value sources, lines that meet picked as one outline, Fix with AI can change an operation's shapes), Run (checks, simulator, steps at the machine, G-code)
 - User events: sign-ins (and failed ones), sign-outs, parts and sketches made and AI calls with their cost, in one table; an Events page for superusers (search, kind, user, period) with AI spend per user; earlier sign-ins, AI calls and documents copied in
+- Duplicate a part or sketch: a button on its card makes "Copy of <name>" in the same project, with the model, its STEP files, the part's context files and CAM jobs (no G-code); a fresh version history
 
 ## Foundation: edge selection ✓ done
 
