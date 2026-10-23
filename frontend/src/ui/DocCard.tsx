@@ -30,12 +30,13 @@ export interface DocCardEdit {
 }
 
 /** A document card: grid-backed thumbnail with a PART/SKETCH badge, name, meta.
- *  Optional double-click rename and a hover delete. */
-export function DocCard({ d, onOpen, onDoubleClick, onRename, onDelete, onMove, editing }: {
+ *  Optional double-click rename and hover rename, duplicate, move and delete. */
+export function DocCard({ d, onOpen, onDoubleClick, onRename, onDuplicate, onDelete, onMove, editing }: {
   d: DocCardData;
   onOpen: () => void;
   onDoubleClick?: () => void;
   onRename?: () => void;
+  onDuplicate?: () => void;
   onDelete?: () => void;
   onMove?: () => void;
   editing?: DocCardEdit;
@@ -60,6 +61,13 @@ export function DocCard({ d, onOpen, onDoubleClick, onRename, onDelete, onMove, 
             style={{ opacity: 0, transition: 'opacity .1s', display: 'flex', width: 24, height: 24, alignItems: 'center', justifyContent: 'center',
                      background: t.surface, border: `1px solid ${t.border2}`, borderRadius: 6, color: t.textDim, cursor: 'pointer' }}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
+          </button>
+        )}
+        {onDuplicate && (
+          <button data-act title="Duplicate" onClick={(e) => { e.stopPropagation(); onDuplicate(); }}
+            style={{ opacity: 0, transition: 'opacity .1s', display: 'flex', width: 24, height: 24, alignItems: 'center', justifyContent: 'center',
+                     background: t.surface, border: `1px solid ${t.border2}`, borderRadius: 6, color: t.textDim, cursor: 'pointer' }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5" /></svg>
           </button>
         )}
         {onMove && (

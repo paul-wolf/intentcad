@@ -134,6 +134,16 @@ export function DocumentListPage() {
     catch (err) { fail("Couldn't delete document", err); }
   };
 
+  // a copy in this project, then its name ready to edit (Enter or click away keeps "Copy of ...")
+  const handleDuplicate = async (d: DocumentListItem) => {
+    try {
+      const copy = await rawApi.duplicateDocument(d.id);
+      setDocs(await api.listDocuments(projectId));   // with its kind and thumbnail
+      setEditingId(copy.id); setEditName(copy.name);
+      note(`Duplicated "${d.name}" as "${copy.name}"`);
+    } catch (err) { fail("Couldn't duplicate document", new Error(errorText(err))); }
+  };
+
   const moveDoc = async (target: Project) => {
     const doc = movingDoc;
     if (!doc) return;
@@ -193,6 +203,7 @@ export function DocumentListPage() {
       onOpen={() => handleOpen(d)}
       onDoubleClick={() => { setEditingId(d.id); setEditName(d.name); }}
       onRename={() => { setEditingId(d.id); setEditName(d.name); }}
+      onDuplicate={() => handleDuplicate(d)}
       onDelete={() => handleDelete(d.id)}
       onMove={allProjects.length > 1 ? () => setMovingDoc(d) : undefined}
       editing={editingId === d.id ? { value: editName, onChange: setEditName, onCommit: commitRename, onCancel: () => setEditingId(null) } : undefined}

@@ -165,6 +165,12 @@ export const api = {
     });
   },
 
+  /** A copy in the same project ("Copy of <name>"): the model, its STEP files,
+   *  the part's context files and CAM jobs; a fresh version history. */
+  duplicateDocument(id: string): Promise<DocumentFull> {
+    return request(`/documents/${id}/duplicate`, { method: 'POST' });
+  },
+
   deleteDocument(id: string): Promise<void> {
     return request(`/documents/${id}`, { method: 'DELETE' });
   },
