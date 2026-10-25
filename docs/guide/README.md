@@ -259,6 +259,45 @@ The AI in a part's chat knows the project the part is in, not only the part.
 
 ![The project page: the brief at the top, the parts with their descriptions under it](images/project-brief.png)
 
+### Shared sketches and parameters
+
+Parts that must agree (a top plate, a bottom plate and a brace bolting to the same
+arm holes) can build from one sketch and one set of sizes in the project, so a change
+in one place reaches every part.
+
+- **Shared sketch**: draw it in a sketch document in the project. Draw it in the
+  project frame (say origin at the frame centre, Z up) and note that in the brief.
+- **Groups and names**: in the sketch editor, select elements and click **Group…**
+  in the Groups panel on the right to name them ("arm holes"). Click a group to select
+  its elements; double-click to rename it. A part's script reads a group as
+  `SK["frame"].group("arm holes")`, a named element as `.named("outline")`, and every
+  hole as `.circles` (centre and radius).
+- **Use it in a part**: in the part editor, open **Use project sketch** (File group of
+  the operations, or the AI). Choose the sketch document, name it for the script
+  ("frame"), and click **Use it**. The script then reads it as `SK["frame"]`. The
+  dialog lists the sketches the part uses; × stops using one.
+- **Parameters**: the **Parameters** table on the project page, under the brief, holds
+  sizes every part shares (plate thickness, tube diameter). Click a cell to edit it;
+  the row saves when you leave it. **Add parameter** adds one; × deletes it. Scripts
+  read them as `PP["plate_t"]`.
+- **Out of date**: change the sketch (its shapes, its groups or names) or a parameter,
+  and the parts built from it show **OUT OF DATE** on their cards. In the sketch editor,
+  **Used by** lists them; **Rebuild all** rebuilds them with the sketch as it is now.
+  Opening a part rebuilds it too.
+- **Renames that break parts**: if a save would remove a group or named element a part
+  uses, the sketch editor holds the save and lists the parts it would break. Click
+  **Save anyway** or undo the change.
+- **Versions**: a part version keeps the sketch and parameter values it was built with.
+  Restoring it builds the old shape, and its card says **PINNED**. A note under the
+  script says what has changed since; **Follow latest** builds with today's sketch and
+  parameters again.
+- **The AI**: ask it to "switch the brace to the frame's arm holes" and it replaces
+  copied numbers with `SK[...]`, adding the sketch to the part if needed. It may
+  propose a new or changed project parameter; it shows under its reply with the old
+  value struck through, and nothing changes until you click **Accept**.
+
+![Shared sketches: the Frame holes sketch with its arm holes group, and the three parts that use it in Used by](images/shared-sketch.png)
+
 ### Beyond 3D: 2D and CNC
 
 The 2D editor exports DXF, PDF and images, imports DXF, and turns sketches into G-code

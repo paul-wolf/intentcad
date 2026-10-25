@@ -43,6 +43,7 @@ operations cost nothing to support, they just don't get UI.
 - The part editor names the part's project in the line under the top bar; click it to go back to the project
 - Open in a new tab: Cmd/Ctrl-click or middle-click the logo, Home, Project, the breadcrumbs, a project row or a part/sketch card
 - Project as context for the AI (phase 1 of 4): a Markdown project brief with versions (word warning past 2,000) that every part's chat reads first; a one-line description per part or sketch; the AI sees the project's other parts (size, key parameters) and reads one's script or parameters when it needs to; @-mentions; it answers questions in the chat and proposes brief changes as a diff to accept or reject
+- Shared definitions (project context phase 2 of 4): a part's script builds from a sketch document in its project as SK["alias"] (closed shapes, named groups and elements, circles, points) and from project parameters as PP["name"] (a Parameters table on the project page); parts show out of date when what they read changes, the sketch editor lists its users with Rebuild all and warns before a save drops a group or name a part uses; a part version pins the sketch and parameter values it was built with (Follow latest undoes it); the AI switches parts to a shared sketch and proposes parameters to accept
 
 ## Foundation: edge selection ✓ done
 
@@ -85,6 +86,11 @@ it), simulation, sheet metal, surface modelling, rendering.
 
 ## Order
 
-Done: edge selection, 1-9, 6b, 13, project context phase 1. Next: 12, 10, 11. Context
-files steps 2-3 and project context phases 2-4 run on their own track. Each step stands alone and is kept or reverted on
+Done: edge selection, 1-9, 6b, 13, project context phases 1-2. Next: 12, 10, 11. Context
+files steps 2-3 and project context phases 3-4 run on their own track. Each step stands alone and is kept or reverted on
 its own merit.
+
+Known gap: a build served from the browser's cache doesn't update the server's record of
+the part's last build, so a part can show out of date until it is built again on the
+server (Rebuild all, or a change that misses the cache). The cache key includes the
+shared inputs, so a cache hit never shows a stale shape.

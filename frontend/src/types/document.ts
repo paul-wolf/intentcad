@@ -33,6 +33,8 @@ export interface ProjectedEdgeRef {
 
 export interface LineEntity {
   id: string;
+  /** A name given in the properties panel, for parts: SK["alias"].named("name"). */
+  name?: string;
   type: 'line';
   points: Point[];
   closed?: boolean;
@@ -58,6 +60,8 @@ export interface LineEntity {
 
 export interface CircleEntity {
   id: string;
+  /** A name given in the properties panel, for parts: SK["alias"].named("name"). */
+  name?: string;
   type: 'circle';
   center: Point;
   radius: number;
@@ -81,6 +85,8 @@ export interface CircleEntity {
 
 export interface RectangleEntity {
   id: string;
+  /** A name given in the properties panel, for parts: SK["alias"].named("name"). */
+  name?: string;
   type: 'rectangle';
   center: Point;
   width: number;
@@ -101,6 +107,8 @@ export interface RectangleEntity {
 
 export interface PointEntity {
   id: string;
+  /** A name given in the properties panel, for parts: SK["alias"].named("name"). */
+  name?: string;
   type: 'point';
   position: Point;
   construction?: boolean;
@@ -114,6 +122,7 @@ export interface PointEntity {
 
 export interface DimensionEntity {
   id: string;
+  name?: string;
   type: 'dimension';
   targetEntityId: string;
   segmentIndex: number;
@@ -138,6 +147,8 @@ export interface DimensionEntity {
 
 export interface BezierEntity {
   id: string;
+  /** A name given in the properties panel, for parts: SK["alias"].named("name"). */
+  name?: string;
   type: 'bezier';
   controlPoints: [Point, Point, Point, Point];
   construction?: boolean;
@@ -151,6 +162,8 @@ export interface BezierEntity {
 
 export interface TextEntity {
   id: string;
+  /** A name given in the properties panel, for parts: SK["alias"].named("name"). */
+  name?: string;
   type: 'text';
   position: Point;
   text: string;
@@ -341,6 +354,26 @@ export interface Sketch {
   constraints: Constraint[];
   /** Grid and circular copies made in this sketch (see CopyPattern). */
   patterns?: CopyPattern[];
+  /** Named sets of elements (Group…), for parts: SK["alias"].group("name"). */
+  groups?: SketchGroup[];
+}
+
+export interface SketchGroup {
+  name: string;
+  ids: string[];
+}
+
+/** One of a part's shared sketches: SK["alias"] is sketch `sketch` of
+ *  sketch document `document`. */
+export interface SketchRef {
+  document: string;
+  sketch: string;
+}
+
+/** The shared inputs a version was built with (backend shared_defs). */
+export interface BuildInputs {
+  sk?: Record<string, SketchRef & { version: string; profile?: unknown }>;
+  pp?: Record<string, number | string>;
 }
 
 export interface DocumentMetadata {
@@ -380,6 +413,11 @@ export interface Document {
   /** The face the part prints on (the overhang highlight's bed; auto_round's
    *  keep_bed), found again on each build; absent: the lowest face along Z. */
   printBed?: import('@/api/client').FaceRefSpec | null;
+  /** The project sketches this part's script reads as SK["alias"]. */
+  sketchRefs?: Record<string, SketchRef>;
+  /** A restored version's inputs (each sketch's profile, the parameter
+   *  values), built with instead of the latest until "Follow latest". */
+  pinned?: BuildInputs;
 }
 
 export interface ChatMessage {
@@ -389,6 +427,8 @@ export interface ChatMessage {
   /** (assistant) a change to the project brief it proposed; `base`: the brief
    *  it was compared against; the user accepts or rejects it */
   brief?: { text: string; reason: string; base: string; status: 'pending' | 'accepted' | 'rejected' };
+  /** (assistant) project parameters it proposed (PP["name"]), to accept or reject */
+  params?: { items: (import('./project').ProjectParameter & { reason: string })[]; status: 'pending' | 'accepted' | 'rejected' };
   code?: string;                // (assistant edit) the resulting script — a checkpoint
   files?: string[];             // (user) the titles of the context files sent with it
   usage?: string;               // (assistant) tokens and cost of the call, cached input included

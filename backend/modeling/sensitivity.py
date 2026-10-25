@@ -72,7 +72,7 @@ def _match(f: dict, candidates: list[dict]) -> tuple[dict, float] | None:
 
 
 def sensitivity(code: str, document_id: str | None = None,
-                sketches: dict[str, dict] | None = None) -> dict[str, dict]:
+                sketches: dict[str, dict] | None = None, shared: dict | None = None) -> dict[str, dict]:
     """Return {param_name: dimension-info} for the script's params.
 
     Each entry is {faces, value, shifts, radial, anchor, dir, kind}:
@@ -93,7 +93,7 @@ def sensitivity(code: str, document_id: str | None = None,
     # (no DB there), and only change P, so they import the same files
     assets = load_assets(code, document_id)
     sketches = load_sketches(code, document_id, sketches)
-    base = run_script(code, assets=assets, sketches=sketches)
+    base = run_script(code, assets=assets, sketches=sketches, shared=shared)
     params = base.get("params", {})
     base_faces = base.get("faces", [])
     if not params or not base_faces:
@@ -112,7 +112,7 @@ def sensitivity(code: str, document_id: str | None = None,
                 continue
             try:
                 perturbed = set_params(code, {name: val + delta})
-                r = run_script(perturbed, assets=assets, sketches=sketches)
+                r = run_script(perturbed, assets=assets, sketches=sketches, shared=shared)
             except (EngineError, ParamError, SyntaxError):
                 continue
             if r.get("warning") and not base.get("warning"):

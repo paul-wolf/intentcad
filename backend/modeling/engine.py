@@ -217,9 +217,31 @@ def load_sketches(code: str, document_id: str | None,
     return out
 
 
+# A project's shared sketch or parameter: SK["frame"], PP["arm_od"] (or
+# PP.get("arm_od", ...)). The part's sketchRefs say which sketch each alias
+# is; modeling/shared_defs.py looks them up.
+SK_REF = re.compile(r"""\bSK\[\s*(["'])(.+?)\1\s*\]""")
+PP_REF = re.compile(r"""\bPP(?:\[\s*|\.get\(\s*)(["'])(.+?)\1""")
+
+
+def sk_aliases(code: str) -> list[str]:
+    """The shared-sketch aliases `code` uses, in order, each once."""
+    return list(dict.fromkeys(m.group(2) for m in SK_REF.finditer(code or "")))
+
+
+def pp_names(code: str) -> list[str]:
+    """The project parameters `code` uses, in order, each once."""
+    return list(dict.fromkeys(m.group(2) for m in PP_REF.finditer(code or "")))
+
+
+def uses_shared(code: str) -> bool:
+    return bool(sk_aliases(code) or pp_names(code))
+
+
 def run_script(code: str, *, export: list[str] | None = None, timeout: float = 60.0,
                document_id: str | None = None, assets: dict[str, bytes] | None = None,
-               sketches: dict[str, dict] | None = None, bed: dict | None = None) -> dict:
+               sketches: dict[str, dict] | None = None, bed: dict | None = None,
+               shared: dict | None = None) -> dict:
     """Execute `code` (a build123d script that binds `part`) and return
     {mesh, faces, edges, params, metrics, exports}. `export` requests STEP/STL
     text. Raises EngineError with the script's error message on failure.
@@ -231,7 +253,10 @@ def run_script(code: str, *, export: list[str] | None = None, timeout: float = 6
     ({name: profile}) first, the document's stored profiles for the rest.
     `bed`: the print bed face set in the editor (a face ref): auto_round
     keeps the faces facing its way sharp, and result["bed"] says where the
-    build found it.
+    build found it. `shared`: the project sketches and parameters it uses
+    (SK[...], PP[...]) as modeling/shared_defs.resolve gives them; looked up
+    from `document_id`'s saved refs when not given. result["inputs"] says
+    which versions it used.
 
     Runs on the warm worker; serialized by a lock. On timeout or crash the worker
     is discarded so the next call gets a fresh one."""
@@ -242,6 +267,11 @@ def run_script(code: str, *, export: list[str] | None = None, timeout: float = 6
     if missing:
         raise EngineError(f"uploaded file ASSETS[\"{missing[0]}\"] is not part of this document")
     profiles = load_sketches(code, document_id, sketches) if sketch_refs(code) else {}
+    if shared is None and uses_shared(code):
+        from modeling import shared_defs  # the engine is otherwise Django-free
+
+        shared = shared_defs.resolve(code, document_id)
+    shared = shared or {}
 
     for attempt in range(2):
         with _worker_lock:
@@ -257,6 +287,7 @@ def run_script(code: str, *, export: list[str] | None = None, timeout: float = 6
                 "asset_refs": sorted(refs),
                 "sketches": profiles,
                 "bed": bed,
+                "shared": {k: shared[k] for k in ("sk", "pp", "errors") if shared.get(k)},
             })
             try:
                 w.proc.stdin.write(payload + "\n")
@@ -286,4 +317,6 @@ def run_script(code: str, *, export: list[str] | None = None, timeout: float = 6
     if not result.get("ok"):
         raise EngineError(result.get("error", "build failed"), fix=result.get("fix"),
                           params=result.get("params"), revolves=result.get("revolves"))
+    if shared.get("inputs"):
+        result["inputs"] = shared["inputs"]
     return result

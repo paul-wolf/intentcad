@@ -396,7 +396,8 @@ def _keep_editor_ops(tree: ast.Module) -> ast.Module:
 
 def _run(code: str, export: list | None = None,
          assets: dict | None = None, asset_refs: list | None = None,
-         sketches: dict | None = None, bed: dict | None = None) -> dict:
+         sketches: dict | None = None, bed: dict | None = None,
+         shared: dict | None = None) -> dict:
     from build123d import export_step, export_stl
 
     _instrument()
@@ -449,6 +450,11 @@ def _run(code: str, export: list | None = None,
 
     sketch_report: dict = {}
     ns.update(sketch_profile.bind(sketches or {}, ns, sketch_report))
+    # SK["alias"] / PP["name"] — the project's shared sketches and parameters
+    # (modeling/shared_sketch.py); the engine sends the ones the script uses
+    from modeling import shared_sketch
+
+    ns.update(shared_sketch.bind(shared))
     # face_ref({...}) — a face found again on the `part` built so far by what
     # it looks like (modeling/face_ref.py); each lookup → result["face_refs"].
     # shell() / holes() — the editor's Shell and Hole operations
@@ -794,7 +800,7 @@ def main() -> None:
         payload = json.loads(sys.stdin.read() or "{}")
         result = _run(payload.get("code", ""), payload.get("export"),
                       payload.get("assets"), payload.get("asset_refs"), payload.get("sketches"),
-                      payload.get("bed"))
+                      payload.get("bed"), payload.get("shared"))
     except Exception as exc:  # any script/engine error → structured, not a crash
         import traceback
         result = {"ok": False, "error": f"{type(exc).__name__}: {exc}",

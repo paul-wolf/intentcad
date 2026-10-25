@@ -21,7 +21,7 @@ export type OpIcon =
   | 'sketch-face' | 'plane-top' | 'plane-front' | 'plane-right' | 'extrude' | 'revolve' | 'hole' | 'shell' | 'fillet' | 'chamfer' | 'round'
   | 'plane-offset' | 'plane-edge' | 'plane-tangent' | 'mirror' | 'mirror-steps' | 'pattern' | 'pattern-circular' | 'pattern-steps'
   | 'lighten' | 'protect' | 'fix' | 'measure' | 'section' | 'overhang' | 'normal' | 'ortho' | 'params' | 'build' | 'import'
-  | 'export' | 'stl' | 'parts' | 'dxf' | 'views3' | 'versions' | 'process' | 'context'
+  | 'export' | 'stl' | 'parts' | 'dxf' | 'views3' | 'versions' | 'process' | 'context' | 'shared-sketch'
   | `view-${StandardView}`;
 
 /** What's selected: the faces, the edges and the construction planes, in
@@ -100,6 +100,8 @@ export interface OpContext {
   process(): void;
   /** the Context layout, and the file picker for a reference PDF or photo */
   addContextFile(): void;
+  /** Use project sketch…: the project's sketches the script reads as SK["alias"] */
+  projectSketches(): void;
   toggleParams(): void;
   setView(view: StandardView): void;
   lookAtSelection(): void;
@@ -605,6 +607,16 @@ export const OPERATIONS: Operation[] = [
     example: 'make a case for the board in the datasheet',
     needs: (_sel, m) => first([m.sketching, 'Finish the sketch first']),
     run: (ctx) => ctx.addContextFile(),
+  },
+  {
+    id: 'project-sketch', name: 'Use project sketch', group: 'File', icon: 'shared-sketch',
+    help: 'Build from a sketch shared in the project, read as SK["name"]',
+    longHelp: 'Picks a sketch from one of the project\'s sketch documents and gives it a name for the script: '
+      + 'SK["frame"] is its closed shapes, SK["frame"].group("arm holes") the elements grouped under that name. '
+      + 'Parts that use the same sketch stay in step: change the sketch and they are marked out of date.',
+    example: 'use the Frame holes sketch for the mounting holes',
+    needs: (_sel, m) => first([m.sketching, 'Finish the sketch first']),
+    run: (ctx) => ctx.projectSketches(),
   },
 ];
 

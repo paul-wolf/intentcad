@@ -33,12 +33,15 @@ def code_sha(code: str) -> str:
 def build_record(code: str, result: dict) -> dict:
     """What a successful build leaves on the document (Document.last_build)."""
     m = result.get("metrics") or {}
-    return {
+    record = {
         "bbox_min": m.get("bbox_min"), "bbox_max": m.get("bbox_max"),
         "summary": geometry_summary(result.get("faces") or [], m),
         "code_sha": code_sha(code),
         "built_at": timezone.now().isoformat(timespec="seconds"),
     }
+    if result.get("inputs"):   # the shared sketches and parameters it read (shared_defs.py)
+        record["inputs"] = result["inputs"]
+    return record
 
 
 def save_build(document_id: str, code: str, result: dict) -> None:
@@ -147,7 +150,161 @@ def project_context(document_id) -> str:
         out.append(f'PROJECT PARTS (the other parts and sketches in "{project.name}"; you are editing '
                    f'"{doc.name}". Call read_part to see one\'s script, parameters or geometry):\n'
                    + "\n".join(lines))
+    shared = shared_context(doc, [doc, *others])
+    if shared:
+        out.append(shared)
     return "\n\n".join(out)
+
+
+def _profile_text(profile: dict) -> str:
+    """A shared sketch's plane, groups and named elements, in a line."""
+    plane = profile.get("plane") or {}
+    if (plane.get("normal") in (None, [0, 0, 1]) and plane.get("origin") in (None, [0, 0, 0])
+            and plane.get("xAxis") in (None, [1, 0, 0])):
+        bits = ["on XY of the project frame"]
+    else:
+        bits = [f"on its own plane (origin {_vec(plane.get('origin') or [0, 0, 0])}, "
+                f"normal {_vec(plane.get('normal') or [0, 0, 1])})"]
+    items = profile.get("items") or {}
+    circles = {c.get("id"): c for c in items.get("circles") or []}
+
+    def what(ids) -> str:
+        cs = [circles[i] for i in ids if i in circles]
+        rest = len(ids) - len(cs)
+        dias = sorted({_fmt(2 * float(c.get("r") or 0)) for c in cs})
+        parts = [f"{len(cs)} circle{'s' if len(cs) != 1 else ''} dia {'/'.join(dias)}"] if cs else []
+        if rest:
+            parts.append(f"{rest} other shape{'s' if rest != 1 else ''}")
+        return ", ".join(parts) or "empty"
+
+    groups = profile.get("groups") or {}
+    if groups:
+        bits.append("groups: " + "; ".join(f'"{g}" ({what(ids)})' for g, ids in groups.items()))
+    names = profile.get("names") or {}
+    if names:
+        bits.append("named: " + ", ".join(f'"{n}"' for n in names))
+    n_items = sum(len(v or []) for v in items.values())
+    bits.append(f"{n_items} element{'s' if n_items != 1 else ''}, {len(profile.get('loops') or [])} closed shape(s)")
+    return "; ".join(bits)
+
+
+def shared_context(doc, docs: list) -> str:
+    """The PROJECT PARAMETERS and SHARED SKETCHES blocks: what any part can
+    read as PP["name"] and SK["alias"], and which part uses which."""
+    from .engine import pp_names, sk_aliases
+
+    out = []
+    params = [p for p in doc.project.parameters or [] if isinstance(p, dict) and p.get("name")]
+    users_of_param: dict[str, list[str]] = {}
+    users_of_sketch: dict[tuple, list[str]] = {}
+    for d in docs:
+        code = _code(d)
+        for name in pp_names(code):
+            users_of_param.setdefault(name, []).append(d.name)
+        refs = (d.data or {}).get("sketchRefs") if isinstance(d.data, dict) else None
+        used = set(sk_aliases(code))
+        for alias, ref in (refs or {}).items() if isinstance(refs, dict) else []:
+            if isinstance(ref, dict) and alias in used:
+                users_of_sketch.setdefault((str(ref.get("document")), ref.get("sketch")), []).append(
+                    f'{d.name} (SK["{alias}"])')
+    if params:
+        lines = []
+        for p in params:
+            v = p.get("value")
+            val = (_fmt(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else json.dumps(v))
+            unit = {"deg": "°"}.get(p.get("unit"), f" {p['unit']}" if p.get("unit") else "")
+            desc = f" — {p['description']}" if p.get("description") else ""
+            who = users_of_param.get(p["name"])
+            lines.append(f'- PP["{p["name"]}"] = {val}{unit}{desc}'
+                         + (f"; used by {', '.join(who)}" if who else ""))
+        out.append("PROJECT PARAMETERS (any part's script reads them as PP[\"name\"]; the user edits them "
+                   "on the project page; propose a change or a new one with set_project_parameter):\n"
+                   + "\n".join(lines))
+    lines = []
+    for d in docs:
+        if document_kind(d.data) == "part":
+            continue
+        for s in (d.data or {}).get("sketches") or []:
+            if not isinstance(s, dict):
+                continue
+            head = f'- "{d.name}" [id {str(d.id)[:8]}] sketch "{s.get("name") or s.get("id")}"'
+            prof = s.get("profile")
+            if not isinstance(prof, dict) or "items" not in prof:
+                lines.append(head + ": not usable yet (the user must open it once in the sketch editor)")
+                continue
+            who = users_of_sketch.get((str(d.id), s.get("id")))
+            lines.append(f"{head}: {_profile_text(prof)}" + (f"; used by {', '.join(who)}" if who else ""))
+    if lines:
+        out.append("SHARED SKETCHES (the project's sketch documents; a part uses one through "
+                   "use_sketch, then reads it as SK[\"alias\"]):\n" + "\n".join(lines[:MANIFEST_MAX]))
+    refs = (doc.data or {}).get("sketchRefs") if isinstance(doc.data, dict) else None
+    if isinstance(refs, dict) and refs:
+        names = {str(d.id): d for d in docs}
+        mine = []
+        for alias, ref in refs.items():
+            if not isinstance(ref, dict):
+                continue
+            src = names.get(str(ref.get("document")))
+            sk = next((s for s in ((src.data or {}).get("sketches") or []) if isinstance(s, dict)
+                       and s.get("id") == ref.get("sketch")), None) if src else None
+            label = (f'"{src.name}" sketch "{(sk or {}).get("name") or ref.get("sketch")}"' if src
+                     else "a sketch outside this project")
+            mine.append(f'- SK["{alias}"] = {label}')
+        out.append("THIS PART'S SHARED SKETCHES (already usable in its script):\n" + "\n".join(mine))
+    return "\n\n".join(out)
+
+
+ALIAS = re.compile(r"^[A-Za-z_][A-Za-z0-9_ -]{0,40}$")
+
+
+def use_sketch(document_id, document: str, sketch: str, alias: str) -> tuple[dict | None, str]:
+    """The use_sketch tool: ({alias: {document, sketch}} to add to the part's
+    sketchRefs, or None) and a message for the model describing it."""
+    alias = (alias or "").strip()
+    if not ALIAS.match(alias):
+        return None, (f"{alias!r} isn't a usable alias: a short name of letters, digits and _ "
+                      'such as "frame" or "arm_holes".')
+    doc, why = find_document(document_id, document)
+    if why:
+        return None, why
+    if document_kind(doc.data) == "part":
+        return None, f'"{doc.name}" is a part, not a sketch; use_sketch takes a sketch document.'
+    sketches = [s for s in (doc.data or {}).get("sketches") or [] if isinstance(s, dict)]
+    want = (sketch or "").strip().lower()
+    hits = ([s for s in sketches if want in ((s.get("name") or "").lower(), str(s.get("id")).lower())]
+            if want else sketches)
+    if len(hits) != 1:
+        listed = ", ".join(f'"{s.get("name") or s.get("id")}"' for s in sketches)
+        return None, (f'"{doc.name}" has {"no sketch called " + repr(sketch) if want and not hits else "several sketches"}; '
+                      f"name one of: {listed}.")
+    s = hits[0]
+    prof = s.get("profile")
+    if not isinstance(prof, dict) or "items" not in prof:
+        return None, (f'"{doc.name}" hasn\'t saved its shapes for parts yet: ask the user to open it once '
+                      "in the sketch editor, then try again.")
+    ref = {alias: {"document": str(doc.id), "sketch": s.get("id")}}
+    return ref, (f'SK["{alias}"] is now "{doc.name}" sketch "{s.get("name") or s.get("id")}": '
+                 f"{_profile_text(prof)}. Write the script with SK[\"{alias}\"] (its .group(...), "
+                 ".named(...), .circles, .points, .on(...)).")
+
+
+def check_parameter(args: dict) -> tuple[dict | None, str]:
+    """A set_project_parameter call: (the parameter, None) or (None, why not)."""
+    from projects.api import check_parameters
+
+    name = str(args.get("name", "")).strip()
+    value = args.get("value")
+    if isinstance(value, str):
+        try:
+            value = float(value) if value.strip() and re.fullmatch(r"-?\d+(\.\d+)?", value.strip()) else value
+        except ValueError:
+            pass
+    if not isinstance(value, (int, float, str)) or isinstance(value, bool):
+        return None, "value must be a number (mm or degrees) or a short text"
+    p = {"name": name, "value": value, "unit": str(args.get("unit") or "").strip(),
+         "description": str(args.get("description") or "").strip()}
+    why = check_parameters([p])
+    return (None, why) if why else (p, "")
 
 
 def find_document(document_id, ref: str):
@@ -281,6 +438,46 @@ READ_PART_TOOL = {
             "what": {"type": "string", "enum": ["script", "parameters", "summary"]},
         },
         "required": ["part", "what"],
+        "additionalProperties": False,
+    },
+}
+
+USE_SKETCH_TOOL = {
+    "name": "use_sketch",
+    "description": "Let this part's script use one of the project's SHARED SKETCHES as SK[\"<alias>\"] "
+                   "(a build123d Sketch on its plane, with .group(name), .named(name), .circles, .points, "
+                   ".on(plane)). Call it before writing a script that reads SK[alias]; the reply describes "
+                   "the sketch's groups and names. Use a shared sketch rather than copying its numbers, so "
+                   "the parts follow it when it changes.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "document": {"type": "string", "description": "the sketch document's name (as listed) or id"},
+            "sketch": {"type": "string", "description": "which sketch in it, by name (blank if it has one)"},
+            "alias": {"type": "string", "description": "the short name the script uses, e.g. \"frame\""},
+        },
+        "required": ["document", "alias"],
+        "additionalProperties": False,
+    },
+}
+
+SET_PROJECT_PARAMETER_TOOL = {
+    "name": "set_project_parameter",
+    "description": "Propose a new or changed PROJECT PARAMETER (PP[\"name\"], read by every part that uses "
+                   "it), e.g. a tube diameter or plate thickness several parts share. The user accepts or "
+                   "rejects it on a card; your script can use the proposed value right away. Changing one "
+                   "changes every part that reads it, so say which in the reason.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "letters, digits and _, e.g. arm_od"},
+            "value": {"anyOf": [{"type": "number"}, {"type": "string"}],
+                      "description": "a number (mm or degrees) or a short text such as \"M3\""},
+            "unit": {"type": "string", "enum": ["mm", "deg", ""]},
+            "description": {"type": "string", "description": "what it is, in a few words"},
+            "reason": {"type": "string", "description": "one short sentence: why, and which parts it affects"},
+        },
+        "required": ["name", "value", "unit", "reason"],
         "additionalProperties": False,
     },
 }

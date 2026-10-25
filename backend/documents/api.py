@@ -65,8 +65,20 @@ def _snapshot(doc, user, data, label=""):
     code = data.get("modelCode") if isinstance(data, dict) else None
     if not (isinstance(code, str) and code.strip()):
         return
+    from modeling import shared_defs
+    from modeling.engine import uses_shared
+
+    if uses_shared(code):
+        # the shared sketches and parameters it reads, as they are now (with
+        # each sketch's shapes), so restoring this version builds the same part
+        inputs = shared_defs.pin_inputs(shared_defs.resolve(
+            code, doc, user=user, refs=data.get("sketchRefs") or {}, pinned=data.get("pinned") or {}))
+        data = {k: v for k, v in data.items() if k != "inputs"}
+        if inputs:
+            data["inputs"] = inputs
     last = doc.versions.first()   # most recent (ordering = -created_at)
-    if last and isinstance(last.data, dict) and last.data.get("modelCode") == code:
+    if (last and isinstance(last.data, dict) and last.data.get("modelCode") == code
+            and shared_defs.input_key(last.data.get("inputs")) == shared_defs.input_key(data.get("inputs"))):
         return                     # unchanged — don't duplicate
     # labels are free text (an AI change summary, "imported <filename>") — clip
     # to the column, which Postgres enforces (sqlite silently doesn't)
@@ -233,6 +245,18 @@ def set_description(request, doc_id: UUID, payload: DescriptionIn):
     doc.description = " ".join(payload.description.split())[:limit]
     Document.objects.filter(id=doc.id).update(description=doc.description)
     return doc
+
+
+@router.get("/{doc_id}/used-by")
+def used_by(request, doc_id: UUID):
+    """The parts that use this sketch document's sketches (SK["…"]), what
+    groups and names their scripts ask for, and whether each is out of date."""
+    doc, err = document_or_error(request, doc_id)
+    if err:
+        return err
+    from modeling import shared_defs
+
+    return {"parts": shared_defs.used_by(doc)}
 
 
 @router.get("/{doc_id}/versions", response=list[VersionListOut])

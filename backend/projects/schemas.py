@@ -23,6 +23,18 @@ class ProjectOut(Schema):
     updated_at: datetime
     brief: str = ""
     brief_updated_at: datetime | None = None
+    parameters: list[dict] = []
+
+
+class ProjectParameter(Schema):
+    name: str
+    value: float | str
+    unit: str = ""          # "mm", "deg" or "" (a count, or text)
+    description: str = ""
+
+
+class ParametersIn(Schema):
+    parameters: list[ProjectParameter]
 
 
 class BriefIn(Schema):

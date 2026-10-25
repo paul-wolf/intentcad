@@ -16,6 +16,7 @@ import { useTokens, SANS, MONO } from '@/ui/tokens';
 import { ContextPane, useContextFiles, type CtxColors } from './ContextPane';
 import { AppLink } from '@/ui/links';
 import { ProjectBrief } from './ProjectBrief';
+import { ProjectParameters } from './ProjectParameters';
 
 function relativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -217,7 +218,8 @@ export function DocumentListPage() {
   });
   const cardOf = (d: DocumentListItem) => (
     <DocCard key={d.id}
-      d={{ id: d.id, name: d.name, kind: d.kind, updated: relativeTime(d.updated_at), thumbnail: d.thumbnail, description: d.description }}
+      d={{ id: d.id, name: d.name, kind: d.kind, updated: relativeTime(d.updated_at), thumbnail: d.thumbnail, description: d.description,
+           stale: d.stale, pinned: d.pinned }}
       onOpen={() => handleOpen(d)}
       onDoubleClick={() => { setEditingId(d.id); setEditName(d.name); }}
       onRename={() => { setEditingId(d.id); setEditName(d.name); }}
@@ -360,6 +362,9 @@ export function DocumentListPage() {
             <>
               {sectionHeader(t.ok, 'BRIEF', null)}
               <ProjectBrief project={project} onSaved={setProject} />
+              {sectionHeader(t.violet, 'PARAMETERS', project.parameters?.length ?? 0)}
+              <ProjectParameters project={project}
+                onSaved={(p) => { setProject(p); api.listDocuments(projectId).then(setDocs).catch(() => {}); }} />
             </>
           )}
 

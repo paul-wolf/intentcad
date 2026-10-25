@@ -66,6 +66,12 @@ interface DocumentStore {
   toggleSketchSuppressed(sketchId: string): void;
   moveSketch(sketchId: string, direction: 'up' | 'down'): void;
   setActiveSketch(sketchId: string): void;
+  /** The sketch's named groups of elements (Group…), for parts: SK["alias"].group("name"). */
+  setSketchGroups(sketchId: string, groups: import('@/types/document').SketchGroup[]): void;
+  /** (parts) the shared sketches it reads as SK["alias"], and the restored
+   *  version's inputs it builds with (null: the latest) */
+  setSharedRefs(sketchRefs: Record<string, import('@/types/document').SketchRef>,
+                pinned: import('@/types/document').BuildInputs | null): void;
 
   // Entity actions
   addEntity(entity: Entity): void;
@@ -331,6 +337,24 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
       },
     }));
     return sketch.id;
+  },
+
+  setSharedRefs(sketchRefs, pinned) {
+    set((s) => {
+      const { pinned: _old, ...rest } = s.document;
+      return { document: { ...rest, sketchRefs, ...(pinned ? { pinned } : {}) } };
+    });
+  },
+
+  setSketchGroups(sketchId, groups) {
+    set((s) => ({
+      document: {
+        ...s.document,
+        sketches: s.document.sketches.map((sk) =>
+          sk.id === sketchId ? { ...sk, groups } : sk,
+        ),
+      },
+    }));
   },
 
   renameSketch(sketchId, name) {
