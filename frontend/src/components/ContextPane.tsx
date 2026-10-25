@@ -21,21 +21,26 @@ export interface CtxColors {
 type Scope = 'part' | 'project';
 type Patch = Parameters<typeof contextApi.update>[1];
 
+const ownerKey = (o: ContextOwner | null) => (o ? ('document' in o ? `d:${o.document}` : `p:${o.project}`) : '');
+
 /** A part's (or a project's) context files, loaded and kept in step with the
  *  server. `owner` null: not saved yet, nothing to load. */
 export function useContextFiles(owner: ContextOwner | null) {
   const [files, setFiles] = useState<ContextFiles | null>(null);
   const [error, setError] = useState('');
-  const key = owner ? ('document' in owner ? `d:${owner.document}` : `p:${owner.project}`) : '';
+  const key = ownerKey(owner);
   const ownerRef = useRef(owner);
   ownerRef.current = owner;
   const reload = useCallback(() => {
     const o = ownerRef.current;
     if (!o) { setFiles(null); return Promise.resolve(); }
-    return contextApi.list(o).then((c) => { setFiles(c); setError(''); })
-      .catch((e) => setError(errorText(e)));
+    const k = ownerKey(o);
+    // a reply for a part or project left meanwhile is dropped
+    return contextApi.list(o).then((c) => { if (ownerKey(ownerRef.current) === k) { setFiles(c); setError(''); } })
+      .catch((e) => { if (ownerKey(ownerRef.current) === k) setError(errorText(e)); });
   }, []);
-  useEffect(() => { void reload(); }, [key, reload]);
+  // a new owner: clear the last one's files rather than show them while loading
+  useEffect(() => { setFiles(null); setError(''); void reload(); }, [key, reload]);
 
   const put = (f: ContextFile) => setFiles((c) => {
     if (!c) return c;
