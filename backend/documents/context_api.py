@@ -10,7 +10,7 @@ from django.shortcuts import get_object_or_404
 from ninja import File, Form, Router, Schema
 from ninja.files import UploadedFile
 
-from projects.access import can_access_project, require_auth
+from projects.access import can_access_document, can_access_project, require_auth
 from projects.models import Project
 
 from .api import _clean_filename, document_or_error
@@ -90,8 +90,9 @@ def file_or_error(request, file_id):
         return None, err
     cf = get_object_or_404(ContextFile.objects.select_related("project", "document__project"),
                            id=file_id)
-    project = cf.project or (cf.document.project if cf.document else None)
-    if project and not can_access_project(request.user, project):
+    allowed = (can_access_project(request.user, cf.project) if cf.project
+               else can_access_document(request.user, cf.document))
+    if not allowed:
         return None, _denied()
     return cf, None
 

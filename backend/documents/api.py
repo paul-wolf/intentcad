@@ -14,7 +14,7 @@ from ninja.files import UploadedFile
 
 from accounts.events import record_event
 from accounts.models import UserEvent
-from projects.access import can_access_project, require_auth
+from projects.access import can_access_document, can_access_project, require_auth
 from projects.models import Project, ProjectShare
 
 from .copying import copy_document_extras
@@ -54,7 +54,7 @@ def document_or_error(request, doc_id):
     if err:
         return None, err
     doc = get_object_or_404(Document, id=doc_id)
-    if doc.project and not can_access_project(request.user, doc.project):
+    if not can_access_document(request.user, doc):
         return None, JsonResponse({"message": "Access denied"}, status=403)
     return doc, None
 
@@ -160,7 +160,7 @@ def get_document(request, doc_id: UUID):
     if err:
         return err
     doc = get_object_or_404(Document, id=doc_id)
-    if doc.project and not can_access_project(request.user, doc.project):
+    if not can_access_document(request.user, doc):
         return JsonResponse({"message": "Access denied"}, status=403)
     return doc
 
@@ -171,7 +171,7 @@ def update_document(request, doc_id: UUID, payload: DocumentUpdateIn):
     if err:
         return err
     doc = get_object_or_404(Document, id=doc_id)
-    if doc.project and not can_access_project(request.user, doc.project):
+    if not can_access_document(request.user, doc):
         return JsonResponse({"message": "Access denied"}, status=403)
 
     # (1) Optimistic concurrency: never let a client holding a stale copy overwrite
@@ -242,7 +242,7 @@ def list_versions(request, doc_id: UUID):
     if err:
         return err
     doc = get_object_or_404(Document, id=doc_id)
-    if doc.project and not can_access_project(request.user, doc.project):
+    if not can_access_document(request.user, doc):
         return JsonResponse({"message": "Access denied"}, status=403)
     return list(doc.versions.all())
 
@@ -254,7 +254,7 @@ def get_version(request, doc_id: UUID, version_id: UUID):
     if err:
         return err
     doc = get_object_or_404(Document, id=doc_id)
-    if doc.project and not can_access_project(request.user, doc.project):
+    if not can_access_document(request.user, doc):
         return JsonResponse({"message": "Access denied"}, status=403)
     return get_object_or_404(DocumentVersion, id=version_id, document=doc)
 
@@ -265,7 +265,7 @@ def delete_document(request, doc_id: UUID):
     if err:
         return err
     doc = get_object_or_404(Document, id=doc_id)
-    if doc.project and not can_access_project(request.user, doc.project):
+    if not can_access_document(request.user, doc):
         return JsonResponse({"message": "Access denied"}, status=403)
     doc.delete()
     return 204, None

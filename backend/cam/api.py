@@ -7,7 +7,7 @@ from ninja import Router
 
 from documents.api import document_or_error
 from documents.models import Document
-from projects.access import can_access_project, require_auth
+from projects.access import can_access_document, can_access_item, can_access_project, require_auth
 from projects.models import ProjectShare
 
 from .models import CamJob, CamProfile
@@ -79,7 +79,7 @@ def get_profile(request, profile_id: UUID):
     if err:
         return err
     profile = get_object_or_404(CamProfile, id=profile_id)
-    if profile.project and not can_access_project(request.user, profile.project):
+    if not can_access_item(request.user, profile.project, profile.created_by_id):
         return JsonResponse({"message": "Access denied"}, status=403)
     return profile
 
@@ -90,7 +90,7 @@ def update_profile(request, profile_id: UUID, payload: CamProfileUpdateIn):
     if err:
         return err
     profile = get_object_or_404(CamProfile, id=profile_id)
-    if profile.project and not can_access_project(request.user, profile.project):
+    if not can_access_item(request.user, profile.project, profile.created_by_id):
         return JsonResponse({"message": "Access denied"}, status=403)
     if payload.name is not None:
         profile.name = payload.name
@@ -109,7 +109,7 @@ def delete_profile(request, profile_id: UUID):
     if err:
         return err
     profile = get_object_or_404(CamProfile, id=profile_id)
-    if profile.project and not can_access_project(request.user, profile.project):
+    if not can_access_item(request.user, profile.project, profile.created_by_id):
         return JsonResponse({"message": "Access denied"}, status=403)
     profile.delete()
     return 204, None
@@ -155,7 +155,7 @@ def create_job(request, payload: CamJobCreateIn):
     if err:
         return err
     doc = get_object_or_404(Document, id=payload.document_id)
-    if doc.project and not can_access_project(request.user, doc.project):
+    if not can_access_document(request.user, doc):
         return JsonResponse({"message": "Access denied"}, status=403)
     if payload.config:
         errors = validate_cam_job_config(payload.config)
@@ -179,7 +179,7 @@ def get_job(request, job_id: UUID):
     if err:
         return err
     job = get_object_or_404(CamJob, id=job_id)
-    if job.document.project and not can_access_project(request.user, job.document.project):
+    if not can_access_document(request.user, job.document):
         return JsonResponse({"message": "Access denied"}, status=403)
     return job
 
@@ -190,7 +190,7 @@ def update_job(request, job_id: UUID, payload: CamJobUpdateIn):
     if err:
         return err
     job = get_object_or_404(CamJob, id=job_id)
-    if job.document.project and not can_access_project(request.user, job.document.project):
+    if not can_access_document(request.user, job.document):
         return JsonResponse({"message": "Access denied"}, status=403)
     if payload.name is not None:
         job.name = payload.name
@@ -212,7 +212,7 @@ def delete_job(request, job_id: UUID):
     if err:
         return err
     job = get_object_or_404(CamJob, id=job_id)
-    if job.document.project and not can_access_project(request.user, job.document.project):
+    if not can_access_document(request.user, job.document):
         return JsonResponse({"message": "Access denied"}, status=403)
     job.delete()
     return 204, None
@@ -228,7 +228,7 @@ def generate_job(request, job_id: UUID):
         return err
     body = json.loads(request.body)
     job = get_object_or_404(CamJob, id=job_id)
-    if job.document.project and not can_access_project(request.user, job.document.project):
+    if not can_access_document(request.user, job.document):
         return JsonResponse({"message": "Access denied"}, status=403)
     job.gcode = body.get("gcode", "")
     job.errors = body.get("errors", [])
@@ -242,7 +242,7 @@ def download_job(request, job_id: UUID):
     if err:
         return err
     job = get_object_or_404(CamJob, id=job_id)
-    if job.document.project and not can_access_project(request.user, job.document.project):
+    if not can_access_document(request.user, job.document):
         return JsonResponse({"message": "Access denied"}, status=403)
     if not job.gcode:
         return JsonResponse({"error": "No G-code generated yet"}, status=404)

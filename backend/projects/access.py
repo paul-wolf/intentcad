@@ -13,6 +13,18 @@ def can_access_project(user, project):
     return ProjectShare.objects.filter(project=project, user=user).exists()
 
 
+def can_access_item(user, project, created_by_id):
+    """A document or CAM profile: in a project, whoever can access the project;
+    in none (made outside any project), only its creator or a superuser."""
+    if project is not None:
+        return can_access_project(user, project)
+    return bool(user.is_superuser or (created_by_id is not None and created_by_id == user.id))
+
+
+def can_access_document(user, doc):
+    return can_access_item(user, doc.project, doc.created_by_id)
+
+
 def get_accessible_projects(user):
     """Return queryset of projects the user can access."""
     if user.is_superuser:
