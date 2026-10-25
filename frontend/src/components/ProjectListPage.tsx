@@ -6,6 +6,7 @@ import { api, type DocumentListItem } from '@/api/cachedClient';
 import { useDocumentStore } from '@/stores/documentStore';
 import { migrateDocument } from '@/utils/document';
 import { setBackendId, setProjectContext } from '@/api/autoSave';
+import { openInNewTab } from '@/ui/links';
 import type { Document } from '@/types/document';
 import type { Project } from '@/types/project';
 import { ShareProjectModal } from './ShareProjectModal';
@@ -133,11 +134,12 @@ export function ProjectListPage() {
             </div>
             {projects.map((p) => (
               <div key={p.id}
-                onClick={() => {
-                  if (editingId === p.id) return;
+                onClick={(e) => {
+                  if (editingId === p.id || openInNewTab(e, `/project/${p.id}`)) return;
                   if (clickTimer.current) clearTimeout(clickTimer.current);
                   clickTimer.current = setTimeout(() => { clickTimer.current = null; navigate(`/project/${p.id}`); }, 250);
                 }}
+                onAuxClick={(e) => { if (editingId !== p.id) openInNewTab(e, `/project/${p.id}`); }}
                 onDoubleClick={() => { if (clickTimer.current) { clearTimeout(clickTimer.current); clickTimer.current = null; } setEditingId(p.id); setEditName(p.name); }}
                 onMouseEnter={() => setHoveredId(p.id)} onMouseLeave={() => setHoveredId(null)}
                 style={{ display: 'grid', gridTemplateColumns: COLS, gap: 14, alignItems: 'center', padding: '15px 20px',

@@ -6,7 +6,7 @@ import {
   type FaceRefSpec, type HolePresets, type EdgeOpKind, type EdgeRefSpec, type ExtrudeExtent, type ExtrudeOp, type KeepItem, type Step,
   type PlaneReport, type MirrorPlane, type PatternReport, type PatternSpec, type PlaneOpKind, type RunFace,
 } from '@/api/client';
-import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, persistPrintBed, persistSketches, getBackendId, getProjectName, subscribeProjectContext } from '@/api/autoSave';
+import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, persistPrintBed, persistSketches, getBackendId, getProjectId, getProjectName, subscribeProjectContext } from '@/api/autoSave';
 import { DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
 import type { ChatMessage } from '@/types/document';
 import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim, type PlacedHandle, type ViewerPick,
@@ -79,6 +79,7 @@ import {
 import { OperationsPanel, Kbd } from './OperationsPanel';
 import { OpIcon, OPS_GRID_ICON } from './OpIcons';
 import { ContextChips, ContextPane, useContextFiles, type CtxColors } from './ContextPane';
+import { AppLink } from '@/ui/links';
 import { acceptable, chatUsageNote, filesToSend, seesSpend, skipList, spendLine, spendNote, usageLabel } from '@/build/contextFiles';
 import { chooseModel, modelsStale } from '@/build/modelList';
 
@@ -913,6 +914,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const user = useAuthStore((st) => st.user);
   const staff = seesSpend(user);
   const projectName = useSyncExternalStore(subscribeProjectContext, getProjectName);
+  const projectId = useSyncExternalStore(subscribeProjectContext, getProjectId);
+  const projectHref = projectId ? `/project/${projectId}` : '/';
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   // context files (reference PDFs and photos the AI reads): the part's and its
   // project's, once the part has a server id (a new part gets one on first save)
@@ -3331,14 +3334,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
           {(onHome || onProject) && (
             <div style={{ display: 'flex', gap: '6px' }}>
               {onHome && (
-                <button onClick={() => navAway(onHome)} title="Back to projects"
+                <AppLink to="/" onGo={() => navAway(onHome)} title="Back to projects"
                   style={{ ...btn, background: 'none', color: palette.textSecondary,
-                           border: `1px solid ${palette.border}` }}>Home</button>
+                           border: `1px solid ${palette.border}` }}>Home</AppLink>
               )}
               {onProject && (
-                <button onClick={() => navAway(onProject)} title="Back to this project"
+                <AppLink to={projectHref} onGo={() => navAway(onProject)} title="Back to this project"
                   style={{ ...btn, background: 'none', color: palette.textSecondary,
-                           border: `1px solid ${palette.border}` }}>Project</button>
+                           border: `1px solid ${palette.border}` }}>Project</AppLink>
               )}
             </div>
           )}
@@ -3412,14 +3415,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                       fontSize: '11.5px', color: palette.textSecondary, borderBottom: `1px solid ${palette.border}`,
                       whiteSpace: 'nowrap', overflow: 'hidden' }}>
           {projectName ? (
-            <span title={onProject ? 'The project this part is in: click to go back to it' : 'The project this part is in'}
-              onClick={onProject ? () => navAway(onProject) : undefined}
-              style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, cursor: onProject ? 'pointer' : 'default' }}>
+            <AppLink to={projectHref} onGo={onProject ? () => navAway(onProject) : undefined}
+              title="The project this part is in: click to go back to it"
+              style={{ display: 'flex', gap: 5, minWidth: 0, cursor: 'pointer' }}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
                 <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
               </svg>
               Project <span style={{ color: palette.text, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>{projectName}</span>
-            </span>
+            </AppLink>
           ) : null}
           {projectName && staff && usage && <span style={{ color: palette.border }}>·</span>}
           {staff && usage && (

@@ -15,6 +15,7 @@ import { downloadTextFile, downloadBlob } from '@/export/download';
 import { getEntityPoint, getEntityPoints } from '@/utils/entityPoints';
 import { getSegmentCount } from '@/utils/lineSegments';
 import { requestSave, getProjectId, getProjectName, setBackendId, setProjectContext } from '@/api/autoSave';
+import { AppLink } from '@/ui/links';
 import { createEmptyDocument, generateNumberedName } from '@/utils/document';
 import { addLog } from '@/stores/logStore';
 import { openCopyDialog } from '@/tools/openCopyDialog';
@@ -180,9 +181,9 @@ export function Toolbar({ embedded = false }: ToolbarProps = {}) {
     return (
       <div style={{ background: palette.panelBg, borderBottom: `1px solid ${palette.border}`, padding: '4px 8px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
         <div style={rowStyle}>
-          <button onClick={() => navigate('/')} style={btn(palette)} title="Back to project list">Home</button>
+          <AppLink to="/" style={btn(palette)} title="Back to project list">Home</AppLink>
           {getProjectId() && (
-            <button onClick={() => navigate(`/project/${getProjectId()}`)} style={btn(palette)} title="Back to project sketches">Project</button>
+            <AppLink to={`/project/${getProjectId()}`} style={btn(palette)} title="Back to project sketches">Project</AppLink>
           )}
           <button onClick={handleNewSketch} style={btn(palette)} title="Create a new sketch in this project">New Sketch</button>
           <Sep color={palette.border} />
@@ -235,9 +236,9 @@ export function Toolbar({ embedded = false }: ToolbarProps = {}) {
 
       {/* ── Row 1: Draw ── */}
       <div style={rowStyle}>
-        <button onClick={() => navigate('/')} {...off(btn(palette))} title="Back to project list">Home</button>
+        <AppLink to="/" style={btn(palette)} title="Back to project list">Home</AppLink>
         {getProjectId() && (
-          <button onClick={() => navigate(`/project/${getProjectId()}`)} {...off(btn(palette))} title="Back to project sketches">Project</button>
+          <AppLink to={`/project/${getProjectId()}`} style={btn(palette)} title="Back to project sketches">Project</AppLink>
         )}
         <button onClick={handleNewSketch} {...off(btn(palette))} title="Create a new sketch in this project">New Sketch</button>
         <Sep color={palette.border} />

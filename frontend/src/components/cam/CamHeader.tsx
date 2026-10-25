@@ -1,16 +1,15 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useCamStore, type CamStep } from '@/stores/camStore';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { getBackendId, getProjectId, getProjectName } from '@/api/autoSave';
 import { Logo, ThemeToggle } from '@/ui/chrome';
+import { AppLink } from '@/ui/links';
 import { Btn, useTokens, SANS, inputStyle } from './ui';
 
 /** The CAM mode header: where you are, the three steps, the job, and the way out. */
 export function CamHeader() {
   const t = useTokens();
-  const navigate = useNavigate();
   const docName = useDocumentStore((s) => s.document.name);
   const step = useCamStore((s) => s.step);
   const setStep = useCamStore((s) => s.setStep);
@@ -34,11 +33,11 @@ export function CamHeader() {
     <div style={{ height: 50, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '0 14px', background: t.surface, borderBottom: `1px solid ${t.border}`, fontFamily: SANS, color: t.text }}>
       <Logo size={22} />
       <nav style={{ display: 'flex', alignItems: 'center', gap: 2, fontSize: 12.5, minWidth: 0 }}>
-        <button style={crumb} onClick={() => navigate('/')} title="Back to the project list">Home</button>
+        <AppLink to="/" style={crumb} title="Back to the project list">Home</AppLink>
         {projectId && (
           <>
             <span style={{ color: t.textMute }}>/</span>
-            <button style={crumb} onClick={() => navigate(`/project/${projectId}`)} title="Back to the project">{getProjectName() ?? 'Project'}</button>
+            <AppLink to={`/project/${projectId}`} style={crumb} title="Back to the project">{getProjectName() ?? 'Project'}</AppLink>
           </>
         )}
         <span style={{ color: t.textMute }}>/</span>
