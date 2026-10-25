@@ -11,6 +11,18 @@ export { clearCsrfToken } from './client';
 
 // ── Documents ──
 
+// Saves of one document run one after another. Overlapping saves (the chat's
+// and the autosave's) would each send the timestamp of the last confirmed save
+// as their base; once the first lands, the server refuses the second as a
+// conflict (409). In turn, each one sends the timestamp the one before got back.
+const saving = new Map<string, Promise<unknown>>();
+function inTurn<T>(id: string, run: () => Promise<T>): Promise<T> {
+  const next = (saving.get(id) ?? Promise.resolve()).catch(() => undefined).then(run);
+  saving.set(id, next);
+  void next.catch(() => undefined).finally(() => { if (saving.get(id) === next) saving.delete(id); });
+  return next;
+}
+
 export const api = {
   async listDocuments(projectId?: string): Promise<DocumentListItem[]> {
     try {
@@ -136,70 +148,74 @@ export const api = {
     }
   },
 
-  async updateDocument(id: string, payload: { name?: string; data?: Record<string, unknown>; history?: unknown; project_id?: string; version_label?: string; snapshot?: boolean }): Promise<DocumentFull> {
-    // sketch axes are derived on load, not saved
-    payload = { ...payload, ...(payload.data ? { data: savedData(payload.data) } : {}), ...(payload.history ? { history: savedHistory(payload.history) } : {}) };
-    const now = new Date().toISOString();
-    const existing = await db.documents.get(id);
-    const optimistic = {
-      id,
-      name: payload.name ?? existing?.name ?? '',
-      data: payload.data ?? existing?.data ?? {},
-      history: payload.history ?? existing?.history,
-      project_id: payload.project_id ?? existing?.project_id ?? null,
-      updated_at: now,
-    };
+  updateDocument(id: string, payload: { name?: string; data?: Record<string, unknown>; history?: unknown; project_id?: string; version_label?: string; snapshot?: boolean }): Promise<DocumentFull> {
+    // one save of a document at a time (see inTurn)
+    return inTurn(id, async () => {
+      // sketch axes are derived on load, not saved
+      payload = { ...payload, ...(payload.data ? { data: savedData(payload.data) } : {}), ...(payload.history ? { history: savedHistory(payload.history) } : {}) };
+      const now = new Date().toISOString();
+      const existing = await db.documents.get(id);
+      const optimistic = {
+        id,
+        name: payload.name ?? existing?.name ?? '',
+        data: payload.data ?? existing?.data ?? {},
+        history: payload.history ?? existing?.history,
+        project_id: payload.project_id ?? existing?.project_id ?? null,
+        updated_at: now,
+        server_confirmed_updated_at: existing?.server_confirmed_updated_at,
+      };
 
-    // Write to IDB immediately so offline edits are never lost
-    await db.documents.put(optimistic);
+      // Write to IDB immediately so offline edits are never lost
+      await db.documents.put(optimistic);
 
-    try {
-      // Send the version we last saw so the server can reject a stale overwrite.
-      const base = existing?.server_confirmed_updated_at ?? existing?.updated_at;
-      const result = await rawApi.updateDocument(id, base ? { ...payload, base_updated_at: base } : payload);
-      // Update IDB with the server's confirmed timestamp
-      await db.documents.put({
-        id: result.id,
-        name: result.name,
-        data: result.data ?? optimistic.data,
-        history: result.history ?? optimistic.history,
-        project_id: result.project_id,
-        updated_at: result.updated_at,
-        server_confirmed_updated_at: result.updated_at,
-      });
-      // Clear any stale pending queue entries now that the server has the latest
-      await db.syncQueue.where('[table+entityId]').equals(['documents', id]).delete();
-      return result;
-    } catch (err) {
-      const msg = String(err);
-      if (msg.includes('API 409')) {
-        // Stale write refused by the server — DON'T overwrite. Pull the server's
-        // current version into IDB so local reflects the truth, and surface it.
-        try {
-          const server = await rawApi.getDocument(id);
-          await db.documents.put({
-            id: server.id, name: server.name, data: server.data, history: server.history,
-            project_id: server.project_id, updated_at: server.updated_at,
-            server_confirmed_updated_at: server.updated_at,
-          });
-        } catch { /* ignore refetch failure */ }
-        throw Object.assign(new Error('conflict'), { conflict: true });
+      try {
+        // Send the version we last saw so the server can reject a stale overwrite.
+        const base = existing?.server_confirmed_updated_at ?? existing?.updated_at;
+        const result = await rawApi.updateDocument(id, base ? { ...payload, base_updated_at: base } : payload);
+        // Update IDB with the server's confirmed timestamp
+        await db.documents.put({
+          id: result.id,
+          name: result.name,
+          data: result.data ?? optimistic.data,
+          history: result.history ?? optimistic.history,
+          project_id: result.project_id,
+          updated_at: result.updated_at,
+          server_confirmed_updated_at: result.updated_at,
+        });
+        // Clear any stale pending queue entries now that the server has the latest
+        await db.syncQueue.where('[table+entityId]').equals(['documents', id]).delete();
+        return result;
+      } catch (err) {
+        const msg = String(err);
+        if (msg.includes('API 409')) {
+          // Stale write refused by the server — DON'T overwrite. Pull the server's
+          // current version into IDB so local reflects the truth, and surface it.
+          try {
+            const server = await rawApi.getDocument(id);
+            await db.documents.put({
+              id: server.id, name: server.name, data: server.data, history: server.history,
+              project_id: server.project_id, updated_at: server.updated_at,
+              server_confirmed_updated_at: server.updated_at,
+            });
+          } catch { /* ignore refetch failure */ }
+          throw Object.assign(new Error('conflict'), { conflict: true });
+        }
+        if (msg.includes('API 4')) {
+          // 4xx — validation/auth error, queuing would not help
+          throw err;
+        }
+        // Network error — queue for sync when back online
+        await db.syncQueue.add({
+          table: 'documents',
+          entityId: id,
+          method: 'update',
+          payload,
+          timestamp: Date.now(),
+        });
+        triggerSync();
+        throw Object.assign(new Error('offline'), { queued: true });
       }
-      if (msg.includes('API 4')) {
-        // 4xx — validation/auth error, queuing would not help
-        throw err;
-      }
-      // Network error — queue for sync when back online
-      await db.syncQueue.add({
-        table: 'documents',
-        entityId: id,
-        method: 'update',
-        payload,
-        timestamp: Date.now(),
-      });
-      triggerSync();
-      throw Object.assign(new Error('offline'), { queued: true });
-    }
+    });
   },
 
   async deleteDocument(id: string): Promise<void> {
