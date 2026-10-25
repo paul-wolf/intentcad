@@ -8,12 +8,20 @@ from django.utils.dateparse import parse_date, parse_datetime
 from django.middleware.csrf import get_token
 from ninja import Router
 
+from documents.schemas import DocumentListOut
+from projects.examples import copy_examples, examples_project, set_examples_project
+from projects.models import Project
+
 from .events import record_event
 from .models import LoginLog, Organisation, User, UserEvent
 from .schemas import (
     ChangePasswordSchema,
     CreateUserSchema,
     CSRFTokenSchema,
+    ExampleProjectSchema,
+    ExamplesAddedSchema,
+    ExamplesSetSchema,
+    ExamplesSettingSchema,
     LoginResponseSchema,
     LoginSchema,
     MessageSchema,
@@ -543,6 +551,9 @@ def create_organisation(request, data: OrganisationCreateSchema):
         phone=data.phone,
         website=data.website,
     )
+    note = None
+    if data.add_examples and examples_project() is not None:
+        note = _add_examples(org, request.user)[1]
     return 201, OrganisationDetailSchema(
         id=str(org.id),
         name=org.name,
@@ -553,6 +564,7 @@ def create_organisation(request, data: OrganisationCreateSchema):
         website=org.website,
         is_active=org.is_active,
         user_count=0,
+        examples_note=note,
     )
 
 
@@ -635,6 +647,91 @@ def delete_organisation(request, org_id: str):
 
     org.delete()
     return 204, None
+
+
+# ── Example project for new organisations (superuser only) ──
+
+
+def _example_project_out(p):
+    return ExampleProjectSchema(id=str(p.id), name=p.name, organisation=p.organisation.name,
+                                document_count=p.documents.count())
+
+
+def _add_examples(org, user):
+    """Copy the examples into `org`: (project or None, a sentence saying what happened)."""
+    project, why_not = copy_examples(org, user)
+    if project is None:
+        return None, why_not
+    kinds = [DocumentListOut.resolve_kind(d) for d in project.documents.only("data")]
+    counts = [_plural(kinds.count("part"), "part"), _plural(kinds.count("sketch"), "sketch")]
+    return project, f'Added "{project.name}" to {org.name}: {" and ".join(counts)}'
+
+
+def _plural(n, word):
+    return f"{n} {word}" + ("" if n == 1 else "es" if word.endswith("h") else "s")
+
+
+def _superuser_error(request):
+    if not request.user.is_authenticated:
+        return 401, {"message": "Authentication required"}
+    if not request.user.is_superuser:
+        return 403, {"message": "Superuser access required"}
+    return None
+
+
+@router.get(
+    "/manage/examples",
+    response={200: ExamplesSettingSchema, 401: MessageSchema, 403: MessageSchema},
+)
+def get_examples(request):
+    """The project new organisations get a copy of, and the projects to choose from."""
+    err = _superuser_error(request)
+    if err:
+        return err
+    chosen = examples_project()
+    choices = Project.objects.select_related("organisation").order_by("organisation__name", "name")
+    return 200, ExamplesSettingSchema(
+        project=_example_project_out(chosen) if chosen else None,
+        choices=[_example_project_out(p) for p in choices],
+    )
+
+
+@router.put(
+    "/manage/examples",
+    response={200: ExamplesSettingSchema, 401: MessageSchema, 403: MessageSchema, 404: MessageSchema},
+)
+def set_examples(request, data: ExamplesSetSchema):
+    """Choose the examples project, or none (project_id null)."""
+    err = _superuser_error(request)
+    if err:
+        return err
+    project = None
+    if data.project_id:
+        project = Project.objects.filter(id=data.project_id).first()
+        if project is None:
+            return 404, {"message": "Project not found"}
+    set_examples_project(project)
+    return get_examples(request)
+
+
+@router.post(
+    "/manage/organisations/{org_id}/examples",
+    response={201: ExamplesAddedSchema, 400: MessageSchema, 401: MessageSchema,
+              403: MessageSchema, 404: MessageSchema},
+)
+def add_organisation_examples(request, org_id: str):
+    """Give an existing organisation its own copy of the examples project."""
+    err = _superuser_error(request)
+    if err:
+        return err
+    org = Organisation.objects.filter(id=org_id).first()
+    if org is None:
+        return 404, {"message": "Organisation not found"}
+    project, message = _add_examples(org, request.user)
+    if project is None:
+        return 400, {"message": message}
+    return 201, ExamplesAddedSchema(project_id=str(project.id), name=project.name,
+                                    document_count=project.documents.count(), message=message)
 
 
 # ── User events (superuser only) ──

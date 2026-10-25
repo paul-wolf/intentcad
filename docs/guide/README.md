@@ -352,6 +352,25 @@ logs; those have no sign-outs.
 
 ![The Events page](images/events.png)
 
+### Example parts for new organisations (superusers)
+
+New organisations can start with a set of example parts and sketches to look at and
+try things on. You choose one project as the examples; each new organisation gets its
+own copy of it, called by the same name. The copy has every part and sketch (the model,
+its STEP files, its context files, its CAM jobs; generate the G-code again) and the
+project's context files. Changing the copy doesn't change the original.
+
+Click **Orgs** in the top bar (only superusers see it).
+
+- Under **Examples for new organisations**, pick the project to copy, or **None** to
+  stop adding examples.
+- **New organisation** has a box, ticked, to add a copy of the example project. Untick
+  it to make an empty organisation. A note at the top says what was added.
+- **Add examples** on an organisation's card adds a copy to an organisation made
+  earlier. It is refused if the organisation already has a project of that name.
+
+![The Organisations page: a new organisation with the example project ticked, and the project chosen as the examples](images/org-examples.png)
+
 ---
 
 ## What IntentCAD deliberately doesn't do

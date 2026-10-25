@@ -1,6 +1,6 @@
-import { useState, useEffect, type FormEvent, type CSSProperties } from 'react';
+import { useState, useEffect, type FormEvent, type CSSProperties, type ReactNode } from 'react';
 import { authApi } from '@/api/authClient';
-import type { OrganisationDetail } from '@/types/auth';
+import type { OrganisationDetail, ExamplesSetting } from '@/types/auth';
 import { TopNav } from '@/ui/TopNav';
 import { useTokens, SANS, MONO } from '@/ui/tokens';
 
@@ -18,6 +18,11 @@ export function OrganisationsPage() {
   const [orgEmail, setOrgEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [website, setWebsite] = useState('');
+  const [addExamples, setAddExamples] = useState(true);
+
+  // Examples for new organisations
+  const [examples, setExamples] = useState<ExamplesSetting | null>(null);
+  const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
 
   // Edit state
   const [editingOrg, setEditingOrg] = useState<OrganisationDetail | null>(null);
@@ -28,7 +33,24 @@ export function OrganisationsPage() {
   const [editPhone, setEditPhone] = useState('');
   const [editWebsite, setEditWebsite] = useState('');
 
-  useEffect(() => { loadOrgs(); }, []);
+  useEffect(() => { loadOrgs(); loadExamples(); }, []);
+
+  const loadExamples = async () => {
+    try { setExamples(await authApi.getExamples()); }
+    catch (err) { console.error('Failed to load the examples setting:', err); }
+  };
+
+  const chooseExamples = async (projectId: string) => {
+    try { setExamples(await authApi.setExamples(projectId || null)); }
+    catch (err) { alert(err instanceof Error ? err.message : 'Failed to choose the examples'); }
+  };
+
+  const handleAddExamples = async (org: OrganisationDetail) => {
+    try {
+      const added = await authApi.addOrganisationExamples(org.id);
+      setNotice({ text: added.message, ok: true });
+    } catch (err) { setNotice({ text: err instanceof Error ? err.message : 'Failed to add the examples', ok: false }); }
+  };
 
   const loadOrgs = async () => {
     try { setOrgs(await authApi.listOrganisations()); }
@@ -37,13 +59,14 @@ export function OrganisationsPage() {
   };
 
   const resetForm = () => {
-    setName(''); setSlug(''); setDescription(''); setOrgEmail(''); setPhone(''); setWebsite(''); setShowForm(false);
+    setName(''); setSlug(''); setDescription(''); setOrgEmail(''); setPhone(''); setWebsite(''); setAddExamples(true); setShowForm(false);
   };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      await authApi.createOrganisation({ name, slug, description, email: orgEmail, phone, website });
+      const org = await authApi.createOrganisation({ name, slug, description, email: orgEmail, phone, website, add_examples: addExamples });
+      setNotice(org.examples_note ? { text: org.examples_note, ok: true } : null);
       resetForm();
       loadOrgs();
     } catch (err) { alert(err instanceof Error ? err.message : 'Failed to create organisation'); }
@@ -80,6 +103,7 @@ export function OrganisationsPage() {
     } catch (err) { alert(err instanceof Error ? err.message : 'Failed to update organisation'); }
   };
 
+  const examplesProject = examples?.project ?? null;
   const initialsOf = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || n.slice(0, 2).toUpperCase();
   const totalUsers = orgs.reduce((n, o) => n + (o.user_count ?? 0), 0);
   const lower = search.toLowerCase();
@@ -100,7 +124,7 @@ export function OrganisationsPage() {
 
   const orgForm = (heading: string, vals: { name: string; slug: string; email: string; phone: string; website: string; description: string },
                    set: { name: (v: string) => void; slug: (v: string) => void; email: (v: string) => void; phone: (v: string) => void; website: (v: string) => void; description: (v: string) => void },
-                   onSubmit: (e: FormEvent) => void, onCancel: () => void, submitLabel: string) => (
+                   onSubmit: (e: FormEvent) => void, onCancel: () => void, submitLabel: string, extra?: ReactNode) => (
     <form onSubmit={onSubmit} style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 14, padding: '20px 20px 22px', marginBottom: 22 }}>
       <div style={{ fontSize: '14px', fontWeight: 600, color: t.text, marginBottom: 16 }}>{heading}</div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
@@ -112,6 +136,7 @@ export function OrganisationsPage() {
       </div>
       <textarea placeholder="Description" rows={2} value={vals.description} onChange={(e) => set.description(e.target.value)}
         style={{ ...formInput, resize: 'vertical', fontFamily: SANS, marginBottom: 14 }} />
+      {extra}
       <div style={{ display: 'flex', gap: 9 }}>
         <button type="submit" style={primaryBtn}>{submitLabel}</button>
         <button type="button" onClick={onCancel} style={ghostBtn}>Cancel</button>
@@ -143,12 +168,49 @@ export function OrganisationsPage() {
         {showForm && orgForm('Create organisation',
           { name, slug, email: orgEmail, phone, website, description },
           { name: setName, slug: setSlug, email: setOrgEmail, phone: setPhone, website: setWebsite, description: setDescription },
-          handleSubmit, resetForm, 'Create')}
+          handleSubmit, resetForm, 'Create',
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '13px', color: examplesProject ? t.text : t.textMute, marginBottom: 14, cursor: examplesProject ? 'pointer' : 'default' }}>
+            <input type="checkbox" checked={addExamples && !!examplesProject} disabled={!examplesProject}
+              onChange={(e) => setAddExamples(e.target.checked)} />
+            {examplesProject
+              ? <>Add a copy of the example project “{examplesProject.name}” ({examplesProject.document_count} parts and sketches)</>
+              : 'Add the example project (choose one under Examples for new organisations first)'}
+          </label>)}
 
         {editingOrg && orgForm(`Edit ${editingOrg.name}`,
           { name: editName, slug: editSlug, email: editOrgEmail, phone: editPhone, website: editWebsite, description: editDescription },
           { name: setEditName, slug: setEditSlug, email: setEditOrgEmail, phone: setEditPhone, website: setEditWebsite, description: setEditDescription },
           handleEditOrgSubmit, () => setEditingOrg(null), 'Save')}
+
+        {notice && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', marginBottom: 18, borderRadius: 10, fontSize: '13px',
+                        background: notice.ok ? t.okSoft : t.surface2, color: notice.ok ? t.ok : t.danger, border: `1px solid ${notice.ok ? t.ok : t.danger}` }}>
+            <span style={{ flex: 1 }}>{notice.text}</span>
+            <button onClick={() => setNotice(null)} title="Dismiss"
+              style={{ background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: '16px', lineHeight: 1 }}>×</button>
+          </div>
+        )}
+
+        {/* Examples for new organisations */}
+        {examples && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', background: t.surface, border: `1px solid ${t.border}`, borderRadius: 14, padding: '14px 18px', marginBottom: 22 }}>
+            <div style={{ flex: '1 1 320px', minWidth: 0 }}>
+              <div style={{ fontSize: '14px', fontWeight: 600, color: t.text }}>Examples for new organisations</div>
+              <div style={{ fontSize: '12.5px', color: t.textDim, marginTop: 4 }}>
+                {examplesProject
+                  ? 'Each new organisation gets its own copy of this project: its parts, sketches, files and CAM jobs.'
+                  : 'Choose a project to copy into each new organisation as its examples.'}
+              </div>
+            </div>
+            <select value={examplesProject?.id ?? ''} onChange={(e) => chooseExamples(e.target.value)}
+              style={{ ...formInput, width: 'auto', minWidth: 300, maxWidth: 420, cursor: 'pointer' }}>
+              <option value="">None</option>
+              {examples.choices.map((p) => (
+                <option key={p.id} value={p.id}>{p.name} · {p.organisation} ({p.document_count})</option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {/* Toolbar */}
         <div style={{ marginBottom: 18 }}>
@@ -191,6 +253,16 @@ export function OrganisationsPage() {
                       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={t.textMute} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c3 3.5 3 14 0 18M12 3c-3 3.5-3 14 0 18" /></svg>
                       <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{o.website}</span>
                     </div>
+                  )}
+                  {examplesProject && (
+                    <button onClick={() => handleAddExamples(o)} title={`Add a copy of “${examplesProject.name}” to ${o.name}`}
+                      style={{ marginLeft: 'auto', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 5, padding: '4px 9px', background: 'transparent', color: t.textDim,
+                               border: `1px solid ${t.border}`, borderRadius: 7, fontSize: '12px', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                      onMouseEnter={(e) => { e.currentTarget.style.color = t.accent; e.currentTarget.style.borderColor = t.accent; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.color = t.textDim; e.currentTarget.style.borderColor = t.border; }}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+                      Add examples
+                    </button>
                   )}
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>

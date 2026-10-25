@@ -1,4 +1,4 @@
-import type { User, UserDetail, OrganisationDetail, UserEventList, UserEventQuery } from '@/types/auth';
+import type { User, UserDetail, OrganisationDetail, UserEventList, UserEventQuery, ExamplesSetting, ExamplesAdded } from '@/types/auth';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8951/api';
 const AUTH_BASE = `${API_BASE}/auth`;
@@ -137,6 +137,7 @@ export const authApi = {
     email?: string;
     phone?: string;
     website?: string;
+    add_examples?: boolean;
   }): Promise<OrganisationDetail> {
     return authRequest('/manage/organisations', {
       method: 'POST',
@@ -153,6 +154,24 @@ export const authApi = {
 
   deleteOrganisation(id: string): Promise<void> {
     return authRequest(`/manage/organisations/${id}`, { method: 'DELETE' });
+  },
+
+  /** Give an existing organisation its own copy of the examples project. */
+  addOrganisationExamples(id: string): Promise<ExamplesAdded> {
+    return authRequest(`/manage/organisations/${id}/examples`, { method: 'POST' });
+  },
+
+  // ── Examples for new organisations (superuser only) ──
+
+  getExamples(): Promise<ExamplesSetting> {
+    return authRequest('/manage/examples');
+  },
+
+  setExamples(projectId: string | null): Promise<ExamplesSetting> {
+    return authRequest('/manage/examples', {
+      method: 'PUT',
+      body: JSON.stringify({ project_id: projectId }),
+    });
   },
 
   // ── User events (superuser only) ──

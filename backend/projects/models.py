@@ -20,6 +20,8 @@ class Project(models.Model):
         null=True,
         blank=True,
     )
+    # the project every new organisation gets a copy of (at most one is marked)
+    is_examples = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
