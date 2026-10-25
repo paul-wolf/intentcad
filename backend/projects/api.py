@@ -4,13 +4,23 @@ from django.db import connection
 from django.db.models import Count
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from ninja import Router
 
 from accounts.models import User
 
 from .access import get_accessible_projects, require_auth, require_project_access
-from .models import Project, ProjectShare
-from .schemas import ProjectCreateIn, ProjectListOut, ProjectOut, ProjectUpdateIn, ShareIn, ShareOut
+from .models import Project, ProjectBriefVersion, ProjectShare
+from .schemas import (
+    BriefIn,
+    BriefVersionOut,
+    ProjectCreateIn,
+    ProjectListOut,
+    ProjectOut,
+    ProjectUpdateIn,
+    ShareIn,
+    ShareOut,
+)
 
 router = Router()
 
@@ -85,6 +95,42 @@ def update_project(request, project_id: UUID, payload: ProjectUpdateIn):
         project.description = payload.description
     project.save()
     return project
+
+
+@router.put("/{project_id}/brief", response=ProjectOut)
+def save_brief(request, project_id: UUID, payload: BriefIn):
+    """Save the project's brief; each changed text is kept as a version."""
+    err = require_auth(request)
+    if err:
+        return err
+    project = get_object_or_404(Project, id=project_id)
+    err = require_project_access(request, project)
+    if err:
+        return err
+    if payload.text == project.brief:
+        return project
+    label = payload.label.strip()
+    limit = ProjectBriefVersion._meta.get_field("label").max_length
+    if len(label) > limit:
+        label = label[:limit - 1].rstrip() + "…"
+    project.brief = payload.text
+    project.brief_updated_at = timezone.now()
+    project.save(update_fields=["brief", "brief_updated_at", "updated_at"])
+    ProjectBriefVersion.objects.create(project=project, text=payload.text, label=label, created_by=request.user)
+    return project
+
+
+@router.get("/{project_id}/brief/versions", response=list[BriefVersionOut])
+def brief_versions(request, project_id: UUID):
+    """The brief's saved texts, newest first."""
+    err = require_auth(request)
+    if err:
+        return err
+    project = get_object_or_404(Project, id=project_id)
+    err = require_project_access(request, project)
+    if err:
+        return err
+    return project.brief_versions.select_related("created_by")[:100]
 
 
 @router.delete("/{project_id}", response={204: None})

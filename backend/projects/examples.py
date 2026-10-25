@@ -35,12 +35,14 @@ def copy_examples(org, user):
         return None, f'{org.name} already has a project called "{src.name}"'
     with transaction.atomic():
         project = Project.objects.create(name=src.name, description=src.description,
+                                         brief=src.brief, brief_updated_at=src.brief_updated_at,
                                          organisation=org, created_by=user)
         for f in src.context_files.all():
             copy_context_file(f, user, project=project)
         for d in src.documents.order_by("created_at"):
             data = copy.deepcopy(d.data)
-            doc = Document.objects.create(name=d.name, data=data, project=project, created_by=user)
+            doc = Document.objects.create(name=d.name, data=data, description=d.description,
+                                          project=project, created_by=user)
             code = data.get("modelCode") if isinstance(data, dict) else None
             if isinstance(code, str) and code.strip():
                 DocumentVersion.objects.create(document=doc, data=data, label="example", created_by=user)

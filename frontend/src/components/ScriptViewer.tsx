@@ -6,6 +6,10 @@ import {
   type FaceRefSpec, type HolePresets, type EdgeOpKind, type EdgeRefSpec, type ExtrudeExtent, type ExtrudeOp, type KeepItem, type Step,
   type PlaneReport, type MirrorPlane, type PatternReport, type PatternSpec, type PlaneOpKind, type RunFace,
 } from '@/api/client';
+import { BriefProposalCard, DescriptionLine, MentionMenu, useProjectDocs } from './ProjectChat';
+import { insertMention, matchMentions, mentionedIds, mentionQuery } from '@/utils/mentions';
+import { Markdown } from '@/ui/Markdown';
+import { projectApi } from '@/api/projectClient';
 import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, persistPrintBed, persistSketches, getBackendId, subscribeBackendId, getProjectId, getProjectName, subscribeProjectContext } from '@/api/autoSave';
 import { DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
 import type { ChatMessage } from '@/types/document';
@@ -921,6 +925,9 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // project's, once the part has a server id. Follows the open part, so Back and
   // Forward between parts don't keep the previous part's files.
   const docId = useSyncExternalStore(subscribeBackendId, getBackendId);
+  // the project's other parts and sketches (@-mentions in the chat) and this part's description
+  const projectDocs = useProjectDocs(projectId, docId);
+  const [mention, setMention] = useState<{ start: number; query: string; active: number } | null>(null);
   const ctxOwner = useMemo(() => (docId ? { document: docId } : null), [docId]);
   // the section is remembered per part
   useEffect(() => {
@@ -2763,6 +2770,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     // a file still uploading goes with this message: wait for it (see the effect below)
     if (chatUploading) { setSendQueued(instruction); return; }
     setAsking(true);
+    setMention(null);
     const sent = filesToSend(ctxStore.files, skipCtx);
     const userMsg: ChatMessage = { role: 'user', text: instruction, at: Date.now(),
                                    ...(sent.length ? { files: sent.map((f) => f.title) } : {}) };
@@ -2780,13 +2788,22 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         build_error: status === 'error' ? message : '',
         // the context files go with it, except those removed for this message
         skip_context: skipList(ctxStore.files, skipCtx),
+        // the project's parts and sketches named as @Name: their summaries go with it
+        mentions: mentionedIds(instruction, projectDocs.others),
       });
       setSkipCtx(new Set());
       const spent = spendNote(r);
+      // a proposed change to the project brief: shown as a diff against the brief now, to accept or reject
+      const proposal = r.brief_proposal && projectId
+        ? { brief: { text: r.brief_proposal.text, reason: r.brief_proposal.reason,
+                     base: (await projectApi.getProject(projectId).catch(() => null))?.brief ?? '', status: 'pending' as const } }
+        : {};
       if (r.kind === 'question') {
-        persistChat([...base, { role: 'assistant', kind: 'question', text: r.question, usage: spent, at: Date.now() }]);
+        persistChat([...base, { role: 'assistant', kind: 'question', text: r.question, usage: spent, at: Date.now(), ...proposal }]);
+      } else if (r.kind === 'answer') {
+        persistChat([...base, { role: 'assistant', kind: 'answer', text: r.answer || '', usage: spent, at: Date.now(), ...proposal }]);
       } else {
-        persistChat([...base, { role: 'assistant', kind: 'edit', text: r.note || 'Done.', code: r.code, usage: spent, at: Date.now() }]);
+        persistChat([...base, { role: 'assistant', kind: 'edit', text: r.note || 'Done.', code: r.code, usage: spent, at: Date.now(), ...proposal }]);
         setCode(r.code);
         saveDraft(r.code);
         await build(r.code, r.note || instruction);
@@ -2990,6 +3007,19 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     chatInputObs.current = new ResizeObserver(() => setChatInputW(el.offsetWidth));
     chatInputObs.current.observe(el);
   }, []);
+  // @-mentions: the menu follows the @-word before the caret; a pick puts "@Name " in its place
+  const trackMention = (text: string, caret: number | null) => {
+    const q = projectDocs.others.length && caret !== null ? mentionQuery(text, caret) : null;
+    setMention((cur) => (q ? { ...q, active: cur && cur.start === q.start ? cur.active : 0 } : null));
+  };
+  const pickMention = (name: string) => {
+    const el = chatInputRef.current;
+    if (!mention || !el) return;
+    const next = insertMention(ask, mention.start, el.selectionStart ?? ask.length, name);
+    setAsk(next.text);
+    setMention(null);
+    window.setTimeout(() => { el.focus(); el.setSelectionRange(next.caret, next.caret); }, 0);
+  };
   const putInChat = (text: string) => {
     setAsk(text);
     setLayout('chat');
@@ -3202,7 +3232,10 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                        border: `1px solid ${isQ ? (palette.warning ?? '#c78a1a') : palette.border}`,
                        cursor: revertable ? 'pointer' : 'default' }}>
               {isQ && <span style={{ color: palette.warning ?? '#c78a1a', fontWeight: 700, marginRight: 5 }}>?</span>}
-              {m.text}
+              {m.kind === 'answer'
+                ? <Markdown text={m.text} color={palette.text} dim={palette.textSecondary} border={palette.border}
+                    codeBg={palette.background} style={{ whiteSpace: 'normal' }} />
+                : m.text}
               {m.files?.length ? (
                 <span style={{ display: 'block', fontSize: '11px', opacity: 0.75, marginTop: 3 }}>
                   📎 {m.files.join(', ')}
@@ -3222,6 +3255,10 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                          borderRadius: '4px', fontSize: '12px', cursor: 'pointer' }}>
                 {paperclip(12)} Attach a file
               </button>
+            )}
+            {m.brief && (
+              <BriefProposalCard brief={m.brief} projectId={projectId} palette={palette}
+                onStatus={(status) => persistChat(chat.map((x, j) => (j === i && x.brief ? { ...x, brief: { ...x.brief, status } } : x)))} />
             )}
             {chatUsageNote(user, m.usage) && (
               <div title="This call: input tokens (of them, read from the prompt cache) · output tokens · cost"
@@ -3260,7 +3297,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       {chatUploading ? `Attaching ${chatUploading}…${sendQueued !== null ? ' Your message goes once it’s attached.' : ''}` : ctxStore.error}
     </div>
   )}
-  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px' }}>
+  <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px' }}>
+  {mention && (
+    <MentionMenu docs={projectDocs.others} query={mention.query} active={mention.active} palette={palette}
+      onHover={(active) => setMention((mn) => (mn ? { ...mn, active } : mn))} onPick={(d) => pickMention(d.name)} />
+  )}
   <button onClick={pickChatFiles} disabled={!!chatUploading} aria-label="Attach a file"
     title="Attach a photo, drawing or datasheet (or drop or paste one here); the AI reads it with your message"
     style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, flex: 'none',
@@ -3272,14 +3313,26 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   <input
     ref={setChatInputEl}
     value={ask}
-    onChange={(e) => setAsk(e.target.value)}
-    onKeyDown={(e) => { if (e.key === 'Enter') void sendChat(); }}
+    onChange={(e) => { setAsk(e.target.value); trackMention(e.target.value, e.target.selectionStart); }}
+    onSelect={(e) => trackMention(e.currentTarget.value, e.currentTarget.selectionStart)}
+    onBlur={() => setMention(null)}
+    onKeyDown={(e) => {
+      const hits = mention ? matchMentions(projectDocs.others, mention.query) : [];
+      if (mention && hits.length) {
+        const step = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
+        if (step) { e.preventDefault(); setMention({ ...mention, active: (mention.active + step + hits.length) % hits.length }); return; }
+        if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(hits[Math.min(mention.active, hits.length - 1)]!.name); return; }
+        if (e.key === 'Escape') { e.preventDefault(); setMention(null); return; }
+      }
+      if (e.key === 'Enter') void sendChat();
+    }}
     onPaste={(e) => {
       // a pasted photo or screenshot becomes a context file of this part
       const l = [...e.clipboardData.files];
       if (l.length) { e.preventDefault(); void attachToChat(l); }
     }}
     placeholder={sel.length ? 'e.g. chamfer this edge 2mm  (targets your selection)'
+                 : chatInputW >= 560 && projectDocs.others.length ? 'Describe a change or ask a question; type @ to mention another part'
                  : chatInputW >= 560 ? 'Describe a change — e.g. add four M4 corner bolt holes — or attach a photo or datasheet'
                  : chatInputW >= 330 ? 'Describe a change — or attach a photo or datasheet' : 'Describe a change'}
     disabled={asking}
@@ -3420,6 +3473,12 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
               Project <span style={{ color: palette.text, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>{projectName}</span>
             </AppLink>
           ) : null}
+          {projectName && docId && (
+            <>
+              <span style={{ color: palette.border }}>·</span>
+              <DescriptionLine value={projectDocs.self?.description ?? ''} onSave={projectDocs.setDescription} palette={palette} />
+            </>
+          )}
           {projectName && staff && usage && <span style={{ color: palette.border }}>·</span>}
           {staff && usage && (
               <span title={`This model: ${usage.document.tokens_in.toLocaleString()} in (${(usage.document.cache_read_tokens ?? 0).toLocaleString()} from the prompt cache) / ${usage.document.tokens_out.toLocaleString()} out.  All-time: ${usage.all_time.tokens_in.toLocaleString()} in (${(usage.all_time.cache_read_tokens ?? 0).toLocaleString()} cached) / ${usage.all_time.tokens_out.toLocaleString()} out.`}>

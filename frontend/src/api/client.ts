@@ -129,6 +129,8 @@ export interface DocumentListItem {
   updated_at: string;
   kind?: 'part' | 'sketch';
   thumbnail?: string | null;
+  /** a line on what it is or is for: the AI sees it in the project's parts list */
+  description?: string;
 }
 
 export interface DocumentFull {
@@ -169,6 +171,11 @@ export const api = {
    *  the part's context files and CAM jobs; a fresh version history. */
   duplicateDocument(id: string): Promise<DocumentFull> {
     return request(`/documents/${id}/duplicate`, { method: 'POST' });
+  },
+
+  /** Sets the one-line description (saved without bumping the part's updated_at). */
+  setDescription(id: string, description: string): Promise<DocumentListItem> {
+    return request(`/documents/${id}/description`, { method: 'PUT', body: JSON.stringify({ description }) });
   },
 
   deleteDocument(id: string): Promise<void> {
@@ -332,7 +339,9 @@ export const buildApi = {
   },
   edit(payload: { code: string; instruction: string; context?: string; document_id?: string;
                   history?: { role: string; text: string }[]; model?: string; production?: string;
-                  build_error?: string; skip_context?: string[] }): Promise<EditResponse> {
+                  build_error?: string; skip_context?: string[];
+                  /** the ids of the project's parts and sketches @-mentioned in the instruction */
+                  mentions?: string[] }): Promise<EditResponse> {
     return request('/build/edit', { method: 'POST', body: JSON.stringify(payload) });
   },
   /** The Claude models the AI edit can use right now (discovered server-side
@@ -469,8 +478,12 @@ export interface DimInfo {
 }
 
 export interface EditResponse {
-  kind: 'edit' | 'question';
+  kind: 'edit' | 'question' | 'answer';
   code: string; note?: string; question: string;
+  /** (kind 'answer') a reply to a question, the script unchanged */
+  answer?: string;
+  /** a change to the project brief the AI suggests; the user accepts or rejects it */
+  brief_proposal?: { text: string; reason: string } | null;
   /** the spend, sent to staff only: all input read, cached or not; of it,
    *  cache_read_tokens came from the prompt cache */
   tokens_in?: number; tokens_out?: number; cost_usd?: number;

@@ -9,12 +9,13 @@ import { importScript, importLabel, partNameFor, STEP_ACCEPT } from '@/build/imp
 import { setBackendId, setProjectContext } from '@/api/autoSave';
 import type { Document } from '@/types/document';
 import { projectApi } from '@/api/projectClient';
-import type { Project } from '@/types/project';
+import type { Project, ProjectDetail } from '@/types/project';
 import { TopNav } from '@/ui/TopNav';
 import { DocCard } from '@/ui/DocCard';
 import { useTokens, SANS, MONO } from '@/ui/tokens';
 import { ContextPane, useContextFiles, type CtxColors } from './ContextPane';
 import { AppLink } from '@/ui/links';
+import { ProjectBrief } from './ProjectBrief';
 
 function relativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -43,11 +44,14 @@ export function DocumentListPage() {
   const setDocument = useDocumentStore((s) => s.setDocument);
   const [docs, setDocs] = useState<DocumentListItem[]>([]);
   const [projectName, setProjectName] = useState('');
+  const [project, setProject] = useState<ProjectDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+  const [describingId, setDescribingId] = useState<string | null>(null);
+  const [describeText, setDescribeText] = useState('');
   const [allProjects, setAllProjects] = useState<Project[]>([]);
   const [movingDoc, setMovingDoc] = useState<DocumentListItem | null>(null);
   const [notice, setNotice] = useState<{ text: string; ok?: boolean } | null>(null);
@@ -69,7 +73,7 @@ export function DocumentListPage() {
       setLoading(true);
       const [docList] = await Promise.all([
         api.listDocuments(projectId),
-        projectId ? projectApi.getProject(projectId).then((p) => setProjectName(p.name)).catch(() => {}) : Promise.resolve(),
+        projectId ? projectApi.getProject(projectId).then((p) => { setProject(p); setProjectName(p.name); }).catch(() => {}) : Promise.resolve(),
         projectApi.listProjects().then(setAllProjects).catch(() => {}),
       ]);
       setDocs(docList);
@@ -187,8 +191,21 @@ export function DocumentListPage() {
     setEditingId(null);
   };
 
+  // the line on what a part is for: the AI sees it in the project's parts list
+  const commitDescription = async () => {
+    const id = describingId;
+    setDescribingId(null);
+    const d = docs.find((x) => x.id === id);
+    const text = describeText.replace(/\s+/g, ' ').trim();
+    if (!d || text === (d.description ?? '')) return;
+    try {
+      const saved = await rawApi.setDescription(d.id, text);
+      setDocs((prev) => prev.map((x) => (x.id === d.id ? { ...x, description: saved.description } : x)));
+    } catch (err) { fail("Couldn't save the description", new Error(errorText(err))); }
+  };
+
   const lower = search.toLowerCase();
-  const visible = lower ? docs.filter((d) => d.name.toLowerCase().includes(lower)) : docs;
+  const visible = lower ? docs.filter((d) => d.name.toLowerCase().includes(lower) || (d.description ?? '').toLowerCase().includes(lower)) : docs;
   const parts = visible.filter((d) => d.kind === 'part');
   const sketches = visible.filter((d) => d.kind !== 'part');
   const latest = docs.length ? docs.reduce((a, b) => (a.updated_at > b.updated_at ? a : b)).updated_at : null;
@@ -200,22 +217,24 @@ export function DocumentListPage() {
   });
   const cardOf = (d: DocumentListItem) => (
     <DocCard key={d.id}
-      d={{ id: d.id, name: d.name, kind: d.kind, updated: relativeTime(d.updated_at), thumbnail: d.thumbnail }}
+      d={{ id: d.id, name: d.name, kind: d.kind, updated: relativeTime(d.updated_at), thumbnail: d.thumbnail, description: d.description }}
       onOpen={() => handleOpen(d)}
       onDoubleClick={() => { setEditingId(d.id); setEditName(d.name); }}
       onRename={() => { setEditingId(d.id); setEditName(d.name); }}
       onDuplicate={() => handleDuplicate(d)}
+      onDescribe={projectId ? () => { setDescribingId(d.id); setDescribeText(d.description ?? ''); } : undefined}
       onDelete={() => handleDelete(d.id)}
       onMove={allProjects.length > 1 ? () => setMovingDoc(d) : undefined}
       editing={editingId === d.id ? { value: editName, onChange: setEditName, onCommit: commitRename, onCancel: () => setEditingId(null) } : undefined}
+      describing={describingId === d.id ? { value: describeText, onChange: setDescribeText, onCommit: commitDescription, onCancel: () => setDescribingId(null) } : undefined}
     />
   );
 
-  const sectionHeader = (color: string, label: string, count: number) => (
+  const sectionHeader = (color: string, label: string, count: number | null) => (
     <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 14 }}>
       <span style={{ width: 8, height: 8, borderRadius: 2, background: color }} />
       <span style={{ fontFamily: MONO, fontSize: '11px', letterSpacing: '1.5px', color: t.textDim }}>{label}</span>
-      <span style={{ fontFamily: MONO, fontSize: '11px', color: t.textMute }}>({count})</span>
+      {count !== null && <span style={{ fontFamily: MONO, fontSize: '11px', color: t.textMute }}>({count})</span>}
       <span style={{ flex: 1, height: 1, background: t.border }} />
     </div>
   );
@@ -336,6 +355,13 @@ export function DocumentListPage() {
               </button>
             </div>
           </div>
+
+          {project && (
+            <>
+              {sectionHeader(t.ok, 'BRIEF', null)}
+              <ProjectBrief project={project} onSaved={setProject} />
+            </>
+          )}
 
           {/* Toolbar */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 28 }}>

@@ -697,7 +697,7 @@ def cam_chat(
         "model": model,
     }
     if out.get("kind") == "cam":
-        raw = {k: v for k, v in out.items() if k not in ("kind", "usage")}
+        raw = {k: v for k, v in out.items() if k not in ("kind", "usage", "side")}
     else:   # no tool call: what the model said is the answer
         raw = {"answer": out.get("question") or out.get("note") or ""}
 

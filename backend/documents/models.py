@@ -4,6 +4,16 @@ from django.conf import settings
 from django.db import models
 
 
+def document_kind(data) -> str:
+    """'part' or 'sketch': the type it says, else a part if it has a script."""
+    data = data if isinstance(data, dict) else {}
+    t = data.get("type")
+    if t in ("part", "sketch"):
+        return t
+    mc = data.get("modelCode")
+    return "part" if isinstance(mc, str) and mc.strip() else "sketch"
+
+
 class Document(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255)
@@ -23,6 +33,12 @@ class Document(models.Model):
         null=True,
         blank=True,
     )
+    # one line on what the part is for, for the AI's list of a project's parts
+    description = models.CharField(max_length=300, blank=True, default="")
+    # the latest successful build of the document's script: {bbox_min, bbox_max,
+    # summary, code_sha, built_at}. Written with .update() so it doesn't move
+    # updated_at (which an open editor uses to detect a save from elsewhere).
+    last_build = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

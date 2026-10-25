@@ -384,8 +384,11 @@ export interface Document {
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
-  kind?: 'edit' | 'question';   // assistant turns
-  text: string;                 // instruction, note, or question
+  kind?: 'edit' | 'question' | 'answer';   // assistant turns
+  text: string;                 // instruction, note, question or answer
+  /** (assistant) a change to the project brief it proposed; `base`: the brief
+   *  it was compared against; the user accepts or rejects it */
+  brief?: { text: string; reason: string; base: string; status: 'pending' | 'accepted' | 'rejected' };
   code?: string;                // (assistant edit) the resulting script — a checkpoint
   files?: string[];             // (user) the titles of the context files sent with it
   usage?: string;               // (assistant) tokens and cost of the call, cached input included
