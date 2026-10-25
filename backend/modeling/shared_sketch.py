@@ -27,6 +27,8 @@ faces), so extrude(SK["frame"], amount=2) works as with any sketch. It adds:
     .lines                        its straight lines, as Edges
     .points                       its points and circle centres (for holes(part, ...))
     .plane                        the plane it is on
+    .line(id)                     a construction line or the H / V axis ("axis-h", "axis-v"),
+                                  as a revolve axis
     .on(plane_or_face)            the same shapes on another plane (a PLANES entry,
                                   Plane.XY, a flat face such as face_ref(...))
 
@@ -38,7 +40,7 @@ from __future__ import annotations
 
 from build123d import Edge, Face, GeomType, Plane, Sketch, Vector
 
-from modeling.sketch_profile import Points, SketchError, profile_faces
+from modeling.sketch_profile import Points, SketchError, profile_faces, profile_line
 
 XY_PLANE = {"origin": [0, 0, 0], "normal": [0, 0, 1], "xAxis": [1, 0, 0]}
 
@@ -165,6 +167,12 @@ class SharedSketch(Sketch):
             if all((v - o).length > 1e-6 for o in out):
                 out.append(v)
         return Points(out, self.plane.z_dir, self._label)
+
+    def line(self, id_: str):
+        """A straight line of the sketch on its plane, by id: a construction or
+        reference line, or the H / V axis ("axis-h", "axis-v"), as the axis of
+        a revolve: revolve(SK["knob"], axis=SK["knob"].line("axis-v"))."""
+        return profile_line(self._profile, self._label, id_)
 
     def on(self, target) -> "SharedSketch":
         """The same shapes, at the same sketch coordinates, on another plane

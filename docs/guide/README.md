@@ -282,7 +282,7 @@ in one place reaches every part.
   read them as `PP["plate_t"]`.
 - **Out of date**: change the sketch (its shapes, its groups or names) or a parameter,
   and the parts built from it show **OUT OF DATE** on their cards. In the sketch editor,
-  **Used by** lists them; **Rebuild all** rebuilds them with the sketch as it is now.
+  **Used by parts** lists them; **Rebuild all** rebuilds them with the sketch as it is now.
   Opening a part rebuilds it too.
 - **Renames that break parts**: if a save would remove a group or named element a part
   uses, the sketch editor holds the save and lists the parts it would break. Click
@@ -297,6 +297,44 @@ in one place reaches every part.
   value struck through, and nothing changes until you click **Accept**.
 
 ![Shared sketches: the Frame holes sketch with its arm holes group, and the three parts that use it in Used by](images/shared-sketch.png)
+
+### Make parts from a project sketch
+
+One sketch can cut or build several parts in one go, like the arm holes through both
+plates and the brace.
+
+- **Start in the sketch**: open a sketch document in a project. Click **Extrude…**,
+  **Cut…** or **Revolve…** in the **Make parts** bar at the bottom.
+- **Choose what and where**: pick the shapes (the whole sketch, a group or a named
+  element; a selected group is picked for you), tick the parts, or **New part** and
+  type its name. Click **Start**.
+- **One part after another**: each part opens with the Extrude or Revolve dialog ready
+  and its preview shown. A cut starts as through all; you set the depth, height or axis.
+  **Place on** keeps the sketch's own plane, or puts it on XY, XZ, YZ, a construction
+  plane or a flat face you click. Apply it, and the next part opens. The banner at the
+  top right says which part you are on; **Skip** leaves a part as it is, **Cancel**
+  stops (the parts already done keep the change).
+- **New part**: it gets the name you typed, and its script starts with the extrude.
+- **Back to the sketch**: the line under a part's top bar shows **Sketch** and the
+  name of each project sketch the part is made from. Click its **Edit ↗** to open the
+  sketch; Back returns to the part.
+- **Back to the project**: a sketch in a project shows **Project** and its name under
+  the toolbar, as a part does. Click it to go back to the project.
+- **Changes show up**: when you come back to a part after changing its sketch (in this
+  tab or another one), it rebuilds and says so at the bottom ("Rebuilt: Frame holes
+  changed"). While a dialog is open it waits and offers **Rebuild** instead. A restored
+  version keeps its pinned sketch until **Follow latest**.
+- **One name**: a sketch document with one sketch has one name. Renaming the sketch
+  renames the document, and the other way round.
+- **Save a face sketch to the project**: while sketching on a part (Sketch on Top, or
+  on a face), click **Save to project** in the banner. The sketch becomes a sketch
+  document in the project, on the plane it was on, and this part reads it as
+  `SK["…"]` from then on. Other parts can then use it from its own Make parts bar, or
+  with **Use project sketch**.
+
+![Make parts: Cut "Frame" on part 1 of 3, the Extrude dialog ready on the arm holes group](images/sketch-to-part.png)
+
+![The Arm brace part: Sketch Frame holes Edit ↗ under the top bar, "Rebuilt: Frame holes changed" at the bottom](images/sketch-link.png)
 
 ### Beyond 3D: 2D and CNC
 

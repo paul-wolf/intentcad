@@ -6,7 +6,7 @@ import {
   type FaceRefSpec, type HolePresets, type EdgeOpKind, type EdgeRefSpec, type ExtrudeExtent, type ExtrudeOp, type KeepItem, type Step,
   type PlaneReport, type MirrorPlane, type PatternReport, type PatternSpec, type PlaneOpKind, type RunFace, type SharedInputs,
 } from '@/api/client';
-import { pinnedChanges, usesShared } from '@/build/sharedSketch';
+import { pinnedChanges, usesShared, withSharedProfiles } from '@/build/sharedSketch';
 import { ProjectSketchDialog } from './ProjectSketchDialog';
 import { ParameterProposalCard } from './ParameterProposalCard';
 import { BriefProposalCard, DescriptionLine, MentionMenu, useProjectDocs } from './ProjectChat';
@@ -14,8 +14,13 @@ import { insertMention, matchMentions, mentionedIds, mentionQuery } from '@/util
 import { Markdown } from '@/ui/Markdown';
 import { projectApi } from '@/api/projectClient';
 import { persistModelCode, persistSharedRefs, persistChat, persistThumbnail, persistName, persistProductionNotes, persistPrintBed, persistSketches, getBackendId, subscribeBackendId, getProjectId, getProjectName, subscribeProjectContext } from '@/api/autoSave';
-import { DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
-import type { BuildInputs, ChatMessage, SketchRef } from '@/types/document';
+import { createEmptyDocument, DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
+import type { BuildInputs, ChatMessage, Sketch, SketchRef } from '@/types/document';
+import { useNavigate } from 'react-router-dom';
+import {
+  advance, aliasFor, aliasIn, isSkSource, toShared, OP_WORDS, parseSkSource, placed, readHandoff, saveHandoff, sharedAsSketch, skDatum,
+  skSource, sketchWords, type Handoff, type SkPlacement,
+} from '@/build/sketchToPart';
 import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim, type PlacedHandle, type ViewerPick,
          type SectionMeasure, type PlacedPlaneLabel, type DragHandle, type MarkLines } from '@/build/webglViewer';
 import {
@@ -76,7 +81,7 @@ import {
   angleFromHandle, axisChoices, axisLabel, defaultAxis, lineProblem, revolvable, revolveHandle, revolveReport, revolveSummary,
   segmentPoints, type RevolveReport, type RevolveValues,
 } from '@/build/revolve';
-import { planeBasis, worldToSketch } from '@/build/sketchPlane';
+import { planeBasis, planeForFace, worldToSketch } from '@/build/sketchPlane';
 import { partParams } from '@/build/scriptParams';
 import { usesNames } from '@/utils/resolveSketch';
 import {
@@ -176,7 +181,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // also depends on their versions: the build asks the server for them first
   // (sharedInputsKey) and they join the key, so a changed sketch isn't served
   // from the cache.
-  const inputsKeyRef = useRef<{ src: string; shared: string; key: string } | null>(null);
+  const inputsKeyRef = useRef<{ src: string; shared: string; key: string; inputs: BuildInputs } | null>(null);
   const buildInputs = (src: string) => {
     const doc = useDocumentStore.getState().document;
     const sketches = referencedProfiles(src, doc.sketches);
@@ -195,7 +200,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     if (!shared) return true;
     try {
       const r = await buildApi.inputs(src, getBackendId() ?? '', shared);
-      inputsKeyRef.current = { src, shared: JSON.stringify(shared), key: r.key };
+      inputsKeyRef.current = { src, shared: JSON.stringify(shared), key: r.key, inputs: r.inputs };
       return true;
     } catch {
       inputsKeyRef.current = null;
@@ -485,6 +490,26 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // a restored version builds with its pinned inputs: which differ from the latest
   const docPinned = useDocumentStore((s) => s.document.pinned);
   const sketchRefs = useDocumentStore((s) => s.document.sketchRefs);
+  // the project sketches the part reads (alias → its sketch), for the
+  // Extrude / Revolve dialogs on a shared sketch
+  // (and the top line's links to them). sharedTick re-reads them when the part
+  // is come back to: they may have been edited in another tab.
+  const [sharedSks, setSharedSks] = useState<Record<string, { doc: string; docName: string; sketch: Sketch }>>({});
+  const [sharedTick, setSharedTick] = useState(0);
+  useEffect(() => {
+    let live = true;
+    const refs = Object.entries(sketchRefs ?? {});
+    void Promise.all(refs.map(async ([alias, r]) => {
+      try {
+        const d = await api.getDocument(r.document);
+        const all = (d.data as { sketches?: Sketch[] }).sketches ?? [];
+        const sk = all.find((x) => x.id === r.sketch);
+        const docName = all.length > 1 && sk ? `${d.name} · ${sk.name}` : d.name;
+        return sk ? [alias, { doc: r.document, docName, sketch: sk }] as const : null;
+      } catch { return null; }
+    })).then((l) => { if (live) setSharedSks(Object.fromEntries(l.filter((x) => x !== null))); });
+    return () => { live = false; };
+  }, [sketchRefs, sharedTick]);
   const [showSketchRefs, setShowSketchRefs] = useState(false);
   const [pinDiff, setPinDiff] = useState<string[] | null>(null);
   const followLatest = () => {
@@ -520,7 +545,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const codeRef = useRef(code);
   codeRef.current = code;
   const faceSketch = useFaceSketch(viewerRef, canvasRef, resRef, (name, ex, rev) => { void sketchDoneRef.current(name, ex, rev); },
-                                   () => hasPartRef.current, () => partParams(codeRef.current, paramBase.current));
+                                   () => hasPartRef.current, () => partParams(codeRef.current, paramBase.current),
+                                   getProjectId() ? (id) => { void saveToProjectRef.current(id); } : undefined);
   const faceSketchRef = useRef(faceSketch);
   faceSketchRef.current = faceSketch;
   const [sketchTip, setSketchTip] = useState<{ name: string; x: number; y: number } | null>(null);
@@ -678,6 +704,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     buildAbort.current = ctrl;
     setStatus('building');
     setMessage('');
+    setSharedNote(null);
     const t0 = performance.now();
     try {
       resolveSketches(src);
@@ -911,7 +938,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       .then((r) => { if (live) setPinDiff(pinnedChanges(docPinned, r.inputs)); })
       .catch(() => { if (live) setPinDiff([]); });
     return () => { live = false; };
-  }, [docPinned, status]);
+  }, [docPinned, status, sharedTick]);
 
   const restoreVersion = (c: string, data?: Record<string, unknown>) => {
     setShowVersions(false);
@@ -1226,6 +1253,40 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const sketchBackRef = useRef<ExtrudeEdit | null>(null);
   const sketchDoneRef = useRef(sketchDone);
   sketchDoneRef.current = sketchDone;
+  // Save to project (the face sketch's banner): the sketch becomes a project
+  // sketch document on the plane it is on now, and the script reads it as
+  // SK["alias"] where it read sketch("name")
+  const saveToProjectRef = useRef(async (_id: string) => {});
+  saveToProjectRef.current = async (sketchId: string) => {
+    const pid = getProjectId();
+    const doc = useDocumentStore.getState().document;
+    const sk = doc.sketches.find((x) => x.id === sketchId);
+    if (!pid || !sk) return;
+    const plane = boundPlane(sk, resRef.current?.sketches, resRef.current?.planes);
+    const { face: _face, planeRef: _ref, profile: _profile, ...rest } = sk;
+    const shared: Sketch = { ...rest, ...(plane ? { plane } : {}) };
+    // an automatic name ("Sketch 2", "Sketch on Top plane") says little in the project: put the part's name first
+    const name = /^Sketch\b/.test(sk.name) ? `${doc.name}: ${sk.name.toLowerCase()}` : sk.name;
+    try {
+      const data = { ...createEmptyDocument(name), type: 'sketch', sketches: withSharedProfiles([shared]), activeSketchId: shared.id };
+      const saved = await api.createDocument(name, data as unknown as Record<string, unknown>, pid);
+      const refs = doc.sketchRefs ?? {};
+      const ref = { document: saved.id, sketch: shared.id };
+      const { alias } = aliasIn(refs, ref, aliasFor(name));
+      const next = toShared(codeRef.current, sk.name, alias);
+      useDocumentStore.setState((st) => {
+        const sketches = st.document.sketches.filter((x) => x.id !== sketchId);
+        const activeSketchId = st.document.activeSketchId === sketchId ? sketches[0]?.id ?? '' : st.document.activeSketchId;
+        return { document: { ...st.document, sketches, activeSketchId } };
+      });
+      persistSharedRefs({ ...refs, [alias]: ref }, doc.pinned ?? null, next);
+      setCode(next);
+      if (next.trim() && next !== STARTER && next !== codeRef.current) await build(next, `Save ${sk.name} to project as SK["${alias}"]`);
+      planeNotice(`“${name}” is a project sketch now: this part reads it as SK["${alias}"], and other parts can use it`);
+    } catch (err) {
+      setNotice(`Save to project: ${errorText(err)}`);
+    }
+  };
 
   // Shell: a dialog writing `part = shell(part, remove=[face_ref(...)], ...)`,
   // its result previewed as a ghost. `line` is the script line it was
@@ -1248,6 +1309,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     setShellOp({ line: null, v: { remove, thickness: 2, inside: true } });
   };
   const closeOp = () => {
+    handoffOpen.current = false;
+    setPlacingFace(false);
     setShellOp(null);
     setHoleOp(null);
     setEdgeOp(null);
@@ -1995,9 +2058,26 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // Extrude, reopened: the options panel on its line (the sketch isn't
   // entered: "Edit sketch" does that, and Done comes back here)
   const [extrudeOp, setExtrudeOp] = useState<ExtrudeEdit | null>(null);
+  // the dialog open was handed over by the sketch editor (sketchToPart); a
+  // face being picked to put its shared sketch on
+  const handoffOpen = useRef(false);
+  const [placingFace, setPlacingFace] = useState(false);
+  // a sketch by the name the dialogs use: a face sketch's name, or a shared
+  // sketch's source, SK["frame"].group("arm holes")...
+  const sketchNamed = (name: string): Sketch | null => {
+    const own = docSketches.find((sk) => sk.name === name);
+    if (own || !isSkSource(name)) return own ?? null;
+    const s = parseSkSource(name);
+    const base = s ? sharedSks[s.alias]?.sketch : undefined;
+    if (!s || !base) return null;
+    const face = s.on && 'face' in s.on ? s.on.face : null;
+    return sharedAsSketch(base, name, face
+      ? { origin: face.center, normal: face.normal, xAxis: planeForFace(face.center, face.normal).xAxis } : null);
+  };
   const extrudeKey = extrudeOp ? JSON.stringify({ line: extrudeOp.line, v: extrudeOp.v }) : '';
   const extrudeLine = (o: ExtrudeEdit) => buildApi.addExtrude({
-    code: codeRef.current, sketch: o.v.sketch, op: o.v.op, depth: o.v.depth, through: o.v.through, flip: o.v.flip,
+    // New body starts the script over when it is still the unbuilt starter
+    code: o.v.op === 'new' && codeRef.current === STARTER ? '' : codeRef.current, sketch: o.v.sketch, op: o.v.op, depth: o.v.depth, through: o.v.through, flip: o.v.flip,
     both: o.v.both, datum: o.v.datum, line: o.line, extent: o.v.extent, face: o.v.face,
     offset: o.v.extent === 'face' ? o.v.offset : 0, key: o.param,
   });
@@ -2019,11 +2099,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         return { mesh: r.mesh, color: UNTIL_PIECE_COLOR, xray: true };
       } : undefined,
   );
-  const extrudeSketch = extrudeOp ? docSketches.find((sk) => sk.name === extrudeOp.v.sketch) ?? null : null;
+  const extrudeSketch = useMemo(() => (extrudeOp ? sketchNamed(extrudeOp.v.sketch) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [extrudeOp?.v.sketch, docSketches, sharedSks]);
+  const extrudeAt = extrudeSketch ? boundPlane(extrudeSketch, null, resRef.current?.planes) : null;
   const extrudeNormal = (extrudeOp && (resRef.current?.sketches?.[extrudeOp.v.sketch]?.plane?.normal
-    ?? extrudeSketch?.plane?.normal)) as Vec3 | undefined;
+    ?? extrudeAt?.normal)) as Vec3 | undefined;
   const extrudeOrigin = (extrudeOp && (resRef.current?.sketches?.[extrudeOp.v.sketch]?.plane?.origin
-    ?? extrudeSketch?.plane?.origin)) as Vec3 | undefined;
+    ?? extrudeAt?.origin)) as Vec3 | undefined;
   const partBox = resRef.current?.metrics;
   const extrudePartAt = extrudeNormal && extrudeOrigin && partBox && !extrudeOp?.firstBody
     ? partSide(extrudeOrigin, extrudeNormal, partBox.bbox_min, partBox.bbox_max) : undefined;
@@ -2032,11 +2115,15 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     if (!o || !extrudeOk(o)) return;
     try {
       const src = extrudePreview.built(extrudeKey) ?? (await extrudeLine(o)).code;
+      const fromHandoff = handoffOpen.current;
       closeOp();
       setCode(src);
-      const out = await build(src, o.line != null ? `Edit extrude ${o.v.sketch}`
-        : `${o.v.op === 'cut' ? 'Cut' : 'Join'} ${o.v.sketch} up to ${o.v.extent === 'next' ? 'next' : 'face'}`);
+      const what = sketchWords(o.v.sketch);
+      const out = await build(src, o.line != null ? `Edit extrude ${what}`
+        : `${{ cut: 'Cut', join: 'Join', new: 'New body from' }[o.v.op]} ${what}`
+          + (o.v.extent === 'next' || o.v.extent === 'face' ? ` up to ${o.v.extent === 'next' ? 'next' : 'face'}` : ''));
       if (out.kind === 'ok') saveDraft(src);
+      if (out.kind === 'ok' && fromHandoff) handoffNext('done');
     } catch (err) {
       setNotice(`Extrude: ${errorText(err)}`);
     }
@@ -2044,6 +2131,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const editExtrudeSketch = () => {
     const o = extrudeOp;
     if (!o) return;
+    if (isSkSource(o.v.sketch)) { editSharedSketch(o.v.sketch); return; }
     if (!extrudeSketch) {
       setNotice(`There is no sketch named “${o.v.sketch}” to edit`);
       window.setTimeout(() => setNotice(''), 6000);
@@ -2064,7 +2152,9 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const revolveKeyRef = useRef(revolveKey);
   revolveKeyRef.current = revolveKey;
   const [revolveRep, setRevolveRep] = useState<{ key: string; r: RevolveReport | null } | null>(null);
-  const revolveSk = revolveOp ? docSketches.find((sk) => sk.name === revolveOp.v.sketch) ?? null : null;
+  const revolveSk = useMemo(() => (revolveOp ? sketchNamed(revolveOp.v.sketch) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [revolveOp?.v.sketch, docSketches, sharedSks]);
   const revolveChoices = useMemo(() => (revolveSk ? axisChoices(revolveSk) : []), [revolveSk]);
   const revolveAxis = revolveOp?.v.axis ?? null;
   // a line of the sketch is checked here at once; the others by the build
@@ -2094,7 +2184,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const revolveNow = revolveRep && revolveRep.key === revolveKey ? revolveRep.r : null;
   const revolveErr = revolveNow?.error ? revolveNow.error.charAt(0).toUpperCase() + revolveNow.error.slice(1) : null;
   const revolveProblem = !revolveOp ? null
-    : !revolveSk ? `There is no sketch named “${revolveOp.v.sketch}”`
+    : !revolveSk ? (isSkSource(revolveOp.v.sketch) ? `Loading ${sketchWords(revolveOp.v.sketch)}…`
+      : `There is no sketch named “${revolveOp.v.sketch}”`)
     : !revolveAxis ? 'Pick an axis: a line of the sketch, X / Y / Z, or click a straight edge or a cylinder in the view'
     : revolveLocal?.message ?? revolveErr;
   const revolvePlane = revolveSk ? boundPlane(revolveSk, resRef.current?.sketches, resRef.current?.planes) : null;
@@ -2112,7 +2203,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     return { loops, axis, crossings };
   }, [revolveSk, revolveAxis, revolveChoices, revolvePlane, revolveNow, revolveLocal]);
   const revolveNormal = (revolveOp && (resRef.current?.sketches?.[revolveOp.v.sketch]?.plane?.normal
-    ?? revolveSk?.plane?.normal)) as Vec3 | undefined;
+    ?? revolvePlane?.normal)) as Vec3 | undefined;
   // the angle handle: on the axis level with the shapes, from the last build's report
   const revolveH = revolveOp && !revolveProblem ? revolveHandle(revolveRep?.r ?? null, revolveAngle) : null;
   const revolveDH: DragHandle | null = revolveH
@@ -2128,10 +2219,12 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     if (!o || !revolveReady || revolveProblem) return;
     try {
       const src = revolvePreview.built(revolveKey) ?? (await revolveLine(o)).code;
+      const fromHandoff = handoffOpen.current;
       closeOp();
       setCode(src);
-      const out = await build(src, `${o.line != null ? 'Edit revolve' : 'Revolve'} ${o.v.sketch}`);
+      const out = await build(src, `${o.line != null ? 'Edit revolve' : 'Revolve'} ${sketchWords(o.v.sketch)}`);
       if (out.kind === 'ok') saveDraft(src);
+      if (out.kind === 'ok' && fromHandoff) handoffNext('done');
     } catch (err) {
       setNotice(`Revolve: ${errorText(err)}`);
     }
@@ -2139,6 +2232,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const editRevolveSketch = () => {
     const o = revolveOp;
     if (!o) return;
+    if (isSkSource(o.v.sketch)) { editSharedSketch(o.v.sketch); return; }
     if (!revolveSk) { planeNotice(`There is no sketch named “${o.v.sketch}” to edit`); return; }
     revolveBackRef.current = o;
     closeOp();
@@ -2155,6 +2249,119 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     setRevolveOp({ line: null, firstBody,
                    v: { sketch: sk.name, op: firstBody ? 'new' : 'join', axis: defaultAxis(sk), angle: 360, both: false, flip: false } });
   };
+  // A project sketch made into parts (the sketch editor's Extrude… / Cut… /
+  // Revolve…): this part's turn opens the dialog on the shared sketch, adding
+  // the part's alias for it if it has none; applied or skipped, the next part
+  // opens (build/sketchToPart.ts).
+  const navigate = useNavigate();
+  const [handoff, setHandoff] = useState<Handoff | null>(() => {
+    const h = readHandoff();
+    return h && h.parts[h.at]?.id === getBackendId() ? h : null;
+  });
+  const pickedUp = useRef(false);
+  const handoffAxis = useRef(false);   // a handed revolve: the sketch's default axis once it has loaded
+  const startHandoff = (h: Handoff) => {
+    const doc = useDocumentStore.getState().document;
+    const refs = doc.sketchRefs ?? {};
+    const ref = { document: h.sketchDoc, sketch: h.sketchId };
+    const { alias, added } = aliasIn(refs, ref, h.alias);
+    if (added) persistSharedRefs({ ...refs, [alias]: ref }, doc.pinned ?? null);
+    const src = skSource({ alias, pick: h.pick, on: null });
+    const firstBody = !hasPartRef.current;
+    if (opOpen) closeOp();
+    handoffOpen.current = true;
+    if (h.op === 'revolve') {
+      handoffAxis.current = true;
+      setRevolveOp({ line: null, firstBody,
+                     v: { sketch: src, op: firstBody ? 'new' : 'join', axis: null, angle: 360, both: false, flip: false } });
+    } else {
+      const cut = h.op === 'cut' && !firstBody;
+      setExtrudeOp({ line: null, firstBody, param: null,
+                     v: { sketch: src, op: firstBody ? 'new' : cut ? 'cut' : 'join', extent: cut ? 'through' : 'distance',
+                          depth: 5, through: cut, flip: false, both: false, datum: true, face: null, offset: 0 } });
+    }
+  };
+  useEffect(() => {
+    if (!handoff || pickedUp.current) return;
+    if (!(status === 'done' || status === 'error' || (code === STARTER && status === 'idle'))) return;
+    pickedUp.current = true;
+    startHandoff(handoff);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handoff, status, code]);
+  useEffect(() => {
+    if (!handoffAxis.current || !revolveOp || revolveOp.v.axis || !revolveSk) return;
+    handoffAxis.current = false;
+    const axis = defaultAxis(revolveSk);
+    if (axis) setRevolveOp((o) => o && ({ ...o, v: { ...o.v, axis } }));
+  }, [revolveOp, revolveSk]);
+  const handoffNext = (how: 'done' | 'skipped') => {
+    const h = handoff;
+    if (!h) return;
+    const n = advance(h, how);
+    const next = n.parts[n.at];
+    if (next) { saveHandoff(n); navigate(`/part/${next.id}`); return; }
+    saveHandoff(null);
+    setHandoff(null);
+    const names = (ids: string[]) => n.parts.filter((x) => ids.includes(x.id)).map((x) => x.name).join(', ');
+    setNotice(`${OP_WORDS[n.op].verb} done${n.done.length ? ` in ${names(n.done)}` : ' in no parts'}`
+      + (n.skipped.length ? `; skipped ${names(n.skipped)}` : ''));
+  };
+  const stopHandoff = () => {
+    const h = handoff;
+    if (!h) return;
+    saveHandoff(null);
+    setHandoff(null);
+    if (handoffOpen.current) closeOp();
+    const done = h.parts.filter((x) => h.done.includes(x.id)).map((x) => x.name);
+    planeNotice(`${OP_WORDS[h.op].verb} stopped${done.length ? `; already done in ${done.join(', ')} (they stay done)` : ''}`);
+  };
+  // "Edit sketch" on a shared sketch: its own document, in a new tab (a
+  // Rebuild here picks up what is saved there)
+  const editSharedSketch = (src: string) => {
+    const s = parseSkSource(src);
+    const doc = s ? sketchRefs?.[s.alias]?.document : undefined;
+    if (!doc) { planeNotice(`${sketchWords(src)} isn't one of this part's project sketches`); return; }
+    window.open(`/edit/${doc}`, '_blank');
+    planeNotice('The project sketch opened in a new tab: save it there, then Build here to use the change');
+  };
+  // where a shared sketch's shapes go, in its dialog
+  const placeShared = (on: SkPlacement) => {
+    setExtrudeOp((o) => {
+      if (!o || !isSkSource(o.v.sketch)) return o;
+      const sketch = placed(o.v.sketch, on), datum = skDatum(sketch);
+      return { ...o, v: { ...o.v, sketch, datum, both: datum && o.v.both } };
+    });
+    setRevolveOp((o) => (o && isSkSource(o.v.sketch) ? { ...o, v: { ...o.v, sketch: placed(o.v.sketch, on) } } : o));
+  };
+  const placementRow = (src: string) => {
+    const s = parseSkSource(src);
+    if (!s) return undefined;
+    const on = s.on;
+    const key = placingFace ? 'pick' : !on ? 'own' : 'base' in on ? `base:${on.base}` : 'plane' in on ? `plane:${on.plane}` : 'face';
+    const pick = (k: string) => {
+      setPlacingFace(k === 'pick');
+      if (k === 'pick') { planeNotice('Click a flat face of the part to put the sketch on'); return; }
+      if (k === 'face') return;
+      placeShared(k === 'own' ? null : k.startsWith('base:') ? { base: k.slice(5) as 'XY' | 'XZ' | 'YZ' }
+        : { plane: k.slice(6) });
+    };
+    return (
+      <label style={{ display: 'flex', alignItems: 'center', gap: '6px', color: palette.text, fontSize: '12px' }}>
+        <span style={{ width: 56 }}>Place on</span>
+        <select value={key} onChange={(e) => pick(e.target.value)} aria-label="Place on"
+                title="Where the sketch's shapes go: its own plane, a plane, or a flat face of this part"
+                style={{ flex: 1, minWidth: 0, fontSize: '12px', padding: '2px 4px', background: palette.inputBg,
+                         color: palette.text, border: `1px solid ${palette.border}`, borderRadius: '3px' }}>
+          <option value="own">Its own plane</option>
+          {(['XY', 'XZ', 'YZ'] as const).map((b) => <option key={b} value={`base:${b}`}>Plane {b}</option>)}
+          {planeNames.map((n) => <option key={n} value={`plane:${n}`}>{n}</option>)}
+          {on && 'face' in on && <option value="face">The {on.face.hint ?? 'picked face'}</option>}
+          <option value="pick">A face: click it in the view…</option>
+        </select>
+      </label>
+    );
+  };
+
   // another sketch picked in the dialog: its own default axis if the line isn't in it
   const changeRevolve = (v: RevolveValues) => setRevolveOp((o) => {
     if (!o) return o;
@@ -2213,7 +2420,15 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // while the Shell dialog is open, clicking a face opens or closes it, and
   // the faces it opens show as selected; in the Hole dialog it says where the
   // holes go
-  opPickRef.current = extrudeOp?.v.extent === 'face' ? (p) => {
+  opPickRef.current = placingFace && (extrudeOp || revolveOp) ? (p) => {
+    // a shared sketch put on a flat face of the part
+    const face = p && 'face' in p ? resRef.current?.faces.find((x) => x.index === p.face.index) : undefined;
+    if (!face) return;
+    const r = face.kind === 'plane' ? refOf(face) : null;
+    if (!r) { planeNotice('Put the sketch on a flat face: pick a flat one'); return; }
+    setPlacingFace(false);
+    placeShared({ face: r });
+  } : extrudeOp?.v.extent === 'face' ? (p) => {
     // Up to face: the face it runs to (any face: flat, slanted, round)
     const face = p && 'face' in p ? resRef.current?.faces.find((x) => x.index === p.face.index) : undefined;
     const r = face ? refOf(face) : null;
@@ -2898,6 +3113,42 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   }, [chatUploading, sendQueued]);
 
   const rebuild = () => { setParamReject(null); saveDraft(code); build(code, 'build'); };
+  // Back on this tab (a project sketch may have been edited in another one):
+  // when a sketch or parameter the part reads has changed, it rebuilds with
+  // it, or, while a dialog is open, offers to. A restored (pinned) version
+  // stays as it is; its "uses an earlier …" line is brought up to date.
+  const [sharedNote, setSharedNote] = useState<{ what: string; rebuilt: boolean } | null>(null);
+  const checkSharedRef = useRef(() => {});
+  checkSharedRef.current = () => {
+    const src = builtCodeRef.current;
+    if (!src || !usesShared(src) || status !== 'done') return;
+    setSharedTick((t) => t + 1);
+    if (useDocumentStore.getState().document.pinned) return;
+    const was = inputsKeyRef.current;
+    void sharedInputsKey(src).then(() => {
+      const now = inputsKeyRef.current;
+      if (!was || !now || was.src !== src || now.src !== src || was.key === now.key) return;
+      const changed = [
+        ...Object.entries(now.inputs.sk ?? {}).filter(([a, v]) => was.inputs.sk?.[a]?.version !== v.version)
+          .map(([a]) => sharedSks[a]?.docName ?? a),
+        ...Object.entries(now.inputs.pp ?? {}).filter(([n, v]) => was.inputs.pp?.[n] !== v).map(([n]) => `parameter ${n}`),
+      ];
+      const what = changed.length ? changed.join(', ') : 'a project sketch';
+      if (opOpen || faceSketch.active) { setSharedNote({ what, rebuilt: false }); return; }
+      void build(src, 'project sketch changed');
+      setSharedNote({ what, rebuilt: true });
+    });
+  };
+  useEffect(() => {
+    const onFocus = () => checkSharedRef.current();
+    const onVisible = () => { if (document.visibilityState === 'visible') checkSharedRef.current(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, []);
   const [exporting, setExporting] = useState<'stl' | 'step' | 'stl-parts' | 'dxf' | 'dxf-views' | null>(null);
   const doExport = async (format: 'stl' | 'step' | 'stl-parts' | 'dxf' | 'dxf-views') => {
     if (status !== 'done' || exporting) return;
@@ -3548,6 +3799,18 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
               Project <span style={{ color: palette.text, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>{projectName}</span>
             </AppLink>
           ) : null}
+          {/* the project sketches it is made from: open one to change it; back here, the part rebuilds */}
+          {Object.entries(sharedSks).map(([alias, sk]) => (
+            <span key={alias} style={{ display: 'contents' }}>
+              <span style={{ color: palette.border }}>·</span>
+              <AppLink to={`/edit/${sk.doc}`} onGo={() => navAway(() => navigate(`/edit/${sk.doc}`))}
+                title={`Open the project sketch this part is made from, to change it (the script reads it as SK["${alias}"]). Back here, the part rebuilds with the change.`}
+                style={{ gap: 4, flexShrink: 0, cursor: 'pointer' }}>
+                Sketch <span style={{ color: palette.text, fontWeight: 600 }}>{sk.docName}</span>
+                <span style={{ color: palette.accent }}>Edit ↗</span>
+              </AppLink>
+            </span>
+          ))}
           {projectName && docId && (
             <>
               <span style={{ color: palette.border }}>·</span>
@@ -3604,6 +3867,33 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
           <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
             <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block',
                      cursor: 'grab', touchAction: 'none', ...faceSketch.canvasStyle }} />
+            {handoff && !faceSketch.active && (() => {
+              const part = handoff.parts[handoff.at];
+              const open = !!extrudeOp || !!revolveOp;
+              const lb: CSSProperties = { background: 'none', border: `1px solid ${palette.border}`, borderRadius: '4px',
+                                          color: palette.text, cursor: 'pointer', fontSize: '12px', padding: '2px 10px' };
+              return (
+                <div role="status"
+                     style={{ position: 'absolute', top: 10, right: 12, zIndex: 6,   // clear of the op dialogs at the top left
+                              display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px', maxWidth: 'calc(100% - 290px)',
+                              background: palette.panelBg, border: `1px solid ${palette.accent}`, borderRadius: '6px',
+                              fontSize: '12px', color: palette.textSecondary, boxShadow: '0 2px 8px rgba(0,0,0,0.25)' }}>
+                  <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <b style={{ color: palette.text }}>{OP_WORDS[handoff.op].verb} “{handoff.sketchName}”</b>
+                    {handoff.parts.length > 1 ? ` · part ${handoff.at + 1} of ${handoff.parts.length}` : ''}
+                    {part ? ` · ${part.name}` : ''}
+                  </span>
+                  {!open && pickedUp.current && (
+                    <button style={lb} onClick={() => startHandoff(handoff)} title="Open the dialog for this part again">Resume</button>
+                  )}
+                  {handoff.parts.length > 1 && (
+                    <button style={lb} onClick={() => { closeOp(); handoffNext('skipped'); }}
+                            title="Leave this part as it is and go on to the next">Skip</button>
+                  )}
+                  <button style={lb} onClick={stopHandoff} title="Stop here: the parts already done stay done">Cancel</button>
+                </div>
+              );
+            })()}
             {/* the parameters float over the maximised 3D view */}
             {layout === 'model' && hasParams && showParams && !faceSketch.active && paramsPane({
               position: 'absolute', top: 12, right: 12, maxWidth: 'min(440px, 60%)', maxHeight: '45%',
@@ -3647,11 +3937,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                   : null}
                 firstBody={extrudeOp.firstBody} param={extrudeOp.param} preview={extrudePreview.preview}
                 direction={extrudeNormal ? extrudeDirectionText(extrudeOp.v, extrudeNormal, extrudePartAt) : ''}
+                placement={placementRow(extrudeOp.v.sketch)}
                 onEditSketch={editExtrudeSketch} onApply={() => void applyExtrude()} onCancel={closeOp} />
             )}
             {revolveOp && (
               <RevolveDialog value={revolveOp.v} onChange={changeRevolve} editing={revolveOp.line != null}
-                firstBody={revolveOp.firstBody} sketches={revolvable(docSketches).map((x) => x.name)}
+                firstBody={revolveOp.firstBody}
+                sketches={isSkSource(revolveOp.v.sketch) ? [revolveOp.v.sketch] : revolvable(docSketches).map((x) => x.name)}
+                placement={placementRow(revolveOp.v.sketch)}
                 choices={revolveChoices} params={paramVals} view={revolveView} problem={revolveProblem}
                 summary={revolveSummary(revolveOp.v, revolveAngle, axisLabel(revolveAxis, revolveChoices), revolveNormal)}
                 preview={revolvePreview.preview} onEditSketch={editRevolveSketch}
@@ -4046,6 +4339,19 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
             <span style={{ color: palette.warning ?? '#c78a1a', marginRight: '10px' }}
                   title="The face set as the print bed is no longer on the part: the overhangs and auto_round's bed use Z">
               ⚠ Print bed face not found; using Z
+            </span>
+          )}
+          {status === 'done' && sharedNote && (
+            <span style={{ marginRight: '10px', color: sharedNote.rebuilt ? palette.textSecondary : (palette.warning ?? '#c78a1a') }}>
+              {sharedNote.rebuilt ? `Rebuilt: ${sharedNote.what} changed` : `${sharedNote.what} changed`}
+              {!sharedNote.rebuilt && <>
+                {' · '}
+                <button onClick={() => { setSharedNote(null); build(builtCodeRef.current, 'project sketch changed'); }}
+                        style={{ background: 'none', border: 'none', padding: 0, color: palette.accent, cursor: 'pointer', fontSize: 'inherit' }}
+                        title="Build the part with the project sketch as it is now">
+                  Rebuild
+                </button>
+              </>}
             </span>
           )}
           {status === 'done' && docPinned && pinDiff && (

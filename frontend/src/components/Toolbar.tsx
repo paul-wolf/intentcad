@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ScriptViewer } from './ScriptViewer';
 import { useDocumentStore } from '@/stores/documentStore';
@@ -14,7 +14,7 @@ import { exportDocumentToImage } from '@/export/image';
 import { downloadTextFile, downloadBlob } from '@/export/download';
 import { getEntityPoint, getEntityPoints } from '@/utils/entityPoints';
 import { getSegmentCount } from '@/utils/lineSegments';
-import { requestSave, getProjectId, getProjectName, setBackendId, setProjectContext } from '@/api/autoSave';
+import { requestSave, getProjectId, getProjectName, setBackendId, setProjectContext, subscribeProjectContext } from '@/api/autoSave';
 import { AppLink } from '@/ui/links';
 import { createEmptyDocument, generateNumberedName } from '@/utils/document';
 import { addLog } from '@/stores/logStore';
@@ -159,6 +159,9 @@ export function Toolbar({ embedded = false }: ToolbarProps = {}) {
   const toggleCamPanel = useCamStore((s) => s.toggleCamPanel);
   const showToolpathPreview = useCamStore((s) => s.showToolpathPreview);
   const toggleToolpathPreview = useCamStore((s) => s.toggleToolpathPreview);
+  // the project loads after the sketch: follow it, so the Project button and line show on a direct load
+  const projectId = useSyncExternalStore(subscribeProjectContext, getProjectId);
+  const projectName = useSyncExternalStore(subscribeProjectContext, getProjectName);
 
   const handleNewSketch = async () => {
     const projId = getProjectId();
@@ -182,8 +185,8 @@ export function Toolbar({ embedded = false }: ToolbarProps = {}) {
       <div style={{ background: palette.panelBg, borderBottom: `1px solid ${palette.border}`, padding: '4px 8px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
         <div style={rowStyle}>
           <AppLink to="/" style={btn(palette)} title="Back to project list">Home</AppLink>
-          {getProjectId() && (
-            <AppLink to={`/project/${getProjectId()}`} style={btn(palette)} title="Back to project sketches">Project</AppLink>
+          {projectId && (
+            <AppLink to={`/project/${projectId}`} style={btn(palette)} title="Back to project sketches">Project</AppLink>
           )}
           <button onClick={handleNewSketch} style={btn(palette)} title="Create a new sketch in this project">New Sketch</button>
           <Sep color={palette.border} />
@@ -237,8 +240,8 @@ export function Toolbar({ embedded = false }: ToolbarProps = {}) {
       {/* ── Row 1: Draw ── */}
       <div style={rowStyle}>
         <AppLink to="/" style={btn(palette)} title="Back to project list">Home</AppLink>
-        {getProjectId() && (
-          <AppLink to={`/project/${getProjectId()}`} style={btn(palette)} title="Back to project sketches">Project</AppLink>
+        {projectId && (
+          <AppLink to={`/project/${projectId}`} style={btn(palette)} title="Back to project sketches">Project</AppLink>
         )}
         <button onClick={handleNewSketch} {...off(btn(palette))} title="Create a new sketch in this project">New Sketch</button>
         <Sep color={palette.border} />
@@ -677,6 +680,20 @@ export function Toolbar({ embedded = false }: ToolbarProps = {}) {
           Fit All
         </button>
       </div>
+
+      {/* a slim line: the project this sketch is in, as in the part editor */}
+      {!embedded && projectId && projectName && (
+        <div style={{ display: 'flex', alignItems: 'center', padding: '0 4px', fontSize: '11.5px',
+                      color: palette.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden' }}>
+          <AppLink to={`/project/${projectId}`} title="The project this sketch is in: click to go back to it"
+            style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, cursor: 'pointer' }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+              <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+            </svg>
+            Project <span style={{ color: palette.text, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>{projectName}</span>
+          </AppLink>
+        </div>
+      )}
     </div>
   );
 }

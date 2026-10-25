@@ -140,7 +140,7 @@ export function SharedSketchPanel() {
       {users.length > 0 && (
         <>
           <div style={{ ...head, borderTop: `1px solid ${palette.border}` }}>
-            <span>Used by</span>
+            <span>Used by parts</span>
             <button style={{ ...btn, opacity: stale.length && !rebuild?.at ? 1 : 0.5 }}
                     disabled={!stale.length || !!rebuild?.at} onClick={() => void rebuildAll()}
                     title={stale.length ? `Rebuild the ${stale.length} out-of-date part(s) with this sketch as it is now`

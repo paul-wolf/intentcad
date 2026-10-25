@@ -132,6 +132,9 @@ export function useFaceSketch(
   hasPart: () => boolean = () => true,
   /** The part's parameters (its P), for dimensions in the sketch to use. */
   partVars: () => Record<string, number> | null = () => null,
+  /** Save to project (a part in a project): the sketch, closed, becomes a
+   *  project sketch the script reads as SK["…"]. */
+  onSaveToProject?: (sketchId: string) => void,
 ): FaceSketchApi {
   const palette = useThemeStore((s) => s.palette);
   const [session, setSession] = useState<Session | null>(null);
@@ -153,6 +156,9 @@ export function useFaceSketch(
   const pendingRevolve = useRef<RevolveStart | null>(null);
   const onDoneRef = useRef(onDone);
   onDoneRef.current = onDone;
+  const onSaveRef = useRef(onSaveToProject);
+  onSaveRef.current = onSaveToProject;
+  const pendingSave = useRef(false);   // Save to project: once the sketch has closed
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const timers = useRef<number[]>([]);
   const later = (ms: number, f: () => void) => { timers.current.push(window.setTimeout(f, ms)); };
@@ -202,6 +208,7 @@ export function useFaceSketch(
     setGlRect(null); setShown(false); setStrokes(false); setExtruding(false); setRevolving(false);
     pendingExtrude.current = null;
     pendingRevolve.current = null;
+    pendingSave.current = false;
     const base = sketchBasePlane(sk);
     // drawn on a face: on that face where the last build found it
     const label = sk.planeRef ? `plane '${sk.planeRef}'` : base ? BASE_PLANES[base].name : faceLabel(plane.normal);
@@ -347,10 +354,12 @@ export function useFaceSketch(
         useEditorStore.getState().setProjectSource(null);
         if (useEditorStore.getState().activeTool === 'project') useEditorStore.getState().setActiveTool('select');
         setSession(null);
-        const extrude = pendingExtrude.current, revolve = pendingRevolve.current;
+        const extrude = pendingExtrude.current, revolve = pendingRevolve.current, save = pendingSave.current;
         pendingExtrude.current = null;
         pendingRevolve.current = null;
-        if (sk && !empty) onDoneRef.current?.(sk.name, extrude, revolve);
+        pendingSave.current = false;
+        if (sk && !empty && save && onSaveRef.current) onSaveRef.current(sk.id);
+        else if (sk && !empty) onDoneRef.current?.(sk.name, extrude, revolve);
       });
     }
   }, [glRect, session?.phase, viewerRef, canvasRef, palette.background]);
@@ -605,6 +614,12 @@ export function useFaceSketch(
               <button style={{ ...btn, ...(revolving ? { color: palette.accent, borderColor: palette.accent } : {}) }}
                       onClick={toggleRevolve}
                       title="Turn the closed shapes round a line of the sketch: knobs, spacers, pulleys, grooves">Revolve…</button>
+              {onSaveToProject && (
+                <button style={btn} onClick={() => { pendingSave.current = true; exit(); }}
+                        title="Make this a project sketch: other parts can use it, and this part's script reads it as SK[…]">
+                  Save to project
+                </button>
+              )}
               <button style={{ ...btn, background: palette.accent, borderColor: palette.accent, color: '#fff' }}
                       onClick={exit}>Done</button>
               {extruding && (

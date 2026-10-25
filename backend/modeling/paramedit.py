@@ -134,6 +134,104 @@ _THROUGH = f"{_BB}.diagonal"                                  # a through cut, o
 _THROUGH_BOTH = f"{_BB}.diagonal + {_BB}.center().length"     # a base-plane sketch's, both ways
 
 
+# A shared sketch (modeling/shared_sketch.py) in an extrude or revolve line, in
+# place of sketch("name"):
+#     SK["frame"]   SK["frame"].group("arm holes")   SK["frame"].named("outline")
+# each maybe placed elsewhere with .on(face_ref({...})), .on(PLANES["Mid"]) or
+# .on(Plane.XZ). The dialogs carry it as this source text where a face sketch
+# has its name.
+
+_BASE_PLANES = ("XY", "XZ", "YZ")
+
+
+def is_shared_src(sketch: str) -> bool:
+    return isinstance(sketch, str) and sketch.startswith("SK[")
+
+
+def _shared_parts(node) -> dict | None:
+    """An SK expression written as above → {"alias", "pick": (kind, name) or
+    None, "on": the .on() argument's source or None}; anything else → None."""
+    on = None
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "on"
+            and len(node.args) == 1 and not node.keywords):
+        a = node.args[0]
+        if isinstance(a, ast.Call) and isinstance(a.func, ast.Name) and a.func.id == "face_ref":
+            try:
+                on = f"face_ref({_lit(_ref_arg(a, 'face_ref', 'face to put the sketch on'))})"
+            except (ParamError, ValueError):
+                return None
+        elif (isinstance(a, ast.Subscript) and isinstance(a.value, ast.Name) and a.value.id == "PLANES"
+              and isinstance(a.slice, ast.Constant) and isinstance(a.slice.value, str)):
+            on = f"PLANES[{json.dumps(a.slice.value)}]"
+        elif (isinstance(a, ast.Attribute) and isinstance(a.value, ast.Name) and a.value.id == "Plane"
+              and a.attr in _BASE_PLANES):
+            on = f"Plane.{a.attr}"
+        else:
+            return None
+        node = node.func.value
+    pick = None
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in ("group", "named")
+            and len(node.args) == 1 and not node.keywords
+            and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)):
+        pick = (node.func.attr, node.args[0].value)
+        node = node.func.value
+    if not (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and node.value.id == "SK"
+            and isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str)):
+        return None
+    return {"alias": node.slice.value, "pick": pick, "on": on}
+
+
+def _shared_text(p: dict) -> str:
+    out = f"SK[{json.dumps(p['alias'])}]"
+    if p["pick"]:
+        out += f".{p['pick'][0]}({json.dumps(p['pick'][1])})"
+    if p["on"]:
+        out += f".on({p['on']})"
+    return out
+
+
+def _shared_src(sketch: str) -> dict:
+    try:
+        node = ast.parse(sketch.strip(), mode="eval").body
+    except SyntaxError:
+        node = None
+    p = _shared_parts(node) if node is not None else None
+    if p is None:
+        raise ParamError(f"{sketch[:60]!r} is not a shared sketch the editor writes "
+                         '(SK["name"], with .group("…") / .named("…") and .on(…) after it)')
+    return p
+
+
+def _sketch_src(sketch: str) -> str:
+    """The source of an operation's sketch: sketch("name"), or a shared
+    sketch's SK[...] written the editor's way."""
+    return _shared_text(_shared_src(sketch)) if is_shared_src(sketch) else f"sketch({json.dumps(sketch)})"
+
+
+def _read_sketch_arg(node) -> str | None:
+    """An operation's sketch argument back into its name or SK source, else None."""
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "sketch"
+            and len(node.args) == 1 and not node.keywords
+            and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)):
+        return node.args[0].value
+    p = _shared_parts(node)
+    return _shared_text(p) if p else None
+
+
+def _shared_datum(sketch: str) -> bool:
+    """A shared sketch on its own plane or a construction plane has no
+    outside (like a base-plane sketch); on a part's face it faces out of it."""
+    return _shared_src(sketch)["on"] is None or not _shared_src(sketch)["on"].startswith("face_ref(")
+
+
+def _keep_sketch(old: str, new: str) -> str:
+    """A reopened line keeps its sketch, but a shared sketch may move (.on)
+    or pick another group of the same SK sketch."""
+    if is_shared_src(old) and is_shared_src(new) and _shared_src(old)["alias"] == _shared_src(new)["alias"]:
+        return _shared_text(_shared_src(new))
+    return old
+
+
 EXTENTS = ("distance", "through", "next", "face")
 
 
@@ -145,7 +243,7 @@ def _extrude_text(sketch: str, op: str, key: str | None, through: bool, flip: bo
     'face_ref({...})', with `offset_src` the offset's source (None: none)."""
     into = op == "cut" and not datum      # negative amount: into the part
     sign = "-" if into != flip else ""
-    head = f"part {_EXTRUDE_SYM[op]} extrude(sketch({json.dumps(sketch)}), "
+    head = f"part {_EXTRUDE_SYM[op]} extrude({_sketch_src(sketch)}, "
     if until is not None:
         offset = f", offset={offset_src}" if offset_src else ""
         return head + f"until={until}{offset}" + (", dir=-1" if sign else "") + ")"
@@ -172,14 +270,11 @@ def _read_extrude(stmt, call, pv: dict, datum_sketches) -> tuple[dict, str | Non
     if len(call.args) != 1 or len(set(kws)) != len(kws) or not (
             set(kws) <= {"until", "offset", "dir"} if until else kws in (["amount"], ["amount", "both"])):
         raise bad
-    s = call.args[0]
-    if not (isinstance(s, ast.Call) and isinstance(s.func, ast.Name) and s.func.id == "sketch"
-            and len(s.args) == 1 and not s.keywords
-            and isinstance(s.args[0], ast.Constant) and isinstance(s.args[0].value, str)):
+    sketch = _read_sketch_arg(call.args[0])
+    if sketch is None:
         raise bad
-    sketch = s.args[0].value
     kw = {k.arg: k.value for k in call.keywords}
-    datum = sketch in datum_sketches
+    datum = _shared_datum(sketch) if is_shared_src(sketch) else sketch in datum_sketches
     exprs: dict = {}
     if until:
         u = kw["until"]
@@ -276,6 +371,8 @@ def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
     depth key kept in P, if any)."""
     if op not in _EXTRUDE_SYM:
         raise ParamError(f"unknown extrude operation {op!r}")
+    if is_shared_src(sketch):
+        datum = _shared_datum(sketch)
     extent = extent or ("through" if through else "distance")
     if extent not in EXTENTS:
         raise ParamError(f"unknown extrude extent {extent!r}")
@@ -323,8 +420,11 @@ def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
     if op != "new" and not before:
         raise ParamError(f"there is no part before this line to {op} with: it can only be a New body")
     old_key = old_key or (key if key in names else None)     # a depth kept while it was an until extrude
+    sk = _keep_sketch(old["sketch"], sketch)
+    if is_shared_src(sk):
+        datum = _shared_datum(sk)
     if until is not None:          # the old depth stays in P, for switching back
-        code = _write_op(code, _extrude_text(old["sketch"], op, None, False, flip, datum, False, until, offset_src),
+        code = _write_op(code, _extrude_text(sk, op, None, False, flip, datum, False, until, offset_src),
                          line, "extrude")
         return code, old_key
     new_key = None
@@ -335,7 +435,7 @@ def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
             new_key = None
         if new_key is None:
             new_key = _unique(names, *_EXTRUDE_KEY[op])
-    code = _write_op(code, _extrude_text(old["sketch"], op, new_key, through, flip, datum, both), line, "extrude")
+    code = _write_op(code, _extrude_text(sk, op, new_key, through, flip, datum, both), line, "extrude")
     if new_key:
         code = set_params(code, {new_key: float(depth)}) if new_key in names else add_param(code, new_key, float(depth))
     if old_key and old_key != new_key:
@@ -366,6 +466,8 @@ def revolve_axis_label(axis: dict | None) -> str:
 
 def _revolve_axis_src(sketch: str, axis) -> str:
     if isinstance(axis, dict) and axis.get("line"):
+        if is_shared_src(sketch):     # a line of the shared sketch, on its (moved) plane
+            return f"{_sketch_src(sketch)}.line({json.dumps(str(axis['line']))})"
         return f"sketch_line({json.dumps(sketch)}, {json.dumps(str(axis['line']))})"
     if isinstance(axis, dict) and not any(axis.get(k) for k in ("base", "edge", "face")):
         raise ParamError("pick an axis: a line of the sketch, a straight edge, a cylinder, or X, Y, Z")
@@ -373,7 +475,7 @@ def _revolve_axis_src(sketch: str, axis) -> str:
 
 
 def _revolve_text(sketch: str, op: str, axis_src: str, angle_src: str, both: bool, flip: bool) -> str:
-    return (f"part {_EXTRUDE_SYM[op]} revolve(sketch({json.dumps(sketch)}), axis={axis_src}, angle={angle_src}"
+    return (f"part {_EXTRUDE_SYM[op]} revolve({_sketch_src(sketch)}, axis={axis_src}, angle={angle_src}"
             + (", both=True" if both else "") + (", flip=True" if flip else "") + ")")
 
 
@@ -386,14 +488,17 @@ def _read_revolve(stmt, call, pv: dict) -> tuple[dict, dict]:
     kw = {k.arg: k.value for k in call.keywords}
     if len(call.args) != 1 or None in kw or not {"axis", "angle"} <= kw.keys() <= {"axis", "angle", "both", "flip"}:
         raise bad
-    s = call.args[0]
-    if not (isinstance(s, ast.Call) and isinstance(s.func, ast.Name) and s.func.id == "sketch"
-            and len(s.args) == 1 and not s.keywords
-            and isinstance(s.args[0], ast.Constant) and isinstance(s.args[0].value, str)):
+    sketch = _read_sketch_arg(call.args[0])
+    if sketch is None:
         raise bad
-    sketch = s.args[0].value
     ax = kw["axis"]
-    if isinstance(ax, ast.Call) and isinstance(ax.func, ast.Name) and ax.func.id == "sketch_line":
+    if (is_shared_src(sketch) and isinstance(ax, ast.Call) and isinstance(ax.func, ast.Attribute)
+            and ax.func.attr == "line"):
+        if not (len(ax.args) == 1 and not ax.keywords and isinstance(ax.args[0], ast.Constant)
+                and isinstance(ax.args[0].value, str) and _read_sketch_arg(ax.func.value) == sketch):
+            raise bad
+        axis = {"line": ax.args[0].value}
+    elif isinstance(ax, ast.Call) and isinstance(ax.func, ast.Name) and ax.func.id == "sketch_line":
         if not (len(ax.args) == 2 and not ax.keywords
                 and all(isinstance(a, ast.Constant) and isinstance(a.value, str) for a in ax.args)
                 and ax.args[0].value == sketch):
@@ -444,7 +549,8 @@ def add_revolve(code: str, sketch: str, op: str, axis, angle=360, both: bool = F
         raise ParamError("New body is only for the first body: the part is made before this line")
     if op != "new" and not before:
         raise ParamError(f"there is no part before this line to {op} with: it can only be a New body")
-    text = _revolve_text(old["sketch"], op, _revolve_axis_src(old["sketch"], axis), angle_src, both, flip)
+    sk = _keep_sketch(old["sketch"], sketch)
+    text = _revolve_text(sk, op, _revolve_axis_src(sk, axis), angle_src, both, flip)
     return _write_op(code, text, line, "revolve")
 
 
@@ -1434,6 +1540,11 @@ TITLES = {"extrude": "Extrude", "revolve": "Revolve", "shell": "Shell", "holes":
 _EXTRUDE_TITLES = {"cut": "Cut", "join": "Join", "new": "New body"}
 
 
+def _sk_words(sketch: str) -> str:
+    """A step's sketch: 'Holes' (a face sketch), or the SK source as written."""
+    return sketch if is_shared_src(sketch) else repr(sketch)
+
+
 def _deg(v) -> str:
     try:
         return f"{round(float(v), 3):g}°"
@@ -1471,10 +1582,10 @@ def _summary(op: str, a: dict, points: dict) -> str:
             off = a.get("offset") or 0
             if off:
                 how += f" {_mm(abs(off))} {'past' if off > 0 else 'short'}"
-        return (f"{_EXTRUDE_TITLES[a['op']]} {a['sketch']!r} {how}" + (" both ways" if a["both"] else "")
+        return (f"{_EXTRUDE_TITLES[a['op']]} {_sk_words(a['sketch'])} {how}" + (" both ways" if a["both"] else "")
                 + (" · flipped" if a["flip"] else ""))
     if op == "revolve":
-        return (f"{_EXTRUDE_TITLES[a['op']]} {a['sketch']!r} revolved {_deg(a['angle'])} about the "
+        return (f"{_EXTRUDE_TITLES[a['op']]} {_sk_words(a['sketch'])} revolved {_deg(a['angle'])} about the "
                 f"{revolve_axis_label(a['axis'])}" + (" both ways" if a["both"] else "")
                 + (" · flipped" if a["flip"] else ""))
     if op == "shell":

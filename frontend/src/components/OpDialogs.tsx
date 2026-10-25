@@ -18,6 +18,7 @@ import { dirWords, instanceCount, patternSummary, remapSkip, type PatternValues 
 import { BODY_HUES } from '@/build/bodyColors';
 import { axisLabel, type AxisChoice, type RevolveAxis, type RevolveValues } from '@/build/revolve';
 import type { XY } from '@/build/faceSketch';
+import { sketchWords } from '@/build/sketchToPart';
 import { ParamExprInput } from './ParamExprInput';
 
 // The part editor's explicit operations (Shell, Hole, Fillet, Chamfer; and reopened,
@@ -717,12 +718,14 @@ export function extrudeSummary(v: ExtrudeValues, offset: number | null): string 
     : extent === 'next' ? (v.op === 'cut' ? 'until it breaks into empty space' : 'until it meets the part')
     : extent === 'face' ? `up to the ${v.face?.hint ?? 'face'}${offset ? `, ${Math.abs(offset)} mm ${offset > 0 ? 'past it' : 'short of it'}` : ''}`
     : `${d} mm${both ? ' each way' : ''}`;
-  return `${what} “${v.sketch}” ${how}.`;
+  return `${what} “${sketchWords(v.sketch)}” ${how}.`;
 }
 
 export function ExtrudeDialog({ value, onChange, editing = true, firstBody, param, params, direction, hoverHint, preview,
-  onEditSketch, onApply, onCancel }: {
+  placement, onEditSketch, onApply, onCancel }: {
   value: ExtrudeValues; onChange: (v: ExtrudeValues) => void;
+  /** a project sketch: where its shapes go (its own plane, a plane, a face) */
+  placement?: ReactNode;
   /** reopened from its line (Update) rather than new (Cut / Join) */
   editing?: boolean;
   /** the line makes the part: New body, and nothing else */
@@ -763,7 +766,7 @@ export function ExtrudeDialog({ value, onChange, editing = true, firstBody, para
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: palette.text }}>
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
               title={value.sketch}>
-          Sketch <b>{value.sketch}</b>
+          Sketch <b>{sketchWords(value.sketch)}</b>
         </span>
         <button onClick={onEditSketch} title="Open the sketch to change its shapes; Done brings you back here"
                 style={{ fontSize: '12px', padding: '2px 8px', cursor: 'pointer', borderRadius: '4px',
@@ -771,6 +774,7 @@ export function ExtrudeDialog({ value, onChange, editing = true, firstBody, para
           Edit sketch
         </button>
       </div>
+      {placement}
       {firstBody ? (
         <div style={{ color: palette.text, lineHeight: 1.4 }}>
           <b>New body</b>
@@ -873,8 +877,10 @@ const AXIS_KEY = (a: RevolveAxis | null): string =>
  *  flip and the operation; a drawing of the sketch with the axis, any crossing
  *  in red; the result is previewed, its angle on a round handle. */
 export function RevolveDialog({ value, onChange, editing, firstBody, sketches, choices, params, view, problem, summary,
-  preview, onEditSketch, onApply, onCancel }: {
+  preview, placement, onEditSketch, onApply, onCancel }: {
   value: RevolveValues; onChange: (v: RevolveValues) => void;
+  /** a project sketch: where its shapes go (its own plane, a plane, a face) */
+  placement?: ReactNode;
   editing: boolean;
   /** the line makes the part: New body, and nothing else */
   firstBody: boolean;
@@ -923,7 +929,7 @@ export function RevolveDialog({ value, onChange, editing, firstBody, sketches, c
           </select>
         ) : (
           <b style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-             title={value.sketch}>{value.sketch}</b>
+             title={value.sketch}>{sketchWords(value.sketch)}</b>
         )}
         <button onClick={onEditSketch} title="Open the sketch to change its shapes or draw an axis line; Done brings you back here"
                 style={{ fontSize: '12px', padding: '2px 8px', cursor: 'pointer', borderRadius: '4px',
@@ -931,6 +937,7 @@ export function RevolveDialog({ value, onChange, editing, firstBody, sketches, c
           Edit sketch
         </button>
       </div>
+      {placement}
       <div style={{ display: 'flex' }}>
         {ops.map((o, i) => (
           <button key={o} style={{ ...seg(value.op === o), borderRadius: ops.length === 1 ? '4px' : i === 0 ? '4px 0 0 4px' : '0 4px 4px 0',
