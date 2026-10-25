@@ -214,6 +214,8 @@ faces of a part:
 - Organise parts and sketches in projects; share projects with others.
 - In the part editor, the line under the top bar names the project the part is in.
   Click the name to go back to the project.
+- Keep your place: Cmd-click (Ctrl-click on Windows) or middle-click the IntentCAD logo,
+  Home, Project, a project or a part card to open it in a new tab.
 - Every successful build is a version; restore any of them.
 - **Duplicate** makes a copy of a part or sketch in the same project. Hover over its
   card in the project and click the two-squares button (between Rename and Move). The

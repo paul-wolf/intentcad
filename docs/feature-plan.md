@@ -41,6 +41,7 @@ operations cost nothing to support, they just don't get UI.
 - Duplicate a part or sketch: a button on its card makes "Copy of <name>" in the same project, with the model, its STEP files, the part's context files and CAM jobs (no G-code); a fresh version history
 - Examples for new organisations: a superuser chooses one project on the Organisations page; each new organisation gets its own copy (parts, sketches, STEP and context files, CAM jobs without G-code), with a box to skip it and an Add examples button for organisations made earlier
 - The part editor names the part's project in the line under the top bar; click it to go back to the project
+- Open in a new tab: Cmd/Ctrl-click or middle-click the logo, Home, Project, the breadcrumbs, a project row or a part/sketch card
 
 ## Foundation: edge selection ✓ done
 

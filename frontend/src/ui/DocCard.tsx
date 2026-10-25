@@ -1,5 +1,6 @@
 import { DocumentThumbnail } from '@/components/DocumentThumbnail';
 import { useTokens, MONO } from './tokens';
+import { openInNewTab } from './links';
 
 /** Generic amber isometric-cube thumbnail for parts (a real render would be
  *  ideal later; this is a clean placeholder that reads as "3D part"). */
@@ -43,11 +44,14 @@ export function DocCard({ d, onOpen, onDoubleClick, onRename, onDuplicate, onDel
 }) {
   const t = useTokens();
   const isPart = d.kind === 'part';
+  const href = isPart ? `/part/${d.id}` : `/edit/${d.id}`;   // Cmd/Ctrl- or middle-click: a new tab
   const badgeColor = isPart ? t.part : t.sketch;
   const badgeBg = isPart ? t.partSoft : t.sketchSoft;
 
   return (
-    <div onClick={editing ? undefined : onOpen} onDoubleClick={editing ? undefined : onDoubleClick}
+    <div onClick={editing ? undefined : (e) => { if (!openInNewTab(e, href)) onOpen(); }}
+      onAuxClick={editing ? undefined : (e) => { openInNewTab(e, href); }}
+      onDoubleClick={editing ? undefined : onDoubleClick}
       style={{ position: 'relative', background: t.surface, border: `1px solid ${t.border}`, borderRadius: 12, overflow: 'hidden',
                cursor: 'pointer', transition: 'transform .12s ease,border-color .12s ease,box-shadow .12s ease' }}
       onMouseEnter={(e) => { const s = e.currentTarget.style; s.transform = 'translateY(-3px)'; s.borderColor = t.border2; s.boxShadow = t.shadow;

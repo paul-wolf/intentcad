@@ -14,6 +14,7 @@ import { TopNav } from '@/ui/TopNav';
 import { DocCard } from '@/ui/DocCard';
 import { useTokens, SANS, MONO } from '@/ui/tokens';
 import { ContextPane, useContextFiles, type CtxColors } from './ContextPane';
+import { AppLink } from '@/ui/links';
 
 function relativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -271,8 +272,8 @@ export function DocumentListPage() {
         <div style={{ maxWidth: 1200, margin: '0 auto', padding: '28px 28px 72px' }}>
           {/* Breadcrumb */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontFamily: MONO, fontSize: '12px', marginBottom: 20 }}>
-            <button onClick={() => navigate('/')}
-              style={{ background: 'none', border: 'none', padding: 0, color: t.textMute, cursor: 'pointer', fontFamily: MONO, fontSize: '12px' }}>Projects</button>
+            <AppLink to="/"
+              style={{ padding: 0, color: t.textMute, cursor: 'pointer', fontFamily: MONO, fontSize: '12px' }}>Projects</AppLink>
             <span style={{ color: t.textMute }}>/</span>
             <span style={{ color: t.textDim }}>{projectName}</span>
           </div>
