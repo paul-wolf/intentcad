@@ -28,6 +28,15 @@ export function setBackendId(id: string | null) {
   pendingHistory = null;
   backendId = id;
   sawModelCode = false;   // new document context — re-arm the blank-save guard
+  backendListeners.forEach((fn) => fn());
+}
+
+const backendListeners = new Set<() => void>();
+
+/** Called when the open document changes (for useSyncExternalStore). */
+export function subscribeBackendId(fn: () => void) {
+  backendListeners.add(fn);
+  return () => { backendListeners.delete(fn); };
 }
 
 export function getProjectId() {

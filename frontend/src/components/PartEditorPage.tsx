@@ -1,10 +1,10 @@
-import { useEffect } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useDocumentStore } from '@/stores/documentStore';
 import { api } from '@/api/cachedClient';
 import { migrateDocument } from '@/utils/document';
 import type { Document } from '@/types/document';
-import { startAutoSave, setBackendId, getBackendId, setProjectContext, getProjectId } from '@/api/autoSave';
+import { startAutoSave, setBackendId, getBackendId, setProjectContext, getProjectId, subscribeBackendId, flushSave } from '@/api/autoSave';
 import { projectApi } from '@/api/projectClient';
 import { ScriptViewer } from './ScriptViewer';
 
@@ -13,10 +13,14 @@ import { ScriptViewer } from './ScriptViewer';
 export function PartEditorPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const backendId = useSyncExternalStore(subscribeBackendId, getBackendId);
+  const [failedId, setFailedId] = useState<string | null>(null);
 
-  // Load the document if navigated directly (mirrors EditorPage's loader).
+  // Load the document if navigated directly, or by Back/Forward from another
+  // part (mirrors EditorPage's loader).
   useEffect(() => {
     if (!id || getBackendId() === id) return;
+    flushSave();   // the last edit of the part being left goes to that part
     let cancelled = false;
     (async () => {
       try {
@@ -38,6 +42,7 @@ export function PartEditorPage() {
         }
       } catch (err) {
         console.error('Failed to load part:', err);
+        if (!cancelled) setFailedId(id);
       }
     })();
     return () => { cancelled = true; };
@@ -50,5 +55,10 @@ export function PartEditorPage() {
     navigate(pid ? `/project/${pid}` : '/');
   };
 
-  return <ScriptViewer onClose={toProject} onHome={() => navigate('/')} onProject={toProject} sketchOnFace />;
+  // The editor reads the part's code once, when it mounts: show it only once
+  // this part has loaded, and a fresh one per part, so it never holds another
+  // part's model (which an edit would then save over this one). A part that
+  // couldn't load (not saved yet) opens as before.
+  if (backendId !== id && failedId !== id) return null;
+  return <ScriptViewer key={id} onClose={toProject} onHome={() => navigate('/')} onProject={toProject} sketchOnFace />;
 }

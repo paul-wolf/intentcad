@@ -6,7 +6,7 @@ import {
   type FaceRefSpec, type HolePresets, type EdgeOpKind, type EdgeRefSpec, type ExtrudeExtent, type ExtrudeOp, type KeepItem, type Step,
   type PlaneReport, type MirrorPlane, type PatternReport, type PatternSpec, type PlaneOpKind, type RunFace,
 } from '@/api/client';
-import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, persistPrintBed, persistSketches, getBackendId, getProjectName, subscribeProjectContext } from '@/api/autoSave';
+import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, persistPrintBed, persistSketches, getBackendId, subscribeBackendId, getProjectName, subscribeProjectContext } from '@/api/autoSave';
 import { DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
 import type { ChatMessage } from '@/types/document';
 import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim, type PlacedHandle, type ViewerPick,
@@ -915,13 +915,9 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const projectName = useSyncExternalStore(subscribeProjectContext, getProjectName);
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   // context files (reference PDFs and photos the AI reads): the part's and its
-  // project's, once the part has a server id (a new part gets one on first save)
-  const [docId, setDocId] = useState<string | null>(() => getBackendId());
-  useEffect(() => {
-    if (docId) return;
-    const t = window.setInterval(() => { const id = getBackendId(); if (id) setDocId(id); }, 250);
-    return () => window.clearInterval(t);
-  }, [docId]);
+  // project's, once the part has a server id. Follows the open part, so Back and
+  // Forward between parts don't keep the previous part's files.
+  const docId = useSyncExternalStore(subscribeBackendId, getBackendId);
   const ctxOwner = useMemo(() => (docId ? { document: docId } : null), [docId]);
   // the section is remembered per part
   useEffect(() => {
