@@ -97,6 +97,13 @@ export function skWords(src: string): string {
 export const sketchWords = (s: string): string => (isSkSource(s) ? skWords(s) : s);
 
 /** An alias from a sketch's name: "Frame holes" → "frame_holes". */
+/** A new part's name to start with: the sketch's name and "part", so the two
+ *  don't share one name ("Frame" makes "Frame part"). */
+export const partNameFor = (sketchName: string): string => {
+  const n = sketchName.trim();
+  return !n ? 'New part' : /\bpart$/i.test(n) ? n : `${n} part`;
+};
+
 export const aliasFor = (name: string): string => {
   const a = name.trim().toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
   return /^[a-z_]/.test(a) ? a : `s_${a}`.slice(0, 40);

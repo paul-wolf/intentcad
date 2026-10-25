@@ -315,7 +315,8 @@ plates and the brace.
   plane or a flat face you click. Apply it, and the next part opens. The banner at the
   top right says which part you are on; **Skip** leaves a part as it is, **Cancel**
   stops (the parts already done keep the change).
-- **New part**: it gets the name you typed, and its script starts with the extrude.
+- **New part**: it gets the name you typed (the sketch's name and "part" to start
+  with, so "Frame" makes "Frame part"), and its script starts with the extrude.
 - **Back to the sketch**: the line under a part's top bar shows **Sketch** and the
   name of each project sketch the part is made from. Click its **Edit ↗** to open the
   sketch; Back returns to the part.

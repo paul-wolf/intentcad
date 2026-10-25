@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import type { FaceRefSpec } from '@/api/client';
 import type { Sketch } from '@/types/document';
 import {
-  advance, aliasIn, parseSkSource, pickFor, placed, readHandoff, saveHandoff, sharedAsSketch, skSource, skWords,
+  advance, aliasIn, parseSkSource, partNameFor, pickFor, placed, readHandoff, saveHandoff, sharedAsSketch, skSource, skWords,
   toShared, type Handoff, type SkSource,
 } from './sketchToPart';
 
@@ -106,5 +106,14 @@ describe('the handoff', () => {
     expect(next.at).toBe(2);
     expect(next.done).toEqual(['a']);
     expect(next.skipped).toEqual(['b']);
+  });
+});
+
+describe('partNameFor', () => {
+  it('names a new part after its sketch, with "part"', () => {
+    expect(partNameFor('arm-brace')).toBe('arm-brace part');
+    expect(partNameFor(' Frame ')).toBe('Frame part');
+    expect(partNameFor('Top Part')).toBe('Top Part');
+    expect(partNameFor('')).toBe('New part');
   });
 });
