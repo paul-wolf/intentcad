@@ -17,7 +17,8 @@ from accounts.models import UserEvent
 from projects.access import can_access_project, require_auth
 from projects.models import Project, ProjectShare
 
-from .models import ContextFile, Document, DocumentAsset, DocumentVersion
+from .copying import copy_document_extras
+from .models import Document, DocumentAsset, DocumentVersion
 from .schemas import (
     AssetBBox,
     AssetListOut,
@@ -136,8 +137,6 @@ def duplicate_document(request, doc_id: UUID):
     script, sketches, parameters, print bed face), the STEP files its script
     imports, the part's own context files and its CAM jobs (settings only; the
     G-code is generated again). The version history starts fresh."""
-    from cam.models import CamJob
-
     src, err = document_or_error(request, doc_id)
     if err:
         return err
@@ -147,19 +146,7 @@ def duplicate_document(request, doc_id: UUID):
     data["name"] = name   # autosave sends data.name as the document name
     with transaction.atomic():
         doc = Document.objects.create(name=name, data=data, project=src.project, created_by=request.user)
-        for a in src.assets.all():
-            DocumentAsset.objects.create(
-                document=doc, sha256=a.sha256, filename=a.filename, content_type=a.content_type,
-                size=a.size, data=a.data, created_by=request.user)
-        for f in src.context_files.all():
-            ContextFile.objects.create(
-                document=doc, filename=f.filename, title=f.title, note=f.note, content_type=f.content_type,
-                size=f.size, sha256=f.sha256, data=f.data, page_count=f.page_count, width=f.width,
-                height=f.height, page_tokens=f.page_tokens, in_context=f.in_context, pages=f.pages,
-                created_by=request.user)
-        for j in src.cam_jobs.order_by("created_at"):
-            CamJob.objects.create(document=doc, name=j.name, profile=j.profile,
-                                  config=copy.deepcopy(j.config), gcode="", errors=[])
+        copy_document_extras(src, doc, request.user)
         _snapshot(doc, request.user, data, f"copied from {src.name}")
     record_event(UserEvent.DOCUMENT_CREATED, request, document=doc, detail={"duplicated_from": str(src.id)})
     return 201, doc

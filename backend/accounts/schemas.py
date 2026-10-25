@@ -22,6 +22,7 @@ class OrganisationDetailSchema(Schema):
     website: str
     is_active: bool
     user_count: int = 0
+    examples_note: str | None = None   # on create: the examples added, or why not
 
 
 class OrganisationCreateSchema(Schema):
@@ -31,6 +32,30 @@ class OrganisationCreateSchema(Schema):
     email: str = ""
     phone: str = ""
     website: str = ""
+    add_examples: bool = True   # copy the examples project, if one is chosen
+
+
+class ExampleProjectSchema(Schema):
+    id: str
+    name: str
+    organisation: str
+    document_count: int
+
+
+class ExamplesSettingSchema(Schema):
+    project: ExampleProjectSchema | None = None
+    choices: list[ExampleProjectSchema]
+
+
+class ExamplesSetSchema(Schema):
+    project_id: str | None = None
+
+
+class ExamplesAddedSchema(Schema):
+    project_id: str
+    name: str
+    document_count: int
+    message: str
 
 
 class OrganisationUpdateSchema(Schema):

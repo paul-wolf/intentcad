@@ -11,6 +11,27 @@ export interface OrganisationDetail extends Organisation {
   website: string;
   is_active: boolean;
   user_count: number;
+  examples_note?: string | null;   // on create: the examples added, or why not
+}
+
+/** A project that can be copied into new organisations as their examples. */
+export interface ExampleProject {
+  id: string;
+  name: string;
+  organisation: string;
+  document_count: number;
+}
+
+export interface ExamplesSetting {
+  project: ExampleProject | null;
+  choices: ExampleProject[];
+}
+
+export interface ExamplesAdded {
+  project_id: string;
+  name: string;
+  document_count: number;
+  message: string;
 }
 
 export interface User {
