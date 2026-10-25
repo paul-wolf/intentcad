@@ -181,7 +181,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // also depends on their versions: the build asks the server for them first
   // (sharedInputsKey) and they join the key, so a changed sketch isn't served
   // from the cache.
-  const inputsKeyRef = useRef<{ src: string; shared: string; key: string } | null>(null);
+  const inputsKeyRef = useRef<{ src: string; shared: string; key: string; inputs: BuildInputs } | null>(null);
   const buildInputs = (src: string) => {
     const doc = useDocumentStore.getState().document;
     const sketches = referencedProfiles(src, doc.sketches);
@@ -200,7 +200,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     if (!shared) return true;
     try {
       const r = await buildApi.inputs(src, getBackendId() ?? '', shared);
-      inputsKeyRef.current = { src, shared: JSON.stringify(shared), key: r.key };
+      inputsKeyRef.current = { src, shared: JSON.stringify(shared), key: r.key, inputs: r.inputs };
       return true;
     } catch {
       inputsKeyRef.current = null;
@@ -492,19 +492,24 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const sketchRefs = useDocumentStore((s) => s.document.sketchRefs);
   // the project sketches the part reads (alias → its sketch), for the
   // Extrude / Revolve dialogs on a shared sketch
-  const [sharedSks, setSharedSks] = useState<Record<string, { doc: string; sketch: Sketch }>>({});
+  // (and the top line's links to them). sharedTick re-reads them when the part
+  // is come back to: they may have been edited in another tab.
+  const [sharedSks, setSharedSks] = useState<Record<string, { doc: string; docName: string; sketch: Sketch }>>({});
+  const [sharedTick, setSharedTick] = useState(0);
   useEffect(() => {
     let live = true;
     const refs = Object.entries(sketchRefs ?? {});
     void Promise.all(refs.map(async ([alias, r]) => {
       try {
         const d = await api.getDocument(r.document);
-        const sk = ((d.data as { sketches?: Sketch[] }).sketches ?? []).find((x) => x.id === r.sketch);
-        return sk ? [alias, { doc: r.document, sketch: sk }] as const : null;
+        const all = (d.data as { sketches?: Sketch[] }).sketches ?? [];
+        const sk = all.find((x) => x.id === r.sketch);
+        const docName = all.length > 1 && sk ? `${d.name} · ${sk.name}` : d.name;
+        return sk ? [alias, { doc: r.document, docName, sketch: sk }] as const : null;
       } catch { return null; }
     })).then((l) => { if (live) setSharedSks(Object.fromEntries(l.filter((x) => x !== null))); });
     return () => { live = false; };
-  }, [sketchRefs]);
+  }, [sketchRefs, sharedTick]);
   const [showSketchRefs, setShowSketchRefs] = useState(false);
   const [pinDiff, setPinDiff] = useState<string[] | null>(null);
   const followLatest = () => {
@@ -699,6 +704,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     buildAbort.current = ctrl;
     setStatus('building');
     setMessage('');
+    setSharedNote(null);
     const t0 = performance.now();
     try {
       resolveSketches(src);
@@ -932,7 +938,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       .then((r) => { if (live) setPinDiff(pinnedChanges(docPinned, r.inputs)); })
       .catch(() => { if (live) setPinDiff([]); });
     return () => { live = false; };
-  }, [docPinned, status]);
+  }, [docPinned, status, sharedTick]);
 
   const restoreVersion = (c: string, data?: Record<string, unknown>) => {
     setShowVersions(false);
@@ -3107,6 +3113,42 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   }, [chatUploading, sendQueued]);
 
   const rebuild = () => { setParamReject(null); saveDraft(code); build(code, 'build'); };
+  // Back on this tab (a project sketch may have been edited in another one):
+  // when a sketch or parameter the part reads has changed, it rebuilds with
+  // it, or, while a dialog is open, offers to. A restored (pinned) version
+  // stays as it is; its "uses an earlier …" line is brought up to date.
+  const [sharedNote, setSharedNote] = useState<{ what: string; rebuilt: boolean } | null>(null);
+  const checkSharedRef = useRef(() => {});
+  checkSharedRef.current = () => {
+    const src = builtCodeRef.current;
+    if (!src || !usesShared(src) || status !== 'done') return;
+    setSharedTick((t) => t + 1);
+    if (useDocumentStore.getState().document.pinned) return;
+    const was = inputsKeyRef.current;
+    void sharedInputsKey(src).then(() => {
+      const now = inputsKeyRef.current;
+      if (!was || !now || was.src !== src || now.src !== src || was.key === now.key) return;
+      const changed = [
+        ...Object.entries(now.inputs.sk ?? {}).filter(([a, v]) => was.inputs.sk?.[a]?.version !== v.version)
+          .map(([a]) => sharedSks[a]?.docName ?? a),
+        ...Object.entries(now.inputs.pp ?? {}).filter(([n, v]) => was.inputs.pp?.[n] !== v).map(([n]) => `parameter ${n}`),
+      ];
+      const what = changed.length ? changed.join(', ') : 'a project sketch';
+      if (opOpen || faceSketch.active) { setSharedNote({ what, rebuilt: false }); return; }
+      void build(src, 'project sketch changed');
+      setSharedNote({ what, rebuilt: true });
+    });
+  };
+  useEffect(() => {
+    const onFocus = () => checkSharedRef.current();
+    const onVisible = () => { if (document.visibilityState === 'visible') checkSharedRef.current(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, []);
   const [exporting, setExporting] = useState<'stl' | 'step' | 'stl-parts' | 'dxf' | 'dxf-views' | null>(null);
   const doExport = async (format: 'stl' | 'step' | 'stl-parts' | 'dxf' | 'dxf-views') => {
     if (status !== 'done' || exporting) return;
@@ -3757,6 +3799,18 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
               Project <span style={{ color: palette.text, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>{projectName}</span>
             </AppLink>
           ) : null}
+          {/* the project sketches it is made from: open one to change it; back here, the part rebuilds */}
+          {Object.entries(sharedSks).map(([alias, sk]) => (
+            <span key={alias} style={{ display: 'contents' }}>
+              <span style={{ color: palette.border }}>·</span>
+              <AppLink to={`/edit/${sk.doc}`} onGo={() => navAway(() => navigate(`/edit/${sk.doc}`))}
+                title={`Open the project sketch this part is made from, to change it (the script reads it as SK["${alias}"]). Back here, the part rebuilds with the change.`}
+                style={{ gap: 4, flexShrink: 0, cursor: 'pointer' }}>
+                Sketch <span style={{ color: palette.text, fontWeight: 600 }}>{sk.docName}</span>
+                <span style={{ color: palette.accent }}>Edit ↗</span>
+              </AppLink>
+            </span>
+          ))}
           {projectName && docId && (
             <>
               <span style={{ color: palette.border }}>·</span>
@@ -4285,6 +4339,19 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
             <span style={{ color: palette.warning ?? '#c78a1a', marginRight: '10px' }}
                   title="The face set as the print bed is no longer on the part: the overhangs and auto_round's bed use Z">
               ⚠ Print bed face not found; using Z
+            </span>
+          )}
+          {status === 'done' && sharedNote && (
+            <span style={{ marginRight: '10px', color: sharedNote.rebuilt ? palette.textSecondary : (palette.warning ?? '#c78a1a') }}>
+              {sharedNote.rebuilt ? `Rebuilt: ${sharedNote.what} changed` : `${sharedNote.what} changed`}
+              {!sharedNote.rebuilt && <>
+                {' · '}
+                <button onClick={() => { setSharedNote(null); build(builtCodeRef.current, 'project sketch changed'); }}
+                        style={{ background: 'none', border: 'none', padding: 0, color: palette.accent, cursor: 'pointer', fontSize: 'inherit' }}
+                        title="Build the part with the project sketch as it is now">
+                  Rebuild
+                </button>
+              </>}
             </span>
           )}
           {status === 'done' && docPinned && pinDiff && (

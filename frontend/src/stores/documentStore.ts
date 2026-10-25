@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { patternCopies, prunePatterns } from '@/utils/copyPattern';
 import type { CopyPatternParams, Document, DocumentMetadata, Entity, OriginAlignMode, Point, Sketch, Constraint, HorizontalConstraint, VerticalConstraint } from '@/types/document';
-import { createEmptyDocument, createEmptySketch } from '@/utils/document';
+import { createEmptyDocument, createEmptySketch, renamedTogether } from '@/utils/document';
 import { createMirroredEntity, dependentsOf, propagateDerived } from '@/utils/propagate';
 import { rotatePoint } from '@/utils/geometry';
 import { getEntityPoints } from '@/utils/entityPoints';
@@ -226,7 +226,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   },
 
   setDocumentName(name) {
-    set((s) => ({ document: { ...s.document, name } }));
+    set((s) => ({ document: renamedTogether(s.document, name) }));
   },
 
   // The 3D feature tree has its own undo (buildStore); this just mirrors it into
@@ -358,14 +358,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
   },
 
   renameSketch(sketchId, name) {
-    set((s) => ({
-      document: {
-        ...s.document,
-        sketches: s.document.sketches.map((sk) =>
-          sk.id === sketchId ? { ...sk, name } : sk,
-        ),
-      },
-    }));
+    set((s) => ({ document: renamedTogether(s.document, name, sketchId) }));
   },
 
   toggleSketchVisibility(sketchId) {

@@ -92,3 +92,18 @@ export const DEFAULT_PRODUCTION_NOTES =
 export function createEmptyPart(name: string): Document {
   return { ...createEmptyDocument(name), type: 'part', productionNotes: DEFAULT_PRODUCTION_NOTES };
 }
+
+/** A sketch document (not a part's face sketches). */
+export const isSketchDocument = (d: { type?: string; modelCode?: string }): boolean =>
+  d.type === 'sketch' || (d.type !== 'part' && !d.modelCode?.trim());
+
+/** A sketch document with one sketch has one name: renaming either the
+ *  document or its sketch renames both (parts made from it are named after it). */
+export function renamedTogether(doc: Document, name: string, sketchId?: string): Document {
+  const sole = isSketchDocument(doc) && doc.sketches.length === 1 ? doc.sketches[0]! : null;
+  if (sketchId !== undefined) {
+    const sketches = doc.sketches.map((s) => (s.id === sketchId ? { ...s, name } : s));
+    return { ...doc, sketches, ...(sole?.id === sketchId ? { name } : {}) };
+  }
+  return { ...doc, name, ...(sole ? { sketches: [{ ...sole, name }] } : {}) };
+}

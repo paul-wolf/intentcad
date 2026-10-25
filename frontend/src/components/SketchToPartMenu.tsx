@@ -11,12 +11,11 @@ import { useEditorStore } from '@/stores/editorStore';
 import { api } from '@/api/cachedClient';
 import { errorText, type DocumentListItem } from '@/api/client';
 import { flushSaveAsync, getBackendId, getProjectId, subscribeBackendId, subscribeProjectContext } from '@/api/autoSave';
-import { createEmptyPart, generateNumberedName } from '@/utils/document';
+import { createEmptyPart, generateNumberedName, isSketchDocument } from '@/utils/document';
 import { addLog } from '@/stores/logStore';
 import { aliasFor, OP_WORDS, pickFor, saveHandoff, type Handoff, type HandoffOp, type SkPick } from '@/build/sketchToPart';
 
-const isSketchDoc = (d: { type?: string; modelCode?: string }) =>
-  d.type === 'sketch' || (d.type !== 'part' && !d.modelCode?.trim());
+const isSketchDoc = isSketchDocument;
 
 export function SketchToPartMenu() {
   const palette = useThemeStore((s) => s.palette);
@@ -59,7 +58,8 @@ function TargetDialog({ op, docId, projectId, onClose }: { op: HandoffOp; docId:
   const [newPart, setNewPart] = useState(op !== 'cut');
   const [pick, setPick] = useState<SkPick>(() => pickFor(sketch, [...selected]));
   const title = sketches.length === 1 ? docName : sketch.name;   // what the sketch is called in the project
-  const [alias, setAlias] = useState(() => aliasFor(title));
+  const alias = aliasFor(title);   // what the scripts call it; a part that has one keeps its own
+  const [partName, setPartName] = useState(title);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -79,7 +79,7 @@ function TargetDialog({ op, docId, projectId, onClose }: { op: HandoffOp; docId:
   const pickKey = pick ? `${pick.kind === 'group' ? 'g' : 'n'}:${pick.name}` : '';
   const chosen = (docs ?? []).filter((d) => parts.has(d.id));
   const count = chosen.length + (newPart ? 1 : 0);
-  const aliasOk = /^[A-Za-z_][A-Za-z0-9_]*$/.test(alias);
+  const nameOk = !newPart || !!partName.trim();
 
   const start = async () => {
     setBusy(true);
@@ -87,7 +87,8 @@ function TargetDialog({ op, docId, projectId, onClose }: { op: HandoffOp; docId:
       await flushSaveAsync();   // the parts read the sketch as saved
       const list: Handoff['parts'] = chosen.map((d) => ({ id: d.id, name: d.name }));
       if (newPart) {
-        const name = (docs ?? []).some((d) => d.name === title) ? generateNumberedName(title, (docs ?? []).map((d) => d.name)) : title;
+        const want = partName.trim();
+        const name = (docs ?? []).some((d) => d.name === want) ? generateNumberedName(want, (docs ?? []).map((d) => d.name)) : want;
         const doc = { ...createEmptyPart(name), sketchRefs: { [alias]: { document: docId, sketch: sketch.id } } };
         const saved = await api.createDocument(name, doc as unknown as Record<string, unknown>, projectId);
         list.unshift({ id: saved.id, name, isNew: true });
@@ -135,8 +136,12 @@ function TargetDialog({ op, docId, projectId, onClose }: { op: HandoffOp; docId:
             {op !== 'cut' && (
               <label style={{ display: 'flex', gap: '6px', alignItems: 'center', padding: '2px 0' }}>
                 <input type="checkbox" checked={newPart} onChange={(e) => setNewPart(e.target.checked)} />
-                <span><b>New part</b> <span style={{ color: palette.textMuted }}>named after the sketch</span></span>
+                <b>New part</b>
               </label>
+            )}
+            {op !== 'cut' && newPart && (
+              <input style={{ ...input, margin: '0 0 4px 22px', width: 'calc(100% - 22px)' }} value={partName}
+                     onChange={(e) => setPartName(e.target.value)} placeholder="Name of the new part" aria-label="Name of the new part" />
             )}
             {docs.map((d) => (
               <label key={d.id} style={{ display: 'flex', gap: '6px', alignItems: 'center', padding: '2px 0' }}>
@@ -148,16 +153,10 @@ function TargetDialog({ op, docId, projectId, onClose }: { op: HandoffOp; docId:
           </div>
         )}
 
-        <label style={label}>Read in the scripts as</label>
-        <input style={input} value={alias} onChange={(e) => setAlias(e.target.value)} spellCheck={false} />
-        <div style={{ color: aliasOk ? palette.textMuted : palette.warning, marginTop: '3px', fontSize: '11px' }}>
-          {aliasOk ? <>SK["{alias}"], unless a part already has a name for this sketch.</> : 'Letters, digits and _, not starting with a digit.'}
-        </div>
-
         <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '14px' }}>
           <button style={btn} onClick={onClose}>Cancel</button>
-          <button style={{ ...btn, borderColor: palette.accent, color: palette.accent, opacity: count && aliasOk && !busy ? 1 : 0.5 }}
-                  disabled={!count || !aliasOk || busy} onClick={() => void start()}>
+          <button style={{ ...btn, borderColor: palette.accent, color: palette.accent, opacity: count && nameOk && !busy ? 1 : 0.5 }}
+                  disabled={!count || !nameOk || busy} onClick={() => void start()}>
             {count > 1 ? `Start (${count} parts)` : 'Start'}
           </button>
         </div>
