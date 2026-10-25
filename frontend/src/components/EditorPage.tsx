@@ -11,6 +11,7 @@ import { useThemeStore } from '@/theme';
 import { startAutoSave, setBackendId, getBackendId, setProjectContext, requestSave, subscribeBackendId } from '@/api/autoSave';
 import { loadUsers } from '@/api/sharedUses';
 import { SharedUsesBanner } from './SharedUsesBanner';
+import { SketchToPartMenu } from './SketchToPartMenu';
 import { api } from '@/api/cachedClient';
 import { projectApi } from '@/api/projectClient';
 import { migrateDocument } from '@/utils/document';
@@ -296,7 +297,7 @@ export function EditorPage() {
         keys={camPanelOpen ? 'viewport' : 'all'}
         toolbar={camPanelOpen ? <CamHeader /> : undefined}
         left={camPanelOpen ? <CamStepPanel /> : undefined}
-        overlay={camPanelOpen ? <><SimDepthIndicator /><CamCanvasHint /></> : <SharedUsesBanner />}
+        overlay={camPanelOpen ? <><SimDepthIndicator /><CamCanvasHint /></> : <><SharedUsesBanner /><SketchToPartMenu /></>}
         right={camPanelOpen ? <></> : undefined}
       />
       <DocumentDrawer />

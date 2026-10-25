@@ -14,11 +14,9 @@ import { skAliases } from '@/build/sharedSketch';
 
 interface SketchChoice { id: string; name: string; usable: boolean; groups: string[] }
 
-/** An alias from a sketch's name: "Frame holes" → "frame_holes". */
-export const aliasFor = (name: string): string => {
-  const a = name.trim().toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
-  return /^[a-z_]/.test(a) ? a : `s_${a}`.slice(0, 40);
-};
+import { aliasFor } from '@/build/sketchToPart';
+
+export { aliasFor };
 const ALIAS = /^[A-Za-z_][A-Za-z0-9_ -]{0,40}$/;
 
 export function ProjectSketchDialog({ projectId, refs, code, onSave, onClose }: {

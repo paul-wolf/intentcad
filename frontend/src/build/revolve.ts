@@ -17,6 +17,7 @@ import { axisLines, sketchLoops, type ProfileSegment, type XY } from './faceSket
 import { add, cross, dot, len, scale, sub, type Vec3 } from './dragHandle';
 import { dirWords, wayWords } from './pattern';
 import type { Amount } from './constructionPlanes';
+import { sketchWords } from './sketchToPart';
 
 /** A revolve's axis as the API has it: a line of the sketch by id, or X / Y /
  *  Z, a straight edge, a cylindrical face. */
@@ -213,7 +214,7 @@ export function revolveReport(r: Pick<RunResponse, 'revolves'> | null | undefine
 /** What the dialog's summary says it makes. */
 export function revolveSummary(v: RevolveValues, angle: number | null, axis: string, normal?: readonly number[] | null): string {
   const what = v.op === 'cut' ? 'Cuts' : v.op === 'join' ? 'Adds' : 'Makes the part from';
-  const head = `${what} “${v.sketch}” turned`;
+  const head = `${what} “${sketchWords(v.sketch)}” turned`;
   if (angle === null) return `${head} about the ${axis}.`;
   if (angle >= 360 - 1e-9) return `${head} a full 360° about the ${axis}: a round shape.`;
   if (v.both) return `${head} ${+(angle / 2).toFixed(3)}° each way about the ${axis} (${+angle.toFixed(3)}° in all), `
