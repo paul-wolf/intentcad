@@ -368,6 +368,7 @@ class EditSendsContextFilesTests(TestCase):
         photo = self.add(make_image(800, 600, "JPEG"), "board.jpg", document=self.doc.id)
         off = self.add(make_pdf((10,)), "old.pdf")
         ContextFile.objects.filter(id=off).update(in_context=False)
+        User.objects.filter(id=self.user.id).update(is_staff=True)   # the spend is shown to staff only
         r, seen = self.edit()
         self.assertEqual(r.status_code, 200, r.content)
         user = seen["user"]
