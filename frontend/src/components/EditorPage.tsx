@@ -8,7 +8,10 @@ import { useDocumentStore } from '@/stores/documentStore';
 import { useCamStore, setCamDocumentId } from '@/stores/camStore';
 import { useBuildStore } from '@/stores/buildStore';
 import { useThemeStore } from '@/theme';
-import { startAutoSave, setBackendId, getBackendId, setProjectContext, requestSave, subscribeBackendId } from '@/api/autoSave';
+import { startAutoSave, setBackendId, getBackendId, setProjectContext, requestSave, subscribeBackendId, getProjectId, subscribeProjectContext } from '@/api/autoSave';
+import { useProjectParamsStore } from '@/stores/projectParamsStore';
+import { solveDocument } from '@/build/projectSketchSolve';
+import { isSketchDocument } from '@/utils/document';
 import { loadUsers } from '@/api/sharedUses';
 import { SharedUsesBanner } from './SharedUsesBanner';
 import { SketchToPartMenu } from './SketchToPartMenu';
@@ -217,6 +220,33 @@ export function EditorPage() {
         && sketches.some((s) => !(s.profile && 'items' in s.profile))) requestSave();
     return () => { void loadUsers(null); };
   }, [backendId, id]);
+
+  // A project sketch's dimensions use the project's parameters by name: load
+  // them with the document and again whenever the tab comes back (they may
+  // have changed on the project page, in a part's AI card or another tab),
+  // and solve the sketches again when they change (build/projectSketchSolve).
+  const projectId = useSyncExternalStore(subscribeProjectContext, getProjectId);
+  const projectParams = useProjectParamsStore((s) => s.params);
+  const paramsProject = useProjectParamsStore((s) => s.projectId);
+  useEffect(() => {
+    void useProjectParamsStore.getState().load(projectId);
+    const again = () => { if (document.visibilityState === 'visible') void useProjectParamsStore.getState().refresh(); };
+    window.addEventListener('focus', again);
+    document.addEventListener('visibilitychange', again);
+    return () => {
+      window.removeEventListener('focus', again);
+      document.removeEventListener('visibilitychange', again);
+    };
+  }, [projectId]);
+  useEffect(() => {
+    if (!backendId || backendId !== id || !projectId || paramsProject !== projectId) return;
+    const doc = useDocumentStore.getState().document;
+    if (!isSketchDocument(doc)) return;
+    const r = solveDocument(doc, projectParams);
+    if (!r.changed) return;
+    useDocumentStore.setState({ document: r.document });   // saved by the autosave, not an undo step
+    for (const [name, e] of r.failed) addLog('error', `Sketch “${name}” can't be solved: ${e.message}. It keeps its last good shape.`);
+  }, [backendId, id, projectId, paramsProject, projectParams]);
 
   // Start auto-save subscription
   useEffect(() => {

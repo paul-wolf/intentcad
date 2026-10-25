@@ -1,7 +1,7 @@
 import re
 from uuid import UUID
 
-from django.db import connection
+from django.db import connection, transaction
 from django.db.models import Count
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
@@ -143,7 +143,12 @@ def check_parameters(params: list[dict]) -> str | None:
 
 @router.put("/{project_id}/parameters", response={200: ProjectOut, 400: dict})
 def save_parameters(request, project_id: UUID, payload: ParametersIn):
-    """Replace the project's parameters (PP["name"] in every part's script)."""
+    """Replace the project's parameters (PP["name"] in every part's script, by
+    name in its sketches' dimensions). `renames` ({old: new}) are rewritten
+    where they are used. A name a project sketch has as its own parameter
+    can't be added: the sketch's dimensions would mean one or the other."""
+    from modeling.project_params import own_clashes, rename
+
     err = require_auth(request)
     if err:
         return err
@@ -156,9 +161,35 @@ def save_parameters(request, project_id: UUID, payload: ParametersIn):
     why = check_parameters(params)
     if why:
         return 400, {"message": why}
-    project.parameters = params
-    project.save(update_fields=["parameters", "updated_at"])
+    names = {p["name"] for p in params}
+    renames = {o.strip(): n.strip() for o, n in payload.renames.items() if n.strip() in names}
+    had = {p.get("name") for p in project.parameters or [] if isinstance(p, dict)}
+    clash = own_clashes(project, names - (had - set(renames)))
+    if clash:
+        n, doc = clash[0]
+        return 400, {"message": f"The sketch {doc!r} has its own parameter called {n!r}: "
+                                "rename one of them, or use Move to project on the sketch's one"}
+    with transaction.atomic():
+        project.parameters = params
+        project.save(update_fields=["parameters", "updated_at"])
+        rename(project, renames)
     return project
+
+
+@router.get("/{project_id}/parameters/uses", response=dict)
+def parameter_uses(request, project_id: UUID):
+    """Which of the project's sketches and parts use each parameter, and any
+    sketch that can't be solved with its value (the project page's Used by)."""
+    from modeling.project_params import uses
+
+    err = require_auth(request)
+    if err:
+        return err
+    project = get_object_or_404(Project, id=project_id)
+    err = require_project_access(request, project)
+    if err:
+        return err
+    return uses(project)
 
 
 @router.get("/{project_id}/brief/versions", response=list[BriefVersionOut])

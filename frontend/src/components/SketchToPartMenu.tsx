@@ -13,7 +13,7 @@ import { errorText, type DocumentListItem } from '@/api/client';
 import { flushSaveAsync, getBackendId, getProjectId, subscribeBackendId, subscribeProjectContext } from '@/api/autoSave';
 import { createEmptyPart, generateNumberedName, isSketchDocument } from '@/utils/document';
 import { addLog } from '@/stores/logStore';
-import { aliasFor, OP_WORDS, pickFor, saveHandoff, type Handoff, type HandoffOp, type SkPick } from '@/build/sketchToPart';
+import { aliasFor, OP_WORDS, partNameFor, pickFor, saveHandoff, type Handoff, type HandoffOp, type SkPick } from '@/build/sketchToPart';
 
 const isSketchDoc = isSketchDocument;
 
@@ -59,7 +59,7 @@ function TargetDialog({ op, docId, projectId, onClose }: { op: HandoffOp; docId:
   const [pick, setPick] = useState<SkPick>(() => pickFor(sketch, [...selected]));
   const title = sketches.length === 1 ? docName : sketch.name;   // what the sketch is called in the project
   const alias = aliasFor(title);   // what the scripts call it; a part that has one keeps its own
-  const [partName, setPartName] = useState(title);
+  const [partName, setPartName] = useState(() => partNameFor(title));
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {

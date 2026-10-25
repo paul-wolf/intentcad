@@ -103,7 +103,7 @@ def build_inputs(request, payload: InputsRequest):
         return err
     r = _shared(request, payload.code, payload.document_id, payload.shared) or {}
     return InputsResponse(key=shared_defs.input_key(r.get("inputs")), inputs=r.get("inputs") or {},
-                          errors=r.get("errors") or {})
+                          errors=r.get("errors") or {}, unsolved=r.get("unsolved") or {})
 
 
 @router.post("/rebuild/{doc_id}", response=RebuildResponse)

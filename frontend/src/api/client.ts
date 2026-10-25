@@ -368,7 +368,8 @@ export const buildApi = {
   /** The versions of the shared sketches and parameters `code` reads now:
    *  `key` changes when any does (part of the browser's build cache key). */
   inputs(code: string, documentId: string, shared: SharedInputs | null = null):
-    Promise<{ key: string; inputs: import('@/types/document').BuildInputs; errors: Record<string, string> }> {
+    Promise<{ key: string; inputs: import('@/types/document').BuildInputs; errors: Record<string, string>;
+              unsolved?: Record<string, import('@/build/projectSketchSolve').Unsolved> }> {
     return request('/build/inputs', { method: 'POST', body: JSON.stringify({ code, document_id: documentId, shared }) });
   },
   /** Build a saved part on the server with its saved script and the latest

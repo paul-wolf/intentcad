@@ -356,6 +356,11 @@ export interface Sketch {
   patterns?: CopyPattern[];
   /** Named sets of elements (Group…), for parts: SK["alias"].group("name"). */
   groups?: SketchGroup[];
+  /** (a project sketch) the project parameter values its dimensions were
+   *  last solved with, and why the current ones couldn't be: see
+   *  build/projectSketchSolve.ts */
+  solvedWith?: Record<string, number | string | null>;
+  solveError?: { with: Record<string, number | string | null>; message: string; dimensionIds: string[] };
 }
 
 export interface SketchGroup {

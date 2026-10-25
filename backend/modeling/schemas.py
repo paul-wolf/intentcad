@@ -213,6 +213,9 @@ class InputsResponse(Schema):
     key: str = ""                  # changes when any input does (the browser's build cache key)
     inputs: dict = {}              # {"sk": {alias: {document, sketch, version}}, "pp": {name: value}}
     errors: dict[str, str] = {}    # alias -> why its sketch couldn't be read
+    # alias -> a project sketch not solved for the project's parameters:
+    # {document, sketch, name, state "pending"|"failed", names, message, held}
+    unsolved: dict = {}
 
 
 class RebuildResponse(Schema):

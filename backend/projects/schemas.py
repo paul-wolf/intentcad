@@ -35,6 +35,8 @@ class ProjectParameter(Schema):
 
 class ParametersIn(Schema):
     parameters: list[ProjectParameter]
+    # {old name: new name}: rewrite where the project's sketches and parts use them
+    renames: dict[str, str] = {}
 
 
 class BriefIn(Schema):

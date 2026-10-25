@@ -2,11 +2,13 @@
  * Under an AI reply in the part chat: the project parameters it proposed with
  * set_project_parameter (new ones, or new values for existing ones), each
  * read by scripts as PP["name"]. Accept writes them to the project's
- * Parameters table; Reject leaves the project as it was.
+ * Parameters table (and solves the project sketches that use them again,
+ * saying which can't be); Reject leaves the project as it was.
  */
 import { useEffect, useState } from 'react';
 import { errorText } from '@/api/client';
 import { projectApi } from '@/api/projectClient';
+import { saveProjectParameters, solvedWords } from '@/build/projectSketchSolve';
 import type { ThemePalette } from '@/theme';
 import type { ChatMessage } from '@/types/document';
 import type { ProjectParameter } from '@/types/project';
@@ -49,7 +51,9 @@ export function ParameterProposalCard({ params, projectId, palette, onStatus, on
     setBusy(true); setError('');
     try {
       const now = (await projectApi.getProject(projectId)).parameters ?? [];
-      await projectApi.setParameters(projectId, mergeParameters(now, params.items));
+      const r = await saveProjectParameters(projectId, mergeParameters(now, params.items));
+      const words = solvedWords(r);
+      if (words) setError(`Saved, but ${words}`);
       onStatus('accepted');
       onAccepted();
     } catch (err) { setError(errorText(err)); }
@@ -87,6 +91,9 @@ export function ParameterProposalCard({ params, projectId, palette, onStatus, on
           </div>
         );
       })}
+      {params.status !== 'pending' && error && (
+        <div role="alert" style={{ padding: '6px 10px', borderTop: `1px solid ${palette.border}`, color: palette.danger }}>{error}</div>
+      )}
       {params.status === 'pending' && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderTop: `1px solid ${palette.border}` }}>
           <span style={{ flex: 1, color: error ? palette.danger : palette.textMuted }}>

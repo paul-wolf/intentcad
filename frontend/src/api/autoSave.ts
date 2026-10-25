@@ -3,7 +3,9 @@ import { addLog } from '@/stores/logStore';
 import { api } from './cachedClient';
 import { sketchProfile } from '@/build/faceSketch';
 import { withSharedProfiles } from '@/build/sharedSketch';
-import type { Sketch } from '@/types/document';
+import type { Document, Sketch } from '@/types/document';
+import { useProjectParamsStore } from '@/stores/projectParamsStore';
+import { stampSolvedWith } from '@/build/projectSketchSolve';
 import { guardSave, refreshUsers } from './sharedUses';
 
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -78,9 +80,15 @@ const isSketchDoc = (doc: Record<string, unknown>) =>
   doc.type === 'sketch' || (doc.type !== 'part' && !hasModelCode(doc));
 
 /** A sketch document saves each sketch's shared profile, for the parts that
- *  read it as SK["alias"] (build/sharedSketch.ts). */
+ *  read it as SK["alias"] (build/sharedSketch.ts), and in a project the
+ *  project values a dimension just given one by name was set with
+ *  (build/projectSketchSolve.ts stampSolvedWith). */
 function withProfiles(doc: Record<string, unknown>): Record<string, unknown> {
   if (!isSketchDoc(doc) || !Array.isArray(doc.sketches)) return doc;
+  const pp = useProjectParamsStore.getState();
+  if (projectId && pp.projectId === projectId) {
+    doc = stampSolvedWith(doc as unknown as Document, pp.params) as unknown as Record<string, unknown>;
+  }
   return { ...doc, sketches: withSharedProfiles(doc.sketches as Sketch[]) };
 }
 
