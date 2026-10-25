@@ -7,6 +7,8 @@ import {
   type PlaneReport, type MirrorPlane, type PatternReport, type PatternSpec, type PlaneOpKind, type RunFace, type SharedInputs,
 } from '@/api/client';
 import { pinnedChanges, usesShared, withSharedProfiles } from '@/build/sharedSketch';
+import { solvePending, type Unsolved } from '@/build/projectSketchSolve';
+import { addLog } from '@/stores/logStore';
 import { ProjectSketchDialog } from './ProjectSketchDialog';
 import { ParameterProposalCard } from './ParameterProposalCard';
 import { BriefProposalCard, DescriptionLine, MentionMenu, useProjectDocs } from './ProjectChat';
@@ -181,7 +183,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // also depends on their versions: the build asks the server for them first
   // (sharedInputsKey) and they join the key, so a changed sketch isn't served
   // from the cache.
-  const inputsKeyRef = useRef<{ src: string; shared: string; key: string; inputs: BuildInputs } | null>(null);
+  const inputsKeyRef = useRef<{ src: string; shared: string; key: string; inputs: BuildInputs; held: Unsolved[] } | null>(null);
   const buildInputs = (src: string) => {
     const doc = useDocumentStore.getState().document;
     const sketches = referencedProfiles(src, doc.sketches);
@@ -199,8 +201,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     const { shared } = buildInputs(src);
     if (!shared) return true;
     try {
-      const r = await buildApi.inputs(src, getBackendId() ?? '', shared);
-      inputsKeyRef.current = { src, shared: JSON.stringify(shared), key: r.key, inputs: r.inputs };
+      let r = await buildApi.inputs(src, getBackendId() ?? '', shared);
+      // a project sketch not yet solved for the project's current values is
+      // solved here (only the browser can), then asked about again
+      const solved = await solvePending(r.unsolved);
+      solved.errors.forEach((m) => addLog('error', `Couldn't bring a project sketch up to date: ${m}`));
+      if (solved.saved) r = await buildApi.inputs(src, getBackendId() ?? '', shared);
+      const held = Object.values(r.unsolved ?? {}).filter((u) => u.state === 'failed');
+      inputsKeyRef.current = { src, shared: JSON.stringify(shared), key: r.key, inputs: r.inputs, held };
       return true;
     } catch {
       inputsKeyRef.current = null;
@@ -769,10 +777,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         `${sz[0]}×${sz[1]}×${sz[2]} mm · vol ${Math.round(m.volume).toLocaleString()} mm³ · area ${Math.round(m.area).toLocaleString()} mm²`,
       );
       setStatus('done');
+      // a project sketch that can't be solved with the project's values: built
+      // with its last good shapes and the values they had, which isn't a version
+      const held = inputsKeyRef.current?.src === src ? inputsKeyRef.current.held : [];
+      setHeldNote(held.length ? held.map((u) => u.message).join('; ') : null);
       // The build succeeded, so this code is a coherent, buildable snapshot —
       // record it as an immutable version (deduped server-side; a rebuild of
       // unchanged code adds nothing).
-      snapshotVersion(src, versionLabel);
+      if (!held.length) snapshotVersion(src, versionLabel);
       // capture a thumbnail from the freshly-framed view (debounced so rapid
       // rebuilds coalesce into one save)
       if (thumbTimer.current) clearTimeout(thumbTimer.current);
@@ -3118,6 +3130,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // it, or, while a dialog is open, offers to. A restored (pinned) version
   // stays as it is; its "uses an earlier …" line is brought up to date.
   const [sharedNote, setSharedNote] = useState<{ what: string; rebuilt: boolean } | null>(null);
+  const [heldNote, setHeldNote] = useState<string | null>(null);
   const checkSharedRef = useRef(() => {});
   checkSharedRef.current = () => {
     const src = builtCodeRef.current;
@@ -4339,6 +4352,12 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
             <span style={{ color: palette.warning ?? '#c78a1a', marginRight: '10px' }}
                   title="The face set as the print bed is no longer on the part: the overhangs and auto_round's bed use Z">
               ⚠ Print bed face not found; using Z
+            </span>
+          )}
+          {status === 'done' && heldNote && (
+            <span role="alert" style={{ display: 'block', color: palette.danger, marginBottom: '4px' }}
+                  title="Change the parameter back, or open the sketch to fix it; the part rebuilds once the sketch solves">
+              ⚠ {heldNote}. This part stays as it was built until the sketch solves.
             </span>
           )}
           {status === 'done' && sharedNote && (

@@ -23,6 +23,10 @@ import { getSegmentCount, getSegmentPointIndices, getEntitySegmentEndpoints } fr
 import { computeDerivedDimensionIds } from '@/utils/dof';
 import { getEntityPoint } from '@/utils/entityPoints';
 import { isExpression, evaluateExpression, expressionNames, completeName } from '@/utils/expression';
+import { editorVars, useProjectParamsStore } from '@/stores/projectParamsStore';
+import { unitMismatch } from '@/build/projectSketchSolve';
+import { isSketchDocument } from '@/utils/document';
+import { addLog } from '@/stores/logStore';
 
 function usePanZoom(
   canvasRef: RefObject<HTMLCanvasElement | null>,
@@ -115,6 +119,12 @@ function DimensionEditInput({
   // sketching on a part: the part's P can be used too (and wins a clash)
   const partParams = useEditorStore((s) => s.partParams);
   const docParams = useDocumentStore((s) => s.document.parameters);
+  // in a project sketch, the project's parameters too
+  const isSketchDoc = useDocumentStore((s) => isSketchDocument(s.document));
+  const project = useProjectParamsStore((s) => (s.projectId && isSketchDoc ? s.params : null));
+  const named: Record<string, number> | null = partParams
+    ? { ...editorVars(useDocumentStore.getState().document), ...partParams }
+    : project ? editorVars(useDocumentStore.getState().document) : null;
   const [text, setText] = useState<string | null>(null);
   const [caret, setCaret] = useState(0);
   const [pick, setPick] = useState(0);
@@ -127,7 +137,13 @@ function DimensionEditInput({
     }
   }, []);
 
-  const vars = () => ({ ...(useDocumentStore.getState().document.parameters ?? {}), ...(partParams ?? {}) });
+  const vars = () => ({ ...editorVars(useDocumentStore.getState().document), ...(partParams ?? {}) });
+  // a degree parameter in a length, or a mm one in an angle (the sketch's own
+  // and the part's P have no unit)
+  const unitNotes = (input: string) => !project || !isExpression(input) ? [] : expressionNames(input)
+    .filter((n) => !(n in (docParams ?? {})) && !(partParams && n in partParams))
+    .map((n) => unitMismatch(n, project.find((p) => p.name === n)?.unit, !!isAngle))
+    .filter((m): m is string => !!m);
 
   const commit = (input: string) => {
     const store = useDocumentStore.getState();
@@ -140,6 +156,7 @@ function DimensionEditInput({
         if (isAngle && v >= 180) return false;
         store.setDimensionExpression(dimensionId, input);
         store.applyDimensionValue(dimensionId, v);
+        unitNotes(input).forEach((m) => addLog('warn', `${m}: check the dimension uses the parameter you meant`));
       } catch {
         return false;
       }
@@ -167,7 +184,7 @@ function DimensionEditInput({
   // the P names to complete the word at the caret, what the expression comes
   // to, and names that are both a sketch parameter and in P
   const current = text ?? defaultVal;
-  const done = partParams ? completeName(current, caret, Object.keys(partParams)) : null;
+  const done = named ? completeName(current, caret, Object.keys(named)) : null;
   const matches = done?.matches.slice(0, 8) ?? [];
   const accept = (name: string) => {
     const el = inputRef.current;
@@ -181,9 +198,12 @@ function DimensionEditInput({
   let result: string | null = null;
   let resultBad = false;
   const clashes: string[] = [];
-  if (partParams && isExpression(current)) {
-    const missing = expressionNames(current).filter((n) => !(n in partParams) && !(n in (docParams ?? {})));
-    if (missing.length) { result = `unknown: ${missing.join(', ')}`; resultBad = true; }
+  const units = unitNotes(current);
+  if (named && isExpression(current)) {
+    const missing = expressionNames(current).filter((n) => !(n in named));
+    const text = missing.filter((n) => project?.some((p) => p.name === n));
+    if (text.length) { result = `${text.join(', ')}: text, can't size a dimension`; resultBad = true; }
+    else if (missing.length) { result = `unknown: ${missing.join(', ')}`; resultBad = true; }
     else {
       try {
         const v = evaluateExpression(current, vars());
@@ -191,7 +211,7 @@ function DimensionEditInput({
         resultBad = !isFinite(v) || v <= 0;
       } catch { result = '…'; resultBad = true; }
     }
-    for (const n of expressionNames(current)) if (docParams && n in docParams && n in partParams) clashes.push(n);
+    if (partParams) for (const n of expressionNames(current)) if (docParams && n in docParams && n in partParams) clashes.push(n);
   }
   const track = (el: HTMLInputElement) => { setText(el.value); setCaret(el.selectionStart ?? el.value.length); };
 
@@ -204,8 +224,8 @@ function DimensionEditInput({
         position: 'absolute',
         left: pos.x - 50,
         top: pos.y - 12,
-        width: partParams ? 140 : 100,
-        ...(partParams ? { left: pos.x - 70 } : {}),
+        width: named ? 140 : 100,
+        ...(named ? { left: pos.x - 70 } : {}),
         height: 24,
         background: '#1e293b',
         border: '1px solid #3b82f6',
@@ -219,8 +239,8 @@ function DimensionEditInput({
         zIndex: 10,
         boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)',
       }}
-      onChange={partParams ? (e) => { track(e.currentTarget); setPick(0); } : undefined}
-      onSelect={partParams ? (e) => track(e.currentTarget) : undefined}
+      onChange={named ? (e) => { track(e.currentTarget); setPick(0); } : undefined}
+      onSelect={named ? (e) => track(e.currentTarget) : undefined}
       onKeyDown={(e) => {
         if (matches.length) {
           if (e.key === 'ArrowDown') { e.preventDefault(); setPick((pick + 1) % matches.length); return; }
@@ -237,7 +257,7 @@ function DimensionEditInput({
       }}
       onBlur={cancel}
     />
-    {partParams && (matches.length > 0 || result || clashes.length > 0) && (
+    {named && (matches.length > 0 || result || clashes.length > 0 || units.length > 0) && (
       <div
         style={{
           position: 'absolute', left: pos.x - 70, top: pos.y + 14, minWidth: 140, zIndex: 11,
@@ -250,8 +270,11 @@ function DimensionEditInput({
         {result && <div style={{ padding: '3px 8px', color: resultBad ? '#f87171' : '#93c5fd' }}>{result}</div>}
         {clashes.map((n) => (
           <div key={n} style={{ padding: '3px 8px', color: '#fbbf24', whiteSpace: 'nowrap' }}>
-            ⚠ {n}: the part's P ({partParams[n]}) is used, not the sketch parameter ({docParams![n]})
+            ⚠ {n}: the part's P ({partParams![n]}) is used, not the sketch parameter ({docParams![n]})
           </div>
+        ))}
+        {units.map((m) => (
+          <div key={m} style={{ padding: '3px 8px', color: '#fbbf24', whiteSpace: 'nowrap' }}>⚠ {m}</div>
         ))}
         {matches.map((n, i) => (
           <div
@@ -262,7 +285,7 @@ function DimensionEditInput({
               background: i === pick ? '#334155' : undefined,
             }}
           >
-            <span>{n}</span><span style={{ color: '#94a3b8' }}>{partParams[n]}</span>
+            <span>{n}</span><span style={{ color: '#94a3b8' }}>{named[n]}</span>
           </div>
         ))}
       </div>

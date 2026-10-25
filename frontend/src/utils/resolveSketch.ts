@@ -508,12 +508,30 @@ export interface ResolveWarning {
   missing: string[];
 }
 
+/** A dimension expression that evaluated but couldn't be met: zero or less,
+ *  not a number, or the sketch can't take that size (its other dimensions and
+ *  constraints don't leave room). `wasMet`: the sketch met it before. */
+export interface ResolveFailure {
+  sketch: string;
+  dimensionId: string;
+  expression: string;
+  /** what the expression gave (null: it couldn't be worked out) */
+  value: number | null;
+  message: string;
+  wasMet: boolean;
+}
+
 export interface Resolved {
   /** the input sketch itself when nothing moved, else a new one */
   sketch: Sketch;
   changed: boolean;
   warnings: ResolveWarning[];
+  failures: ResolveFailure[];
 }
+
+const fmt = (v: number) => String(Math.round(v * 1000) / 1000);
+/** Met to within 0.02 mm (or 0.1 % of a large size): the solver's iterations stop at 0.01. */
+const meets = (have: number | null, want: number) => have != null && Math.abs(have - want) <= Math.max(0.02, Math.abs(want) * 1e-3);
 
 /** Whether a sketch's dimension expressions use any of `names`. */
 export function usesNames(sketch: Sketch, names: Iterable<string>): boolean {
@@ -532,7 +550,11 @@ export function usesNames(sketch: Sketch, names: Iterable<string>): boolean {
 export function resolveSketch(sketch: Sketch, vars: Record<string, number>): Resolved {
   let entities = sketch.entities;
   const warnings: ResolveWarning[] = [];
+  const failures: ResolveFailure[] = [];
+  const targets: { dim: Entity; v: number }[] = [];
   const broken = brokenIds(sketch.entities);
+  const fail = (dim: Entity & { expression?: string }, value: number | null, message: string, wasMet = false) =>
+    failures.push({ sketch: sketch.name, dimensionId: dim.id, expression: dim.expression ?? '', value, message, wasMet });
   for (const dim of sketch.entities) {
     if (dim.type !== 'dimension' || !dim.expression || onBroken(dim, broken)) continue;
     const missing = expressionNames(dim.expression).filter((n) => !Object.prototype.hasOwnProperty.call(vars, n));
@@ -543,15 +565,30 @@ export function resolveSketch(sketch: Sketch, vars: Record<string, number>): Res
     let v: number;
     try {
       v = evaluateExpression(dim.expression, vars);
-    } catch {
+    } catch (e) {
+      fail(dim, null, `${dim.expression} can't be worked out (${e instanceof Error ? e.message : e})`);
       continue;
     }
-    if (!isFinite(v) || v <= 0) continue;
+    if (!isFinite(v) || v <= 0) {
+      fail(dim, isFinite(v) ? v : null, `${dim.expression} = ${isFinite(v) ? fmt(v) : 'not a number'}: a dimension must be more than 0`);
+      continue;
+    }
     const next = dimensionEntities({ ...sketch, entities }, dim.id, v);
     if (Array.isArray(next)) entities = next;
+    if (next !== 'derived') targets.push({ dim, v });
+  }
+  // a dimension the sketch couldn't take (or that a later one pulled off again)
+  for (const { dim, v } of targets) {
+    const have = measureDimension(dim, entities);
+    if (meets(have, v)) continue;
+    const unit = dim.type === 'dimension' && dim.angleMode ? '°' : ' mm';
+    fail(dim, v, have == null
+      ? `${(dim as { expression: string }).expression} = ${fmt(v)}${unit}: the sketch can't take that size`
+      : `${(dim as { expression: string }).expression} = ${fmt(v)}${unit}, but the sketch can only make it ${fmt(have)}${unit} (its other dimensions and constraints don't leave room)`,
+    meets(measureDimension(dim, sketch.entities), v));
   }
   const changed = !sameGeometry(sketch.entities, entities);
-  return { sketch: changed ? { ...sketch, entities } : sketch, changed, warnings };
+  return { sketch: changed ? { ...sketch, entities } : sketch, changed, warnings, failures };
 }
 
 /** Two entity lists alike to within `tol` in every number (the solver's

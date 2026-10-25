@@ -14,6 +14,8 @@ import { getSegmentCount } from '@/utils/lineSegments';
 import { BoundsBuilder } from '@/utils/bounds';
 import { evaluateExpression } from '@/utils/expression';
 import { dimensionEntities, resolveSketch } from '@/utils/resolveSketch';
+import { editorVars, projectSketchParams } from '@/stores/projectParamsStore';
+import { solveWithProject } from '@/build/projectSketchSolve';
 import { filletSketch, type Corner, type FilletOutcome } from '@/utils/fillet';
 import { trimSketch, type TrimOutcome } from '@/utils/trim';
 import { addOffset as addOffsetTo, unlinkOffset as unlinkOffsetIn } from '@/utils/offset';
@@ -166,6 +168,9 @@ interface DocumentStore {
   setParameter(name: string, value: number): void;
   removeParameter(name: string): void;
   renameParameter(oldName: string, newName: string): void;
+  /** A project parameter was renamed (the server rewrote the saved
+   *  sketches): the same in this document's expressions and solve records. */
+  renameProjectParameter(oldName: string, newName: string): void;
   setDimensionExpression(dimensionId: string, expression: string | undefined): void;
   reapplyExpressionDimensions(): void;
 
@@ -2129,7 +2134,9 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     const { document } = get();
     const params = { ...(document.parameters ?? {}) };
     delete params[name];
-    // Clear expressions that can no longer evaluate
+    // Clear expressions that can no longer evaluate (a project sketch's can
+    // use the project's parameters as well)
+    const vars = editorVars({ ...document, parameters: params });
     const updatedDoc: Document = {
       ...document,
       parameters: params,
@@ -2138,7 +2145,7 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
         entities: sk.entities.map((e) => {
           if (e.type !== 'dimension' || !e.expression) return e;
           try {
-            evaluateExpression(e.expression, params);
+            evaluateExpression(e.expression, vars);
             return e;
           } catch {
             return { ...e, expression: undefined };
@@ -2171,6 +2178,26 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     set({ document: updatedDoc });
   },
 
+  renameProjectParameter(oldName, newName) {
+    const { document } = get();
+    if (document.parameters && oldName in document.parameters) return;   // its own one, not the project's
+    const re = new RegExp(`(?<![\\w.])${oldName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?!\\w)`, 'g');
+    const keys = <T,>(o: Record<string, T>) =>
+      Object.fromEntries(Object.entries(o).map(([k, v]) => [k === oldName ? newName : k, v]));
+    set({
+      document: {
+        ...document,
+        sketches: document.sketches.map((sk) => ({
+          ...sk,
+          entities: sk.entities.map((e) => (e.type === 'dimension' && e.expression
+            ? { ...e, expression: e.expression.replace(re, newName) } : e)),
+          ...(sk.solvedWith ? { solvedWith: keys(sk.solvedWith) } : {}),
+          ...(sk.solveError ? { solveError: { ...sk.solveError, with: keys(sk.solveError.with) } } : {}),
+        })),
+      },
+    });
+  },
+
   setDimensionExpression(dimensionId, expression) {
     const { document } = get();
     set({
@@ -2191,6 +2218,13 @@ export const useDocumentStore = create<DocumentStore>((set, get) => ({
     const { document } = get();
     const sketch = document.sketches.find((sk) => sk.id === document.activeSketchId);
     if (!sketch) return;
+    const pp = projectSketchParams(document);
+    if (pp) {
+      // a project sketch: also what it was solved with, or why it couldn't be
+      const r = solveWithProject(sketch, pp, document.parameters);
+      if (r.changed) set({ document: { ...document, sketches: document.sketches.map((s) => (s.id === sketch.id ? r.sketch : s)) } });
+      return;
+    }
     const { sketch: resolved, changed } = resolveSketch(sketch, document.parameters ?? {});
     if (changed) set({ document: updateActiveSketch(document, () => ({ entities: resolved.entities })) });
   },

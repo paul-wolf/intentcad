@@ -16,6 +16,18 @@ and groups, so renaming a group marks the parts that use it out of date.
 
 The inputs of a build, kept in Document.last_build["inputs"] and in each
 part version: {"sk": {alias: {document, sketch, version}}, "pp": {name: value}}.
+
+A sketch document in a project can size its dimensions with the project's
+parameters (by name in a dimension's expression). Only the browser solves a
+sketch, so each sketch also saves what it was solved with:
+    solvedWith: {name: value}   the project parameter values of its last solve
+    solveError: {"with": {name: value}, "message": "…", "dimensionIds": [...]}
+                when the values in `with` couldn't be solved; the sketch kept
+                its last good shapes (and `solvedWith`)
+A sketch whose parameters have changed since (sketch_state "pending") gives
+parts no shapes until the browser solves it again; one that couldn't be solved
+("failed") gives its last good shapes, and parts read the parameters it failed
+on at the values those shapes were solved with ("held"), so they stay as built.
 """
 from __future__ import annotations
 
@@ -30,6 +42,7 @@ from documents.models import Document, document_kind
 from .engine import pp_names, sk_aliases
 
 GROUP_USE = re.compile(r"""\.(group|named)\(\s*(["'])(.+?)\2""")
+IDENT = re.compile(r"(?<![\w.])[A-Za-z_][A-Za-z0-9_]*")
 
 
 def profile_version(profile: dict | None) -> str:
@@ -79,11 +92,86 @@ def find_sketch(sk_doc, sketch_id: str) -> dict | None:
     return None
 
 
+def params_of(project) -> dict:
+    """A project's parameters as {name: value}."""
+    if project is None:
+        return {}
+    return {p["name"]: p.get("value") for p in project.parameters or []
+            if isinstance(p, dict) and p.get("name")}
+
+
 def _project_params(part) -> dict:
     if part is None or not part.project_id:
         return {}
-    return {p["name"]: p.get("value") for p in part.project.parameters or []
-            if isinstance(p, dict) and p.get("name")}
+    return params_of(part.project)
+
+
+def expression_names(sketch: dict) -> set[str]:
+    """The names a sketch's dimension expressions use."""
+    out = set()
+    for e in sketch.get("entities") or []:
+        if isinstance(e, dict) and e.get("type") == "dimension" and isinstance(e.get("expression"), str):
+            out.update(IDENT.findall(e["expression"]))
+    return out
+
+
+def own_params(sk_doc) -> dict:
+    """A sketch document's own parameters ({name: value})."""
+    p = _data(sk_doc).get("parameters")
+    return dict(p) if isinstance(p, dict) else {}
+
+
+def sketch_pp(sk_doc, sketch: dict, params: dict) -> list[str]:
+    """The project parameters a sketch's dimensions use (its own parameters
+    of the same name come first, so those don't count), with any it was
+    solved with that have since been deleted."""
+    if sk_doc is None or not sk_doc.project_id:
+        return []
+    own = own_params(sk_doc)
+    solved = sketch.get("solvedWith") if isinstance(sketch.get("solvedWith"), dict) else {}
+    return sorted(n for n in expression_names(sketch) if n not in own and (n in params or n in solved))
+
+
+def sketch_title(sk_doc, sketch: dict) -> str:
+    """What the project calls a sketch: its document's name (and its own name
+    when the document has several)."""
+    many = len(_data(sk_doc).get("sketches") or []) > 1
+    return f"{sk_doc.name} · {sketch.get('name')}" if many else sk_doc.name
+
+
+def sketch_state(sk_doc, sketch: dict, params: dict) -> dict | None:
+    """None if `sketch` is solved with the project's current parameter values,
+    else {"state": "pending"|"failed", "names": [changed names], "message",
+    "held": {name: value its shapes were solved with}}."""
+    used = sketch_pp(sk_doc, sketch, params)
+    if not used:
+        return None
+    solved = sketch.get("solvedWith") if isinstance(sketch.get("solvedWith"), dict) else {}
+    now = {n: params.get(n) for n in used}
+    changed = [n for n in used if n not in solved or solved[n] != now[n]]
+    if not changed:
+        return None
+    words = ", ".join(f"{n} = {_v(now[n])}" for n in changed)
+    err = sketch.get("solveError")
+    if isinstance(err, dict) and isinstance(err.get("with"), dict) and all(
+            n in err["with"] and err["with"][n] == now[n] for n in used):
+        held = {n: solved[n] for n in changed if n in solved}
+        was = ", ".join(f"{n} = {_v(v)}" for n, v in held.items())
+        return {"state": "failed", "names": changed, "held": held,
+                "message": f"{sketch_title(sk_doc, sketch)!r} can't be solved with {words}: "
+                           f"{err.get('message') or 'its dimensions conflict'}"
+                           + (f" (it keeps its shapes for {was})" if was else "")}
+    return {"state": "pending", "names": changed, "held": {},
+            "message": f"{sketch_title(sk_doc, sketch)!r} hasn't been solved for {words} yet: "
+                       "open it, or a part that uses it, so the editor solves it"}
+
+
+def _v(v) -> str:
+    if v is None:
+        return "(deleted)"
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v)
 
 
 def resolve(code: str, part, user=None, refs: dict | None = None, pinned: dict | None = None,
@@ -91,9 +179,13 @@ def resolve(code: str, part, user=None, refs: dict | None = None, pinned: dict |
     """What `code` (part `part`'s script, or a document id) reads through SK
     and PP: {"sk": {alias: profile}, "pp": {name: value}, "errors": {alias:
     why}, "inputs": {"sk": {alias: {document, sketch, version}}, "pp": {...}},
-    "profiles": {alias: profile}}. `refs`/`pinned` override the part's saved
-    ones (the editor sends what it has, saved or not). `docs` caches sketch
-    documents across calls."""
+    "profiles": {alias: profile}, "unsolved": {alias: {document, sketch, name,
+    state, names, message, held}}}. A sketch not yet solved for the project's
+    parameters is an error (no shapes from an unsolved sketch); one that can't
+    be solved gives its last good shapes and holds the parameters it failed on
+    (see sketch_state). `refs`/`pinned` override the part's saved ones (the
+    editor sends what it has, saved or not). `docs` caches sketch documents
+    across calls."""
     part = _part(part)
     data = _data(part)
     refs = data.get("sketchRefs") if refs is None else refs
@@ -101,7 +193,8 @@ def resolve(code: str, part, user=None, refs: dict | None = None, pinned: dict |
     pinned = data.get("pinned") if pinned is None else pinned
     pinned = pinned if isinstance(pinned, dict) else {}
     docs = {} if docs is None else docs
-    sk, errors, used_sk = {}, {}, {}
+    sk, errors, used_sk, unsolved, held = {}, {}, {}, {}, {}
+    project_params = {}   # by project id
 
     for alias in sk_aliases(code):
         pin = (pinned.get("sk") or {}).get(alias)
@@ -133,11 +226,23 @@ def resolve(code: str, part, user=None, refs: dict | None = None, pinned: dict |
             errors[alias] = (f"SK[{alias!r}]: open {sk_doc.name!r} once in the sketch editor, "
                              "so it saves its shapes for parts to use")
             continue
+        if sk_doc.project_id not in project_params:
+            project_params[sk_doc.project_id] = params_of(sk_doc.project) if sk_doc.project_id else {}
+        state = sketch_state(sk_doc, s, project_params[sk_doc.project_id])
+        if state:
+            unsolved[alias] = {"document": str(sk_doc.id), "sketch": s.get("id"),
+                               "project": str(sk_doc.project_id) if sk_doc.project_id else None,
+                               "name": sketch_title(sk_doc, s), **state}
+            if state["state"] == "pending":
+                errors[alias] = f"SK[{alias!r}]: {state['message']}"
+                continue
+            for n, v in state["held"].items():
+                held.setdefault(n, v)
         sk[alias] = profile
         used_sk[alias] = {"document": str(sk_doc.id), "sketch": s.get("id"),
                           "version": profile_version(profile)}
 
-    pp = _project_params(part)
+    pp = {**_project_params(part), **held}
     pinned_pp = pinned.get("pp") if isinstance(pinned.get("pp"), dict) else {}
     used_pp = {}
     for name in pp_names(code):
@@ -148,7 +253,7 @@ def resolve(code: str, part, user=None, refs: dict | None = None, pinned: dict |
 
     inputs = {k: v for k, v in (("sk", used_sk), ("pp", used_pp)) if v}
     return {"sk": sk, "pp": pp, "errors": errors, "inputs": inputs,
-            "profiles": {a: sk[a] for a in used_sk}}
+            "profiles": {a: sk[a] for a in used_sk}, "unsolved": unsolved}
 
 
 def pin_inputs(resolved: dict) -> dict:

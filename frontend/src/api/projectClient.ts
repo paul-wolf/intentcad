@@ -63,10 +63,18 @@ export const projectApi = {
     });
   },
 
-  /** Replace the project's parameters (PP["name"] in its parts' scripts);
-   *  a bad or repeated name is refused with a message. */
-  setParameters(id: string, parameters: import('@/types/project').ProjectParameter[]): Promise<ProjectDetail> {
-    return request(`/projects/${id}/parameters`, { method: 'PUT', body: JSON.stringify({ parameters }) });
+  /** Replace the project's parameters (PP["name"] in its parts' scripts, by
+   *  name in its sketches' dimensions); a bad or repeated name, or one a
+   *  project sketch has as its own parameter, is refused with a message.
+   *  `renames` ({old: new}) are rewritten where the project uses them. */
+  setParameters(id: string, parameters: import('@/types/project').ProjectParameter[],
+                renames: Record<string, string> = {}): Promise<ProjectDetail> {
+    return request(`/projects/${id}/parameters`, { method: 'PUT', body: JSON.stringify({ parameters, renames }) });
+  },
+
+  /** Which sketches and parts use each project parameter. */
+  parameterUses(id: string): Promise<import('@/types/project').ParameterUses> {
+    return request(`/projects/${id}/parameters/uses`);
   },
 
   updateProject(id: string, data: { name?: string; description?: string }): Promise<ProjectDetail> {

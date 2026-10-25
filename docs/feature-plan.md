@@ -45,6 +45,7 @@ operations cost nothing to support, they just don't get UI.
 - Project as context for the AI (phase 1 of 4): a Markdown project brief with versions (word warning past 2,000) that every part's chat reads first; a one-line description per part or sketch; the AI sees the project's other parts (size, key parameters) and reads one's script or parameters when it needs to; @-mentions; it answers questions in the chat and proposes brief changes as a diff to accept or reject
 - Shared definitions (project context phase 2 of 4): a part's script builds from a sketch document in its project as SK["alias"] (closed shapes, named groups and elements, circles, points) and from project parameters as PP["name"] (a Parameters table on the project page); parts show out of date when what they read changes, the sketch editor lists its users with Rebuild all and warns before a save drops a group or name a part uses; a part version pins the sketch and parameter values it was built with (Follow latest undoes it); the AI switches parts to a shared sketch and proposes parameters to accept
 - Sketch to parts (project context phase 2 of 4): Extrude…, Cut… and Revolve… in a project sketch's editor pick the shapes (whole sketch, a group, a named element) and the parts or a new part, then open each part in turn with the dialog and its preview ready (Place on: its own plane, a base or construction plane, or a clicked face; Skip and Cancel); Save to project turns a sketch on a part's face into a project sketch the part reads as SK["alias"]; a part links to its project sketches (Sketch … Edit ↗) and rebuilds when you come back after changing one; a sketch links back to its project; a one-sketch document and its sketch share one name
+- Project parameters in sketches (project context phase 2 of 4): a project sketch's Parameters panel shows and edits the project's parameters, its dimensions use them by name (text values listed, not usable), and its own parameters sit under This sketch only with Move to project (a taken name: use the project's value or rename; no name is both); a change re-solves the sketches that use it in the browser (in the sketch editor on open, in the part editor before a build, after a save on the project page or an accepted AI proposal), and parts never build from a sketch not yet solved for the current values; a value a sketch can't meet still saves, the sketch keeps its last good shape and the failure shows on the sketch, the parameter and the parts; renaming rewrites sketch expressions and PP["…"] after listing what it changes; the project's Parameters table has Used by; degree/length mix-ups are warned
 
 ## Foundation: edge selection ✓ done
 
@@ -87,7 +88,7 @@ it), simulation, sheet metal, surface modelling, rendering.
 
 ## Order
 
-Done: edge selection, 1-9, 6b, 13, project context phases 1-2. Next: 12, 10, 11. Context
+Done: edge selection, 1-9, 6b, 13, project context phases 1-2 (with project parameters in sketches). Next: 12, 10, 11. Context
 files steps 2-3 and project context phases 3-4 run on their own track. Each step stands alone and is kept or reverted on
 its own merit.
 

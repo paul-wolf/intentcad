@@ -115,7 +115,8 @@ faces of a part:
   points, Bézier curves.
 - Constraints: coincident, horizontal/vertical (lines or two points), parallel,
   perpendicular, tangent, equal, midpoint, symmetric, point on curve, fixed.
-- Dimensions that can be formulas using the part's parameters, e.g. `floor + 2`.
+- Dimensions that can be formulas using the part's parameters, e.g. `floor + 2` (in a
+  project sketch, the project's parameters).
 - Corner fillet, trim, offset (stays linked to its source), mirror, grid and circular
   copies.
 - Built-in horizontal and vertical axes in every sketch, ready to mirror about.
@@ -335,6 +336,41 @@ plates and the brace.
 ![Make parts: Cut "Frame" on part 1 of 3, the Extrude dialog ready on the arm holes group](images/sketch-to-part.png)
 
 ![The Arm brace part: Sketch Frame holes Edit ↗ under the top bar, "Rebuilt: Frame holes changed" at the bottom](images/sketch-link.png)
+
+### Project parameters in sketches
+
+A sketch in a project sizes its shapes with the project's parameters, so one number
+(the bolt hole, say) sets the sketch and every part made from it.
+
+- **One list**: the **Project parameters** panel on the right of a project sketch shows
+  the project's parameters. Type a value and leave the field to save it for the whole
+  project. **+** adds one. Double-click a name to rename it.
+- **Use one**: double-click a dimension and type the name, e.g. `bolt_d` or
+  `bolt_d + 0.2`. Names complete as you type. A text value (like `M3`) is listed but
+  can't size a dimension.
+- **Units**: a parameter in degrees used in a length, or one in mm used in an angle,
+  gets a warning under the dimension and above the list.
+- **This sketch only**: a sketch's own parameters are listed under it. **Move to
+  project** makes one a project parameter. If the project already has that name, choose
+  **Use the project's value** or **Rename…**. A name can't be both. Sketches outside a
+  project keep their own parameters, as before.
+- **A change reaches the parts**: change a value here, on the project page, or by
+  accepting the AI's proposal, and the sketches that use it are solved again; their
+  parts rebuild when you open them. The solving happens in the browser: a sketch that
+  hasn't been solved for the new value yet is solved when you open it or a part made
+  from it. A part never builds from a sketch that hasn't been solved.
+- **A value that doesn't fit**: if a sketch can't be solved with a new value (a hole of
+  0, say), the value is still saved and the sketch keeps its last good shape. The
+  sketch shows the reason in red above the list, the parameter is marked ⚠, and the
+  part says at the bottom that it stays as it was built until the sketch solves.
+- **Used by**: the **Parameters** table on the project page has a **Used by** column:
+  the sketches (✎) and parts (◼) that use each parameter, with any sketch that can't be
+  solved in red.
+- **Rename everywhere**: renaming a parameter on the project page or in the panel lists
+  what it will change, then rewrites the name in the sketches' dimensions and in the
+  parts' scripts (`PP["…"]`). The old script stays in the part's script history.
+
+![A project sketch: its holes sized by bolt_d, the Project parameters panel, and a sketch-only parameter with Move to project](images/project-params-in-sketch.png)
 
 ### Beyond 3D: 2D and CNC
 

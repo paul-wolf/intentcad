@@ -28,6 +28,14 @@ export interface ProjectParameter {
   description?: string;
 }
 
+/** Where each project parameter is used (backend modeling/project_params.uses):
+ *  sketches by name in a dimension (with any that can't be solved with its
+ *  value), parts through PP["name"] ("script") or a sketch they read. */
+export type ParameterUses = Record<string, {
+  sketches: { id: string; sketch: string; name: string; state: 'ok' | 'pending' | 'failed'; message: string }[];
+  parts: { id: string; name: string; via: string[] }[];
+}>;
+
 export interface BriefVersion {
   id: string;
   text: string;
