@@ -40,6 +40,7 @@ operations cost nothing to support, they just don't get UI.
 - User events: sign-ins (and failed ones), sign-outs, parts and sketches made and AI calls with their cost, in one table; an Events page for superusers (search, kind, user, period) with AI spend per user; earlier sign-ins, AI calls and documents copied in
 - Duplicate a part or sketch: a button on its card makes "Copy of <name>" in the same project, with the model, its STEP files, the part's context files and CAM jobs (no G-code); a fresh version history
 - Examples for new organisations: a superuser chooses one project on the Organisations page; each new organisation gets its own copy (parts, sketches, STEP and context files, CAM jobs without G-code), with a box to skip it and an Add examples button for organisations made earlier
+- The part editor names the part's project in the line under the top bar; click it to go back to the project
 
 ## Foundation: edge selection ✓ done
 

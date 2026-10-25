@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
 import {
@@ -6,7 +6,7 @@ import {
   type FaceRefSpec, type HolePresets, type EdgeOpKind, type EdgeRefSpec, type ExtrudeExtent, type ExtrudeOp, type KeepItem, type Step,
   type PlaneReport, type MirrorPlane, type PatternReport, type PatternSpec, type PlaneOpKind, type RunFace,
 } from '@/api/client';
-import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, persistPrintBed, persistSketches, getBackendId } from '@/api/autoSave';
+import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, persistPrintBed, persistSketches, getBackendId, getProjectName, subscribeProjectContext } from '@/api/autoSave';
 import { DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
 import type { ChatMessage } from '@/types/document';
 import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim, type PlacedHandle, type ViewerPick,
@@ -912,6 +912,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // the AI spend (the status line, the chat's notes): staff and superusers only
   const user = useAuthStore((st) => st.user);
   const staff = seesSpend(user);
+  const projectName = useSyncExternalStore(subscribeProjectContext, getProjectName);
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   // context files (reference PDFs and photos the AI reads): the part's and its
   // project's, once the part has a server id (a new part gets one on first save)
@@ -3326,7 +3327,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         <style>{'@keyframes bar-fade { from { opacity: 0 } } .bar-fade { animation: bar-fade 160ms ease-out; }'}</style>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '0 16px', height: 54,
                       boxSizing: 'border-box', flexShrink: 0,
-                      borderBottom: staff ? 'none' : `1px solid ${palette.border}` }}>
+                      borderBottom: 'none' }}>
           {(onHome || onProject) && (
             <div style={{ display: 'flex', gap: '6px' }}>
               {onHome && (
@@ -3406,17 +3407,27 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
           <button onClick={handleClose} style={{ background: 'none', border: 'none',
                    color: palette.textSecondary, fontSize: '18px', cursor: 'pointer', padding: '0 4px' }}>&times;</button>
         </div>
-        {/* the AI spend, for staff: a slim line under the bar */}
-        {staff && (
-          <div style={{ height: 22, flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 16px',
-                        fontSize: '11.5px', color: palette.textSecondary, borderBottom: `1px solid ${palette.border}` }}>
-            {usage && (
+        {/* a slim line under the bar: the project the part is in, and the AI spend for staff */}
+        <div style={{ height: 22, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '0 16px',
+                      fontSize: '11.5px', color: palette.textSecondary, borderBottom: `1px solid ${palette.border}`,
+                      whiteSpace: 'nowrap', overflow: 'hidden' }}>
+          {projectName ? (
+            <span title={onProject ? 'The project this part is in: click to go back to it' : 'The project this part is in'}
+              onClick={onProject ? () => navAway(onProject) : undefined}
+              style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, cursor: onProject ? 'pointer' : 'default' }}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+              </svg>
+              Project <span style={{ color: palette.text, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>{projectName}</span>
+            </span>
+          ) : null}
+          {projectName && staff && usage && <span style={{ color: palette.border }}>·</span>}
+          {staff && usage && (
               <span title={`This model: ${usage.document.tokens_in.toLocaleString()} in (${(usage.document.cache_read_tokens ?? 0).toLocaleString()} from the prompt cache) / ${usage.document.tokens_out.toLocaleString()} out.  All-time: ${usage.all_time.tokens_in.toLocaleString()} in (${(usage.all_time.cache_read_tokens ?? 0).toLocaleString()} cached) / ${usage.all_time.tokens_out.toLocaleString()} out.`}>
                 {spendLine(user, usage)}
               </span>
-            )}
-          </div>
-        )}
+          )}
+        </div>
 
         {/* body: parameters + script or chat (left) | 3D view (right) */}
         <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
