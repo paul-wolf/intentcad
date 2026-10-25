@@ -459,10 +459,11 @@ def _system(production: str = "", project: bool = False) -> str:
         "instruction is genuinely ambiguous or you lack information you need "
         "(which face? what dimension? which of several holes?), call "
         "ask_clarification with ONE short question instead of guessing — a wrong "
-        "guess is worse than a question. When the user asks a question rather than "
-        "for a change (what does it look like, how big is it, what would you "
-        "suggest), reply with answer and leave the script alone. Otherwise, make "
-        "the edit."
+        "guess is worse than a question. ask_clarification is only for a question "
+        "you need answered before you can act. When the user asks a question rather "
+        "than for a change (what does it look like, how big is it, what would you "
+        "suggest), reply with answer, never ask_clarification, and leave the script "
+        "alone. Otherwise, make the edit."
     ) + PROVENANCE
     if project:
         base += PROJECT
@@ -495,10 +496,12 @@ WRITE_TOOL = {
 
 ASK_TOOL = {
     "name": "ask_clarification",
-    "description": "Ask the user ONE short clarifying question instead of editing, when the "
-                   "instruction is ambiguous or you need information (which face, what size, "
-                   "which of several holes). Prefer this over guessing. Only for a question TO "
-                   "the user; to reply to the user's own question, use answer.",
+    "description": "Ask the user ONE short question, only when you can't go on without their "
+                   "input: the instruction is ambiguous (which face? which of several holes?) or "
+                   "a dimension you need is missing. Ask rather than guess. The text is that one "
+                   "question, ending in '?'. Never use this to reply: answers, explanations, "
+                   "findings and suggestions go through answer, even when they end by offering "
+                   "a next step.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -586,6 +589,16 @@ def _face_sketches(document_id: str | None) -> list[str]:
                    f"through {o} with normal {n} (as drawn; it follows its face){lines}")
     return out
 
+def prose_reply(text: str) -> dict:
+    """A reply in plain text with no tool call. With thinking on, tool use can't
+    be forced, and the model often answers a question in prose: that is an
+    answer, unless it ends by asking something."""
+    text = text.strip()
+    if text.endswith("?"):
+        return {"kind": "question", "question": text}
+    return {"kind": "answer", "text": text}
+
+
 def _anthropic_call(system: str, user: str | list[dict], tools: list[dict], model: str,
                     turns: list[dict] | None = None) -> dict:
     """One model call. `user` is the prompt text, or content blocks (context
@@ -643,7 +656,7 @@ def _anthropic_call(system: str, user: str | list[dict], tools: list[dict], mode
         if block.type == "text":
             text += block.text
     # No tool call — don't hard-fail. Surface what the model actually said (an
-    # explanation or an in-prose question), or a helpful note if it ran out of room.
+    # answer or an in-prose question), or a helpful note if it ran out of room.
     if resp.stop_reason == "refusal":
         return {"kind": "question", "question": "The model declined this request.", "usage": usage}
     if resp.stop_reason == "max_tokens":
@@ -651,7 +664,7 @@ def _anthropic_call(system: str, user: str | list[dict], tools: list[dict], mode
                "Try breaking it into smaller changes.")
         return {"kind": "question", "question": text.strip() or msg, "usage": usage}
     if text.strip():
-        return {"kind": "question", "question": text.strip(), "usage": usage}
+        return {**prose_reply(text), "usage": usage}
     wanted = "a reply" if any(t.get("name") == "cam_reply" for t in tools) else "a script"
     raise AssistantError(f"the model did not return {wanted}")
 
@@ -779,8 +792,8 @@ def edit_script(
             for c in o.get("side") or []:   # a brief proposed alongside the reply
                 tool_result(c, lookups)
             if o.get("kind") == "question" and "?" not in o.get("question", ""):
-                # the model sometimes replies through ask_clarification; with no
-                # question in it, it's an answer (shown as one, Markdown and all)
+                # a safety net (the tool descriptions say otherwise): a reply sent
+                # through ask_clarification with no question in it is an answer
                 return {**o, "kind": "answer", "text": o.get("question", "")}
             if o.get("kind") != "tool":
                 return o

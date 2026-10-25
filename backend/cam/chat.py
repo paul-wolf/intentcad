@@ -699,7 +699,7 @@ def cam_chat(
     if out.get("kind") == "cam":
         raw = {k: v for k, v in out.items() if k not in ("kind", "usage", "side")}
     else:   # no tool call: what the model said is the answer
-        raw = {"answer": out.get("question") or out.get("note") or ""}
+        raw = {"answer": out.get("text") or out.get("question") or out.get("note") or ""}
 
     tool_ids = [str(t["id"]) for t in _list(context.get("tools"))
                 if isinstance(t, dict) and t.get("id") is not None]

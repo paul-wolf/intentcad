@@ -5,7 +5,7 @@ from django.test import Client, TestCase
 from accounts.models import Organisation, User
 from documents.models import Document
 from modeling import llm_models
-from modeling.assistant import AssistantError, edit_script
+from modeling.assistant import AssistantError, edit_script, prose_reply
 from modeling.project_context import code_sha, find_document, project_context, read_part
 from projects.models import Project, ProjectBriefVersion
 
@@ -186,6 +186,12 @@ class EditWithProjectTests(ProjectWorld):
         llm, _ = _scripted({"kind": "question", "question": "Which face, top or bottom?", "usage": {}, "side": []})
         r = edit_script(PLATE, "add a hole", document_id=str(self.top.id), llm=llm)
         self.assertEqual(r["kind"], "question")
+
+    def test_a_reply_in_prose_with_no_tool_call_is_an_answer(self):
+        # with thinking on, the model often answers in plain text instead of calling answer
+        self.assertEqual(prose_reply("  The plate is 80 × 80 mm.\n"), {"kind": "answer", "text": "The plate is 80 × 80 mm."})
+        self.assertEqual(prose_reply("Do you want them countersunk?"),
+                         {"kind": "question", "question": "Do you want them countersunk?"})
 
     def test_a_brief_proposal_comes_back_and_the_brief_is_unchanged(self):
         llm, _ = _scripted(
