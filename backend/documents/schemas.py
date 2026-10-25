@@ -23,9 +23,14 @@ class DocumentUpdateIn(Schema):
                                          # (False for in-progress drafts between builds)
 
 
+class DescriptionIn(Schema):
+    description: str
+
+
 class DocumentOut(Schema):
     id: UUID
     name: str
+    description: str = ""
     data: dict[str, Any]
     history: Any
     project_id: UUID | None = None
@@ -67,6 +72,7 @@ class VersionOut(Schema):
 class DocumentListOut(Schema):
     id: UUID
     name: str
+    description: str = ""
     project_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
@@ -75,12 +81,8 @@ class DocumentListOut(Schema):
 
     @staticmethod
     def resolve_kind(obj) -> str:
-        data = obj.data if isinstance(obj.data, dict) else {}
-        t = data.get("type")
-        if t in ("part", "sketch"):
-            return t
-        mc = data.get("modelCode")
-        return "part" if isinstance(mc, str) and mc.strip() else "sketch"
+        from .models import document_kind
+        return document_kind(obj.data)
 
     @staticmethod
     def resolve_thumbnail(obj) -> str | None:

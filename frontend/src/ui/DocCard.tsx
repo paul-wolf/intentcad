@@ -21,6 +21,7 @@ export interface DocCardData {
   updated: string;
   subtitle?: string;    // e.g. project name (for the "recent" grid)
   thumbnail?: string | null;   // PNG data URL preview of the built part
+  description?: string;        // a line on what it is for (the AI sees it too)
 }
 
 export interface DocCardEdit {
@@ -30,17 +31,20 @@ export interface DocCardEdit {
   onCancel: () => void;
 }
 
-/** A document card: grid-backed thumbnail with a PART/SKETCH badge, name, meta.
- *  Optional double-click rename and hover rename, duplicate, move and delete. */
-export function DocCard({ d, onOpen, onDoubleClick, onRename, onDuplicate, onDelete, onMove, editing }: {
+/** A document card: grid-backed thumbnail with a PART/SKETCH badge, name,
+ *  description, meta. Optional double-click rename and hover rename, describe,
+ *  duplicate, move and delete. */
+export function DocCard({ d, onOpen, onDoubleClick, onRename, onDescribe, onDuplicate, onDelete, onMove, editing, describing }: {
   d: DocCardData;
   onOpen: () => void;
   onDoubleClick?: () => void;
   onRename?: () => void;
+  onDescribe?: () => void;
   onDuplicate?: () => void;
   onDelete?: () => void;
   onMove?: () => void;
   editing?: DocCardEdit;
+  describing?: DocCardEdit;
 }) {
   const t = useTokens();
   const isPart = d.kind === 'part';
@@ -49,9 +53,9 @@ export function DocCard({ d, onOpen, onDoubleClick, onRename, onDuplicate, onDel
   const badgeBg = isPart ? t.partSoft : t.sketchSoft;
 
   return (
-    <div onClick={editing ? undefined : (e) => { if (!openInNewTab(e, href)) onOpen(); }}
-      onAuxClick={editing ? undefined : (e) => { openInNewTab(e, href); }}
-      onDoubleClick={editing ? undefined : onDoubleClick}
+    <div onClick={editing || describing ? undefined : (e) => { if (!openInNewTab(e, href)) onOpen(); }}
+      onAuxClick={editing || describing ? undefined : (e) => { openInNewTab(e, href); }}
+      onDoubleClick={editing || describing ? undefined : onDoubleClick}
       style={{ position: 'relative', background: t.surface, border: `1px solid ${t.border}`, borderRadius: 12, overflow: 'hidden',
                cursor: 'pointer', transition: 'transform .12s ease,border-color .12s ease,box-shadow .12s ease' }}
       onMouseEnter={(e) => { const s = e.currentTarget.style; s.transform = 'translateY(-3px)'; s.borderColor = t.border2; s.boxShadow = t.shadow;
@@ -65,6 +69,14 @@ export function DocCard({ d, onOpen, onDoubleClick, onRename, onDuplicate, onDel
             style={{ opacity: 0, transition: 'opacity .1s', display: 'flex', width: 24, height: 24, alignItems: 'center', justifyContent: 'center',
                      background: t.surface, border: `1px solid ${t.border2}`, borderRadius: 6, color: t.textDim, cursor: 'pointer' }}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
+          </button>
+        )}
+        {onDescribe && (
+          <button data-act title="Describe: a line on what it is for (the AI sees it in the project's parts list)"
+            onClick={(e) => { e.stopPropagation(); onDescribe(); }}
+            style={{ opacity: 0, transition: 'opacity .1s', display: 'flex', width: 24, height: 24, alignItems: 'center', justifyContent: 'center',
+                     background: t.surface, border: `1px solid ${t.border2}`, borderRadius: 6, color: t.textDim, cursor: 'pointer' }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"><path d="M4 6h16M4 12h16M4 18h10" /></svg>
           </button>
         )}
         {onDuplicate && (
@@ -115,6 +127,18 @@ export function DocCard({ d, onOpen, onDoubleClick, onRename, onDuplicate, onDel
             {d.name}
           </div>
         )}
+        {describing ? (
+          <input value={describing.value} autoFocus maxLength={300} onClick={(e) => e.stopPropagation()}
+            placeholder="What it is for, e.g. carries the flight controller"
+            onChange={(e) => describing.onChange(e.target.value)} onBlur={describing.onCommit}
+            onKeyDown={(e) => { if (e.key === 'Enter') describing.onCommit(); if (e.key === 'Escape') describing.onCancel(); }}
+            style={{ width: '100%', marginTop: 5, background: t.appBg, border: `1px solid ${t.accent}`, borderRadius: 5, color: t.text, fontSize: '12.5px', padding: '3px 6px', outline: 'none' }} />
+        ) : d.description ? (
+          <div title={d.description}
+            style={{ fontSize: '12.5px', color: t.textDim, marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {d.description}
+          </div>
+        ) : null}
         <div style={{ fontFamily: MONO, fontSize: '11px', color: t.textMute, marginTop: 5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {d.subtitle ? `${d.subtitle} · ${d.updated}` : d.updated}
         </div>

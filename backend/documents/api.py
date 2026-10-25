@@ -23,6 +23,7 @@ from .schemas import (
     AssetBBox,
     AssetListOut,
     AssetOut,
+    DescriptionIn,
     DocumentCreateIn,
     DocumentListOut,
     DocumentOut,
@@ -145,7 +146,8 @@ def duplicate_document(request, doc_id: UUID):
     data = copy.deepcopy(src.data) if isinstance(src.data, dict) else {}
     data["name"] = name   # autosave sends data.name as the document name
     with transaction.atomic():
-        doc = Document.objects.create(name=name, data=data, project=src.project, created_by=request.user)
+        doc = Document.objects.create(name=name, data=data, description=src.description,
+                                      project=src.project, created_by=request.user)
         copy_document_extras(src, doc, request.user)
         _snapshot(doc, request.user, data, f"copied from {src.name}")
     record_event(UserEvent.DOCUMENT_CREATED, request, document=doc, detail={"duplicated_from": str(src.id)})
@@ -216,6 +218,20 @@ def update_document(request, doc_id: UUID, payload: DocumentUpdateIn):
     # persist for durability without cluttering history with unfinished states.
     if payload.data is not None and payload.snapshot:
         _snapshot(doc, request.user, doc.data, payload.version_label or "")
+    return doc
+
+
+@router.put("/{doc_id}/description", response=DocumentListOut)
+def set_description(request, doc_id: UUID, payload: DescriptionIn):
+    """Set the one-line description the AI sees in the project's list of parts.
+    Saved with .update(), so the document's updated_at (an open editor's
+    check for a save from elsewhere) doesn't move."""
+    doc, err = document_or_error(request, doc_id)
+    if err:
+        return err
+    limit = Document._meta.get_field("description").max_length
+    doc.description = " ".join(payload.description.split())[:limit]
+    Document.objects.filter(id=doc.id).update(description=doc.description)
     return doc
 
 

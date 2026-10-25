@@ -21,6 +21,26 @@ class ProjectOut(Schema):
     description: str
     created_at: datetime
     updated_at: datetime
+    brief: str = ""
+    brief_updated_at: datetime | None = None
+
+
+class BriefIn(Schema):
+    text: str
+    label: str = ""   # what the save was, e.g. "AI proposal: added the tube sizes"
+
+
+class BriefVersionOut(Schema):
+    id: UUID
+    text: str
+    label: str
+    created_at: datetime
+    created_by: str = ""
+
+    @staticmethod
+    def resolve_created_by(obj) -> str:
+        u = obj.created_by
+        return (u.get_full_name() or u.username) if u else ""
 
 
 class ProjectListOut(Schema):

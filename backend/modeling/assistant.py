@@ -155,7 +155,25 @@ PROVENANCE = (
 )
 
 
-def _system(production: str = "") -> str:
+# The part is one of several in a project (a drone: plates, braces, mounts and
+# bought tubes): the brief and the other parts come with the request.
+PROJECT = (
+    "\n\nTHE PROJECT. This part belongs to a project of several parts built "
+    "together. A PROJECT BRIEF (if shown) gives the project's goals, constraints, "
+    "materials, conventions and bought parts: follow it, and when your edit would "
+    "break it, say so in the note. PROJECT PARTS lists the project's other parts "
+    "and sketches (size, key parameters), never their scripts. When a question or an "
+    "edit depends on another part (its hole pattern, its thickness, where it mounts), "
+    "call read_part to look before you answer or edit — don't guess. MENTIONED PARTS "
+    "(if shown) are parts the user pointed at with @ in this message. The other parts "
+    "are read-only: you only ever change this part's script. If the user settles "
+    "something the whole project should remember (a material, a bolt size, a bought "
+    "part, a convention), offer it with propose_brief_edit; the user accepts or "
+    "rejects it."
+)
+
+
+def _system(production: str = "", project: bool = False) -> str:
     base = (
         "You edit a build123d (Python) script that defines a 3D part. The script "
         "MUST bind `part` to the built solid. build123d is already star-imported "
@@ -441,8 +459,14 @@ def _system(production: str = "") -> str:
         "instruction is genuinely ambiguous or you lack information you need "
         "(which face? what dimension? which of several holes?), call "
         "ask_clarification with ONE short question instead of guessing — a wrong "
-        "guess is worse than a question. Otherwise, make the edit."
+        "guess is worse than a question. ask_clarification is only for a question "
+        "you need answered before you can act. When the user asks a question rather "
+        "than for a change (what does it look like, how big is it, what would you "
+        "suggest), reply with answer, never ask_clarification, and leave the script "
+        "alone. Otherwise, make the edit."
     ) + PROVENANCE
+    if project:
+        base += PROJECT
     if production.strip():
         base += (
             "\n\nMANUFACTURING CONTEXT — the user's target production process for "
@@ -472,9 +496,12 @@ WRITE_TOOL = {
 
 ASK_TOOL = {
     "name": "ask_clarification",
-    "description": "Ask the user ONE short clarifying question instead of editing, when the "
-                   "instruction is ambiguous or you need information (which face, what size, "
-                   "which of several holes). Prefer this over guessing.",
+    "description": "Ask the user ONE short question, only when you can't go on without their "
+                   "input: the instruction is ambiguous (which face? which of several holes?) or "
+                   "a dimension you need is missing. Ask rather than guess. The text is that one "
+                   "question, ending in '?'. Never use this to reply: answers, explanations, "
+                   "findings and suggestions go through answer, even when they end by offering "
+                   "a next step.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -485,6 +512,27 @@ ASK_TOOL = {
     },
 }
 
+
+ANSWER_TOOL = {
+    "name": "answer",
+    "description": "Reply to the user without changing the script: an answer to their question "
+                   "about this part or the project's other parts, an explanation, or a suggestion. "
+                   "Use this, not ask_clarification, whenever you are telling rather than asking.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "text": {"type": "string", "description": "the reply, in plain short sentences "
+                     "(markdown lists are fine)"},
+        },
+        "required": ["text"],
+        "additionalProperties": False,
+    },
+}
+
+# the tools that end a turn; any other tool call is answered and the model goes on
+FINAL_TOOLS = {"write_script": "edit", "ask_clarification": "question", "answer": "answer",
+               "cam_reply": "cam"}
+MAX_LOOKUPS = 4   # read_part calls per request, so a confused model can't loop for ever
 
 
 def _hole_table() -> str:
@@ -541,9 +589,26 @@ def _face_sketches(document_id: str | None) -> list[str]:
                    f"through {o} with normal {n} (as drawn; it follows its face){lines}")
     return out
 
-def _anthropic_call(system: str, user: str | list[dict], tools: list[dict], model: str) -> dict:
+def prose_reply(text: str) -> dict:
+    """A reply in plain text with no tool call. With thinking on, tool use can't
+    be forced, and the model often answers a question in prose: that is an
+    answer, unless it ends by asking something."""
+    text = text.strip()
+    if text.endswith("?"):
+        return {"kind": "question", "question": text}
+    return {"kind": "answer", "text": text}
+
+
+def _anthropic_call(system: str, user: str | list[dict], tools: list[dict], model: str,
+                    turns: list[dict] | None = None) -> dict:
     """One model call. `user` is the prompt text, or content blocks (context
-    files, then the prompt text) when files are attached."""
+    files, then the prompt text) when files are attached. `turns` continue the
+    conversation after it (the model's tool calls and their results).
+
+    Returns the final tool's input with its kind (FINAL_TOOLS), plus `side`:
+    any other tool calls it made alongside. With no final tool but other tool
+    calls, returns {kind: "tool", calls, content}: the caller answers the calls
+    and calls again with content and the results appended to `turns`."""
     try:
         import anthropic
     except ImportError as exc:  # pragma: no cover
@@ -563,7 +628,7 @@ def _anthropic_call(system: str, user: str | list[dict], tools: list[dict], mode
             model=model, max_tokens=32000,
             thinking={"type": "adaptive"},
             system=system, tools=tools,
-            messages=[{"role": "user", "content": user}],
+            messages=[{"role": "user", "content": user}, *(turns or [])],
         ) as stream:
             resp = stream.get_final_message()
     except anthropic.APITimeoutError as exc:
@@ -577,20 +642,21 @@ def _anthropic_call(system: str, user: str | list[dict], tools: list[dict], mode
              "cache_read": getattr(u, "cache_read_input_tokens", 0) or 0,
              "cache_write": getattr(u, "cache_creation_input_tokens", 0) or 0}
     text = ""
+    calls = [{"id": b.id, "name": b.name, "input": dict(b.input)}
+             for b in resp.content if b.type == "tool_use"]
+    side = [c for c in calls if c["name"] not in FINAL_TOOLS]
+    for c in calls:
+        if c["name"] in FINAL_TOOLS:   # cam_reply is the CAM chat's (cam/chat.py)
+            return {**c["input"], "kind": FINAL_TOOLS[c["name"]], "usage": usage, "side": side}
+    if side:
+        # thinking blocks go back exactly as they came (the API checks them)
+        content = [b.model_dump(exclude_none=True) for b in resp.content]
+        return {"kind": "tool", "calls": side, "content": content, "usage": usage}
     for block in resp.content:
-        if block.type == "tool_use" and block.name == "write_script":
-            out = dict(block.input); out["kind"] = "edit"; out["usage"] = usage
-            return out
-        if block.type == "tool_use" and block.name == "ask_clarification":
-            out = dict(block.input); out["kind"] = "question"; out["usage"] = usage
-            return out
-        if block.type == "tool_use" and block.name == "cam_reply":   # the CAM chat (cam/chat.py)
-            out = dict(block.input); out["kind"] = "cam"; out["usage"] = usage
-            return out
         if block.type == "text":
             text += block.text
     # No tool call — don't hard-fail. Surface what the model actually said (an
-    # explanation or an in-prose question), or a helpful note if it ran out of room.
+    # answer or an in-prose question), or a helpful note if it ran out of room.
     if resp.stop_reason == "refusal":
         return {"kind": "question", "question": "The model declined this request.", "usage": usage}
     if resp.stop_reason == "max_tokens":
@@ -598,7 +664,7 @@ def _anthropic_call(system: str, user: str | list[dict], tools: list[dict], mode
                "Try breaking it into smaller changes.")
         return {"kind": "question", "question": text.strip() or msg, "usage": usage}
     if text.strip():
-        return {"kind": "question", "question": text.strip(), "usage": usage}
+        return {**prose_reply(text), "usage": usage}
     wanted = "a reply" if any(t.get("name") == "cam_reply" for t in tools) else "a script"
     raise AssistantError(f"the model did not return {wanted}")
 
@@ -614,8 +680,9 @@ def edit_script(
     document_id: str | None = None,
     files: list[dict] | None = None,
     file_listing: list[str] | None = None,
+    mentions: list[str] | None = None,
     *,
-    llm: Callable[[str, str | list[dict], list[dict]], dict] | None = None,
+    llm: Callable[..., dict] | None = None,
 ) -> dict:
     """Turn `instruction` into either an edit of `code` or a clarifying question.
 
@@ -627,14 +694,23 @@ def edit_script(
     the script imports (ASSETS[...]); for such a script the prompt also gets a
     GEOMETRY SUMMARY of the current build. `files` are content blocks for the
     context files (documents/context.py ai_blocks), sent before the prompt
-    text, which lists them (`file_listing`) so the model can cite them. Returns {kind: "edit", code, note, tokens…} for an edit
-    (validated to build, one corrective retry) or {kind: "question", question,
-    tokens…} when the model asks for clarification."""
+    text, which lists them (`file_listing`) so the model can cite them.
+
+    When the document is in a project, the prompt opens with the project's
+    brief and a list of its other parts (project_context.py); the model can
+    read_part any of them (up to MAX_LOOKUPS per call) and propose a new brief
+    (returned as `brief_proposal`, never saved here). `mentions` are the ids of
+    parts the user @-mentioned; their summaries come with the instruction.
+
+    Returns {kind: "edit", code, note, tokens…} for an edit (validated to
+    build, one corrective retry), {kind: "question", question, tokens…} when
+    the model asks for clarification, or {kind: "answer", answer, tokens…}
+    when it replies without editing."""
     instruction = (instruction or "").strip()
     if not instruction:
         raise AssistantError("empty instruction")
     model = model if model and is_known(model) else list_models()["default"]
-    llm = llm or (lambda s, u, t: _anthropic_call(s, u, t, model=model))
+    llm = llm or (lambda s, u, t, turns=None: _anthropic_call(s, u, t, model=model, **({"turns": turns} if turns else {})))
 
     # an imported file's geometry isn't readable from the script: describe it
     assets = load_assets(code, document_id) if asset_refs(code) else {}
@@ -647,8 +723,16 @@ def edit_script(
             pass    # the current script doesn't build: no inventory to describe
 
     drawn = _face_sketches(document_id)
+    from . import project_context as pc
+    project = pc.project_context(document_id) if document_id else ""
+    in_project = bool(document_id) and pc.in_project(document_id)
+    mentioned = pc.mention_context(document_id, mentions) if mentions and in_project else ""
+    tools = [WRITE_TOOL, ASK_TOOL, ANSWER_TOOL] + ([pc.READ_PART_TOOL, pc.PROPOSE_BRIEF_TOOL] if in_project else [])
+    proposal: dict = {}
 
     def prompt(extra: str = "") -> str:
+        proj = f"{project}\n\n" if project else ""
+        ment = f"MENTIONED PARTS (the user pointed at these with @):\n{mentioned}\n\n" if mentioned else ""
         sel = f"SELECTION: {context}\n\n" if context.strip() else ""
         sk = ("FACE SKETCHES (usable as sketch(\"<name>\") / sketch_points(\"<name>\") / sketch_line(\"<name>\", id)):\n" + "\n".join(drawn) + "\n\n") if drawn else ""
         berr = (f"BUILD ERROR (the current script fails with this):\n{build_error.strip()}\n\n"
@@ -665,29 +749,65 @@ def edit_script(
         attached = ("CONTEXT FILES (attached above, in this order):\n" + "\n".join(file_listing)
                     + "\n\n") if files and file_listing else ""
         return (
-            f"{attached}CURRENT SCRIPT:\n```python\n{code}\n```\n\n"
-            f"{geom}{sk}{convo}{berr}{sel}INSTRUCTION: {instruction}\n{extra}"
+            f"{proj}{attached}CURRENT SCRIPT:\n```python\n{code}\n```\n\n"
+            f"{geom}{sk}{convo}{berr}{ment}{sel}INSTRUCTION: {instruction}\n{extra}"
         )
 
     tok = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
     usd = [0.0]   # priced per request: a long prompt can change the rate
+
+    def tool_result(c: dict, lookups: int) -> dict:
+        args = c.get("input") or {}
+        if c["name"] == "read_part" and lookups > MAX_LOOKUPS:
+            text = "That's enough looking: finish now with what you have."
+        elif c["name"] == "read_part":
+            text = pc.read_part(document_id, str(args.get("part", "")), str(args.get("what", "summary")))
+        elif c["name"] == "propose_brief_edit":
+            proposal.update(text=str(args.get("new_text", "")), reason=str(args.get("reason", "")))
+            text = "Shown to the user as a proposed brief; they'll accept or reject it. Now finish your reply."
+        else:
+            text = f"There is no tool called {c['name']}."
+        return {"type": "tool_result", "tool_use_id": c["id"], "content": text}
 
     def call(extra: str = "") -> dict:
         text = prompt(extra)
         # files first, then the text (the API reads documents and images best
         # before the question); their cache_control makes the next turn cheap
         user = [*files, {"type": "text", "text": text}] if files else text
-        try:
-            o = llm(_system(production), user, [WRITE_TOOL, ASK_TOOL])
-        except AssistantError as exc:
-            if usd[0]:          # an earlier call of this edit was billed
-                exc.usage = cost()
-            raise
-        u = o.get("usage") or {}
-        for k in tok:
-            tok[k] += u.get(k, 0)
-        usd[0] += call_cost(model, u)
-        return o
+        turns: list[dict] = []
+        lookups = 0
+        while True:
+            try:
+                # the first call keeps the three-argument form (tests fake it)
+                o = (llm(_system(production, in_project), user, tools, turns) if turns
+                     else llm(_system(production, in_project), user, tools))
+            except AssistantError as exc:
+                if usd[0]:          # an earlier call of this edit was billed
+                    exc.usage = cost()
+                raise
+            u = o.get("usage") or {}
+            for k in tok:
+                tok[k] += u.get(k, 0)
+            usd[0] += call_cost(model, u)
+            for c in o.get("side") or []:   # a brief proposed alongside the reply
+                tool_result(c, lookups)
+            if o.get("kind") == "question" and "?" not in o.get("question", ""):
+                # a safety net (the tool descriptions say otherwise): a reply sent
+                # through ask_clarification with no question in it is an answer
+                return {**o, "kind": "answer", "text": o.get("question", "")}
+            if o.get("kind") != "tool":
+                return o
+            lookups += sum(1 for c in o["calls"] if c["name"] == "read_part")
+            if lookups > MAX_LOOKUPS + 2:
+                raise AssistantError("the model kept looking at other parts without replying — "
+                                     "try a more specific request", usage=cost())
+            turns += [{"role": "assistant", "content": o["content"]},
+                      {"role": "user", "content": [tool_result(c, lookups) for c in o["calls"]]}]
+
+    def done(r: dict) -> dict:
+        if proposal.get("text"):
+            r["brief_proposal"] = dict(proposal)
+        return r
 
     def cost() -> dict:
         return {
@@ -725,7 +845,9 @@ def edit_script(
 
     out = call()
     if out.get("kind") == "question":
-        return {"kind": "question", "question": out.get("question", ""), **cost()}
+        return done({"kind": "question", "question": out.get("question", ""), **cost()})
+    if out.get("kind") == "answer":
+        return done({"kind": "answer", "answer": out.get("text", ""), **cost()})
 
     new_code = out.get("code", "")
     try:
@@ -737,7 +859,7 @@ def edit_script(
             note = (out.get("note", "") +
                     f" ({fix['param']} reduced to {fix['value']:g}, the largest "
                     f"{fix.get('kind', 'size')} that fits this geometry)").strip()
-            return {"kind": "edit", "code": fixed, "note": note, **cost()}
+            return done({"kind": "edit", "code": fixed, "note": note, **cost()})
         out = call(
             f"\nYour previous script failed to build. The failing line and error "
             f"(with the likely cause, where known):\n{exc}\n"
@@ -748,7 +870,9 @@ def edit_script(
             "reads: describe the design as a whole (and list every estimated value, if "
             "any), not only this fix.")
         if out.get("kind") == "question":
-            return {"kind": "question", "question": out.get("question", ""), **cost()}
+            return done({"kind": "question", "question": out.get("question", ""), **cost()})
+        if out.get("kind") == "answer":
+            return done({"kind": "answer", "answer": out.get("text", ""), **cost()})
         new_code = out.get("code", "")
         try:
             validate(new_code)
@@ -759,4 +883,4 @@ def edit_script(
                                      usage=cost()) from exc2
             new_code = fixed
 
-    return {"kind": "edit", "code": new_code, "note": out.get("note", ""), **cost()}
+    return done({"kind": "edit", "code": new_code, "note": out.get("note", ""), **cost()})

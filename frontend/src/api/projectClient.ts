@@ -1,4 +1,4 @@
-import type { Project, ProjectDetail, ProjectShare } from '@/types/project';
+import type { BriefVersion, Project, ProjectDetail, ProjectShare } from '@/types/project';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8951/api';
 
@@ -72,6 +72,15 @@ export const projectApi = {
 
   deleteProject(id: string): Promise<void> {
     return request(`/projects/${id}`, { method: 'DELETE' });
+  },
+
+  /** Saves the brief; each different text is kept as a version (`label`: e.g. "AI proposal: …"). */
+  saveBrief(id: string, text: string, label = ''): Promise<ProjectDetail> {
+    return request(`/projects/${id}/brief`, { method: 'PUT', body: JSON.stringify({ text, label }) });
+  },
+
+  briefVersions(id: string): Promise<BriefVersion[]> {
+    return request(`/projects/${id}/brief/versions`);
   },
 
   listShares(projectId: string): Promise<ProjectShare[]> {

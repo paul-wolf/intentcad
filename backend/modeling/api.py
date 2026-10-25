@@ -8,6 +8,7 @@ from documents.api import document_or_error
 from projects.access import require_auth
 
 from .assistant import AssistantError, edit_script
+from .project_context import save_build
 from .models import AiEdit
 from documents.context import ContextFileError, ai_blocks
 from .engine import EngineError, run_script
@@ -97,6 +98,9 @@ def run_model(request, payload: RunRequest):
         if exc.revolves:
             body["revolves"] = exc.revolves
         return JsonResponse(body, status=422)
+    if payload.document_id and not r.get("warning"):
+        # the project's other parts' AI sees this part's size and geometry
+        save_build(payload.document_id, payload.code, r)
     return RunResponse(
         mesh=MeshOut(**r["mesh"]),
         faces=[RunFace(**f) for f in r.get("faces", [])],
@@ -434,7 +438,8 @@ def edit_model(request, payload: EditRequest):
         r = edit_script(payload.code, payload.instruction, payload.context, history,
                         payload.model or None, production=payload.production,
                         build_error=payload.build_error, document_id=payload.document_id,
-                        files=prepared.blocks, file_listing=prepared.listing)
+                        files=prepared.blocks, file_listing=prepared.listing,
+                        mentions=payload.mentions)
     except AssistantError as exc:
         # a failed edit can still have been billed (a script that didn't build,
         # then a retry): log that spend and report it with the error
@@ -448,6 +453,7 @@ def edit_model(request, payload: EditRequest):
     return EditResponse(
         kind=r.get("kind", "edit"),
         code=r.get("code", ""), note=r.get("note"), question=r.get("question", ""),
+        answer=r.get("answer", ""), brief_proposal=r.get("brief_proposal"),
         context_files=[str(cf.id) for cf in sent], **spend,
     )
 

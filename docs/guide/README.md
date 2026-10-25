@@ -99,6 +99,8 @@ check before printing.
 - Chat to create and change parts; the AI writes and edits the model script.
 - Select faces and edges first to say precisely what you mean.
 - The AI asks a question when something is ambiguous instead of guessing.
+- Ask it a question ("how thick is the wall?") and it answers in the chat without
+  changing the model.
 - **Process notes**: tell it how the part will be made (printer, material, clearances)
   and every edit respects it.
 - **Fix with AI**: when a build fails (a fillet too big, say), one click asks the AI to
@@ -227,6 +229,35 @@ faces of a part:
 ![The part editor: the line under the top bar shows the project, Guide examples](images/part-project.png)
 
 ![Duplicate: the copy of Shelf bracket, its name ready to edit, and the hover buttons on the original](images/duplicate.png)
+
+### The project as context for the AI
+
+The AI in a part's chat knows the project the part is in, not only the part.
+
+- **Brief**: a short Markdown note at the top of the project page: what the project is,
+  its materials, hardware and rules (say "2 mm carbon fibre, M3 throughout, 4 mm from
+  any edge"). Every part's AI reads it first. Click **Edit** (or **Write a brief**),
+  write in the Write tab, check it in Preview, and **Save** (⌘S). Each save is kept:
+  **Versions** lists them, and **Restore…** opens an older one to save again. Keep it
+  under about 2,000 words; past that the count turns red, because every message in
+  every part carries it.
+- **Descriptions**: one line per part or sketch on what it's for ("the arms bolt to
+  it"). Hover over a card in the project and click the lines button, or click the line
+  under the top bar in the part editor. The AI sees it in the list of the project's
+  parts.
+- **The other parts**: the AI sees a list of the project's other parts and sketches
+  (name, description, size from the last build, key parameters) and can open one to
+  read its script or parameters when your question needs it. Ask "what does the
+  bottom plate's hole pattern look like?" in the top plate's chat and it looks. It
+  only ever changes the part you're in.
+- **@-mentions**: type @ in the chat box and pick a part or sketch (arrow keys and
+  Enter, or click) to send its summary with your message.
+- **Brief changes**: when you settle something the whole project should remember (a
+  bolt size, a bought part), the AI may propose a change to the brief. It shows as a
+  diff under its reply; **Accept** saves it as a new brief version, **Reject** drops
+  it. The AI never changes the brief itself.
+
+![The project page: the brief at the top, the parts with their descriptions under it](images/project-brief.png)
 
 ### Beyond 3D: 2D and CNC
 

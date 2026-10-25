@@ -639,6 +639,7 @@ class EditRequest(Schema):
     production: str = ""           # target production process (e.g. FDM print) — standing context
     build_error: str = ""          # the error the current script fails with, if it doesn't build
     skip_context: list[str] = []   # context file ids left out of this message only
+    mentions: list[str] = []       # ids of the project's parts the user @-mentioned
 
 
 class ModelInfo(Schema):
@@ -659,11 +660,18 @@ class ModelsResponse(Schema):
     source: str           # "live" or "static" (API unreachable — snapshot)
 
 
+class BriefProposal(Schema):
+    text: str
+    reason: str = ""
+
+
 class EditResponse(Schema):
-    kind: str = "edit"           # 'edit' | 'question'
+    kind: str = "edit"           # 'edit' | 'question' | 'answer'
     code: str = ""               # (edit) the full updated script, validated to build
     note: str | None = None      # (edit) one-sentence description of the change
     question: str = ""           # (question) the assistant's clarifying question
+    answer: str = ""             # (answer) a reply that leaves the script as it is
+    brief_proposal: BriefProposal | None = None   # a new project brief, for the user to accept
     # the spend, for staff only: left out of the response for everyone else
     tokens_in: int | None = None           # all input read, cached or not
     tokens_out: int | None = None
