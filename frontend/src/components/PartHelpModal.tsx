@@ -128,6 +128,7 @@ const SECTIONS: { title: string; items: [string, string][] }[] = [
     items: [
       ['Build', 'Rebuilds from the script after editing it by hand.'],
       ['Versions', 'Saved versions of the script; restore any of them.'],
+      ['Use project sketch', 'Builds from a sketch shared in the project, read in the script as SK["name"]; the part goes out of date when that sketch changes.'],
       ['Process', 'How the part will be made (e.g. FDM printing). The AI designs every change to it.'],
       ['Import STEP', 'Starts the part from a STEP file.'],
       ['STL · STEP', 'Download the part for printing or for other CAD tools.'],

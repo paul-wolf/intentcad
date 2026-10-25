@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useEditorStore } from '@/stores/editorStore';
@@ -27,6 +27,28 @@ function FieldGroup({ label, children }: { label: string; children: React.ReactN
         {children}
       </div>
     </div>
+  );
+}
+
+/** An element's name, for parts that read the sketch: SK["alias"].named("name"). */
+function NameField({ entity, onChange }: { entity: Entity; onChange: (name: string) => void }) {
+  const palette = useThemeStore((s) => s.palette);
+  const [value, setValue] = useState(entity.name ?? '');
+  useEffect(() => setValue(entity.name ?? ''), [entity.id, entity.name]);
+  const commit = () => { if (value.trim() !== (entity.name ?? '')) onChange(value.trim()); };
+  return (
+    <FieldGroup label="Name">
+      <input
+        value={value}
+        placeholder="none (parts use it by this name)"
+        title='Parts that use this sketch can pick this element by name: SK["alias"].named("…")'
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setValue(entity.name ?? ''); }}
+        style={{ padding: '3px 6px', fontSize: '12px', background: palette.inputBg, color: palette.text,
+                 border: `1px solid ${palette.inputBorder}`, borderRadius: '3px', fontFamily: 'inherit' }}
+      />
+    </FieldGroup>
   );
 }
 
@@ -269,6 +291,13 @@ export function PropertiesPanel({ entity }: PropertiesPanelProps) {
           </span>
         ))}
       </div>
+
+      {entity.type !== 'dimension' && (
+        <NameField entity={entity} onChange={(name) => {
+          const { name: _old, ...rest } = entity;
+          update((name ? { ...rest, name } : rest) as Entity);
+        }} />
+      )}
 
       {entity.type === 'point' && (
         <FieldGroup label="Position">

@@ -42,7 +42,7 @@ def main() -> None:
             req = json.loads(line)
             result = _engine_runner._run(req.get("code", ""), req.get("export"),
                                          req.get("assets"), req.get("asset_refs"),
-                                         req.get("sketches"), req.get("bed"))
+                                         req.get("sketches"), req.get("bed"), req.get("shared"))
         except Exception as exc:  # never let one bad request take down the worker
             result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
         proto.write(json.dumps(result) + "\n")

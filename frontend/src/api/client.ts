@@ -131,6 +131,27 @@ export interface DocumentListItem {
   thumbnail?: string | null;
   /** a line on what it is or is for: the AI sees it in the project's parts list */
   description?: string;
+  /** (parts) why its last build is out of date with the project's shared
+   *  sketches and parameters, e.g. 'SK["frame"] changed' */
+  stale?: string[];
+  /** (parts) built with a restored version's inputs, not the latest */
+  pinned?: boolean;
+}
+
+/** A part that uses one of a sketch document's sketches (documents/api used-by). */
+export interface UsedByPart {
+  id: string;
+  name: string;
+  /** each alias that points here; the groups and names its script asks for */
+  uses: { alias: string; sketch: string; in_script: boolean; groups: string[]; names: string[] }[];
+  stale: string[];
+  pinned: boolean;
+}
+
+/** What a part's script reads as SK / PP, as the editor has its refs. */
+export interface SharedInputs {
+  refs?: Record<string, import('@/types/document').SketchRef>;
+  pinned?: import('@/types/document').BuildInputs | null;
 }
 
 export interface DocumentFull {
@@ -200,6 +221,11 @@ export const api = {
 
   getVersion(docId: string, versionId: string): Promise<VersionFull> {
     return request(`/documents/${docId}/versions/${versionId}`);
+  },
+
+  /** The parts that use this sketch document's sketches. */
+  usedBy(docId: string): Promise<{ parts: UsedByPart[] }> {
+    return request(`/documents/${docId}/used-by`);
   },
 };
 
@@ -329,19 +355,34 @@ export const buildApi = {
   // `documentId`: the part whose uploaded files the script imports (ASSETS[...])
   // `sketches`: the face sketches it extrudes (sketch("name")) as on screen — saved or not
   /** `bed`: the print bed face (Document.printBed), found again in the build (RunResponse.bed). */
+  /** `shared`: the part's SK aliases and pinned inputs as the editor has them. */
   run(code: string, signal?: AbortSignal, documentId = '', sketches: Record<string, unknown> = {},
-      bed: FaceRefSpec | null = null): Promise<RunResponse> {
-    return request('/build/run', { method: 'POST', body: JSON.stringify({ code, document_id: documentId, sketches, bed }), signal });
+      bed: FaceRefSpec | null = null, shared: SharedInputs | null = null): Promise<RunResponse> {
+    return request('/build/run', { method: 'POST', body: JSON.stringify({ code, document_id: documentId, sketches, bed, shared }), signal });
   },
   export(code: string, format: 'stl' | 'step' | 'stl-parts' | 'dxf' | 'dxf-views', documentId = '',
-         sketches: Record<string, unknown> = {}, bed: FaceRefSpec | null = null): Promise<{ format: string; data: string }> {
-    return request('/build/export', { method: 'POST', body: JSON.stringify({ code, format, document_id: documentId, sketches, bed }) });
+         sketches: Record<string, unknown> = {}, bed: FaceRefSpec | null = null,
+         shared: SharedInputs | null = null): Promise<{ format: string; data: string }> {
+    return request('/build/export', { method: 'POST', body: JSON.stringify({ code, format, document_id: documentId, sketches, bed, shared }) });
+  },
+  /** The versions of the shared sketches and parameters `code` reads now:
+   *  `key` changes when any does (part of the browser's build cache key). */
+  inputs(code: string, documentId: string, shared: SharedInputs | null = null):
+    Promise<{ key: string; inputs: import('@/types/document').BuildInputs; errors: Record<string, string> }> {
+    return request('/build/inputs', { method: 'POST', body: JSON.stringify({ code, document_id: documentId, shared }) });
+  },
+  /** Build a saved part on the server with its saved script and the latest
+   *  shared inputs, and record the build (Rebuild all). */
+  rebuild(documentId: string): Promise<{ ok: boolean; error: string; warning: string; stale: string[] }> {
+    return request(`/build/rebuild/${documentId}`, { method: 'POST' });
   },
   edit(payload: { code: string; instruction: string; context?: string; document_id?: string;
                   history?: { role: string; text: string }[]; model?: string; production?: string;
                   build_error?: string; skip_context?: string[];
                   /** the ids of the project's parts and sketches @-mentioned in the instruction */
-                  mentions?: string[] }): Promise<EditResponse> {
+                  mentions?: string[];
+                  /** the part's SK aliases as the editor has them */
+                  sketch_refs?: Record<string, import('@/types/document').SketchRef> }): Promise<EditResponse> {
     return request('/build/edit', { method: 'POST', body: JSON.stringify(payload) });
   },
   /** The Claude models the AI edit can use right now (discovered server-side
@@ -459,8 +500,9 @@ export const buildApi = {
   unlinkStep(code: string, line: number): Promise<{ code: string }> {
     return request('/build/unlink_step', { method: 'POST', body: JSON.stringify({ code, line }) });
   },
-  sensitivity(code: string, documentId = '', sketches: Record<string, unknown> = {}): Promise<{ params: Record<string, DimInfo> }> {
-    return request('/build/sensitivity', { method: 'POST', body: JSON.stringify({ code, document_id: documentId, sketches }) });
+  sensitivity(code: string, documentId = '', sketches: Record<string, unknown> = {},
+              shared: SharedInputs | null = null): Promise<{ params: Record<string, DimInfo> }> {
+    return request('/build/sensitivity', { method: 'POST', body: JSON.stringify({ code, document_id: documentId, sketches, shared }) });
   },
 };
 
@@ -484,6 +526,10 @@ export interface EditResponse {
   answer?: string;
   /** a change to the project brief the AI suggests; the user accepts or rejects it */
   brief_proposal?: { text: string; reason: string } | null;
+  /** shared sketches the AI added with use_sketch: merge into data.sketchRefs */
+  sketch_refs?: Record<string, import('@/types/document').SketchRef> | null;
+  /** project parameters the AI suggests (set_project_parameter); the user accepts or rejects each */
+  parameter_proposals?: (import('@/types/project').ProjectParameter & { reason: string })[] | null;
   /** the spend, sent to staff only: all input read, cached or not; of it,
    *  cache_read_tokens came from the prompt cache */
   tokens_in?: number; tokens_out?: number; cost_usd?: number;
@@ -793,6 +839,8 @@ export interface RunResponse {
   revolves?: import('@/build/revolve').RevolveReport[];
   /** the print bed face (the run's `bed`) found again: its index and outward normal now */
   bed?: { status: 'found' | 'ambiguous' | 'not_found'; face: number | null; normal: [number, number, number] | null } | null;
+  /** the shared sketches' versions and the parameter values it was built with */
+  inputs?: import('@/types/document').BuildInputs;
 }
 
 /** Mirrors backend modeling.schemas.AutoRoundReport. */

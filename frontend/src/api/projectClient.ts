@@ -63,6 +63,12 @@ export const projectApi = {
     });
   },
 
+  /** Replace the project's parameters (PP["name"] in its parts' scripts);
+   *  a bad or repeated name is refused with a message. */
+  setParameters(id: string, parameters: import('@/types/project').ProjectParameter[]): Promise<ProjectDetail> {
+    return request(`/projects/${id}/parameters`, { method: 'PUT', body: JSON.stringify({ parameters }) });
+  },
+
   updateProject(id: string, data: { name?: string; description?: string }): Promise<ProjectDetail> {
     return request(`/projects/${id}`, {
       method: 'PATCH',

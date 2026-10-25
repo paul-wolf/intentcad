@@ -185,6 +185,13 @@ class ChatResponse(Schema):
 
 
 # ── build123d engine (the new modeler) ──
+class SharedIn(Schema):
+    """The part's shared-sketch refs and pinned inputs as the editor has them
+    (saved or not); None for either means the saved ones (shared_defs.py)."""
+    refs: dict | None = None
+    pinned: dict | None = None
+
+
 class RunRequest(Schema):
     """Execute a build123d script (the model is the script)."""
     code: str
@@ -193,6 +200,26 @@ class RunRequest(Schema):
     sketches: dict[str, dict] = {}
     # the print bed face set in the editor (a face ref), else the bed is -Z
     bed: dict | None = None
+    shared: SharedIn | None = None
+
+
+class InputsRequest(Schema):
+    code: str
+    document_id: str = ""
+    shared: SharedIn | None = None
+
+
+class InputsResponse(Schema):
+    key: str = ""                  # changes when any input does (the browser's build cache key)
+    inputs: dict = {}              # {"sk": {alias: {document, sketch, version}}, "pp": {name: value}}
+    errors: dict[str, str] = {}    # alias -> why its sketch couldn't be read
+
+
+class RebuildResponse(Schema):
+    ok: bool
+    error: str = ""
+    warning: str = ""
+    stale: list[str] = []          # still out of date (only when it failed)
 
 
 class RunMetrics(Schema):
@@ -349,6 +376,7 @@ class RunResponse(Schema):
     patterns: list[dict] = []                   # each linear()/circular() used: its instances (pattern.py)
     revolves: list[dict] = []                   # each revolve(): its axis and reach, or why it failed (revolve.py)
     bed: dict | None = None                     # the print bed face found again: {status, face, normal}
+    inputs: dict | None = None                  # the shared sketches/parameters it read (shared_defs.py)
 
 
 class ExportRequest(Schema):
@@ -357,6 +385,7 @@ class ExportRequest(Schema):
     document_id: str = ""
     sketches: dict[str, dict] = {}
     bed: dict | None = None
+    shared: SharedIn | None = None
 
 
 class ExportResponse(Schema):
@@ -593,6 +622,7 @@ class SensitivityRequest(Schema):
     code: str
     document_id: str = ""
     sketches: dict[str, dict] = {}
+    shared: SharedIn | None = None
 
 
 class DimInfo(Schema):
@@ -640,6 +670,7 @@ class EditRequest(Schema):
     build_error: str = ""          # the error the current script fails with, if it doesn't build
     skip_context: list[str] = []   # context file ids left out of this message only
     mentions: list[str] = []       # ids of the project's parts the user @-mentioned
+    sketch_refs: dict | None = None   # the part's SK aliases as the editor has them (else the saved ones)
 
 
 class ModelInfo(Schema):
@@ -672,6 +703,8 @@ class EditResponse(Schema):
     question: str = ""           # (question) the assistant's clarifying question
     answer: str = ""             # (answer) a reply that leaves the script as it is
     brief_proposal: BriefProposal | None = None   # a new project brief, for the user to accept
+    sketch_refs: dict | None = None               # aliases use_sketch added: merge into data.sketchRefs
+    parameter_proposals: list[dict] | None = None # project parameters, for the user to accept
     # the spend, for staff only: left out of the response for everyone else
     tokens_in: int | None = None           # all input read, cached or not
     tokens_out: int | None = None

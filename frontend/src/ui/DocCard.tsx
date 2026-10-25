@@ -22,6 +22,10 @@ export interface DocCardData {
   subtitle?: string;    // e.g. project name (for the "recent" grid)
   thumbnail?: string | null;   // PNG data URL preview of the built part
   description?: string;        // a line on what it is for (the AI sees it too)
+  /** (parts) why it's out of date with the project's shared sketches and parameters */
+  stale?: string[];
+  /** (parts) built with a restored version's sketches and parameters */
+  pinned?: boolean;
 }
 
 export interface DocCardEdit {
@@ -110,6 +114,15 @@ export function DocCard({ d, onOpen, onDoubleClick, onRename, onDescribe, onDupl
                        border: `1px solid ${badgeColor}`, borderRadius: 5, padding: '2px 6px' }}>
           {isPart ? 'PART' : 'SKETCH'}
         </span>
+        {(d.pinned || !!d.stale?.length) && (
+          <span title={d.pinned ? 'Built with the sketches and parameters of a restored version (Follow latest, in the part, unpins it)'
+                        : `Out of date: ${d.stale!.join(', ')}. Open it, or Rebuild all in the sketch, to rebuild it`}
+            style={{ position: 'absolute', bottom: 9, left: 9, zIndex: 2, fontFamily: MONO, fontSize: '9.5px', fontWeight: 600,
+                     letterSpacing: '0.5px', color: d.pinned ? t.violet : t.danger, background: d.pinned ? t.violetSoft : t.surface,
+                     border: `1px solid ${d.pinned ? t.violet : t.danger}`, borderRadius: 5, padding: '2px 6px' }}>
+            {d.pinned ? 'PINNED' : 'OUT OF DATE'}
+          </span>
+        )}
         {d.thumbnail
           ? <img src={d.thumbnail} alt="" style={{ maxWidth: '86%', maxHeight: '86%', objectFit: 'contain' }} />
           : isPart

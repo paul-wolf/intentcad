@@ -11,7 +11,8 @@ from .assistant import AssistantError, edit_script
 from .project_context import save_build
 from .models import AiEdit
 from documents.context import ContextFileError, ai_blocks
-from .engine import EngineError, run_script
+from .engine import EngineError, run_script, uses_shared
+from . import shared_defs
 from . import hole_presets
 from .llm_models import list_models
 from .paramedit import (ParamError, add_edge_op, add_extrude, add_holes, add_revolve, add_mirror_body, add_plane, add_shell,
@@ -41,6 +42,8 @@ from .schemas import (
     EditResponse,
     ExportRequest,
     ExportResponse,
+    InputsRequest,
+    InputsResponse,
     MeshOut,
     MirrorStepsRequest,
     MirrorStepsResponse,
@@ -49,6 +52,7 @@ from .schemas import (
     RunFace,
     RunMetrics,
     RunRequest,
+    RebuildResponse,
     RunResponse,
     SensitivityRequest,
     SensitivityResponse,
@@ -79,6 +83,51 @@ def _check_document(request, document_id: str):
     return document_or_error(request, document_id)[1]
 
 
+def _shared(request, code: str, document_id: str, shared) -> dict | None:
+    """The project sketches and parameters `code` reads (SK[...], PP[...]),
+    with the editor's refs and pins when it sent them; None if it reads none."""
+    if not uses_shared(code):
+        return None
+    return shared_defs.resolve(code, document_id or None, user=request.user,
+                               refs=shared.refs if shared else None,
+                               pinned=shared.pinned if shared else None)
+
+
+@router.post("/inputs", response=InputsResponse)
+def build_inputs(request, payload: InputsRequest):
+    """Which versions of the project's sketches and parameters a build of
+    `code` would read: the browser puts the key in its build cache key, so a
+    changed sketch or parameter isn't served from the cache."""
+    err = _check_document(request, payload.document_id)
+    if err:
+        return err
+    r = _shared(request, payload.code, payload.document_id, payload.shared) or {}
+    return InputsResponse(key=shared_defs.input_key(r.get("inputs")), inputs=r.get("inputs") or {},
+                          errors=r.get("errors") or {})
+
+
+@router.post("/rebuild/{doc_id}", response=RebuildResponse)
+def rebuild(request, doc_id: UUID):
+    """Build a saved part on the server (as it is saved: its refs, its pins)
+    and record the build, so it is no longer out of date. The sketch editor's
+    Rebuild all calls this for each part that uses the sketch, one at a time."""
+    doc, err = document_or_error(request, doc_id)
+    if err:
+        return err
+    code = (doc.data or {}).get("modelCode") if isinstance(doc.data, dict) else None
+    if not isinstance(code, str) or not code.strip():
+        return RebuildResponse(ok=False, error="It has no script to build")
+    try:
+        r = run_script(code, document_id=str(doc.id),
+                       shared=shared_defs.resolve(code, doc, user=request.user) if uses_shared(code) else None)
+    except EngineError as exc:
+        return RebuildResponse(ok=False, error=str(exc), stale=shared_defs.stale(doc))
+    if r.get("warning"):
+        return RebuildResponse(ok=False, warning=r["warning"], stale=shared_defs.stale(doc))
+    save_build(str(doc.id), code, r)
+    return RebuildResponse(ok=True)
+
+
 @router.post("/run", response=RunResponse)
 def run_model(request, payload: RunRequest):
     """Execute a build123d script and return its artifacts (mesh + STEP).
@@ -90,7 +139,8 @@ def run_model(request, payload: RunRequest):
         return err
     try:
         r = run_script(payload.code, document_id=payload.document_id,
-                       sketches=payload.sketches, bed=payload.bed)
+                       sketches=payload.sketches, bed=payload.bed,
+                       shared=_shared(request, payload.code, payload.document_id, payload.shared))
     except EngineError as exc:
         body = {"message": str(exc), "params": exc.params}
         if exc.fix:
@@ -119,6 +169,7 @@ def run_model(request, payload: RunRequest):
         patterns=r.get("patterns") or [],
         revolves=r.get("revolves") or [],
         bed=r.get("bed"),
+        inputs=r.get("inputs"),
     )
 
 
@@ -133,7 +184,8 @@ def export_model(request, payload: ExportRequest):
         return JsonResponse({"message": f"unknown format {payload.format!r}"}, status=422)
     try:
         r = run_script(payload.code, export=[fmt], document_id=payload.document_id,
-                       sketches=payload.sketches, bed=payload.bed)
+                       sketches=payload.sketches, bed=payload.bed,
+                       shared=_shared(request, payload.code, payload.document_id, payload.shared))
     except EngineError as exc:
         return JsonResponse({"message": str(exc)}, status=422)
     return ExportResponse(format=fmt, data=r.get("exports", {}).get(fmt, ""))
@@ -414,7 +466,8 @@ def sensitivity_endpoint(request, payload: SensitivityRequest):
     if err:
         return err
     try:
-        m = sensitivity(payload.code, document_id=payload.document_id, sketches=payload.sketches)
+        m = sensitivity(payload.code, document_id=payload.document_id, sketches=payload.sketches,
+                        shared=_shared(request, payload.code, payload.document_id, payload.shared))
     except EngineError as exc:
         return JsonResponse({"message": str(exc)}, status=422)
     return SensitivityResponse(params=m)
@@ -439,7 +492,7 @@ def edit_model(request, payload: EditRequest):
                         payload.model or None, production=payload.production,
                         build_error=payload.build_error, document_id=payload.document_id,
                         files=prepared.blocks, file_listing=prepared.listing,
-                        mentions=payload.mentions)
+                        mentions=payload.mentions, sketch_refs=payload.sketch_refs)
     except AssistantError as exc:
         # a failed edit can still have been billed (a script that didn't build,
         # then a retry): log that spend and report it with the error
@@ -454,6 +507,7 @@ def edit_model(request, payload: EditRequest):
         kind=r.get("kind", "edit"),
         code=r.get("code", ""), note=r.get("note"), question=r.get("question", ""),
         answer=r.get("answer", ""), brief_proposal=r.get("brief_proposal"),
+        sketch_refs=r.get("sketch_refs"), parameter_proposals=r.get("parameter_proposals"),
         context_files=[str(cf.id) for cf in sent], **spend,
     )
 

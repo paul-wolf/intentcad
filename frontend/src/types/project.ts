@@ -15,6 +15,17 @@ export interface ProjectDetail {
   /** Markdown every part's AI reads first: what the project is, materials, constraints */
   brief?: string;
   brief_updated_at?: string | null;
+  /** Project parameters, read in every part's script as PP["name"] */
+  parameters?: ProjectParameter[];
+}
+
+/** A project parameter (backend projects/schemas.ProjectParameter): a number
+ *  in mm or degrees, a count (unit ""), or text such as "M3". */
+export interface ProjectParameter {
+  name: string;
+  value: number | string;
+  unit: 'mm' | 'deg' | '';
+  description?: string;
 }
 
 export interface BriefVersion {

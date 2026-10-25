@@ -5,6 +5,7 @@ import { PropertiesPanel } from './PropertiesPanel';
 import { SketchPanel } from './SketchPanel';
 import { ParametersPanel } from './ParametersPanel';
 import { PatternPanel } from './PatternPanel';
+import { SharedSketchPanel } from './SharedSketchPanel';
 
 export function RightPanel() {
   const selectedEntityIds = useEditorStore((s) => s.selectedEntityIds);
@@ -29,6 +30,7 @@ export function RightPanel() {
       }}
     >
       <SketchPanel />
+      <SharedSketchPanel />
       <ParametersPanel />
       <PatternPanel />
       {singleEntity && <PropertiesPanel entity={singleEntity} />}

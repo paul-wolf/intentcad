@@ -27,6 +27,9 @@ class Project(models.Model):
     # ProjectBriefVersion.
     brief = models.TextField(blank=True, default="")
     brief_updated_at = models.DateTimeField(null=True, blank=True)
+    # values every part in the project can read as PP["name"]:
+    # [{name, value (a number in mm or degrees, or text), unit, description}]
+    parameters = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

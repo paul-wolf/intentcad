@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useRef, useCallback } from 'react';
+import { useMemo, useEffect, useRef, useCallback, useSyncExternalStore } from 'react';
 import { useParams } from 'react-router-dom';
 import { DocumentDrawer } from './DocumentDrawer';
 import { SketchWorkspace } from './SketchWorkspace';
@@ -8,7 +8,9 @@ import { useDocumentStore } from '@/stores/documentStore';
 import { useCamStore, setCamDocumentId } from '@/stores/camStore';
 import { useBuildStore } from '@/stores/buildStore';
 import { useThemeStore } from '@/theme';
-import { startAutoSave, setBackendId, getBackendId, setProjectContext, requestSave } from '@/api/autoSave';
+import { startAutoSave, setBackendId, getBackendId, setProjectContext, requestSave, subscribeBackendId } from '@/api/autoSave';
+import { loadUsers } from '@/api/sharedUses';
+import { SharedUsesBanner } from './SharedUsesBanner';
 import { api } from '@/api/cachedClient';
 import { projectApi } from '@/api/projectClient';
 import { migrateDocument } from '@/utils/document';
@@ -203,6 +205,18 @@ export function EditorPage() {
     return () => { cancelled = true; };
   }, [id]);
 
+  // The parts that use this sketch document (Used by, and the save guard).
+  // A sketch saved before parts could use it gets its shared profiles now.
+  const backendId = useSyncExternalStore(subscribeBackendId, getBackendId);
+  useEffect(() => {
+    if (!backendId || backendId !== id) return;
+    void loadUsers(backendId);
+    const sketches = useDocumentStore.getState().document.sketches;
+    if (!useDocumentStore.getState().document.modelCode?.trim()
+        && sketches.some((s) => !(s.profile && 'items' in s.profile))) requestSave();
+    return () => { void loadUsers(null); };
+  }, [backendId, id]);
+
   // Start auto-save subscription
   useEffect(() => {
     const unsub = startAutoSave();
@@ -282,7 +296,7 @@ export function EditorPage() {
         keys={camPanelOpen ? 'viewport' : 'all'}
         toolbar={camPanelOpen ? <CamHeader /> : undefined}
         left={camPanelOpen ? <CamStepPanel /> : undefined}
-        overlay={camPanelOpen ? <><SimDepthIndicator /><CamCanvasHint /></> : undefined}
+        overlay={camPanelOpen ? <><SimDepthIndicator /><CamCanvasHint /></> : <SharedUsesBanner />}
         right={camPanelOpen ? <></> : undefined}
       />
       <DocumentDrawer />

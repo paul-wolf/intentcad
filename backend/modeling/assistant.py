@@ -14,7 +14,7 @@ import os
 from collections import defaultdict
 from typing import Callable
 
-from .engine import EngineError, asset_refs, load_assets, load_sketches, run_script
+from .engine import EngineError, asset_refs, load_assets, load_sketches, run_script, uses_shared
 from .paramedit import ParamError, set_params
 from .llm_models import call_cost, is_known, list_models
 
@@ -170,6 +170,22 @@ PROJECT = (
     "something the whole project should remember (a material, a bolt size, a bought "
     "part, a convention), offer it with propose_brief_edit; the user accepts or "
     "rejects it."
+    "\n\nSHARED DEFINITIONS. Parts that must match (hole patterns, outlines, a tube "
+    "size) share them instead of copying numbers. SHARED SKETCHES are the project's "
+    "sketch documents: call use_sketch to give this part one under an alias, then "
+    "read it as SK[\"alias\"] — a build123d Sketch on its plane (its closed shapes as "
+    "faces: extrude(SK[\"frame\"], amount=2)) with .group(\"name\") and "
+    ".named(\"name\") (a part of it), .circles (each .center, .radius, .diameter), "
+    ".points (points and circle centres: holes(part, SK[\"frame\"].group(\"arm "
+    "holes\").points, ...)), .lines, .plane and .on(plane_or_flat_face) (the same "
+    "shapes on another plane). Sketches drawn on XY of the project frame sit at z=0: "
+    "place a plate's shapes with .on(...) or cut through the whole part. PROJECT "
+    "PARAMETERS are read as PP[\"name\"] (a number in mm or degrees, or text). When "
+    "a shared sketch or parameter exists for what you're writing, use it rather than "
+    "a copied number; when the user asks to switch a part to a shared sketch, replace "
+    "its copied coordinates with SK[...] and keep the rest. To add or change a "
+    "project parameter, use set_project_parameter (the user accepts it); never "
+    "redefine PP or SK in the script."
 )
 
 
@@ -681,6 +697,7 @@ def edit_script(
     files: list[dict] | None = None,
     file_listing: list[str] | None = None,
     mentions: list[str] | None = None,
+    sketch_refs: dict | None = None,
     *,
     llm: Callable[..., dict] | None = None,
 ) -> dict:
@@ -727,8 +744,12 @@ def edit_script(
     project = pc.project_context(document_id) if document_id else ""
     in_project = bool(document_id) and pc.in_project(document_id)
     mentioned = pc.mention_context(document_id, mentions) if mentions and in_project else ""
-    tools = [WRITE_TOOL, ASK_TOOL, ANSWER_TOOL] + ([pc.READ_PART_TOOL, pc.PROPOSE_BRIEF_TOOL] if in_project else [])
+    tools = [WRITE_TOOL, ASK_TOOL, ANSWER_TOOL] + ([pc.READ_PART_TOOL, pc.USE_SKETCH_TOOL,
+                                                   pc.SET_PROJECT_PARAMETER_TOOL, pc.PROPOSE_BRIEF_TOOL]
+                                                  if in_project else [])
     proposal: dict = {}
+    added_refs: dict = {}     # use_sketch: aliases this edit adds to the part's sketchRefs
+    param_props: dict = {}    # set_project_parameter: name -> {name, value, unit, description, reason}
 
     def prompt(extra: str = "") -> str:
         proj = f"{project}\n\n" if project else ""
@@ -762,6 +783,19 @@ def edit_script(
             text = "That's enough looking: finish now with what you have."
         elif c["name"] == "read_part":
             text = pc.read_part(document_id, str(args.get("part", "")), str(args.get("what", "summary")))
+        elif c["name"] == "use_sketch":
+            ref, text = pc.use_sketch(document_id, str(args.get("document", "")), str(args.get("sketch", "")),
+                                      str(args.get("alias", "")))
+            if ref:
+                added_refs.update(ref)
+        elif c["name"] == "set_project_parameter":
+            p, why = pc.check_parameter(args)
+            if p:
+                param_props[p["name"]] = {**p, "reason": str(args.get("reason", ""))}
+                text = (f'Shown to the user as a proposed project parameter PP["{p["name"]}"]; your script '
+                        "can use it now (it is built with the proposed value). Now finish your reply.")
+            else:
+                text = why
         elif c["name"] == "propose_brief_edit":
             proposal.update(text=str(args.get("new_text", "")), reason=str(args.get("reason", "")))
             text = "Shown to the user as a proposed brief; they'll accept or reject it. Now finish your reply."
@@ -807,6 +841,10 @@ def edit_script(
     def done(r: dict) -> dict:
         if proposal.get("text"):
             r["brief_proposal"] = dict(proposal)
+        if added_refs:
+            r["sketch_refs"] = dict(added_refs)
+        if param_props:
+            r["parameter_proposals"] = list(param_props.values())
         return r
 
     def cost() -> dict:
@@ -825,7 +863,14 @@ def edit_script(
         if dropped:
             raise EngineError(f'the script no longer imports ASSETS["{dropped[0]}"]; '
                               "keep every ASSETS[...] line exactly as it was")
-        r = run_script(script, document_id=document_id)  # raises EngineError if nothing builds
+        shared = None
+        if uses_shared(script):
+            from . import shared_defs
+
+            base = sketch_refs if sketch_refs is not None else shared_defs.saved_refs(document_id)
+            shared = shared_defs.resolve(script, document_id, refs={**(base or {}), **added_refs})
+            shared["pp"].update({n: p["value"] for n, p in param_props.items()})
+        r = run_script(script, document_id=document_id, shared=shared)  # raises EngineError if nothing builds
         if r.get("warning"):    # an operation failed partway — treat as a build error
             raise EngineError(r["warning"], fix=r.get("fix"))
 

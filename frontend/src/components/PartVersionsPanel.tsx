@@ -41,7 +41,9 @@ function fmtWhen(iso: string): string {
 export function PartVersionsPanel({ docId, currentCode, onRestore, onClose }: {
   docId: string;
   currentCode: string;
-  onRestore: (code: string) => void;
+  /** the version's code, and its saved data (its shared sketch refs and the
+   *  inputs it was built with, to pin) */
+  onRestore: (code: string, data: Record<string, unknown>) => void;
   onClose: () => void;
 }) {
   const palette = useThemeStore((s) => s.palette);
@@ -49,6 +51,7 @@ export function PartVersionsPanel({ docId, currentCode, onRestore, onClose }: {
   const [error, setError] = useState('');
   const [selId, setSelId] = useState<string | null>(null);
   const [selCode, setSelCode] = useState<string>('');
+  const [selData, setSelData] = useState<Record<string, unknown>>({});
   const [loadingCode, setLoadingCode] = useState(false);
   const [mode, setMode] = useState<'full' | 'diff'>('diff');
 
@@ -68,6 +71,7 @@ export function PartVersionsPanel({ docId, currentCode, onRestore, onClose }: {
       .then((full) => {
         const code = (full.data as { modelCode?: string }).modelCode ?? '';
         setSelCode(code);
+        setSelData(full.data as Record<string, unknown>);
       })
       .catch((e) => setError(String(e)))
       .finally(() => setLoadingCode(false));
@@ -75,7 +79,10 @@ export function PartVersionsPanel({ docId, currentCode, onRestore, onClose }: {
 
   const mono = 'ui-monospace, SFMono-Regular, Menlo, monospace';
   const diff = mode === 'diff' ? lineDiff(selCode, currentCode) : null;
-  const isCurrent = selCode.trim() === currentCode.trim();
+  // a version with shared inputs can be restored with the same script: it
+  // pins the sketches and parameters it was built with
+  const pins = !!selData.inputs;
+  const isCurrent = selCode.trim() === currentCode.trim() && !pins;
 
   return (
     <div onClick={onClose}
@@ -141,10 +148,10 @@ export function PartVersionsPanel({ docId, currentCode, onRestore, onClose }: {
               {isCurrent
                 ? <span style={{ fontSize: '12px', color: palette.textSecondary }}>This is the current model</span>
                 : (
-                  <button onClick={() => onRestore(selCode)} disabled={!selCode}
+                  <button onClick={() => onRestore(selCode, selData)} disabled={!selCode}
                     style={{ padding: '6px 14px', fontSize: '13px', fontWeight: 600, borderRadius: 6,
                              background: palette.accent, color: '#fff', border: 'none', cursor: selCode ? 'pointer' : 'default', opacity: selCode ? 1 : 0.5 }}>
-                    Restore this version
+                    {pins && selCode.trim() === currentCode.trim() ? 'Restore its sketches and parameters' : 'Restore this version'}
                   </button>
                 )}
             </div>

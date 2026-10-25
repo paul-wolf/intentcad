@@ -78,6 +78,20 @@ class DocumentListOut(Schema):
     updated_at: datetime
     kind: str = "sketch"   # 'part' | 'sketch' — so the list can group without fetching each doc
     thumbnail: str | None = None   # PNG data URL preview of a built part, if any
+    # a part whose project sketches or parameters changed since it was built:
+    # what changed, e.g. ['SK["frame"] changed'] (modeling/shared_defs.stale)
+    stale: list[str] = []
+    pinned: bool = False   # restored to an old version's sketches and parameters
+
+    @staticmethod
+    def resolve_stale(obj) -> list[str]:
+        from modeling import shared_defs
+        return shared_defs.stale(obj)
+
+    @staticmethod
+    def resolve_pinned(obj) -> bool:
+        data = obj.data if isinstance(obj.data, dict) else {}
+        return bool(data.get("pinned"))
 
     @staticmethod
     def resolve_kind(obj) -> str:

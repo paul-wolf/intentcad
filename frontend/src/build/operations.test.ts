@@ -113,7 +113,7 @@ describe('the operation registry', () => {
   it('runs through the editor’s own actions', () => {
     const ctx = Object.fromEntries(
       ['sketchOnSelection', 'sketchOnPlane', 'shell', 'hole', 'fillet', 'chamfer', 'ask', 'build', 'importStep', 'exportAs', 'versions',
-       'process', 'addContextFile', 'toggleParams', 'setView', 'lookAtSelection', 'toggleOrtho', 'copyMeasure',
+       'process', 'addContextFile', 'projectSketches', 'toggleParams', 'setView', 'lookAtSelection', 'toggleOrtho', 'copyMeasure',
        'section', 'overhangs', 'offsetPlane', 'edgePlane', 'tangentPlane', 'mirrorBody', 'mirrorSteps', 'patternBody', 'patternSteps', 'revolve'].map((k) => [k, vi.fn()]),
     ) as unknown as Record<keyof OpContext, ReturnType<typeof vi.fn>>;
     for (const op of OPERATIONS) op.run(ctx as unknown as OpContext);

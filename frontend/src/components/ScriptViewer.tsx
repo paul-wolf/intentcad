@@ -4,15 +4,18 @@ import { useDocumentStore } from '@/stores/documentStore';
 import {
   api, buildApi, errorText, ApiError, type RunResponse, type RunEdge, type FaceRefReport, type UsageResponse, type DimInfo, type ModelInfo, type ModelsResponse, type SizeFix,
   type FaceRefSpec, type HolePresets, type EdgeOpKind, type EdgeRefSpec, type ExtrudeExtent, type ExtrudeOp, type KeepItem, type Step,
-  type PlaneReport, type MirrorPlane, type PatternReport, type PatternSpec, type PlaneOpKind, type RunFace,
+  type PlaneReport, type MirrorPlane, type PatternReport, type PatternSpec, type PlaneOpKind, type RunFace, type SharedInputs,
 } from '@/api/client';
+import { pinnedChanges, usesShared } from '@/build/sharedSketch';
+import { ProjectSketchDialog } from './ProjectSketchDialog';
+import { ParameterProposalCard } from './ParameterProposalCard';
 import { BriefProposalCard, DescriptionLine, MentionMenu, useProjectDocs } from './ProjectChat';
 import { insertMention, matchMentions, mentionedIds, mentionQuery } from '@/utils/mentions';
 import { Markdown } from '@/ui/Markdown';
 import { projectApi } from '@/api/projectClient';
-import { persistModelCode, persistChat, persistThumbnail, persistName, persistProductionNotes, persistPrintBed, persistSketches, getBackendId, subscribeBackendId, getProjectId, getProjectName, subscribeProjectContext } from '@/api/autoSave';
+import { persistModelCode, persistSharedRefs, persistChat, persistThumbnail, persistName, persistProductionNotes, persistPrintBed, persistSketches, getBackendId, subscribeBackendId, getProjectId, getProjectName, subscribeProjectContext } from '@/api/autoSave';
 import { DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
-import type { ChatMessage } from '@/types/document';
+import type { BuildInputs, ChatMessage, SketchRef } from '@/types/document';
 import { createViewer, type Viewer, type FaceRange, type AxisDir, type PlacedDim, type PlacedHandle, type ViewerPick,
          type SectionMeasure, type PlacedPlaneLabel, type DragHandle, type MarkLines } from '@/build/webglViewer';
 import {
@@ -110,6 +113,7 @@ const humanBytes = (b: number): string =>
   b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
 
 const NO_CHAT: ChatMessage[] = [];
+const NO_REFS: Record<string, SketchRef> = {};
 /** What the code view's Edit button calls a line's dialog. */
 const OP_NAMES = {
   shell: 'Shell', holes: 'Hole', fillet: 'Fillet', chamfer: 'Chamfer', extrude: 'Extrude', auto_round: 'Round',
@@ -168,24 +172,46 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // A build is a pure function of the script, the face sketches it extrudes
   // (sketch("name")) and the print bed face (auto_round's keep_bed): all go
   // to the engine and into the cache key.
+  // A script that reads project sketches or parameters (SK["alias"], PP["name"])
+  // also depends on their versions: the build asks the server for them first
+  // (sharedInputsKey) and they join the key, so a changed sketch isn't served
+  // from the cache.
+  const inputsKeyRef = useRef<{ src: string; shared: string; key: string } | null>(null);
   const buildInputs = (src: string) => {
     const doc = useDocumentStore.getState().document;
     const sketches = referencedProfiles(src, doc.sketches);
     const bed = doc.printBed ?? null;
+    const shared: SharedInputs | null = usesShared(src) ? { refs: doc.sketchRefs ?? {}, pinned: doc.pinned ?? null } : null;
+    const ik = inputsKeyRef.current;
     const extra = (Object.keys(sketches).length ? `\n# sketches ${JSON.stringify(sketches)}` : '')
-      + (bed ? `\n# bed ${JSON.stringify(bed)}` : '');
-    return { sketches, bed, key: buildKey(src + extra) };
+      + (bed ? `\n# bed ${JSON.stringify(bed)}` : '')
+      + (shared && ik?.src === src && ik.shared === JSON.stringify(shared) ? `\n# inputs ${ik.key}` : '');
+    return { sketches, bed, shared, key: buildKey(src + extra) };
+  };
+  /** Fetch the versions of the shared inputs `src` reads, for its cache key;
+   *  false when they can't be known (the build then skips the cache). */
+  const sharedInputsKey = async (src: string): Promise<boolean> => {
+    const { shared } = buildInputs(src);
+    if (!shared) return true;
+    try {
+      const r = await buildApi.inputs(src, getBackendId() ?? '', shared);
+      inputsKeyRef.current = { src, shared: JSON.stringify(shared), key: r.key };
+      return true;
+    } catch {
+      inputsKeyRef.current = null;
+      return false;
+    }
   };
   // buildApi.run / export's last arguments for this script
-  const runArgs = (src: string) => { const b = buildInputs(src); return [b.sketches, b.bed] as const; };
+  const runArgs = (src: string) => { const b = buildInputs(src); return [b.sketches, b.bed, b.shared] as const; };
   const ensureSens = () => {
     const src = builtCodeRef.current;
     if (!src) return;
-    const { key, sketches } = buildInputs(src);
+    const { key, sketches, shared } = buildInputs(src);
     if (sensKeyRef.current === key) return;   // already computed or in flight
     sensKeyRef.current = key;
     setSensState('loading');
-    buildApi.sensitivity(src, getBackendId() ?? '', sketches)
+    buildApi.sensitivity(src, getBackendId() ?? '', sketches, shared)
       .then((r) => {
         if (sensKeyRef.current !== key) return;
         setSens(r.params); setSensState('ready'); putCachedSens(key, r.params);
@@ -456,6 +482,17 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // what the last build did to the face sketches' reference outlines: the
   // sketches whose edges moved with the part, whether it built again to
   // apply that, and those that still moved after that second build
+  // a restored version builds with its pinned inputs: which differ from the latest
+  const docPinned = useDocumentStore((s) => s.document.pinned);
+  const sketchRefs = useDocumentStore((s) => s.document.sketchRefs);
+  const [showSketchRefs, setShowSketchRefs] = useState(false);
+  const [pinDiff, setPinDiff] = useState<string[] | null>(null);
+  const followLatest = () => {
+    const doc = useDocumentStore.getState().document;
+    persistSharedRefs(doc.sketchRefs ?? {}, null);
+    setPinDiff(null);
+    build(codeRef.current, 'follow latest');
+  };
   const [followNote, setFollowNote] = useState<{ moved: string[]; rebuilt: boolean; unsettled: string[] }>(
     { moved: [], rebuilt: false, unsettled: [] });
   // the engine's one-click remedy for a fillet/chamfer that doesn't fit (a
@@ -647,10 +684,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       // Deterministic: same code → same mesh. Serve an unchanged part from the
       // IndexedDB cache with no engine call.
       const runOnce = async () => {
-        const { key, sketches, bed } = buildInputs(src);
-        const cached = await getCachedBuild(key);
-        const run = cached?.run ?? await buildApi.run(src, ctrl.signal, getBackendId() ?? '', sketches, bed);
-        if (!cached) putCachedBuild(key, run);
+        const known = await sharedInputsKey(src);
+        const { key, sketches, bed, shared } = buildInputs(src);
+        const cached = known ? await getCachedBuild(key) : null;
+        const run = cached?.run ?? await buildApi.run(src, ctrl.signal, getBackendId() ?? '', sketches, bed, shared);
+        if (!cached && known) putCachedBuild(key, run);
         return { run, key, cached };
       };
       // the face sketches follow what was built; when that moves a shape the
@@ -859,11 +897,32 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     }
   };
 
-  const restoreVersion = (c: string) => {
+  // Restoring a version restores its shared sketch aliases too, and pins the
+  // sketches and parameters it was built with (its saved inputs), so it builds
+  // as it did then; "Follow latest" unpins it. (A chat revert passes no data:
+  // the aliases and pins stay as they are.)
+  // which pinned inputs are older than the latest (after each build while pinned)
+  useEffect(() => {
+    const src = builtCodeRef.current;
+    if (!docPinned || status !== 'done' || !usesShared(src)) { setPinDiff(null); return; }
+    let live = true;
+    const doc = useDocumentStore.getState().document;
+    buildApi.inputs(src, getBackendId() ?? '', { refs: doc.sketchRefs ?? {}, pinned: {} })
+      .then((r) => { if (live) setPinDiff(pinnedChanges(docPinned, r.inputs)); })
+      .catch(() => { if (live) setPinDiff([]); });
+    return () => { live = false; };
+  }, [docPinned, status]);
+
+  const restoreVersion = (c: string, data?: Record<string, unknown>) => {
     setShowVersions(false);
     if (!c.trim()) return;
     setCode(c);
-    saveDraft(c);
+    const doc = useDocumentStore.getState().document;
+    const refs = data?.sketchRefs as Record<string, SketchRef> | undefined;
+    const inputs = data?.inputs as BuildInputs | undefined;
+    if (data && (refs || inputs || doc.sketchRefs || doc.pinned)) {
+      persistSharedRefs(refs ?? doc.sketchRefs ?? {}, inputs && (inputs.sk || inputs.pp) ? inputs : null, c);
+    } else saveDraft(c);
     build(c, 'restored');
     setFlash('Restored this version');
     setTimeout(() => setFlash(''), 2500);
@@ -2790,6 +2849,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         skip_context: skipList(ctxStore.files, skipCtx),
         // the project's parts and sketches named as @Name: their summaries go with it
         mentions: mentionedIds(instruction, projectDocs.others),
+        // the shared sketches it has (saved or not), for use_sketch and the check build
+        sketch_refs: useDocumentStore.getState().document.sketchRefs ?? {},
       });
       setSkipCtx(new Set());
       const spent = spendNote(r);
@@ -2798,6 +2859,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         ? { brief: { text: r.brief_proposal.text, reason: r.brief_proposal.reason,
                      base: (await projectApi.getProject(projectId).catch(() => null))?.brief ?? '', status: 'pending' as const } }
         : {};
+      if (r.parameter_proposals?.length) {
+        Object.assign(proposal, { params: { items: r.parameter_proposals, status: 'pending' as const } });
+      }
+      // sketches it gave the part with use_sketch: the script reads them as SK["alias"]
+      if (r.sketch_refs && Object.keys(r.sketch_refs).length) {
+        const doc = useDocumentStore.getState().document;
+        persistSharedRefs({ ...(doc.sketchRefs ?? {}), ...r.sketch_refs }, doc.pinned ?? null);
+      }
       if (r.kind === 'question') {
         persistChat([...base, { role: 'assistant', kind: 'question', text: r.question, usage: spent, at: Date.now(), ...proposal }]);
       } else if (r.kind === 'answer') {
@@ -2961,6 +3030,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     importStep: () => stepInput.current?.click(),
     exportAs: (format) => void doExport(format),
     versions: () => setShowVersions(true),
+    projectSketches: () => setShowSketchRefs(true),
     process: openProduction,
     addContextFile: () => {
       setLayout('context');
@@ -3255,6 +3325,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                          borderRadius: '4px', fontSize: '12px', cursor: 'pointer' }}>
                 {paperclip(12)} Attach a file
               </button>
+            )}
+            {m.params && (
+              <ParameterProposalCard params={m.params} projectId={projectId} palette={palette}
+                onStatus={(status) => persistChat(chat.map((x, j) => (j === i && x.params ? { ...x, params: { ...x.params, status } } : x)))}
+                onAccepted={() => build(codeRef.current, 'project parameters')} />
             )}
             {m.brief && (
               <BriefProposalCard brief={m.brief} projectId={projectId} palette={palette}
@@ -3973,6 +4048,18 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
               ⚠ Print bed face not found; using Z
             </span>
           )}
+          {status === 'done' && docPinned && pinDiff && (
+            <span style={{ marginRight: '10px', color: pinDiff.length ? (palette.warning ?? '#c78a1a') : palette.textSecondary }}
+                  title="Restored: it builds with the shared sketches and project parameters as they were in that version">
+              {pinDiff.length ? `uses an earlier ${pinDiff.join(', ')}` : 'pinned to a restored version (the same as the latest)'}
+              {' · '}
+              <button onClick={followLatest}
+                      style={{ background: 'none', border: 'none', padding: 0, color: palette.accent, cursor: 'pointer', fontSize: 'inherit' }}
+                      title="Build with the shared sketches and parameters as they are now">
+                Follow latest
+              </button>
+            </span>
+          )}
           {status === 'done' && resRef.current?.sketches && (() => {
             const docSketches = useDocumentStore.getState().document.sketches;
             const { moved, warnings } = sketchBindNotes(resRef.current.sketches, docSketches, prevBindRef.current);
@@ -4137,6 +4224,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       </div>
       {showHelp && <PartHelpModal onClose={() => setShowHelp(false)} />}
       {faceSketch.overlay}
+      {showSketchRefs && (
+        <ProjectSketchDialog projectId={projectId} refs={sketchRefs ?? NO_REFS} code={code}
+          onSave={(refs) => persistSharedRefs(refs, useDocumentStore.getState().document.pinned ?? null)}
+          onClose={() => setShowSketchRefs(false)} />
+      )}
       {showVersions && getBackendId() && (
         <PartVersionsPanel docId={getBackendId()!} currentCode={code}
           onRestore={restoreVersion} onClose={() => setShowVersions(false)} />

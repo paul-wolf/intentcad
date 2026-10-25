@@ -2,6 +2,9 @@ import { useDocumentStore } from '@/stores/documentStore';
 import { addLog } from '@/stores/logStore';
 import { api } from './cachedClient';
 import { sketchProfile } from '@/build/faceSketch';
+import { withSharedProfiles } from '@/build/sharedSketch';
+import type { Sketch } from '@/types/document';
+import { guardSave, refreshUsers } from './sharedUses';
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 let backendId: string | null = null;
@@ -71,6 +74,16 @@ function hasModelCode(doc: Record<string, unknown>): boolean {
   return typeof c === 'string' && c.trim().length > 0;
 }
 
+const isSketchDoc = (doc: Record<string, unknown>) =>
+  doc.type === 'sketch' || (doc.type !== 'part' && !hasModelCode(doc));
+
+/** A sketch document saves each sketch's shared profile, for the parts that
+ *  read it as SK["alias"] (build/sharedSketch.ts). */
+function withProfiles(doc: Record<string, unknown>): Record<string, unknown> {
+  if (!isSketchDoc(doc) || !Array.isArray(doc.sketches)) return doc;
+  return { ...doc, sketches: withSharedProfiles(doc.sketches as Sketch[]) };
+}
+
 function doSave(id: string, doc: Record<string, unknown>, history?: unknown, versionLabel?: string, snapshot = false) {
   // A save supersedes an older debounced snapshot of the same doc — e.g. one
   // queued while a script-less part was sketched, before New body wrote its code
@@ -88,6 +101,13 @@ function doSave(id: string, doc: Record<string, unknown>, history?: unknown, ver
     console.warn('[autoSave] blocked a blank-model save over a document that had model code');
     return;
   }
+  doc = withProfiles(doc);
+  // a sketch save that would drop a group or name a part uses waits for the user
+  if (isSketchDoc(doc) && !guardSave(id, doc.sketches as Sketch[], () => send(id, doc, history, versionLabel, snapshot))) return;
+  send(id, doc, history, versionLabel, snapshot);
+}
+
+function send(id: string, doc: Record<string, unknown>, history?: unknown, versionLabel?: string, snapshot = false) {
   api.updateDocument(id, {
     name: (doc as { name: string }).name,
     data: doc,
@@ -96,6 +116,7 @@ function doSave(id: string, doc: Record<string, unknown>, history?: unknown, ver
     snapshot,
   }).then(() => {
     addLog('info', 'Document saved');
+    if (isSketchDoc(doc)) void refreshUsers(id);   // the parts using it may now be out of date
   }).catch((err: unknown) => {
     if (err instanceof Error && (err as Error & { conflict?: boolean }).conflict) {
       // The server had a newer version (another tab saved). We did NOT overwrite it.
@@ -139,6 +160,20 @@ export function persistModelCode(code: string, label?: string, snapshot = true) 
   const doc = { ...state.document } as unknown as Record<string, unknown>;
   const history = { undo: state.undoStack, redo: state.redoStack };
   doSave(backendId, doc, history, label, snapshot);
+}
+
+/** Persist a part's shared sketch aliases and pinned inputs NOW (with its
+ *  script, when restoring a version: one save, one version). */
+export function persistSharedRefs(sketchRefs: Record<string, import('@/types/document').SketchRef>,
+                                  pinned: import('@/types/document').BuildInputs | null, code?: string) {
+  const store = useDocumentStore.getState();
+  store.setSharedRefs(sketchRefs, pinned);
+  if (code !== undefined) store.setModelCode(code);
+  if (!backendId) return;
+  const state = useDocumentStore.getState();
+  const doc = { ...state.document } as unknown as Record<string, unknown>;
+  const history = { undo: state.undoStack, redo: state.redoStack };
+  doSave(backendId, doc, history, undefined, false);
 }
 
 /** Persist a document rename NOW, directly (used by the part editor header). */
@@ -240,9 +275,11 @@ export async function flushSaveAsync(): Promise<void> {
       console.warn('[autoSave] blocked a blank-model flush over a document that had model code');
       return;
     }
+    const data = withProfiles(doc);
+    if (isSketchDoc(data) && !guardSave(id, data.sketches as Sketch[], () => send(id, data, history ?? undefined))) return;
     await api.updateDocument(id, {
       name: (doc as { name: string }).name,
-      data: doc,
+      data,
       history: history ?? undefined,
     });
   }

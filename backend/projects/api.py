@@ -1,3 +1,4 @@
+import re
 from uuid import UUID
 
 from django.db import connection
@@ -14,6 +15,7 @@ from .models import Project, ProjectBriefVersion, ProjectShare
 from .schemas import (
     BriefIn,
     BriefVersionOut,
+    ParametersIn,
     ProjectCreateIn,
     ProjectListOut,
     ProjectOut,
@@ -117,6 +119,45 @@ def save_brief(request, project_id: UUID, payload: BriefIn):
     project.brief_updated_at = timezone.now()
     project.save(update_fields=["brief", "brief_updated_at", "updated_at"])
     ProjectBriefVersion.objects.create(project=project, text=payload.text, label=label, created_by=request.user)
+    return project
+
+
+PARAM_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def check_parameters(params: list[dict]) -> str | None:
+    """Why a project's parameter list can't be saved, or None."""
+    seen = set()
+    for p in params:
+        name = p.get("name", "")
+        if not PARAM_NAME.match(name):
+            return (f"{name!r} isn't a usable parameter name: use letters, digits and _, "
+                    "not starting with a digit (e.g. arm_od)")
+        if name in seen:
+            return f"There are two parameters called {name!r}"
+        seen.add(name)
+        if isinstance(p.get("value"), str) and not p["value"].strip():
+            return f"{name!r} has no value"
+    return None
+
+
+@router.put("/{project_id}/parameters", response={200: ProjectOut, 400: dict})
+def save_parameters(request, project_id: UUID, payload: ParametersIn):
+    """Replace the project's parameters (PP["name"] in every part's script)."""
+    err = require_auth(request)
+    if err:
+        return err
+    project = get_object_or_404(Project, id=project_id)
+    err = require_project_access(request, project)
+    if err:
+        return err
+    params = [{"name": p.name.strip(), "value": p.value, "unit": p.unit.strip(),
+               "description": p.description.strip()} for p in payload.parameters]
+    why = check_parameters(params)
+    if why:
+        return 400, {"message": why}
+    project.parameters = params
+    project.save(update_fields=["parameters", "updated_at"])
     return project
 
 
