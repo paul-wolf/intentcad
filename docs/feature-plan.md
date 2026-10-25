@@ -39,6 +39,7 @@ operations cost nothing to support, they just don't get UI.
 - CAM for sketches (2D editor): Setup (machine with a default material, tool library with cutting data per material, carbon fibre included, stock, origin, clamps), Plan (operations with defaults worked out from the setup, AI proposals with reasons to accept, per-value sources, lines that meet picked as one outline, Fix with AI can change an operation's shapes), Run (checks, simulator, steps at the machine, G-code)
 - User events: sign-ins (and failed ones), sign-outs, parts and sketches made and AI calls with their cost, in one table; an Events page for superusers (search, kind, user, period) with AI spend per user; earlier sign-ins, AI calls and documents copied in
 - Duplicate a part or sketch: a button on its card makes "Copy of <name>" in the same project, with the model, its STEP files, the part's context files and CAM jobs (no G-code); a fresh version history
+- The part editor names the part's project in the line under the top bar; click it to go back to the project
 
 ## Foundation: edge selection ✓ done
 

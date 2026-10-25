@@ -29,6 +29,7 @@ export function PartEditorPage() {
         }
         setBackendId(full.id);
         if (full.project_id) {
+          setProjectContext(full.project_id, null);   // not another part's project while the name loads
           projectApi.getProject(full.project_id)
             .then((p) => { if (!cancelled) setProjectContext(full.project_id, p.name); })
             .catch(() => {});

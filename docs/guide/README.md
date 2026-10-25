@@ -212,6 +212,8 @@ faces of a part:
 ### Projects, versions and sharing
 
 - Organise parts and sketches in projects; share projects with others.
+- In the part editor, the line under the top bar names the project the part is in.
+  Click the name to go back to the project.
 - Every successful build is a version; restore any of them.
 - **Duplicate** makes a copy of a part or sketch in the same project. Hover over its
   card in the project and click the two-squares button (between Rename and Move). The
@@ -219,6 +221,8 @@ faces of a part:
   has the model as it is now (script, sketches, parameters, print bed face, chat),
   the STEP files it imports, the part's own context files and its CAM jobs (generate
   the G-code again). Its version history starts fresh.
+
+![The part editor: the line under the top bar shows the project, Guide examples](images/part-project.png)
 
 ![Duplicate: the copy of Shelf bracket, its name ready to edit, and the hover buttons on the original](images/duplicate.png)
 

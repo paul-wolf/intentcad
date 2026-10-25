@@ -38,9 +38,18 @@ export function getProjectName() {
   return projectName;
 }
 
+const projectListeners = new Set<() => void>();
+
 export function setProjectContext(id: string | null, name: string | null) {
   projectId = id;
   projectName = name;
+  projectListeners.forEach((fn) => fn());
+}
+
+/** Called when the project context changes (for useSyncExternalStore). */
+export function subscribeProjectContext(fn: () => void) {
+  projectListeners.add(fn);
+  return () => { projectListeners.delete(fn); };
 }
 
 // Guard against a blank/reset store clobbering a loaded document. Once a doc has
