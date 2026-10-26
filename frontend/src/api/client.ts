@@ -962,6 +962,7 @@ export interface SketchAskResponse {
   result?: import('@/types/generated').GenRunResult;
   broken?: import('@/types/generated').BrokenOutput[];
   parameter_proposals?: (import('@/types/project').ProjectParameter & { reason: string })[];
+  brief_proposal?: { text: string; reason: string };
   sentence?: string;
   name?: string;
   /** (proposal) the drawn sketch is empty: it becomes the generated one */

@@ -11,7 +11,9 @@ trial run with one corrective retry; nothing is saved here (the editor saves
 it as a revert point, asking first when outputs parts use would go). In a
 drawn sketch it can't change the drawing: it answers, or proposes a
 generated sketch (propose_generated) with code already run, which the user
-accepts or declines.
+accepts or declines. In both, as in the part chat, it may propose project
+parameters (set_project_parameter) and a new brief (propose_brief_edit):
+they come back with any kind of reply, for the user to accept or reject.
 """
 from __future__ import annotations
 
@@ -60,7 +62,8 @@ GENERATED = (
     "If LAST RUN shows an error, the code doesn't run: fix the cause, keeping the design "
     "intent. To add or change a PROJECT PARAMETER (one several parts share), use "
     "set_project_parameter; the code can read it right away. A rule only this layout uses "
-    "stays a constant in the code.\n\n"
+    "stays a constant in the code. A layout often needs new parameters: propose them with "
+    "the code that reads them, in the same reply.\n\n"
     "Answer questions (what the layout does, why a check fails) with answer, using LAST RUN "
     "and the code; ask_clarification only when you can't go on without the user."
 )
@@ -68,7 +71,11 @@ GENERATED = (
 DRAWN = (
     "You are the AI in a DRAWN SKETCH: shapes the user drew by hand, which parts of the "
     "project may build from. You can't change drawn shapes: say so plainly when asked to "
-    "edit them, and say the user draws them with the tools. You can answer questions about "
+    "move, add or resize them, and say the user draws them with the tools. That limit is "
+    "only the drawing: project parameters and the brief you can propose as in any chat "
+    "(set_project_parameter, propose_brief_edit; see THE PROJECT). A dimension of this "
+    "sketch uses a project parameter when the user types its name in it, so say that "
+    "when you propose one for it. You can answer questions about "
     "the sketch and the project (with answer), and you can offer a GENERATED SKETCH: a "
     "layout drawn by code from the project's parameters, which follows when a parameter "
     "changes. When the user asks for a layout that depends on project parameters or "
@@ -87,7 +94,13 @@ PROJECT = (
     "conventions: follow it. PROJECT PARTS lists the other parts and sketches; call "
     "read_part to look at one before you answer or write anything that depends on it. "
     "MENTIONED PARTS are those the user pointed at with @. PROJECT PARAMETERS are the "
-    "values PP[\"name\"] reads. Other documents are read-only."
+    "values PP[\"name\"] reads. Other documents are read-only.\n\n"
+    "PROJECT TOOLS (in this chat as in every other): set_project_parameter proposes a new "
+    "or changed project parameter; for several (a list the user pasted, say) call it once "
+    "for each, all in the same reply, and they show as one card. If the user settles "
+    "something the whole project should remember (a material, a bolt size, a bought part, "
+    "a convention), offer it with propose_brief_edit. The user accepts or rejects both; "
+    "nothing changes until they do. Then finish with your reply as usual."
 )
 
 FILES = (
@@ -189,10 +202,11 @@ def sketch_chat(doc, instruction: str, history: list[dict] | None = None, model:
                 files: list[dict] | None = None, file_listing: list[str] | None = None,
                 mentions: list[str] | None = None, *, llm: Callable[..., dict] | None = None) -> dict:
     """One turn of a sketch document's chat. Returns, with the cost keys:
-    {kind: "edit", code, note, result, broken, parameter_proposals?} (a
-    generated sketch's new code, run but not saved), {kind: "proposal",
-    sentence, name, code, result, empty} (a drawn sketch: a generated one
-    offered), {kind: "answer", answer} or {kind: "question", question}."""
+    {kind: "edit", code, note, result, broken} (a generated sketch's new
+    code, run but not saved), {kind: "proposal", sentence, name, code, result,
+    empty} (a drawn sketch: a generated one offered), {kind: "answer", answer}
+    or {kind: "question", question}; any of them with parameter_proposals
+    and brief_proposal when the AI proposed those."""
     instruction = (instruction or "").strip()
     if not instruction:
         raise AssistantError("empty instruction")
@@ -204,11 +218,12 @@ def sketch_chat(doc, instruction: str, history: list[dict] | None = None, model:
     project = pc.project_context(doc_id) if in_project else ""
     mentioned = pc.mention_context(doc_id, mentions) if mentions and in_project else ""
     final = WRITE_CODE_TOOL if generated else PROPOSE_TOOL
-    tools = [final, ASK_TOOL, ANSWER_TOOL] + ([pc.READ_PART_TOOL] if in_project else []) + \
-        ([pc.SET_PROJECT_PARAMETER_TOOL] if in_project and generated else [])
+    tools = [final, ASK_TOOL, ANSWER_TOOL] + ([pc.READ_PART_TOOL, pc.SET_PROJECT_PARAMETER_TOOL,
+                                               pc.PROPOSE_BRIEF_TOOL] if in_project else [])
     system = (GENERATED if generated else DRAWN) + (PROJECT if in_project else "") + FILES
     block = sketch_block(doc)
-    param_props: dict = {}
+    param_props: dict = {}    # set_project_parameter: name -> {name, value, unit, description, reason}
+    brief: dict = {}          # propose_brief_edit: {text, reason}
 
     def prompt(extra: str = "") -> str:
         proj = f"{project}\n\n" if project else ""
@@ -235,14 +250,19 @@ def sketch_chat(doc, instruction: str, history: list[dict] | None = None, model:
         if c["name"] == "read_part" and in_project:
             text = ("That's enough looking: finish now with what you have." if lookups > MAX_LOOKUPS
                     else pc.read_part(doc_id, str(args.get("part", "")), str(args.get("what", "summary"))))
-        elif c["name"] == "set_project_parameter" and in_project and generated:
+        elif c["name"] == "set_project_parameter" and in_project:
             p, why = pc.check_parameter(args)
             if p:
                 param_props[p["name"]] = {**p, "reason": str(args.get("reason", ""))}
-                text = (f'Shown to the user as a proposed project parameter PP["{p["name"]}"]; the code '
-                        "can read it now (it runs with the proposed value). Now finish your reply.")
+                use = ("the code can read it now (it runs with the proposed value)" if generated else
+                       "once accepted, a dimension of this sketch uses it when its name is typed in it")
+                text = (f'Shown to the user as a proposed project parameter PP["{p["name"]}"] (with any others '
+                        f"you propose, on one card); {use}. Now finish your reply.")
             else:
                 text = why
+        elif c["name"] == "propose_brief_edit" and in_project:
+            brief.update(text=str(args.get("new_text", "")), reason=str(args.get("reason", "")))
+            text = "Shown to the user as a proposed brief; they'll accept or reject it. Now finish your reply."
         else:
             text = f"There is no tool called {c['name']}."
         return {"type": "tool_result", "tool_use_id": c["id"], "content": text}
@@ -276,11 +296,19 @@ def sketch_chat(doc, instruction: str, history: list[dict] | None = None, model:
             turns += [{"role": "assistant", "content": o["content"]},
                       {"role": "user", "content": [tool_result(c, lookups) for c in o["calls"]]}]
 
+    def done(r: dict) -> dict:
+        """Any reply, with the project proposals made on the way."""
+        if param_props:
+            r["parameter_proposals"] = list(param_props.values())
+        if brief.get("text"):
+            r["brief_proposal"] = dict(brief)
+        return r
+
     def reply(o: dict) -> dict | None:
         if o.get("kind") == "question":
-            return {"kind": "question", "question": o.get("question", ""), **cost()}
+            return done({"kind": "question", "question": o.get("question", ""), **cost()})
         if o.get("kind") == "answer":
-            return {"kind": "answer", "answer": o.get("text", ""), **cost()}
+            return done({"kind": "answer", "answer": o.get("text", ""), **cost()})
         if o.get("kind") not in ("edit", "proposal"):
             raise AssistantError("the model didn't reply with code", usage=cost())
         return None
@@ -306,10 +334,7 @@ def sketch_chat(doc, instruction: str, history: list[dict] | None = None, model:
         if not r.get("ok"):
             raise AssistantError(f"couldn't write code that runs: {r.get('error')}", usage=cost())
     if generated:
-        res = {"kind": "edit", "code": out["code"], "note": out.get("note", ""), "result": r,
-               "broken": gs.broken_outputs(doc, r), **cost()}
-        if param_props:
-            res["parameter_proposals"] = list(param_props.values())
-        return res
-    return {"kind": "proposal", "sentence": out.get("sentence", ""), "name": (out.get("name") or "").strip(),
-            "code": out["code"], "result": r, "empty": gs.is_empty_drawn(doc), **cost()}
+        return done({"kind": "edit", "code": out["code"], "note": out.get("note", ""), "result": r,
+                     "broken": gs.broken_outputs(doc, r), **cost()})
+    return done({"kind": "proposal", "sentence": out.get("sentence", ""), "name": (out.get("name") or "").strip(),
+                 "code": out["code"], "result": r, "empty": gs.is_empty_drawn(doc), **cost()})

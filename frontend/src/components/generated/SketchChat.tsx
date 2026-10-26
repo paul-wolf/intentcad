@@ -5,10 +5,12 @@
  * generated sketch saves new code, a drawn one offers a generated sketch.
  * This file also has the two cards those replies show: a change that stops
  * making outputs parts use (applied only when the user says so), and a
- * proposed generated sketch with a picture of it.
+ * proposed generated sketch with a picture of it. Proposed project parameters
+ * and brief changes get the part chat's cards (ChatHistory), in both kinds.
  */
 import { useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { ApiError, errorText, sketchApi, type SketchAskResponse } from '@/api/client';
+import { projectApi } from '@/api/projectClient';
 import { useThemeStore, type ThemePalette } from '@/theme';
 import type { ChatMessage } from '@/types/document';
 import type { GenRunResult } from '@/types/generated';
@@ -79,7 +81,9 @@ export function SketchChat({ docId, projectId, messages, persist, onReply, onRev
       box.setSkipCtx(new Set());
       const at = Date.now();
       const said: ChatMessage = { role: 'assistant', text: '', usage: spendNote(r), at };
-      if (r.parameter_proposals?.length) said.params = { items: r.parameter_proposals, status: 'pending' };
+      // project parameters and a new brief, as in the part chat: cards to accept or reject
+      const brief = r.brief_proposal && projectId ? (await projectApi.getProject(projectId).catch(() => null))?.brief ?? '' : null;
+      Object.assign(said, projectCards(r, brief));
       if (r.kind === 'question') Object.assign(said, { kind: 'question', text: r.question || '' });
       else if (r.kind === 'answer') Object.assign(said, { kind: 'answer', text: r.answer || '' });
       else Object.assign(said, await onReply(r, at));
@@ -242,6 +246,18 @@ export function ProposalCard({ proposal, at, onAccept, onDecline }: {
       )}
     </div>
   );
+}
+
+/** The project cards a reply brings, in any kind of reply: its proposed
+ *  parameters (one card for all of them) and brief (a diff against `brief`,
+ *  the brief now; null outside a project). */
+export function projectCards(r: SketchAskResponse, brief: string | null): Pick<ChatMessage, 'params' | 'brief'> {
+  const out: Pick<ChatMessage, 'params' | 'brief'> = {};
+  if (r.parameter_proposals?.length) out.params = { items: r.parameter_proposals, status: 'pending' };
+  if (r.brief_proposal && brief !== null) {
+    out.brief = { text: r.brief_proposal.text, reason: r.brief_proposal.reason, base: brief, status: 'pending' };
+  }
+  return out;
 }
 
 /** A proposal reply as a chat message (the picture kept for this visit). */

@@ -486,8 +486,10 @@ SET_PROJECT_PARAMETER_TOOL = {
     "name": "set_project_parameter",
     "description": "Propose a new or changed PROJECT PARAMETER (PP[\"name\"], read by every part that uses "
                    "it), e.g. a tube diameter or plate thickness several parts share. The user accepts or "
-                   "rejects it on a card; your script can use the proposed value right away. Changing one "
-                   "changes every part that reads it, so say which in the reason.",
+                   "rejects it on a card; a script or a generated sketch's code can use the proposed value "
+                   "right away. For several (a list the user pasted), call it once for each in the same reply: "
+                   "they show together on one card. Changing one changes every part that reads it, so say "
+                   "which in the reason.",
     "input_schema": {
         "type": "object",
         "properties": {

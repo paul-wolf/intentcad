@@ -1,7 +1,8 @@
 """The sketch chat: what it sees (the project, the sketch's code and last run
 or its drawn shapes, which parts use which outputs), what it may do in a
 generated sketch (new code, run but not saved, one retry) and in a drawn one
-(answer, or offer a generated sketch), and who may use it."""
+(answer, or offer a generated sketch), and who may use it. The project tools
+every chat shares are tested in test_chat_project_tools."""
 import json
 from unittest import mock
 
@@ -56,7 +57,7 @@ class GeneratedChatTests(SketchChatWorld):
         self.assertIn('- "Plate" as SK[\'layout\']: outputs holes, plate', c["user"])
         self.assertIn("USER: hello", c["user"])
         self.assertEqual(c["tools"], ["write_code", "ask_clarification", "answer", "read_part",
-                                      "set_project_parameter"])
+                                      "set_project_parameter", "propose_brief_edit"])
         self.assertIn("GENERATED SKETCH", c["system"])
         self.assertIn("check()", c["system"])
 
@@ -121,7 +122,8 @@ class DrawnChatTests(SketchChatWorld):
         r = sketch_chat(doc, "move the hole left", llm=llm)
         self.assertEqual(r["kind"], "answer")
         [c] = calls
-        self.assertEqual(c["tools"], ["propose_generated", "ask_clarification", "answer", "read_part"])
+        self.assertEqual(c["tools"], ["propose_generated", "ask_clarification", "answer", "read_part",
+                                      "set_project_parameter", "propose_brief_edit"])
         self.assertIn("You can't change drawn shapes", c["system"])
         self.assertIn('THIS SKETCH: "Drawn", drawn.', c["user"])
         self.assertIn("circle centre (5, 0) dia 3.2", c["user"])

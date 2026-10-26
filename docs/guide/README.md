@@ -388,6 +388,10 @@ itself when they change.
 - **Drawn or generated**: a sketch you draw is a drawn sketch; its chat answers
   questions but can't move shapes, and offers a generated sketch instead. A drawn
   sketch with shapes in it stays as it is; the generated one is a new sketch document.
+- **Project parameters and the brief from any chat**: in a drawn or generated sketch,
+  as in a part, ask the AI to add or change a project parameter ("add prop_d 406.4 mm")
+  or to note something in the brief. It shows a card under its reply; **Accept** saves
+  it, **Reject** drops it. Several parameters at once come as one card.
 - **The drawing**: shows the shapes with their sizes and notes. It can't be edited by
   hand: dragging a shape says so and points to the parameters and the chat.
 - **Outputs**: the panel on the right lists what parts can use (`plate_outline`,

@@ -15,6 +15,7 @@ import { isAxis } from '@/utils/sketchAxes';
 import { addLog } from '@/stores/logStore';
 import type { ChatMessage, Entity } from '@/types/document';
 import { CardButton, ProposalCard, SketchChat, proposalMessage } from './SketchChat';
+import { useProjectParamsStore } from '@/stores/projectParamsStore';
 
 const EMPTY: ChatMessage[] = [];
 
@@ -92,10 +93,12 @@ export function DrawnSketchChat({ id, onGenerated }: { id: string; onGenerated: 
           style={{ background: 'none', border: 'none', color: palette.textSecondary, cursor: 'pointer', fontSize: '14px' }}>›</button>
       </div>
       <SketchChat docId={id} projectId={projectId} messages={messages} persist={persistChat} onReply={onReply}
-        onRevert={() => {}} onParamsAccepted={() => {}} fill
+        onRevert={() => {}} fill
+        // accepted project parameters: the Parameters panel and the dimensions that use them follow
+        onParamsAccepted={() => void useProjectParamsStore.getState().refresh()}
         placeholder={empty
           ? 'Describe the layout, for example "a hexagon frame plate from the project parameters, with holes for the arm braces". The AI offers to generate it from code, so it follows the parameters.'
-          : "Ask about this sketch. The AI can't move drawn shapes; for a layout that follows rules it can make a generated sketch."}
+          : "Ask about this sketch, or add project parameters. The AI can't move drawn shapes; for a layout that follows rules it can make a generated sketch."}
         card={(m, i) => m.proposal ? (
           <ProposalCard proposal={m.proposal} at={m.at} onAccept={() => accept(i)}
             onDecline={() => persistChat(change(i, 'declined'))} />

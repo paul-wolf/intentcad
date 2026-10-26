@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GenRunResult } from '@/types/generated';
-import { proposalMessage, runWords } from './SketchChat';
+import { projectCards, proposalMessage, runWords } from './SketchChat';
 
 const run: GenRunResult = {
   ok: true, profile: {}, entities: [], annotations: { labels: [], dims: [] }, reads: { w: 100 },
@@ -21,5 +21,19 @@ describe('sketch chat words', () => {
     expect(m.text).toBe("I'll make this a generated sketch.");
     expect(m.proposal).toEqual({ name: 'Frame layout', code: 'output()', empty: true, outputs: ['plate (100 × 60 mm)'],
                                  checks: '1 of 2 checks pass (fails: edge).', status: 'pending' });
+  });
+
+  it('gives every kind of reply its project cards: one for all the parameters, one for the brief', () => {
+    const items = [{ name: 'prop_d', value: 406.4, unit: 'mm' as const, reason: 'pasted' },
+                   { name: 'arm_count', value: 6, unit: '' as const, reason: 'pasted' }];
+    for (const kind of ['answer', 'question', 'edit', 'proposal'] as const) {
+      const cards = projectCards({ kind, context_files: [], parameter_proposals: items,
+                                   brief_proposal: { text: 'New brief', reason: 'arms' } }, 'Old brief');
+      expect(cards.params).toEqual({ items, status: 'pending' });
+      expect(cards.brief).toEqual({ text: 'New brief', reason: 'arms', base: 'Old brief', status: 'pending' });
+    }
+    expect(projectCards({ kind: 'answer', context_files: [] }, 'Old brief')).toEqual({});
+    // outside a project there is no brief to change
+    expect(projectCards({ kind: 'answer', context_files: [], brief_proposal: { text: 'x', reason: '' } }, null)).toEqual({});
   });
 });
