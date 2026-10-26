@@ -542,14 +542,20 @@ def sees_spend(user) -> bool:
 
 def _log_ai_edit(request, payload, r: dict, failed: bool = False) -> dict:
     """Record one AI edit's spend (and the user's event); returns its token counts."""
+    return log_ai_call(request, "part chat", payload.document_id, payload.instruction, r, failed)
+
+
+def log_ai_call(request, source: str, document_id: str, instruction: str, r: dict,
+                failed: bool = False) -> dict:
+    """Record one AI call's spend for a document (and the user's event); returns its token counts."""
     from accounts.events import record_ai_call
 
-    record_ai_call(request, "part chat", payload.document_id, payload.instruction, r, failed)
+    record_ai_call(request, source, document_id, instruction, r, failed)
     usage = {k: r.get(k, 0) for k in ("tokens_in", "tokens_out", "cache_read_tokens",
                                       "cache_write_tokens")}
     AiEdit.objects.create(
-        user=request.user, document_id=payload.document_id,
-        instruction=payload.instruction[:500], cost_usd=r.get("cost_usd", 0.0), **usage,
+        user=request.user, document_id=document_id,
+        instruction=instruction[:500], cost_usd=r.get("cost_usd", 0.0), **usage,
     )
     return usage
 

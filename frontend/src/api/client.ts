@@ -944,4 +944,33 @@ export const sketchApi = {
   saveChat(id: string, chat: unknown[]): Promise<{ ok: boolean }> {
     return request(`/sketches/${id}/chat`, { method: 'PUT', body: JSON.stringify({ chat }) });
   },
+  /** One turn of a sketch's chat, drawn or generated. Saves nothing: an edit
+   *  is saved with saveCode, a proposed generated sketch made with create. */
+  ask(id: string, body: { instruction: string; history: { role: string; text: string }[]; model?: string;
+                          skip_context?: string[]; mentions?: string[] }): Promise<SketchAskResponse> {
+    return request(`/sketches/${id}/ask`, { method: 'POST', body: JSON.stringify(body) });
+  },
 };
+
+/** The sketch chat's reply: new code for a generated sketch (run, not saved;
+ *  `broken`: outputs parts use it no longer makes), a generated sketch offered
+ *  in a drawn one, an answer or a question. Spend fields for staff only. */
+export interface SketchAskResponse {
+  kind: 'edit' | 'proposal' | 'answer' | 'question';
+  code?: string;
+  note?: string;
+  result?: import('@/types/generated').GenRunResult;
+  broken?: import('@/types/generated').BrokenOutput[];
+  parameter_proposals?: (import('@/types/project').ProjectParameter & { reason: string })[];
+  sentence?: string;
+  name?: string;
+  /** (proposal) the drawn sketch is empty: it becomes the generated one */
+  empty?: boolean;
+  question?: string;
+  answer?: string;
+  context_files: string[];
+  tokens_in?: number;
+  tokens_out?: number;
+  cache_read_tokens?: number;
+  cost_usd?: number;
+}

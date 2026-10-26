@@ -22,6 +22,7 @@ import type { Document } from '@/types/document';
 import { addLog } from '@/stores/logStore';
 import { api as rawApi } from '@/api/client';
 import { GeneratedSketchEditor } from './generated/GeneratedSketchEditor';
+import { DrawnSketchChat, EmptySketchHint } from './generated/DrawnSketchChat';
 
 function SimDepthIndicator() {
   const simState = useCamStore((s) => s.simState);
@@ -167,10 +168,11 @@ function SimDepthIndicator() {
  *  workspace) or generated (drawn by code: generated/GeneratedSketchEditor). */
 export function EditorPage() {
   const { id } = useParams<{ id: string }>();
-  const kind = useSketchKind(id);
+  const [kind, setKind] = useSketchKind(id);
   const palette = useThemeStore((s) => s.palette);
   if (!id || !kind) return <div style={{ position: 'fixed', inset: 0, background: palette.background }} />;
-  return kind === 'generated' ? <GeneratedSketchEditor key={id} id={id} /> : <DrawnSketchEditor />;
+  return kind === 'generated' ? <GeneratedSketchEditor key={id} id={id} />
+    : <DrawnSketchEditor onGenerated={() => setKind({ id, kind: 'generated' })} />;
 }
 
 const storeKind = (id: string | undefined) =>
@@ -180,7 +182,7 @@ const storeKind = (id: string | undefined) =>
 
 /** 'drawn' or 'generated': from the document already open, or asked of the
  *  server (null until it answers). */
-function useSketchKind(id: string | undefined): 'drawn' | 'generated' | null {
+function useSketchKind(id: string | undefined) {
   const [kind, setKind] = useState<{ id: string; kind: 'drawn' | 'generated' } | null>(() => {
     const k = storeKind(id);
     return id && k ? { id, kind: k } : null;
@@ -195,10 +197,11 @@ function useSketchKind(id: string | undefined): 'drawn' | 'generated' | null {
       .catch(() => { if (live) setKind({ id, kind: 'drawn' }); });   // offline: the drawn editor has the local copy
     return () => { live = false; };
   }, [id]);
-  return kind && kind.id === id ? kind.kind : null;
+  return [kind && kind.id === id ? kind.kind : null, setKind] as const;
 }
 
-function DrawnSketchEditor() {
+/** `onGenerated`: the sketch became a generated one (the chat, or Write it as code). */
+function DrawnSketchEditor({ onGenerated }: { onGenerated: () => void }) {
   const { id } = useParams<{ id: string }>();
   const camPanelOpen = useCamStore((s) => s.camPanelOpen);
 
@@ -364,8 +367,10 @@ function DrawnSketchEditor() {
         keys={camPanelOpen ? 'viewport' : 'all'}
         toolbar={camPanelOpen ? <CamHeader /> : undefined}
         left={camPanelOpen ? <CamStepPanel /> : undefined}
-        overlay={camPanelOpen ? <><SimDepthIndicator /><CamCanvasHint /></> : <><SharedUsesBanner /><SketchToPartMenu /></>}
+        overlay={camPanelOpen ? <><SimDepthIndicator /><CamCanvasHint /></>
+          : <><SharedUsesBanner /><SketchToPartMenu />{id && <EmptySketchHint id={id} onGenerated={onGenerated} />}</>}
         right={camPanelOpen ? <></> : undefined}
+        aside={!camPanelOpen && id && backendId === id ? <DrawnSketchChat id={id} onGenerated={onGenerated} /> : undefined}
       />
       <DocumentDrawer />
     </>

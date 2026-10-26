@@ -5,7 +5,7 @@
  * model picker, Ask and Clear). What a message does is the editor's: it
  * passes `send`, and the history's revert and proposal callbacks.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { buildApi, type DocumentListItem, type ModelInfo, type ModelsResponse } from '@/api/client';
 import type { ThemePalette } from '@/theme';
 import type { ChatMessage } from '@/types/document';
@@ -148,10 +148,12 @@ const paperclip = (size: number) => (
  *  of the window). An edit with code is a checkpoint: clicking it calls
  *  `onRevert`. `scrollKey`: a change keeps the latest message in view. */
 export function ChatHistory({ messages, asking, fill, box, palette, projectId, onPersist, onRevert, onParamsAccepted, scrollKey,
-                              revertTitle = 'Revert the model to this version' }: {
+                              revertTitle = 'Revert the model to this version', revertWords = '↩ click to revert here', card }: {
   messages: ChatMessage[]; asking: boolean; fill: boolean; box: ChatBox; palette: ThemePalette;
   projectId: string | null; onPersist: (messages: ChatMessage[]) => void; onRevert: (code: string) => void;
-  onParamsAccepted: () => void; scrollKey?: unknown; revertTitle?: string;
+  onParamsAccepted: () => void; scrollKey?: unknown; revertTitle?: string; revertWords?: string;
+  /** a card of the editor's own under a message (the sketch chat's proposals) */
+  card?: (m: ChatMessage, i: number) => ReactNode;
 }) {
   const user = useAuthStore((st) => st.user);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -187,7 +189,7 @@ export function ChatHistory({ messages, asking, fill, box, palette, projectId, o
               ) : null}
               {revertable && (
                 <span style={{ display: 'block', fontSize: '11px', opacity: 0.6, marginTop: 3 }}>
-                  ↩ click to revert here
+                  {revertWords}
                 </span>
               )}
             </div>
@@ -209,6 +211,7 @@ export function ChatHistory({ messages, asking, fill, box, palette, projectId, o
               <BriefProposalCard brief={m.brief} projectId={projectId} palette={palette}
                 onStatus={(status) => onPersist(messages.map((x, j) => (j === i && x.brief ? { ...x, brief: { ...x.brief, status } } : x)))} />
             )}
+            {card?.(m, i)}
             {chatUsageNote(user, m.usage) && (
               <div title="This call: input tokens (of them, read from the prompt cache) · output tokens · cost"
                 style={{ fontSize: '10.5px', color: palette.textSecondary, marginTop: 2, paddingLeft: 4 }}>

@@ -302,6 +302,17 @@ class StorageTests(GeneratedWorld):
         self.assertEqual(gs.the_sketch(empty)["id"], "s")
         self.assertEqual(len(gs.the_sketch(empty)["generated"]["outputs"]), 2)
 
+    def test_a_sketch_still_called_sketch_takes_the_proposed_name(self):
+        empty = Document.objects.create(name="Sketch 2", project=self.drone, created_by=self.user, data={
+            "name": "Sketch 2", "type": "sketch", "sketches": [{"id": "s", "entities": [], "constraints": []}]})
+        named = Document.objects.create(name="Mine", project=self.drone, created_by=self.user, data={
+            "name": "Mine", "type": "sketch", "sketches": [{"id": "s", "entities": [], "constraints": []}]})
+        for doc in (empty, named):
+            self.post("/api/sketches/create", {"from_document": str(doc.id), "code": LAYOUT, "name": "Frame layout"})
+            doc.refresh_from_db()
+        self.assertEqual((empty.name, empty.data["name"]), ("Frame layout", "Frame layout"))
+        self.assertEqual(named.name, "Mine")
+
     def test_a_drawn_sketch_with_shapes_gets_a_new_document(self):
         self.holes.data["sketches"][0]["entities"] = [
             {"id": "c", "type": "circle", "center": {"x": 0, "y": 0}, "radius": 3}]

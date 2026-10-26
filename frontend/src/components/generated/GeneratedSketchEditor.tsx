@@ -3,7 +3,9 @@
  * it; parts read what it saved). The drawing is the default view, with the
  * code one click away; on the right its outputs, the project parameters it
  * read (sliders try values without saving; Apply to project saves them), its
- * checks and the parts that use it.
+ * checks and the parts that use it; under the drawing the sketch chat (the AI
+ * edits the code: a change that stops making outputs parts use waits for the
+ * user's yes).
  *
  * Nothing here goes through the drawn sketch's document store or autosave:
  * the code is saved by Run (PUT /api/sketches/{id}/code), and trial values
@@ -26,19 +28,18 @@ import { fmt } from '@/components/ParamControl';
 import { trialErrorWords } from '@/build/generatedSketch';
 import type { SavedRange } from '@/utils/paramRange';
 import type { BrokenOutput, GenDoc, GenRunResult } from '@/types/generated';
+import type { ChatMessage } from '@/types/document';
+import type { SketchAskResponse } from '@/api/client';
 import { SketchDrawing } from './SketchDrawing';
 import { CodeView } from './CodeView';
 import { ChecksPanel, OutputsPanel, ParametersPanel, UsedByPanel } from './SidePanels';
+import { HeldCard, SketchChat, runWords } from './SketchChat';
 
 type Trial = { values: Record<string, number>; result: GenRunResult | null };
 const NO_TRIAL: Trial = { values: {}, result: null };
 const sameValues = (a: Record<string, number>, b: Record<string, number>) => JSON.stringify(a) === JSON.stringify(b);
 
-export function GeneratedSketchEditor({ id, chat }: {
-  id: string;
-  /** the sketch chat, under the drawing */
-  chat?: (ctx: { doc: GenDoc; reload: () => Promise<void> }) => ReactNode;
-}) {
+export function GeneratedSketchEditor({ id }: { id: string }) {
   const palette = useThemeStore((s) => s.palette);
   const [doc, setDoc] = useState<GenDoc | null>(null);
   const [loadError, setLoadError] = useState('');
@@ -61,6 +62,10 @@ export function GeneratedSketchEditor({ id, chat }: {
   const [rebuild, setRebuild] = useState<{ at: string; done: string[]; failed: string[] } | null>(null);
   const [op, setOp] = useState<HandoffOp | null>(null);
   const [useMenu, setUseMenu] = useState(false);
+  const [chat, setChat] = useState<ChatMessage[]>([]);
+  const chatRef = useRef(chat);
+  chatRef.current = chat;
+  const askAi = useRef<((text: string) => void) | null>(null);
   const users = useSyncExternalStore(subscribeSharedUses, getUsers);
   const params = useProjectParamsStore((s) => s.params);
   const projectId = doc?.project_id ?? null;
@@ -70,11 +75,13 @@ export function GeneratedSketchEditor({ id, chat }: {
     const d = full as unknown as GenDoc;
     setDoc(d);
     setCode(d.data.code);
+    return d;
   };
   useEffect(() => {
     setDoc(null);
     setLoadError('');
-    reload().catch((e) => setLoadError(errorText(e)));
+    setChat([]);
+    reload().then((d) => setChat((d.data.chat ?? []) as ChatMessage[])).catch((e) => setLoadError(errorText(e)));
     void loadUsers(id);
     return () => { void loadUsers(null); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -205,6 +212,68 @@ export function GeneratedSketchEditor({ id, chat }: {
     }
   };
 
+  // ── chat ──
+  const persistChat = (messages: ChatMessage[]) => {
+    setChat(messages);
+    sketchApi.saveChat(id, messages).catch((e) => addLog('error', `Couldn't save the chat: ${errorText(e)}`));
+  };
+  const changeMessage = (i: number, change: (m: ChatMessage) => ChatMessage) =>
+    persistChat(chatRef.current.map((m, j) => (j === i ? change(m) : m)));
+  /** Save code the chat brought; null, or the outputs parts use it would drop (then nothing is saved). */
+  const saveFromChat = async (c: string, label: string, confirmBroken: boolean): Promise<BrokenOutput[] | null> => {
+    const r = await sketchApi.saveCode(id, { code: c, label, confirm: confirmBroken });
+    if (!r.saved) return r.broken;
+    const { saved: _s, broken: _b, result: _r, ...d } = r;
+    if (dirty) addLog('info', 'The code you were editing was replaced by the AI\'s change (your saved versions are in the Code tab\'s history).');
+    setDoc(d as GenDoc);
+    setCode(c);
+    setBroken(null);
+    resetTrial();
+    await refreshUsers(id);
+    return null;
+  };
+  const onReply = async (r: SketchAskResponse): Promise<Partial<ChatMessage>> => {
+    const text = [r.note || 'Done.', runWords(r.result)].filter(Boolean).join(' ');
+    if (r.kind !== 'edit' || !r.code) return { kind: 'answer', text: r.sentence || text };
+    const label = `before AI: ${r.note || 'a change'}`.slice(0, 80);
+    const held = (broken: BrokenOutput[]) => ({ kind: 'edit' as const, text, held: { code: r.code!, label, broken, status: 'pending' as const } });
+    // new outputs parts would lose, or project parameters not accepted yet: the user says first
+    if (r.broken?.length || r.parameter_proposals?.length) return held(r.broken ?? []);
+    try {
+      const lost = await saveFromChat(r.code, label, false);
+      return lost ? held(lost) : { kind: 'edit', text, code: r.code };
+    } catch (e) {
+      return { kind: 'question', text: `${text}\n⚠ Couldn't save it: ${errorText(e)}` };
+    }
+  };
+  const applyHeld = async (i: number) => {
+    const h = chatRef.current[i]?.held;
+    if (!h) return;
+    try {
+      await saveFromChat(h.code, h.label, true);
+      changeMessage(i, (m) => ({ ...m, code: h.code, held: { ...h, status: 'applied' } }));
+    } catch (e) {
+      addLog('error', `Couldn't apply the change: ${errorText(e)}`);
+    }
+  };
+  const revertTo = async (c: string) => {
+    try {
+      const lost = await saveFromChat(c, 'before going back', false);
+      // it would drop outputs parts use: the Code tab asks, as for a hand edit
+      if (lost) { setTab('code'); setCode(c); setBroken(lost); }
+    } catch (e) {
+      addLog('error', `Couldn't go back: ${errorText(e)}`);
+    }
+  };
+  const paramsAccepted = async () => {
+    await useProjectParamsStore.getState().refresh();
+    await reload();
+    // code that waited for these parameters goes in now
+    const i = chatRef.current.map((m) => m.held?.status === 'pending' && !m.held.broken.length).lastIndexOf(true);
+    if (i >= 0) await applyHeld(i);
+    await refreshUsers(id);
+  };
+
   const stale = users.filter((p) => p.stale.length && !p.pinned);
   const rebuildAll = async () => {
     const state = { at: '', done: [] as string[], failed: [] as string[] };
@@ -259,6 +328,10 @@ export function GeneratedSketchEditor({ id, chat }: {
             Show line {savedError.line}
           </button>
         )}
+        <button style={btn} title="Ask the AI to fix the code"
+          onClick={() => askAi.current?.(`The code stopped${savedError.line ? ` at line ${savedError.line}` : ''}: ${savedError.message}. Please fix it.`)}>
+          Fix with AI
+        </button>
       </Banner>
     );
   })();
@@ -325,7 +398,13 @@ export function GeneratedSketchEditor({ id, chat }: {
               onUndo={() => { setCode(saved); setBroken(null); }} onSaveAnyway={() => void runCode(true)}
               history={doc.data.codeHistory ?? []} goToLine={goTo} />
           )}
-          {chat?.({ doc, reload })}
+          <SketchChat docId={id} projectId={projectId} messages={chat} persist={persistChat} onReply={onReply}
+            onRevert={(c) => void revertTo(c)} onParamsAccepted={() => void paramsAccepted()} askRef={askAi}
+            placeholder="Ask the AI to change the layout, add a check, or explain a size. It changes the code; click one of its changes to go back to it."
+            card={(m, i) => m.held ? (
+              <HeldCard held={m.held} onApply={() => applyHeld(i)}
+                onKeep={() => changeMessage(i, (x) => ({ ...x, held: { ...x.held!, status: 'kept' } }))} />
+            ) : null} />
         </div>
 
         <aside style={{ width: 310, flexShrink: 0, overflowY: 'auto', background: palette.panelBg,
