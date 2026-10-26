@@ -412,7 +412,9 @@ itself when they change.
   project, after saying how many parts it affects. Those parts then show
   **OUT OF DATE**; **Rebuild all** under **Used by parts** rebuilds them.
 - **Checks**: green or red lines such as "fits the 256 mm bed" or "holes 3 mm from the
-  edge". Click one to light up the output it checks. Ask the AI for more.
+  edge". Click one to light up the output it checks. Ask the AI for more. A failing check
+  also shows on the drawing: its output turns red and its message sits at the top left.
+  So a value that only a check reads, such as the bed size, still shows when it matters.
 - **Code**: click **Code** at the top. Edit it and click **Run** (⌘/Ctrl+Enter) to save
   and redraw; an error shows on its line. **Earlier versions** lists the code before
   each change, yours or the AI's; each AI change in the chat can be clicked to go back

@@ -7,22 +7,26 @@
  * The drawing comes from code, so it can't be edited here: dragging an
  * element, double-clicking one or pressing Delete says so for a few seconds.
  * While the code fails (or a value is tried it can't handle) the last good
- * drawing stays, dimmed.
+ * drawing stays, dimmed. A failing check shows on the drawing too: its output
+ * in red, and its message at the top left (clicking it picks the output), so
+ * a value only a check reads, such as a bed size, still visibly does something.
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useThemeStore } from '@/theme';
 import type { Entity as SketchEntity } from '@/types/document';
-import type { GenAnnotations, GenOutput } from '@/types/generated';
+import type { GenAnnotations, GenCheck, GenOutput } from '@/types/generated';
 import type { UsedByPart } from '@/api/client';
 import { boundsOf, fitView, hoverWords, linePath, outputOf, toScreen, toSketch, type View } from '@/build/generatedSketch';
 
 export const READ_ONLY_HINT = 'This drawing comes from code. Change a parameter on the right, or ask the AI below.';
 
-export function SketchDrawing({ entities, notes, outputs, users, lit, onHover, onPick, dimmed, fitKey, hint, onEditAttempt,
-                                interactive = true, children }: {
+export function SketchDrawing({ entities, notes, outputs, checks = [], users, lit, onHover, onPick, dimmed, fitKey, hint,
+                                onEditAttempt, interactive = true, children }: {
   entities: SketchEntity[];
   notes: GenAnnotations | null;
   outputs: GenOutput[];
+  /** failing ones show on the drawing */
+  checks?: GenCheck[];
   users: UsedByPart[];
   /** the outputs shown lit (hovered, or picked on the right) */
   lit: ReadonlySet<string>;
@@ -70,6 +74,8 @@ export function SketchDrawing({ entities, notes, outputs, users, lit, onHover, o
   }, [size.w, size.h]);
 
   const byName = useMemo(() => new Map(outputs.map((o) => [o.name, o])), [outputs]);
+  const failing = interactive ? checks.filter((c) => !c.ok) : [];
+  const failed = new Set(failing.map((c) => c.output).filter((o): o is string => !!o));
   const v = view && size.w ? { ...view, width: size.w, height: size.h } : null;
 
   const wheel = (e: React.WheelEvent) => {
@@ -108,11 +114,13 @@ export function SketchDrawing({ entities, notes, outputs, users, lit, onHover, o
   const grid = v ? gridLines(v, palette.gridMinor, palette.gridMajor) : null;
   const shapes: ReactNode[] = [];
   if (v) {
-    const order = [...entities].sort((a, b) => Number(lit.has(outputOf(a.id) ?? '')) - Number(lit.has(outputOf(b.id) ?? '')));
+    // lit outputs on top, then those a check fails on
+    const rank = (e: SketchEntity) => { const o = outputOf(e.id) ?? ''; return lit.has(o) ? 2 : failed.has(o) ? 1 : 0; };
+    const order = [...entities].sort((a, b) => rank(a) - rank(b));
     for (const e of order) {
       const out = outputOf(e.id) ?? '';
       const on = lit.has(out);
-      const stroke = on ? palette.accent : palette.line;
+      const stroke = on ? palette.accent : failed.has(out) ? palette.danger : palette.line;
       const fill = on ? palette.accent : 'none';
       const common = {
         'data-output': out,
@@ -218,6 +226,20 @@ export function SketchDrawing({ entities, notes, outputs, users, lit, onHover, o
                                     borderRadius: 8, padding: '7px 12px', fontSize: '12.5px', boxShadow: '0 2px 10px rgba(0,0,0,0.25)',
                                     maxWidth: 'calc(100% - 32px)' }}>
           {READ_ONLY_HINT}
+        </div>
+      )}
+      {failing.length > 0 && (
+        <div role="status" style={{ position: 'absolute', left: 12, top: 12, zIndex: 5, display: 'flex', flexDirection: 'column', gap: 2,
+                                    maxWidth: 'calc(100% - 24px)', background: palette.panelBg, border: `1px solid ${palette.danger}`,
+                                    borderRadius: 6, padding: '5px 10px', fontSize: '12px', boxShadow: '0 2px 8px rgba(0,0,0,0.2)' }}>
+          {failing.map((c, i) => (
+            <div key={`${c.name}-${i}`} onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => c.output && onPick?.(lit.has(c.output) ? null : c.output)}
+              title={c.output ? `Click to show ${c.output}` : undefined}
+              style={{ color: palette.danger, cursor: c.output ? 'pointer' : 'default' }}>
+              ✗ {c.name}{c.message ? `: ${c.message}` : ''}
+            </div>
+          ))}
         </div>
       )}
       {children}
