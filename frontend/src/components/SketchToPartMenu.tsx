@@ -13,6 +13,7 @@ import { errorText, type DocumentListItem } from '@/api/client';
 import { flushSaveAsync, getBackendId, getProjectId, subscribeBackendId, subscribeProjectContext } from '@/api/autoSave';
 import { createEmptyPart, generateNumberedName, isSketchDocument } from '@/utils/document';
 import { addLog } from '@/stores/logStore';
+import { useSketchEmpty } from '@/components/generated/DrawnSketchChat';
 import { aliasFor, OP_WORDS, partNameFor, pickFor, saveHandoff, type Handoff, type HandoffOp, type SkPick } from '@/build/sketchToPart';
 
 const isSketchDoc = isSketchDocument;
@@ -23,8 +24,10 @@ export function SketchToPartMenu() {
   const sketch = useDocumentStore((s) => s.getActiveSketch());
   const backendId = useSyncExternalStore(subscribeBackendId, getBackendId);
   const projectId = useSyncExternalStore(subscribeProjectContext, getProjectId);
+  const empty = useSketchEmpty();
   const [op, setOp] = useState<HandoffOp | null>(null);
-  if (!sketchDoc || !sketch || !backendId || !projectId) return null;
+  // nothing drawn yet: nothing to make parts from (and the empty-sketch hint sits here)
+  if (!sketchDoc || !sketch || !backendId || !projectId || empty) return null;
   const btn: React.CSSProperties = {
     background: 'none', border: 'none', color: palette.text, cursor: 'pointer', fontSize: '12px', padding: '4px 10px',
   };
