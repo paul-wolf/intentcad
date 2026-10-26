@@ -26,6 +26,10 @@ export interface ProjectParameter {
   value: number | string;
   unit: 'mm' | 'deg' | '';
   description?: string;
+  /** the slider's range (absent: about 0.5× to 2× the value, utils/paramRange) */
+  min?: number | null;
+  max?: number | null;
+  step?: number | null;
 }
 
 /** Where each project parameter is used (backend modeling/project_params.uses):

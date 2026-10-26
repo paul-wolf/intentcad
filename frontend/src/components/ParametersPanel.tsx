@@ -5,20 +5,27 @@
  * document's own, each with Move to project. Elsewhere, only its own.
  * Dimensions use any of them by name (`brace_t + 2`); text values are listed
  * but can't size a dimension.
+ *
+ * A number's value has the shared ParamControl (field + slider). Moving it
+ * tries the value: the sketch re-solves live, but nothing is saved and no
+ * undo step is made until Apply in the bar above (Reset puts it back).
  */
-import { useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useDocumentStore } from '@/stores/documentStore';
 import { useProjectParamsStore } from '@/stores/projectParamsStore';
 import { useThemeStore } from '@/theme';
-import { flushSaveAsync, getBackendId, getProjectId, getProjectName, requestSave, subscribeProjectContext } from '@/api/autoSave';
+import { flushSaveAsync, getBackendId, getProjectId, getProjectName, holdSavesForTrial, persistParamRanges, requestSave,
+         subscribeProjectContext } from '@/api/autoSave';
 import { projectApi } from '@/api/projectClient';
 import { errorText } from '@/api/client';
 import { addLog } from '@/stores/logStore';
-import { NumberInput } from './NumberInput';
+import { ParamControl, TrialBar } from './ParamControl';
+import { affectsWords } from './ProjectParameters';
+import type { SavedRange } from '@/utils/paramRange';
 import { isValidParamName } from '@/utils/expression';
 import { isSketchDocument } from '@/utils/document';
 import { saveProjectParameters, solvedWords, unitWarnings } from '@/build/projectSketchSolve';
-import type { ProjectParameter } from '@/types/project';
+import type { ParameterUses, ProjectParameter } from '@/types/project';
 
 type Palette = ReturnType<typeof useThemeStore.getState>['palette'];
 
@@ -52,15 +59,96 @@ function freeName(taken: Iterable<string>): string {
   return `param${i}`;
 }
 
+type TrialEntry = { kind: 'own' | 'project'; saved: number; value: number };
+type Trial = ReturnType<typeof useSketchTrial>;
+
+/** Values being tried in a drawn sketch: shown in the stores (the sketch
+ *  re-solves, at most once a frame) with saves held; Apply makes them real
+ *  (an undo step for its own, a project save for the project's). */
+function useSketchTrial(projectId: string | null) {
+  const [entries, setEntries] = useState<Record<string, TrialEntry>>({});
+  const ref = useRef(entries);
+  const base = useRef<ProjectParameter[] | null>(null);   // the project's values before the trial
+  const frame = useRef<number | null>(null);
+
+  const show = (e: Record<string, TrialEntry>, restoreAll = false) => {
+    const doc = useDocumentStore.getState().document;
+    const own = { ...(doc.parameters ?? {}) };
+    for (const [n, t] of Object.entries(e)) if (t.kind === 'own') own[n] = restoreAll ? t.saved : t.value;
+    useDocumentStore.setState({ document: { ...doc, parameters: own } });
+    if (projectId && base.current) {
+      useProjectParamsStore.getState().set(projectId, base.current.map((p) => {
+        const t = e[p.name];
+        return t?.kind === 'project' && !restoreAll ? { ...p, value: t.value } : p;
+      }));
+    }
+    useDocumentStore.getState().reapplyExpressionDimensions();
+  };
+  const set = (next: Record<string, TrialEntry>) => {
+    ref.current = next;
+    setEntries(next);
+    if (frame.current == null) {
+      frame.current = requestAnimationFrame(() => { frame.current = null; show(ref.current); });
+    }
+  };
+  const tryValue = (name: string, kind: TrialEntry['kind'], saved: number, value: number) => {
+    holdSavesForTrial(true);
+    if (kind === 'project' && !base.current) base.current = useProjectParamsStore.getState().params;
+    const prev = ref.current[name];
+    const { [name]: _drop, ...rest } = ref.current;
+    const s0 = prev?.saved ?? saved;
+    set(value === s0 ? rest : { ...rest, [name]: { kind, saved: s0, value } });
+  };
+  const end = () => {
+    if (frame.current != null) { cancelAnimationFrame(frame.current); frame.current = null; }
+    const was = ref.current;
+    show(was, true);
+    ref.current = {};
+    setEntries({});
+    base.current = null;
+    holdSavesForTrial(false);
+    return was;
+  };
+  const reset = () => { if (Object.keys(ref.current).length || base.current) end(); };
+  /** the project's values as saved (not the ones being tried) */
+  const projectSaved = () => base.current ?? useProjectParamsStore.getState().params;
+  const apply = async (saveProject: (next: ProjectParameter[], renames?: Record<string, string>, what?: string) => Promise<boolean>) => {
+    const savedProject = projectSaved();
+    const was = end();
+    const own = Object.entries(was).filter(([, t]) => t.kind === 'own');
+    const proj = Object.entries(was).filter(([, t]) => t.kind === 'project');
+    if (own.length) {
+      const st = useDocumentStore.getState();
+      st.beginTransaction('Edit parameter');
+      for (const [n, t] of own) st.setParameter(n, t.value);
+      requestSave();
+    }
+    if (proj.length) {
+      await saveProject(savedProject.map((p) => (was[p.name]?.kind === 'project' ? { ...p, value: was[p.name]!.value } : p)), {},
+                        `${proj.map(([n, t]) => `${n} = ${t.value}`).join(', ')} for the whole project`);
+    }
+  };
+  useEffect(() => () => { if (Object.keys(ref.current).length) end(); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  return { entries, tryValue, reset, apply, projectSaved };
+}
+
 export function ParametersPanel() {
   const isSketchDoc = useDocumentStore((s) => isSketchDocument(s.document));
   const projectId = useSyncExternalStore(subscribeProjectContext, getProjectId);
   const paramsProject = useProjectParamsStore((s) => s.projectId);
   const inProject = isSketchDoc && !!projectId && paramsProject === projectId;
-  return inProject ? <ProjectSketchParameters projectId={projectId!} /> : <OwnParameters title="Parameters" />;
+  const trial = useSketchTrial(inProject ? projectId : null);
+  return inProject ? <ProjectSketchParameters projectId={projectId!} trial={trial} />
+    : (
+      <>
+        <TrialBar style={{ margin: 6, flexWrap: 'wrap' }} onReset={trial.reset} onApply={() => void trial.apply(async () => true)}
+          items={Object.entries(trial.entries).map(([n, t]) => ({ name: n, value: t.value, saved: t.saved }))} />
+        <OwnParameters title="Parameters" trial={trial} />
+      </>
+    );
 }
 
-function ProjectSketchParameters({ projectId }: { projectId: string }) {
+function ProjectSketchParameters({ projectId, trial }: { projectId: string; trial: Trial }) {
   const palette = useThemeStore((s) => s.palette);
   const projectName = useSyncExternalStore(subscribeProjectContext, getProjectName);
   const params = useProjectParamsStore((s) => s.params);
@@ -70,6 +158,11 @@ function ProjectSketchParameters({ projectId }: { projectId: string }) {
   const [nameText, setNameText] = useState('');
   const [renaming, setRenaming] = useState<{ from: string; to: string; affects: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [uses, setUses] = useState<ParameterUses>({});
+  const tryingProject = Object.values(trial.entries).some((t) => t.kind === 'project');
+  useEffect(() => {
+    if (tryingProject) projectApi.parameterUses(projectId).then(setUses).catch(() => {});
+  }, [tryingProject, projectId]);
 
   const save = async (next: ProjectParameter[], renames: Record<string, string> = {}, what = 'Project parameters saved') => {
     setBusy(true);
@@ -89,8 +182,11 @@ function ProjectSketchParameters({ projectId }: { projectId: string }) {
     }
   };
 
-  const setValue = (name: string, value: number) =>
-    void save(params.map((p) => (p.name === name ? { ...p, value } : p)), {}, `${name} = ${value} for the whole project`);
+  const setRange = (name: string, r: SavedRange | null) =>
+    void save(trial.projectSaved().map((p) => (p.name === name ? { ...p, min: r?.min ?? null, max: r?.max ?? null, step: r?.step ?? null } : p)),
+              {}, `Slider range of ${name} saved`);
+  const trialItems = Object.entries(trial.entries).map(([n, t]) => ({ name: n, value: t.value, saved: t.saved }));
+  const projectTried = Object.entries(trial.entries).filter(([, t]) => t.kind === 'project').map(([n]) => n);
 
   const add = () => {
     const name = freeName([...params.map((p) => p.name), ...Object.keys(own)]);
@@ -121,6 +217,9 @@ function ProjectSketchParameters({ projectId }: { projectId: string }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', borderBottom: `1px solid ${palette.border}` }}>
+      <TrialBar style={{ margin: 6, flexWrap: 'wrap' }} items={trialItems} onReset={trial.reset}
+        onApply={() => void trial.apply(save)} applyLabel={projectTried.length ? 'Apply to project' : 'Apply'}
+        note={projectTried.length ? affectsWords(projectTried, uses) : undefined} />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px',
                     borderBottom: `1px solid ${palette.border}` }}>
         <span style={headerText(palette)} title={`The parameters of the project${projectName ? ` ${projectName}` : ''}: changing one here changes it for every sketch and part that uses it`}>
@@ -168,16 +267,16 @@ function ProjectSketchParameters({ projectId }: { projectId: string }) {
             <span style={{ color: palette.textMuted, flexShrink: 0 }}>=</span>
             <div style={{ flex: 1, minWidth: 0 }}>
               {typeof p.value === 'number' ? (
-                <NumberInput value={p.value} disabled={busy} onChange={(v) => { if (v !== p.value) setValue(p.name, v); }} />
+                <ParamControl value={trial.entries[p.name]?.value ?? p.value} saved={trial.entries[p.name]?.saved ?? p.value}
+                  unit={p.unit} range={p} disabled={busy} savedWord="project"
+                  onChange={(v) => trial.tryValue(p.name, 'project', trial.entries[p.name]?.saved ?? (p.value as number), v)}
+                  onRange={(r) => setRange(p.name, r)} />
               ) : (
                 <span style={{ fontSize: '11px', color: palette.textMuted }} title="Text: parts' scripts can read it as PP[…], but it can't size a dimension">
                   “{p.value}” (text)
                 </span>
               )}
             </div>
-            <span style={{ fontSize: '10px', color: palette.textMuted, width: '18px', flexShrink: 0 }}>
-              {p.unit === 'deg' ? '°' : p.unit}
-            </span>
           </div>
         ))}
       </div>
@@ -201,22 +300,25 @@ function ProjectSketchParameters({ projectId }: { projectId: string }) {
         </div>
       )}
 
-      <OwnParameters title="This sketch only" project={params} projectId={projectId} onMove={save} busy={busy} />
+      <OwnParameters title="This sketch only" project={trial.projectSaved()} projectId={projectId} onMove={save} busy={busy}
+        trial={trial} />
     </div>
   );
 }
 
 /** The document's own parameters; in a project sketch, "This sketch only",
  *  each with Move to project. */
-function OwnParameters({ title, project, projectId, onMove, busy }: {
+function OwnParameters({ title, project, projectId, onMove, busy, trial }: {
   title: string;
+  trial: Trial;
   project?: ProjectParameter[];
   projectId?: string;
   onMove?: (next: ProjectParameter[], renames?: Record<string, string>, what?: string) => Promise<boolean>;
   busy?: boolean;
 }) {
   const palette = useThemeStore((s) => s.palette);
-  const parameters = useDocumentStore((s) => s.document.parameters ?? {});
+  const parameters = useDocumentStore((s) => s.document.parameters) ?? {};
+  const ranges = useDocumentStore((s) => s.document.paramRanges) ?? {};
   const beginTransaction = useDocumentStore((s) => s.beginTransaction);
   const setParameter = useDocumentStore((s) => s.setParameter);
   const removeParameter = useDocumentStore((s) => s.removeParameter);
@@ -330,11 +432,12 @@ function OwnParameters({ title, project, projectId, onMove, busy }: {
               )}
               <span style={{ color: palette.textMuted, flexShrink: 0 }}>=</span>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <NumberInput value={value} onChange={(v) => {
-                  beginTransaction('Edit parameter');
-                  setParameter(name, v);
-                  requestSave();
-                }} />
+                <ParamControl value={value} saved={trial.entries[name]?.saved ?? value} range={ranges[name]}
+                  onChange={(v) => trial.tryValue(name, 'own', trial.entries[name]?.saved ?? value, v)}
+                  onRange={(r) => {
+                    const { [name]: _old, ...rest } = ranges;
+                    persistParamRanges(r ? { ...rest, [name]: r } : rest);
+                  }} />
               </div>
               {inProject && (
                 <button style={{ ...smallButton(palette), padding: '0 4px', fontSize: '10px', flexShrink: 0 }} disabled={busy}

@@ -396,6 +396,9 @@ export interface Document {
   sketches: Sketch[];
   activeSketchId: string;
   parameters?: Record<string, number>;
+  /** slider ranges for the part's P values or the sketch's own parameters
+   *  (absent: automatic, utils/paramRange) */
+  paramRanges?: Record<string, import('@/utils/paramRange').SavedRange>;
   metadata?: DocumentMetadata;
   /** The 3D build feature tree (legacy op-list modeler). */
   buildFeatures?: import('@/api/client').BuildFeature[];

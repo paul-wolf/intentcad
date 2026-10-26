@@ -14,7 +14,7 @@ import { DescriptionLine, useProjectDocs } from './ProjectChat';
 import { ChatHistory, ChatInput, useChatBox, useModelPicker } from './ChatPanel';
 import { mentionedIds } from '@/utils/mentions';
 import { projectApi } from '@/api/projectClient';
-import { persistModelCode, persistSharedRefs, persistChat, persistThumbnail, persistName, persistProductionNotes, persistPrintBed, persistSketches, getBackendId, subscribeBackendId, getProjectId, getProjectName, subscribeProjectContext } from '@/api/autoSave';
+import { persistModelCode, persistSharedRefs, persistChat, persistThumbnail, persistName, persistProductionNotes, persistPrintBed, persistSketches, persistParamRanges, getBackendId, subscribeBackendId, getProjectId, getProjectName, subscribeProjectContext } from '@/api/autoSave';
 import { createEmptyDocument, DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
 import type { BuildInputs, ChatMessage, Sketch, SketchRef } from '@/types/document';
 import { useNavigate } from 'react-router-dom';
@@ -93,6 +93,8 @@ import { OperationsPanel, Kbd } from './OperationsPanel';
 import { OpIcon, OPS_GRID_ICON } from './OpIcons';
 import { ContextPane, useContextFiles, type CtxColors } from './ContextPane';
 import { AppLink } from '@/ui/links';
+import { LatestRunner } from '@/utils/latestRunner';
+import { ParamControl, TrialBar, fmt } from './ParamControl';
 import { filesToSend, seesSpend, skipList, spendLine, spendNote, usageLabel } from '@/build/contextFiles';
 
 // the view buttons, in key order (1–6, then 0)
@@ -1058,6 +1060,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   useEffect(() => { if (staff) fetchUsage(); else setUsage(null); }, [staff]);
   const [paramVals, setParamVals] = useState<Record<string, number>>({});
   const paramBase = useRef<Record<string, number>>({});   // values as of the last build (good or failed)
+  const paramRanges = useDocumentStore((st) => st.document.paramRanges) ?? {};
   const [sens, setSens] = useState<Record<string, DimInfo>>({});   // param -> what it controls
   // where `sens` stands for the current build, so the status bar can tell
   // "still working out the handles" from "nothing moves this face"
@@ -1108,7 +1111,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
 
   // A parameter edit that didn't build: what was tried, what was kept, and why.
   const [paramReject, setParamReject] = useState<{
-    name: string; tried: number; kept: number | undefined; message: string; fix: SizeFix | null;
+    tried: string; kept: string; message: string; fix: SizeFix | null;
   } | null>(null);
   const applying = useRef<string | null>(null);   // "name=val" in flight (Enter + blur both fire)
 
@@ -1117,25 +1120,28 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // cleanly is REJECTED: the last good script and value come back (the model
   // stays rendered, the draft stays buildable) and the reason is shown — with
   // the engine's one-click fix when it measured a value that fits.
-  const applyParam = async (name: string, val: number) => {
-    const key = `${name}=${val}`;
+  const applyParam = (name: string, val: number) => applyParams({ [name]: val });
+  const applyParams = async (vals: Record<string, number>) => {
+    const key = JSON.stringify(vals);
     if (applying.current === key) return;
     applying.current = key;
     const prevCode = code;
-    const prevVal = paramBase.current[name];
+    const words = Object.entries(vals).map(([n, v]) => `${n} = ${fmt(v)}`).join(', ');
+    const kept = Object.keys(vals).filter((n) => paramBase.current[n] !== undefined)
+      .map((n) => `${n} ${fmt(paramBase.current[n])}`).join(', ');
     // Only guard when there IS a good state to keep. If the script is already
     // broken, a param change is the way out — let it through, saved or not.
     const guarded = status === 'done' && !warn;
     setParamReject(null);
     try {
-      const r = await buildApi.setParams(code, { [name]: val });
+      const r = await buildApi.setParams(code, vals);
       setCode(r.code);
-      if (!guarded) { saveDraft(r.code); await build(r.code, `${name} = ${val}`); return; }
-      const out = await build(r.code, `${name} = ${val}`);
+      if (!guarded) { saveDraft(r.code); await build(r.code, words); return; }
+      const out = await build(r.code, words);
       if (out.kind === 'ok') { saveDraft(r.code); return; }
       if (out.kind === 'aborted') return;
       setCode(prevCode);
-      setParamReject({ name, tried: val, kept: prevVal, message: out.message, fix: out.fix });
+      setParamReject({ tried: words, kept, message: out.message, fix: out.fix });
       await build(prevCode);          // the last good build — served from cache
     } catch (err) {
       setMessage(errorText(err));
@@ -1143,6 +1149,66 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       if (applying.current === key) applying.current = null;
     }
   };
+  // Values being tried with the sliders: once a slider pauses (or is let
+  // go) the part builds with them, saved nowhere and no version, the old model
+  // dimmed meanwhile; a result for a value already left is dropped. Apply
+  // writes them into the script (applyParams); Reset shows the last build again.
+  const [trialVals, setTrialValsState] = useState<Record<string, number>>({});
+  const trialRef = useRef<Record<string, number>>({});
+  const [trialBusy, setTrialBusy] = useState(false);
+  const [trialError, setTrialError] = useState('');
+  const trialAbort = useRef<AbortController | null>(null);
+  const setTrialVals = (v: Record<string, number>) => { trialRef.current = v; setTrialValsState(v); };
+  const trialRunner = useRef<LatestRunner<Record<string, number>, RunResponse> | null>(null);
+  if (!trialRunner.current) {
+    trialRunner.current = new LatestRunner<Record<string, number>, RunResponse>(
+      async (vals) => {
+        const ctrl = new AbortController();
+        trialAbort.current = ctrl;
+        try {
+          const src = (await buildApi.setParams(codeRef.current, vals)).code;
+          const { sketches, bed, shared } = buildInputs(src);
+          return await buildApi.run(src, ctrl.signal, getBackendId() ?? '', sketches, bed, shared);
+        } catch (err) {
+          if (!(err instanceof DOMException && err.name === 'AbortError')) {
+            setTrialError(`${Object.entries(vals).map(([n, v]) => `${n} = ${fmt(v)}`).join(', ')} doesn't build: `
+                          + (errorText(err).split('\n').map((l) => l.trim()).filter(Boolean).pop() ?? ''));
+          }
+          throw err;
+        }
+      },
+      (_vals, res) => {
+        setTrialError('');
+        applySelection([], [], []);           // face numbers differ in the preview
+        viewerRef.current?.update(res.mesh, res.faces);
+        viewerRef.current?.setEdges(res.edges);
+      },
+      { pause: 300, onBusy: setTrialBusy },
+    );
+  }
+  const tryParam = (name: string, v: number, final: boolean) => {
+    const { [name]: _was, ...rest } = trialRef.current;
+    const next = v === paramVals[name] ? rest : { ...rest, [name]: v };
+    if (!Object.keys(next).length) { resetTrial(); return; }
+    setTrialVals(next);
+    trialRunner.current!.submit(next, final);
+  };
+  const resetTrial = (show = true) => {
+    const had = Object.keys(trialRef.current).length > 0;
+    trialRunner.current!.cancel();
+    trialAbort.current?.abort();
+    setTrialVals({}); setTrialError('');
+    const res = resRef.current;
+    if (show && had && res) { viewerRef.current?.update(res.mesh, res.faces); viewerRef.current?.setEdges(res.edges); }
+  };
+  const applyTrial = () => {
+    const vals = trialRef.current;
+    resetTrial(false);
+    void applyParams(vals);
+  };
+  // the script changed some other way (typed, the AI): the trial is over
+  useEffect(() => { if (Object.keys(trialRef.current).length) resetTrial(); }, [code]);   // eslint-disable-line react-hooks/exhaustive-deps
+
   // A face sketch was closed. Extrude asked for: append the script line (its
   // depth a new parameter) and build. Otherwise rebuild if the script already
   // extrudes this sketch — its shapes are part of the build's inputs.
@@ -3322,26 +3388,22 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         const controls = sens[name]?.faces ?? [];
         const active = sel.length > 0 && controls.some((i) => sel.includes(i));
         return (
-          <label key={name}
+          <div key={name}
             onMouseEnter={() => { ensureSens(); if (controls.length) viewerRef.current?.selectFaces(controls); }}
             onMouseLeave={() => viewerRef.current?.selectFaces(sel)}
-            title={controls.length ? `controls ${controls.length} face(s) — hover to preview` : ''}
-            style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px',
-                     color: active ? palette.text : palette.textSecondary,
-                     fontWeight: active ? 600 : 400 }}>
-            {name}
-            <input
-              type="number" value={val} step="any"
-              onChange={(e) => setParamVals((p) => ({ ...p, [name]: Number(e.target.value) }))}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyParam(name, paramVals[name]!); } }}
-              onBlur={() => { if (paramVals[name] !== paramBase.current[name]) applyParam(name, paramVals[name]!); }}
-              style={{ width: '64px', padding: '3px 6px', background: palette.inputBg,
-                       border: `1px solid ${active ? palette.primaryBtn : palette.inputBorder}`,
-                       borderRadius: '4px', color: palette.text, fontSize: '12px' }}
-            />
-          </label>
+            style={{ width: 196, fontWeight: active ? 600 : 400 }}>
+            <ParamControl label={name} value={trialVals[name] ?? val} saved={val} range={paramRanges[name]}
+              onRange={(r) => {
+                const { [name]: _old, ...rest } = paramRanges;
+                persistParamRanges(r ? { ...rest, [name]: r } : rest);
+              }}
+              title={controls.length ? `controls ${controls.length} face(s) — hover to preview` : ''}
+              onChange={(v, final) => tryParam(name, v, final)} />
+          </div>
         );
       })}
+      <TrialBar style={{ width: '100%' }} items={Object.entries(trialVals).map(([n, v]) => ({ name: n, value: v, saved: paramVals[n] }))}
+        busy={trialBusy} note={trialError || undefined} onReset={() => resetTrial()} onApply={applyTrial} />
       {paramReject && (() => {
         const pr = paramReject;
         const lines = pr.message.split('\n').map((l) => l.trim()).filter(Boolean);
@@ -3351,7 +3413,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
             style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
                      fontSize: '11px', color: palette.danger }}>
             <span>
-              {pr.name} = {pr.tried} doesn't build{pr.kept !== undefined ? ` — kept ${pr.kept}` : ''}. {why}
+              {pr.tried} doesn't build{pr.kept ? ` — kept ${pr.kept}` : ''}. {why}
             </span>
             {pr.fix?.param && fixButton(pr.fix)}
           </div>
@@ -3625,7 +3687,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
           </div>
           <div style={{ flex: 1, position: 'relative', minHeight: 0, overflow: 'hidden' }}>
             <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block',
-                     cursor: 'grab', touchAction: 'none', ...faceSketch.canvasStyle }} />
+                     cursor: 'grab', touchAction: 'none', opacity: trialBusy ? 0.55 : 1, transition: 'opacity 120ms',
+                     ...faceSketch.canvasStyle }} />
             {handoff && !faceSketch.active && (() => {
               const part = handoff.parts[handoff.at];
               const open = !!extrudeOp || !!revolveOp;

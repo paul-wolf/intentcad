@@ -219,6 +219,18 @@ export function persistPrintBed(bed: import('./client').FaceRefSpec | null) {
   doSave(backendId, doc, history);
 }
 
+/** Persist the parameters' slider ranges NOW (a part's P, a drawn sketch's own). */
+export function persistParamRanges(ranges: Record<string, import('@/utils/paramRange').SavedRange>) {
+  const st = useDocumentStore.getState();
+  useDocumentStore.setState({ document: { ...st.document, paramRanges: ranges } });
+  if (!backendId) return;
+  const state = useDocumentStore.getState();
+  const sketches = state.document.sketches.map((s) => (s.plane ? { ...s, profile: sketchProfile(s) ?? undefined } : s));
+  const doc = { ...state.document, sketches } as unknown as Record<string, unknown>;
+  const history = { undo: state.undoStack, redo: state.redoStack };
+  doSave(backendId, doc, history);
+}
+
 /** Persist the AI modeling conversation NOW (no debounce), directly. */
 export function persistChat(chat: import('@/types/document').ChatMessage[]) {
   useDocumentStore.getState().setChat(chat);
@@ -310,6 +322,12 @@ function scheduleSave(doc: Record<string, unknown>, history?: unknown) {
   }, DEBOUNCE_MS);
 }
 
+// A parameter slider is trying a value in a drawn sketch: the store shows it
+// (re-solved live) but it isn't saved until Apply, so store changes don't
+// schedule saves meanwhile. Explicit requestSave() calls still save.
+let trialHold = false;
+export function holdSavesForTrial(on: boolean) { trialHold = on; }
+
 export function startAutoSave() {
   // Deliberately NO save-on-mount and NO periodic/timer writer here.
   //
@@ -328,6 +346,7 @@ export function startAutoSave() {
     if (!backendId) return;
     // Parts never auto-save from store changes — only via explicit persist* calls.
     if (hasModelCode(state.document as unknown as Record<string, unknown>)) return;
+    if (trialHold) return;
     const history = { undo: state.undoStack, redo: state.redoStack };
     scheduleSave(state.document as unknown as Record<string, unknown>, history);
   });
