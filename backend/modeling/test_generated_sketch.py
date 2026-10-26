@@ -202,6 +202,20 @@ class GeneratedSketchTests(GeneratedWorld):
         self.assertEqual(self.layout.data["codeHistory"][-1]["code"], LAYOUT)
 
 
+    def test_the_part_chat_sees_its_outputs_and_failing_checks(self):
+        from .project_context import shared_context, use_sketch
+        docs = list(Document.objects.filter(project=self.drone))
+        out = shared_context(self.part, docs)
+        self.assertIn('outputs (use as .group("name")): plate (100 × 60 mm, the outline); '
+                      'holes (2 holes Ø3.4, 2 fixing holes)', out)
+        self.assertNotIn("FAILING", out)
+        self.set_w(14)                            # the holes now sit too near the edge
+        out = shared_context(self.part, [Document.objects.get(id=d.id) for d in docs])
+        self.assertIn("FAILING checks: hole edge", out)
+        _, said = use_sketch(self.part.id, "Layout", "", "frame")
+        self.assertIn("outputs (use as", said)
+
+
 class OutputWarningTests(GeneratedWorld):
     def test_dropping_an_output_a_part_uses_asks_first(self):
         renamed = LAYOUT.replace('output("holes"', 'output("fixing_holes"')

@@ -188,6 +188,24 @@ def _profile_text(profile: dict) -> str:
     return "; ".join(bits)
 
 
+def _generated_text(gen: dict | None) -> str:
+    """A generated sketch's outputs (what SK["alias"].group("name") gives) and
+    the checks that fail, in a line; "" for a drawn sketch."""
+    if not isinstance(gen, dict):
+        return ""
+    outs = gen.get("outputs") or []
+    bits = ["generated from code; outputs (use as .group(\"name\")): " + ("; ".join(
+        f"{o['name']} ({o.get('size') or ''}{', ' + o['description'] if o.get('description') else ''})"
+        for o in outs if isinstance(o, dict) and o.get("name")) or "none")]
+    failing = [c for c in gen.get("checks") or [] if isinstance(c, dict) and not c.get("ok")]
+    if failing:
+        bits.append("FAILING checks: " + "; ".join(
+            c["name"] + (f" ({c['message']})" if c.get("message") else "") for c in failing))
+    if gen.get("error"):
+        bits.append("its code now fails, so parts use its last good run")
+    return "; ".join(bits)
+
+
 def shared_context(doc, docs: list) -> str:
     """The PROJECT PARAMETERS and SHARED SKETCHES blocks: what any part can
     read as PP["name"] and SK["alias"], and which part uses which."""
@@ -233,7 +251,9 @@ def shared_context(doc, docs: list) -> str:
                 lines.append(head + ": not usable yet (the user must open it once in the sketch editor)")
                 continue
             who = users_of_sketch.get((str(d.id), s.get("id")))
-            lines.append(f"{head}: {_profile_text(prof)}" + (f"; used by {', '.join(who)}" if who else ""))
+            gen = _generated_text(s.get("generated"))
+            lines.append(f"{head}: " + (f"{gen}; " if gen else "") + _profile_text(prof)
+                         + (f"; used by {', '.join(who)}" if who else ""))
     if lines:
         out.append("SHARED SKETCHES (the project's sketch documents; a part uses one through "
                    "use_sketch, then reads it as SK[\"alias\"]):\n" + "\n".join(lines[:MANIFEST_MAX]))
@@ -283,8 +303,9 @@ def use_sketch(document_id, document: str, sketch: str, alias: str) -> tuple[dic
         return None, (f'"{doc.name}" hasn\'t saved its shapes for parts yet: ask the user to open it once '
                       "in the sketch editor, then try again.")
     ref = {alias: {"document": str(doc.id), "sketch": s.get("id")}}
+    gen = _generated_text(s.get("generated"))
     return ref, (f'SK["{alias}"] is now "{doc.name}" sketch "{s.get("name") or s.get("id")}": '
-                 f"{_profile_text(prof)}. Write the script with SK[\"{alias}\"] (its .group(...), "
+                 + (f"{gen}; " if gen else "") + f"{_profile_text(prof)}. Write the script with SK[\"{alias}\"] (its .group(...), "
                  ".named(...), .circles, .points, .on(...)).")
 
 

@@ -4,7 +4,7 @@
  * to fit, and the words the editor shows about outputs and checks.
  */
 import type { Entity as SketchEntity } from '@/types/document';
-import type { GenAnnotations, GenCheck, GenOutput } from '@/types/generated';
+import type { GenAnnotations, GenCheck, GenOutput, GenRecord } from '@/types/generated';
 import type { UsedByPart } from '@/api/client';
 
 /** The output a generated element belongs to: its id is "g:<output>:<n>". */
@@ -130,4 +130,15 @@ export function trialErrorWords(trial: Record<string, number>, saved: Record<str
   const tried = names.map((k) => `${k} = ${fmt(trial[k]!)}`).join(', ');
   const kept = names.filter((k) => saved[k] !== undefined).map((k) => `${k} = ${fmt(saved[k]!)}`).join(', ');
   return `Can't generate with ${tried}: ${message}.${kept ? ` Parts keep the drawing for ${kept}.` : ''}`;
+}
+
+/** What a part's Extrude or Cut takes from a generated sketch, in words:
+ *  "Output brace_holes: 36 holes Ø3.4", and the checks that fail now. */
+export function outputNote(gen: GenRecord, pick: string | null): { words: string; failing: string } {
+  const o = pick ? gen.outputs.find((x) => x.name === pick) : null;
+  const words = !pick ? `The whole sketch (${gen.outputs.length} output${gen.outputs.length === 1 ? '' : 's'})`
+    : o ? `Output ${o.name}: ${o.size}` : `Output ${pick}: the sketch no longer makes it`;
+  const bad = gen.checks.filter((c) => !c.ok).map((c) => c.name);
+  const failing = !bad.length ? '' : `⚠ ${bad.length} check${bad.length === 1 ? ' fails' : 's fail'}: ${bad.join(', ')}`;
+  return { words, failing };
 }

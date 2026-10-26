@@ -10,6 +10,8 @@ import { pinnedChanges, usesShared, withSharedProfiles } from '@/build/sharedSke
 import { solvePending, type Unsolved } from '@/build/projectSketchSolve';
 import { addLog } from '@/stores/logStore';
 import { ProjectSketchDialog } from './ProjectSketchDialog';
+import { outputNote } from '@/build/generatedSketch';
+import type { GenRecord } from '@/types/generated';
 import { DescriptionLine, useProjectDocs } from './ProjectChat';
 import { ChatHistory, ChatInput, useChatBox, useModelPicker } from './ChatPanel';
 import { mentionedIds } from '@/utils/mentions';
@@ -2365,7 +2367,18 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       placeShared(k === 'own' ? null : k.startsWith('base:') ? { base: k.slice(5) as 'XY' | 'XZ' | 'YZ' }
         : { plane: k.slice(6) });
     };
+    // a generated sketch: the output it takes, and its checks that fail now
+    const gen = (sharedSks[s.alias]?.sketch as (Sketch & { generated?: GenRecord }) | undefined)?.generated;
+    const note = gen ? outputNote(gen, s.pick?.name ?? null) : null;
     return (
+      <>
+      {note && (
+        <div style={{ fontSize: '12px', lineHeight: 1.4 }}
+             title={`From the generated sketch ${sharedSks[s.alias]?.docName ?? s.alias}: open it with Edit sketch`}>
+          <div style={{ color: palette.text }}>{note.words}</div>
+          {note.failing && <div style={{ color: palette.warning }}>{note.failing}</div>}
+        </div>
+      )}
       <label style={{ display: 'flex', alignItems: 'center', gap: '6px', color: palette.text, fontSize: '12px' }}>
         <span style={{ width: 56 }}>Place on</span>
         <select value={key} onChange={(e) => pick(e.target.value)} aria-label="Place on"
@@ -2379,6 +2392,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
           <option value="pick">A face: click it in the view…</option>
         </select>
       </label>
+      </>
     );
   };
 

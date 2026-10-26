@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Entity as SketchEntity } from '@/types/document';
 import type { UsedByPart } from '@/api/client';
 import { arcMidpoint } from '@/utils/arcGeometry';
-import { boundsOf, checksWords, fitView, hoverWords, linePath, outputOf, trialErrorWords, usedWords } from './generatedSketch';
+import { boundsOf, checksWords, fitView, hoverWords, linePath, outputNote, outputOf, trialErrorWords, usedWords } from './generatedSketch';
 
 const view = { cx: 0, cy: 0, scale: 1, width: 0, height: 0 };
 const user = (name: string, groups: string[], names: string[] = []): UsedByPart =>
@@ -59,5 +59,14 @@ describe('generated sketch words', () => {
   it('says what a value it cannot generate with leaves', () => {
     expect(trialErrorWords({ brace_r_in: 20 }, { brace_r_in: 42 }, 'the braces collide'))
       .toBe("Can't generate with brace_r_in = 20: the braces collide. Parts keep the drawing for brace_r_in = 42.");
+  });
+
+  it('says which output a part takes, and the checks that fail', () => {
+    const gen = { outputs: [{ name: 'brace_holes', description: '', kind: 'holes' as const, count: 36, size: '36 holes Ø3.4' }],
+                  checks: [{ name: 'bed fit', ok: true, message: '' }, { name: 'hole edge', ok: false, message: '1.5 mm' }],
+                  annotations: { labels: [], dims: [] }, reads: {}, error: null, ran_at: 0 };
+    expect(outputNote(gen, 'brace_holes')).toEqual({ words: 'Output brace_holes: 36 holes Ø3.4', failing: '⚠ 1 check fails: hole edge' });
+    expect(outputNote(gen, null).words).toBe('The whole sketch (1 output)');
+    expect(outputNote({ ...gen, checks: [] }, 'gone')).toEqual({ words: 'Output gone: the sketch no longer makes it', failing: '' });
   });
 });
