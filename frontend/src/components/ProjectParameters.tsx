@@ -11,6 +11,10 @@
  * A number's value has the shared ParamControl (field + slider): moving it
  * only tries a value; the bar above the table says what that would affect,
  * and Apply saves (Reset drops it). ⋯ sets the slider's range, saved at once.
+ *
+ * Paste… takes lines of "name value [unit]" (utils/pasteParameters), shows
+ * which are new, changed or unchanged and what they affect, and saves them in
+ * one step.
  */
 import { useEffect, useState, type CSSProperties } from 'react';
 import { projectApi } from '@/api/projectClient';
@@ -19,7 +23,10 @@ import { saveProjectParameters, solvedWords } from '@/build/projectSketchSolve';
 import type { ParameterUses, ProjectDetail, ProjectParameter } from '@/types/project';
 import { useTokens, SANS, MONO } from '@/ui/tokens';
 import type { SavedRange } from '@/utils/paramRange';
+import { parsePastedParameters, previewParameters, previewWords, type PasteError, type PreviewItem,
+         type PreviewStatus } from '@/utils/pasteParameters';
 import { ParamControl, fmt } from './ParamControl';
+import { mergeParameters } from './ParameterProposalCard';
 
 /** `was`: the name it has in the project, so a changed name is a rename */
 type Row = { name: string; value: string; unit: ProjectParameter['unit']; description: string; was?: string } & SavedRange;
@@ -71,6 +78,8 @@ export function ProjectParameters({ project, onSaved }: { project: ProjectDetail
   const savedKey = JSON.stringify(saved);
   // values being tried (by saved name): not saved until Apply
   const [trial, setTrial] = useState<Record<string, number>>({});
+  // the Paste… box's text (null: closed)
+  const [paste, setPaste] = useState<string | null>(null);
 
   // the project changed elsewhere (an accepted AI proposal): show it
   useEffect(() => { setRows(saved.map(toRow)); setTrial({}); }, [savedKey]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -116,6 +125,22 @@ export function ProjectParameters({ project, onSaved }: { project: ProjectDetail
   const setRange = (i: number, range: SavedRange | null) => {
     const next = rows.map((r, j) => (j === i ? { ...r, min: range?.min ?? null, max: range?.max ?? null, step: range?.step ?? null } : r));
     setRows(next); void save(next);
+  };
+
+  const pasted = paste == null ? null : parsePastedParameters(paste);
+  const preview = pasted ? previewParameters(saved, pasted.items) : [];
+  const toSave = preview.filter((p) => p.status !== 'unchanged');
+  const savePaste = async () => {
+    setSaving(true); setError(''); setNote('');
+    try {
+      const r = await saveProjectParameters(project.id, mergeParameters(saved, toSave.map((p) => p.item)));
+      onSaved(r.project);
+      setPaste(null);
+      const words = solvedWords(r);
+      setNote(words ? `Pasted, but ${words}` : `Pasted: ${previewWords(toSave)}.`);
+      void loadUses();
+    } catch (err) { setError(errorText(err)); }
+    finally { setSaving(false); }
   };
 
   const cell: CSSProperties = {
@@ -235,12 +260,24 @@ export function ProjectParameters({ project, onSaved }: { project: ProjectDetail
           </div>
         </div>
       )}
+      {pasted && (
+        <PastePanel text={paste!} onText={setPaste} preview={preview} errors={pasted.errors} saving={saving}
+          affects={toSave.some((p) => p.status === 'changed') ? affectsWords(toSave.filter((p) => p.status === 'changed').map((p) => p.item.name), uses) : ''}
+          onSave={() => void savePaste()} onCancel={() => setPaste(null)} />
+      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 12px' }}>
         <button onClick={() => setRows((rs) => [...rs, { name: '', value: '', unit: 'mm', description: '' }])}
           style={{ padding: '6px 12px', borderRadius: 8, fontFamily: SANS, fontSize: '12.5px', fontWeight: 600, cursor: 'pointer',
                    background: t.surface, color: t.textDim, border: `1px solid ${t.border2}` }}>
           Add parameter
         </button>
+        {paste == null && (
+          <button onClick={() => { setPaste(''); setNote(''); setError(''); }} title='Add or change several at once from lines of "name value [unit]"'
+            style={{ padding: '6px 12px', borderRadius: 8, fontFamily: SANS, fontSize: '12.5px', fontWeight: 600, cursor: 'pointer',
+                     background: t.surface, color: t.textDim, border: `1px solid ${t.border2}`, whiteSpace: 'nowrap' }}>
+            Paste…
+          </button>
+        )}
         <span style={{ fontSize: '12.5px', color: error ? t.danger : t.textMute }}>
           {error || (saving ? 'Saving…' : note || (rows.length
             ? 'Parts read these as PP["name"] and sketches use them by name in dimensions; a change marks the parts that use it out of date.'
@@ -274,6 +311,72 @@ function UsedBy({ u }: { u: ParameterUses[string] | undefined }) {
       {bad.map((s) => (
         <div key={`e:${s.id}:${s.sketch}`} style={{ color: t.danger, fontSize: '11.5px' }}>{s.message}</div>
       ))}
+    </div>
+  );
+}
+
+/** Paste…: a box for lines of "name value [unit]", what they would do (new,
+ *  changed with the old value struck through, unchanged) and the lines that
+ *  can't be read; Save writes the new and changed ones in one step. */
+function PastePanel({ text, onText, preview, errors, affects, saving, onSave, onCancel }: {
+  text: string; onText: (t: string) => void; preview: PreviewItem[]; errors: PasteError[]; affects: string;
+  saving: boolean; onSave: () => void; onCancel: () => void;
+}) {
+  const t = useTokens();
+  const tag: Record<PreviewStatus, string> = { new: t.ok, changed: t.accent, unchanged: t.textMute };
+  const n = preview.filter((p) => p.status !== 'unchanged').length;
+  const show = (p: ProjectParameter) => `${fmt(p.value)}${p.unit ? ` ${p.unit}` : ''}`;
+  return (
+    <div role="dialog" aria-label="Paste parameters"
+         style={{ padding: '10px 12px', borderTop: `1px solid ${t.border}`, fontSize: '12.5px', color: t.text }}>
+      <div style={{ color: t.textDim, marginBottom: 6 }}>
+        One parameter per line: <span style={{ fontFamily: MONO }}>name value [unit]</span>, unit mm or deg (none for a
+        count, or to keep the unit it has). Words after the unit become its description.
+      </div>
+      <textarea aria-label="Pasted parameters" autoFocus rows={5} value={text} onChange={(e) => onText(e.target.value)}
+        placeholder={'prop_d 406.4 mm\ntube_od 30 mm\narm_count 6'} spellCheck={false}
+        style={{ width: '100%', boxSizing: 'border-box', fontFamily: MONO, fontSize: '12.5px', padding: '6px 8px', borderRadius: 6,
+                 border: `1px solid ${t.border2}`, background: t.surface2, color: t.text, resize: 'vertical' }} />
+      {preview.length > 0 && (
+        <table aria-label="What pasting does" style={{ borderCollapse: 'collapse', margin: '6px 0', fontFamily: MONO, fontSize: '12.5px' }}>
+          <tbody>
+            {preview.map((p) => (
+              <tr key={p.item.name}>
+                <td style={{ padding: '2px 12px 2px 0', fontFamily: SANS, fontSize: '11.5px', fontWeight: 600, color: tag[p.status] }}>{p.status}</td>
+                <td style={{ padding: '2px 12px 2px 0' }}>{p.item.name}</td>
+                <td style={{ padding: '2px 12px 2px 0', color: p.status === 'unchanged' ? t.textMute : t.text }}>
+                  {p.status === 'changed' && p.was && (
+                    <span style={{ textDecoration: 'line-through', color: t.textMute, marginRight: 6 }}>{show(p.was)}</span>
+                  )}
+                  {show(p.item)}
+                </td>
+                <td style={{ padding: '2px 0', fontFamily: SANS, color: t.textDim }}>{p.item.description ?? ''}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {errors.map((e) => (
+        <div key={`${e.line}:${e.text}`} role="alert" style={{ color: t.danger, fontSize: '12px' }}>
+          Line {e.line} (<span style={{ fontFamily: MONO }}>{e.text}</span>): {e.why}
+        </div>
+      ))}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+        <button onClick={onSave} disabled={saving || !n || errors.length > 0}
+          style={{ padding: '5px 12px', borderRadius: 8, fontSize: '12.5px', fontWeight: 600, cursor: n && !errors.length ? 'pointer' : 'default',
+                   background: t.accent, color: '#fff', border: 'none', opacity: n && !errors.length ? 1 : 0.5 }}>
+          {saving ? 'Saving…' : n ? `Save ${previewWords(preview.filter((p) => p.status !== 'unchanged'))}` : 'Save'}
+        </button>
+        <button onClick={onCancel}
+          style={{ padding: '5px 12px', borderRadius: 8, fontSize: '12.5px', cursor: 'pointer',
+                   background: t.surface, color: t.textDim, border: `1px solid ${t.border2}` }}>
+          Cancel
+        </button>
+        <span style={{ color: t.textMute }}>
+          {errors.length ? 'Fix the lines in red first.' : preview.length && !n ? 'Nothing to change: the project has these already.'
+            : [preview.length ? previewWords(preview) : '', affects].filter(Boolean).join('. ')}
+        </span>
+      </div>
     </div>
   );
 }

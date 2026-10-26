@@ -281,6 +281,14 @@ in one place reaches every part.
   sizes every part shares (plate thickness, tube diameter). Click a cell to edit it;
   the row saves when you leave it. **Add parameter** adds one; × deletes it. Scripts
   read them as `PP["plate_t"]`.
+- **Paste several at once**: click **Paste…** under the table and paste lines of
+  `name value [unit]`, one per line (`prop_d 381 mm`, `arm_count 6`, `tilt: 12 deg`).
+  Words after the unit become the description; a line without a unit keeps the unit the
+  parameter has. A preview marks each line **new**, **changed** (old value struck
+  through) or **unchanged** and says which parts the changes affect. A line it can't
+  read is shown in red with why. **Save** writes them all in one step.
+
+  ![Paste on the Parameters table: five pasted lines, previewed as changed, unchanged and new](images/paste-parameters.png)
 - **Out of date**: change the sketch (its shapes, its groups or names) or a parameter,
   and the parts built from it show **OUT OF DATE** on their cards. In the sketch editor,
   **Used by parts** lists them; **Rebuild all** rebuilds them with the sketch as it is now.
@@ -294,8 +302,9 @@ in one place reaches every part.
   parameters again.
 - **The AI**: ask it to "switch the brace to the frame's arm holes" and it replaces
   copied numbers with `SK[...]`, adding the sketch to the part if needed. It may
-  propose a new or changed project parameter; it shows under its reply with the old
-  value struck through, and nothing changes until you click **Accept**.
+  propose a new or changed project parameter; it shows under its reply marked new,
+  changed (old value struck through) or unchanged, and nothing changes until you click
+  **Accept**. A list you paste into the chat comes back as one card.
 
 ![Shared sketches: the Frame holes sketch with its arm holes group, and the three parts that use it in Used by](images/shared-sketch.png)
 
@@ -391,7 +400,7 @@ itself when they change.
 - **Project parameters and the brief from any chat**: in a drawn or generated sketch,
   as in a part, ask the AI to add or change a project parameter ("add prop_d 406.4 mm")
   or to note something in the brief. It shows a card under its reply; **Accept** saves
-  it, **Reject** drops it. Several parameters at once come as one card.
+  it, **Reject** drops it. Several parameters at once (a pasted list) come as one card.
 - **The drawing**: shows the shapes with their sizes and notes. It can't be edited by
   hand: dragging a shape says so and points to the parameters and the chat.
 - **Outputs**: the panel on the right lists what parts can use (`plate_outline`,

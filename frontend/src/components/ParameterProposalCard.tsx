@@ -1,7 +1,8 @@
 /**
- * Under an AI reply in the part chat: the project parameters it proposed with
- * set_project_parameter (new ones, or new values for existing ones), each
- * read by scripts as PP["name"]. Accept writes them to the project's
+ * Under an AI reply in any chat (part, drawn or generated sketch): the project
+ * parameters it proposed with set_project_parameter, all on one card, each
+ * marked new, changed (the old value struck through) or unchanged, and read by
+ * scripts as PP["name"]. Accept writes them to the project's
  * Parameters table (and solves the project sketches that use them again,
  * saying which can't be); Reject leaves the project as it was.
  */
@@ -9,20 +10,25 @@ import { useEffect, useState } from 'react';
 import { errorText } from '@/api/client';
 import { projectApi } from '@/api/projectClient';
 import { saveProjectParameters, solvedWords } from '@/build/projectSketchSolve';
+import { previewParameters, previewWords, type PreviewStatus } from '@/utils/pasteParameters';
 import type { ThemePalette } from '@/theme';
 import type { ChatMessage } from '@/types/document';
 import type { ProjectParameter } from '@/types/project';
 
 export type ParamProposal = NonNullable<ChatMessage['params']>;
 
-/** The project's parameters with the proposed ones added or changed (by name). */
+/** The project's parameters with the proposed ones added or changed (by name);
+ *  a value that becomes text loses its slider range. */
 export function mergeParameters(now: ProjectParameter[], proposed: ProjectParameter[]): ProjectParameter[] {
   const out = [...now];
   for (const p of proposed) {
     const clean: ProjectParameter = { name: p.name, value: p.value, unit: p.unit, ...(p.description ? { description: p.description } : {}) };
     const i = out.findIndex((x) => x.name === p.name);
-    if (i >= 0) out[i] = { ...out[i], ...clean, description: p.description || out[i]!.description };
-    else out.push(clean);
+    if (i >= 0) {
+      const { min, max, step, ...kept } = out[i]!;
+      out[i] = { ...(typeof p.value === 'number' ? out[i] : kept), ...clean, description: p.description || out[i]!.description };
+      if (!out[i]!.description) delete out[i]!.description;
+    } else out.push(clean);
   }
   return out;
 }
@@ -59,6 +65,8 @@ export function ParameterProposalCard({ params, projectId, palette, onStatus, on
     } catch (err) { setError(errorText(err)); }
     finally { setBusy(false); }
   };
+  const preview = current && pending ? previewParameters(Object.values(current), params.items) : null;
+  const tagColor: Record<PreviewStatus, string> = { new: '#1f9d55', changed: palette.accent, unchanged: palette.textMuted };
   const green = '#1f9d55';
   const mono = 'ui-monospace, Menlo, monospace';
   const btn: React.CSSProperties = {
@@ -77,12 +85,16 @@ export function ParameterProposalCard({ params, projectId, palette, onStatus, on
           </span>
         )}
       </div>
-      {params.items.map((p) => {
+      {params.items.map((p, i) => {
         const was = current?.[p.name];
+        const status = preview?.[i]?.status;
         return (
           <div key={p.name} style={{ padding: '5px 10px', color: palette.text }}>
+            {status && (
+              <span style={{ float: 'right', marginLeft: 6, fontSize: '11px', fontWeight: 600, color: tagColor[status] }}>{status}</span>
+            )}
             <code style={{ fontFamily: mono }}>PP["{p.name}"]</code>{' = '}
-            {was && params.status === 'pending' && (
+            {was && status === 'changed' && (
               <span style={{ textDecoration: 'line-through', color: palette.textMuted, marginRight: 4 }}>{String(was.value)}{was.unit && ` ${was.unit}`}</span>
             )}
             <b>{String(p.value)}{p.unit && ` ${p.unit}`}</b>
@@ -95,9 +107,9 @@ export function ParameterProposalCard({ params, projectId, palette, onStatus, on
         <div role="alert" style={{ padding: '6px 10px', borderTop: `1px solid ${palette.border}`, color: palette.danger }}>{error}</div>
       )}
       {params.status === 'pending' && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderTop: `1px solid ${palette.border}` }}>
-          <span style={{ flex: 1, color: error ? palette.danger : palette.textMuted }}>
-            {error || 'Every part that reads it uses the project value. Nothing changes unless you accept.'}
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '6px 10px', borderTop: `1px solid ${palette.border}` }}>
+          <span style={{ flex: '1 1 200px', color: error ? palette.danger : palette.textMuted }}>
+            {error || `${preview && params.items.length > 1 ? `${previewWords(preview)}. ` : ''}Every part that reads it uses the project value. Nothing changes unless you accept.`}
           </span>
           <button onClick={() => onStatus('rejected')} disabled={busy}
             style={{ ...btn, background: 'none', color: palette.textSecondary, border: `1px solid ${palette.border}` }}>

@@ -42,6 +42,14 @@ describe('project parameters', () => {
       { name: 'plate_t', value: 2, unit: 'mm', description: 'carbon plate' },
     ]);
   });
+
+  it('keeps a slider range for a new number, and drops it when the value becomes text', () => {
+    const now = [{ name: 'bolt', value: 3, unit: '' as const, min: 2, max: 8 }, { name: 'd', value: 30, unit: 'mm' as const, min: 20, max: 40 }];
+    expect(mergeParameters(now, [{ name: 'bolt', value: 'M3', unit: '' }, { name: 'd', value: 32, unit: 'mm' }])).toEqual([
+      { name: 'bolt', value: 'M3', unit: '' },
+      { name: 'd', value: 32, unit: 'mm', min: 20, max: 40 },
+    ]);
+  });
 });
 
 describe('aliasFor', () => {
