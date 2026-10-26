@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
 import {
-  api, buildApi, errorText, ApiError, type RunResponse, type RunEdge, type FaceRefReport, type UsageResponse, type DimInfo, type ModelInfo, type ModelsResponse, type SizeFix,
+  api, buildApi, errorText, ApiError, type RunResponse, type RunEdge, type FaceRefReport, type UsageResponse, type DimInfo, type SizeFix,
   type FaceRefSpec, type HolePresets, type EdgeOpKind, type EdgeRefSpec, type ExtrudeExtent, type ExtrudeOp, type KeepItem, type Step,
   type PlaneReport, type MirrorPlane, type PatternReport, type PatternSpec, type PlaneOpKind, type RunFace, type SharedInputs,
 } from '@/api/client';
@@ -10,10 +10,9 @@ import { pinnedChanges, usesShared, withSharedProfiles } from '@/build/sharedSke
 import { solvePending, type Unsolved } from '@/build/projectSketchSolve';
 import { addLog } from '@/stores/logStore';
 import { ProjectSketchDialog } from './ProjectSketchDialog';
-import { ParameterProposalCard } from './ParameterProposalCard';
-import { BriefProposalCard, DescriptionLine, MentionMenu, useProjectDocs } from './ProjectChat';
-import { insertMention, matchMentions, mentionedIds, mentionQuery } from '@/utils/mentions';
-import { Markdown } from '@/ui/Markdown';
+import { DescriptionLine, useProjectDocs } from './ProjectChat';
+import { ChatHistory, ChatInput, useChatBox, useModelPicker } from './ChatPanel';
+import { mentionedIds } from '@/utils/mentions';
 import { projectApi } from '@/api/projectClient';
 import { persistModelCode, persistSharedRefs, persistChat, persistThumbnail, persistName, persistProductionNotes, persistPrintBed, persistSketches, getBackendId, subscribeBackendId, getProjectId, getProjectName, subscribeProjectContext } from '@/api/autoSave';
 import { createEmptyDocument, DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
@@ -92,10 +91,9 @@ import {
 } from '@/build/operations';
 import { OperationsPanel, Kbd } from './OperationsPanel';
 import { OpIcon, OPS_GRID_ICON } from './OpIcons';
-import { ContextChips, ContextPane, useContextFiles, type CtxColors } from './ContextPane';
+import { ContextPane, useContextFiles, type CtxColors } from './ContextPane';
 import { AppLink } from '@/ui/links';
-import { acceptable, chatUsageNote, filesToSend, seesSpend, skipList, spendLine, spendNote, usageLabel } from '@/build/contextFiles';
-import { chooseModel, modelsStale } from '@/build/modelList';
+import { filesToSend, seesSpend, skipList, spendLine, spendNote, usageLabel } from '@/build/contextFiles';
 
 // the view buttons, in key order (1–6, then 0)
 const VIEW_BUTTONS = (['1', '2', '3', '4', '5', '6', '0'] as const)
@@ -967,51 +965,9 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     setTimeout(() => setFlash(''), 2500);
   };
 
-  const [ask, setAsk] = useState('');
   const [asking, setAsking] = useState(false);
-  // Model picker. The list comes from the server (which asks the Models API);
-  // '' means "server default" until the list arrives. The page asks again when
-  // its list is old — on coming back to the tab or focusing the picker — so a
-  // new model shows up without a reload. Someone who never chose follows the
-  // default; a remembered pick the API no longer offers falls back to it.
-  const [models, setModels] = useState<ModelInfo[]>([]);
-  const [modelsSource, setModelsSource] = useState<ModelsResponse['source'] | null>(null);
-  const modelsAt = useRef(0);
-  const modelsLoading = useRef(false);
-  const [model, setModel] = useState<string>(() => { try { return localStorage.getItem('intentcad-edit-model') || ''; } catch { return ''; } });
-  const pickModel = (m: string) => { setModel(m); try { localStorage.setItem('intentcad-edit-model', m); } catch { /* ignore */ } };
-  const loadModels = useRef((refresh: boolean) => {
-    if (modelsLoading.current) return;
-    modelsLoading.current = true;
-    buildApi.models(refresh).then((r) => {
-      modelsAt.current = Date.now();
-      setModels(r.models);
-      setModelsSource(r.source);
-      let picked = false;
-      try { picked = !!localStorage.getItem('intentcad-edit-model'); } catch { /* ignore */ }
-      setModel((cur) => chooseModel(cur, r, picked));
-    }).catch(() => { /* keep the free-text id; the server falls back to its default */ })
-      .finally(() => { modelsLoading.current = false; });
-  }).current;
-  const modelsSourceRef = useRef(modelsSource);
-  modelsSourceRef.current = modelsSource;
-  const refreshModelsIfStale = () => {
-    if (modelsStale(modelsAt.current, modelsSourceRef.current, Date.now())) loadModels(true);
-  };
-  useEffect(() => {
-    loadModels(false);
-    const onVisible = () => { if (document.visibilityState === 'visible') refreshModelsIfStale(); };
-    window.addEventListener('focus', refreshModelsIfStale);
-    document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      window.removeEventListener('focus', refreshModelsIfStale);
-      document.removeEventListener('visibilitychange', onVisible);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  const modelTitle = (m: ModelInfo) =>
-    `${m.label} — ${m.note}. $${m.input_per_m}/M in · $${m.output_per_m}/M out (released ${m.released})`
-    + (modelsSource === 'static' ? '. Offline list: the Models API could not be reached; retrying.' : '');
+  const picker = useModelPicker();
+  const { models, model } = picker;
   // the AI spend (the status line, the chat's notes): staff and superusers only
   const user = useAuthStore((st) => st.user);
   const staff = seesSpend(user);
@@ -1025,7 +981,6 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const docId = useSyncExternalStore(subscribeBackendId, getBackendId);
   // the project's other parts and sketches (@-mentions in the chat) and this part's description
   const projectDocs = useProjectDocs(projectId, docId);
-  const [mention, setMention] = useState<{ start: number; query: string; active: number } | null>(null);
   const ctxOwner = useMemo(() => (docId ? { document: docId } : null), [docId]);
   // the section is remembered per part
   useEffect(() => {
@@ -1063,17 +1018,9 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ovState.on, ovState.threshold, ovBuilt, ovDownKey]);
   const ctxStore = useContextFiles(ctxOwner);
-  // files left out of the next message only (the chips' ×); cleared after it is sent
-  const [skipCtx, setSkipCtx] = useState<ReadonlySet<string>>(new Set());
   const ctxPick = useRef<(() => void) | null>(null);
-  const [chatUploading, setChatUploading] = useState('');
-  // a message sent while its file was still uploading: sent once the upload is in
-  const [sendQueued, setSendQueued] = useState<string | null>(null);
-  const [chatDragging, setChatDragging] = useState(false);
-  const chatFileRef = useRef<HTMLInputElement | null>(null);
-  // the message box's width, for a placeholder that fits
-  const [chatInputW, setChatInputW] = useState(0);
-  const chatInputObs = useRef<ResizeObserver | null>(null);
+  const box = useChatBox({ docs: projectDocs.others, ctxStore, send: (text) => void sendChat(text) });
+  const { ask, setAsk, skipCtx, setSkipCtx } = box;
   // what the window shows beside the 3D view: the script, the chat, or nothing
   // (the 3D view maximised); the parameters are shown or hidden separately
   // (or the Operations grid); the keys reach it through refs, and the
@@ -1103,11 +1050,6 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     try { localStorage.setItem('intentcad-part-params', cur ? 'hide' : 'show'); } catch { /* ignore */ }
     return !cur;
   });
-  const chatScrollRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const el = chatScrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;   // keep the latest message in view
-  }, [chat, asking, layout]);
   const fetchUsage = () => {
     if (!seesSpend(useAuthStore.getState().user)) return;
     buildApi.usage(getBackendId() ?? '').then(setUsage).catch(() => {});
@@ -3054,9 +2996,9 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     const instruction = (text ?? ask).trim();
     if (!instruction || asking) return;
     // a file still uploading goes with this message: wait for it (see the effect below)
-    if (chatUploading) { setSendQueued(instruction); return; }
+    if (box.uploading) { box.setSendQueued(instruction); return; }
     setAsking(true);
-    setMention(null);
+    box.setMention(null);
     const sent = filesToSend(ctxStore.files, skipCtx);
     const userMsg: ChatMessage = { role: 'user', text: instruction, at: Date.now(),
                                    ...(sent.length ? { files: sent.map((f) => f.title) } : {}) };
@@ -3115,14 +3057,6 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       setAsking(false);
     }
   };
-
-  // the upload is in and the skip set updated (same render): now send
-  useEffect(() => {
-    if (chatUploading || sendQueued === null) return;
-    setSendQueued(null);
-    void sendChat(sendQueued);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatUploading, sendQueued]);
 
   const rebuild = () => { setParamReject(null); saveDraft(code); build(code, 'build'); };
   // Back on this tab (a project sketch may have been edited in another one):
@@ -3333,31 +3267,10 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   opsRef.current = { ctx: opCtx, model: opModel, sel: opSel, run: runOp,
                      modal: showHelp || showVersions || showProduction };
   // "or ask: …" on the help card: into the chat box, not sent
-  const chatInputRef = useRef<HTMLInputElement | null>(null);
-  const setChatInputEl = useCallback((el: HTMLInputElement | null) => {
-    chatInputRef.current = el;
-    chatInputObs.current?.disconnect();
-    if (!el || typeof ResizeObserver === 'undefined') return;
-    chatInputObs.current = new ResizeObserver(() => setChatInputW(el.offsetWidth));
-    chatInputObs.current.observe(el);
-  }, []);
-  // @-mentions: the menu follows the @-word before the caret; a pick puts "@Name " in its place
-  const trackMention = (text: string, caret: number | null) => {
-    const q = projectDocs.others.length && caret !== null ? mentionQuery(text, caret) : null;
-    setMention((cur) => (q ? { ...q, active: cur && cur.start === q.start ? cur.active : 0 } : null));
-  };
-  const pickMention = (name: string) => {
-    const el = chatInputRef.current;
-    if (!mention || !el) return;
-    const next = insertMention(ask, mention.start, el.selectionStart ?? ask.length, name);
-    setAsk(next.text);
-    setMention(null);
-    window.setTimeout(() => { el.focus(); el.setSelectionRange(next.caret, next.caret); }, 0);
-  };
   const putInChat = (text: string) => {
     setAsk(text);
     setLayout('chat');
-    window.setTimeout(() => chatInputRef.current?.focus(), 0);
+    window.setTimeout(() => box.inputRef.current?.focus(), 0);
   };
   const runById = (id: string) => { const op = opById(id); if (op) runOp(op); };
   // a top-bar button for an operation: the same entry, the same reason when
@@ -3527,186 +3440,19 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     surface: palette.background, card: palette.inputBg, accent: palette.accent, primary: palette.primaryBtn,
     danger: palette.danger, warning: palette.warning,
   };
-  // images pasted or dropped into the chat: added to this part, in context
-  const attachToChat = async (list: File[]) => {
-    const ok = list.filter(acceptable);
-    if (!ok.length) { ctxStore.setError('Only PDF, PNG, JPEG, WebP or HEIC files can go with a message.'); return; }
-    for (const f of ok) {
-      setChatUploading(f.name || 'image');
-      // a pasted screenshot is called image.png; give it a name worth citing
-      const named = f.name && f.name !== 'image.png' ? f
-        : new File([f], `pasted-${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')}.${f.type.split('/')[1] || 'png'}`, { type: f.type });
-      const added = await ctxStore.upload('part', named);
-      if (added && !added.in_context) await ctxStore.update(added.id, { in_context: true });
-      if (added) setSkipCtx((cur) => { if (!cur.has(added.id)) return cur; const n = new Set(cur); n.delete(added.id); return n; });
-    }
-    setChatUploading('');
-    chatInputRef.current?.focus();
-  };
-  const pickChatFiles = () => chatFileRef.current?.click();
-  const paperclip = (size: number) => (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-    </svg>
-  );
   const chatHistory = (
-    <div ref={chatScrollRef} style={{ ...(layout === 'chat' ? { flex: 1, minHeight: 0 } : { maxHeight: '30vh' }), overflowY: 'auto', padding: '10px 16px',
-                                      display: 'flex', flexDirection: 'column', gap: '7px' }}>
-      {chat.map((m, i) => {
-        const mine = m.role === 'user';
-        const revertable = m.role === 'assistant' && m.kind === 'edit' && !!m.code;
-        const isQ = m.kind === 'question';
-        return (
-          <div key={`${m.at}-${i}`} style={{ alignSelf: mine ? 'flex-end' : 'flex-start', maxWidth: '82%' }}>
-            <div onClick={revertable ? () => restoreVersion(m.code!) : undefined}
-              title={revertable ? 'Revert the model to this version' : undefined}
-              style={{ padding: '7px 11px', borderRadius: '10px', fontSize: '13px', lineHeight: 1.45,
-                       whiteSpace: 'pre-wrap', color: mine ? '#fff' : palette.text,
-                       background: mine ? palette.primaryBtn : palette.inputBg,
-                       border: `1px solid ${isQ ? (palette.warning ?? '#c78a1a') : palette.border}`,
-                       cursor: revertable ? 'pointer' : 'default' }}>
-              {isQ && <span style={{ color: palette.warning ?? '#c78a1a', fontWeight: 700, marginRight: 5 }}>?</span>}
-              {m.kind === 'answer'
-                ? <Markdown text={m.text} color={palette.text} dim={palette.textSecondary} border={palette.border}
-                    codeBg={palette.background} style={{ whiteSpace: 'normal' }} />
-                : m.text}
-              {m.files?.length ? (
-                <span style={{ display: 'block', fontSize: '11px', opacity: 0.75, marginTop: 3 }}>
-                  📎 {m.files.join(', ')}
-                </span>
-              ) : null}
-              {revertable && (
-                <span style={{ display: 'block', fontSize: '11px', opacity: 0.6, marginTop: 3 }}>
-                  ↩ click to revert here
-                </span>
-              )}
-            </div>
-            {!mine && isQ && i === chat.length - 1 && !m.text.startsWith('⚠') && (
-              <button onClick={pickChatFiles} disabled={!!chatUploading}
-                title="Answer with a photo, drawing or datasheet (or type your answer below); add a sentence before you send"
-                style={{ marginTop: 4, display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px',
-                         background: 'none', color: palette.accent ?? palette.text, border: `1px solid ${palette.border}`,
-                         borderRadius: '4px', fontSize: '12px', cursor: 'pointer' }}>
-                {paperclip(12)} Attach a file
-              </button>
-            )}
-            {m.params && (
-              <ParameterProposalCard params={m.params} projectId={projectId} palette={palette}
-                onStatus={(status) => persistChat(chat.map((x, j) => (j === i && x.params ? { ...x, params: { ...x.params, status } } : x)))}
-                onAccepted={() => build(codeRef.current, 'project parameters')} />
-            )}
-            {m.brief && (
-              <BriefProposalCard brief={m.brief} projectId={projectId} palette={palette}
-                onStatus={(status) => persistChat(chat.map((x, j) => (j === i && x.brief ? { ...x, brief: { ...x.brief, status } } : x)))} />
-            )}
-            {chatUsageNote(user, m.usage) && (
-              <div title="This call: input tokens (of them, read from the prompt cache) · output tokens · cost"
-                style={{ fontSize: '10.5px', color: palette.textSecondary, marginTop: 2, paddingLeft: 4 }}>
-                {m.usage}
-              </div>
-            )}
-          </div>
-        );
-      })}
-      {asking && (
-        <div style={{ alignSelf: 'flex-start', fontSize: '12px', color: palette.textSecondary }}>thinking…</div>
-      )}
-    </div>
+    <ChatHistory messages={chat} asking={asking} fill={layout === 'chat'} box={box} palette={palette} projectId={projectId}
+      onPersist={persistChat} onRevert={restoreVersion} onParamsAccepted={() => build(codeRef.current, 'project parameters')}
+      scrollKey={layout} />
   );
   const chatInput = (
-  <div onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setChatDragging(true); } }}
-    onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setChatDragging(false); }}
-    onDrop={(e) => { setChatDragging(false); const l = [...e.dataTransfer.files]; if (l.length) { e.preventDefault(); void attachToChat(l); } }}
-    style={{ position: 'relative', outline: chatDragging ? `2px dashed ${palette.accent ?? palette.border}` : 'none', outlineOffset: -3 }}>
-  {chatDragging && (
-    <div style={{ position: 'absolute', inset: 0, zIndex: 2, pointerEvents: 'none', display: 'flex', alignItems: 'center',
-                  justifyContent: 'center', gap: 6, background: `${palette.background}d9`, color: palette.accent ?? palette.text,
-                  fontSize: '13px', fontWeight: 600 }}>
-      {paperclip(14)} Drop to attach
-    </div>
-  )}
-  <input ref={chatFileRef} type="file" multiple accept="image/*,application/pdf" style={{ display: 'none' }}
-    onChange={(e) => { const l = [...(e.target.files ?? [])]; e.target.value = ''; if (l.length) void attachToChat(l); }} />
-  <ContextChips files={filesToSend(ctxStore.files, new Set())} skipped={skipCtx} c={ctxColors}
-    onOpen={() => setLayout('context')}
-    onSkip={(id, skip) => setSkipCtx((cur) => { const n = new Set(cur); if (skip) n.add(id); else n.delete(id); return n; })} />
-  {(chatUploading || (ctxStore.error && layout !== 'context')) && (
-    <div onClick={() => ctxStore.setError('')}
-      style={{ padding: '4px 16px 0', fontSize: '12px', color: chatUploading ? palette.textSecondary : palette.danger }}>
-      {chatUploading ? `Attaching ${chatUploading}…${sendQueued !== null ? ' Your message goes once it’s attached.' : ''}` : ctxStore.error}
-    </div>
-  )}
-  <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px' }}>
-  {mention && (
-    <MentionMenu docs={projectDocs.others} query={mention.query} active={mention.active} palette={palette}
-      onHover={(active) => setMention((mn) => (mn ? { ...mn, active } : mn))} onPick={(d) => pickMention(d.name)} />
-  )}
-  <button onClick={pickChatFiles} disabled={!!chatUploading} aria-label="Attach a file"
-    title="Attach a photo, drawing or datasheet (or drop or paste one here); the AI reads it with your message"
-    style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, flex: 'none',
-             background: 'none', color: palette.textSecondary, border: `1px solid ${palette.inputBorder}`,
-             borderRadius: '4px', cursor: !chatUploading ? 'pointer' : 'default',
-             opacity: !chatUploading ? 1 : 0.5 }}>
-    {paperclip(15)}
-  </button>
-  <input
-    ref={setChatInputEl}
-    value={ask}
-    onChange={(e) => { setAsk(e.target.value); trackMention(e.target.value, e.target.selectionStart); }}
-    onSelect={(e) => trackMention(e.currentTarget.value, e.currentTarget.selectionStart)}
-    onBlur={() => setMention(null)}
-    onKeyDown={(e) => {
-      const hits = mention ? matchMentions(projectDocs.others, mention.query) : [];
-      if (mention && hits.length) {
-        const step = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
-        if (step) { e.preventDefault(); setMention({ ...mention, active: (mention.active + step + hits.length) % hits.length }); return; }
-        if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(hits[Math.min(mention.active, hits.length - 1)]!.name); return; }
-        if (e.key === 'Escape') { e.preventDefault(); setMention(null); return; }
-      }
-      if (e.key === 'Enter') void sendChat();
-    }}
-    onPaste={(e) => {
-      // a pasted photo or screenshot becomes a context file of this part
-      const l = [...e.clipboardData.files];
-      if (l.length) { e.preventDefault(); void attachToChat(l); }
-    }}
-    placeholder={sel.length ? 'e.g. chamfer this edge 2mm  (targets your selection)'
-                 : chatInputW >= 560 && projectDocs.others.length ? 'Describe a change or ask a question; type @ to mention another part'
-                 : chatInputW >= 560 ? 'Describe a change — e.g. add four M4 corner bolt holes — or attach a photo or datasheet'
-                 : chatInputW >= 330 ? 'Describe a change — or attach a photo or datasheet' : 'Describe a change'}
-    disabled={asking}
-    style={{ flex: 1, padding: '6px 10px', background: palette.inputBg,
-             border: `1px solid ${palette.inputBorder}`, borderRadius: '4px',
-             color: palette.text, fontSize: '13px', outline: 'none' }}
-  />
-  <select value={model} onChange={(e) => pickModel(e.target.value)} onFocus={refreshModelsIfStale}
-    disabled={asking || models.length === 0}
-    title={models.find((m) => m.id === model) ? modelTitle(models.find((m) => m.id === model)!)
-           : 'Model for AI edits — stronger tiers cost more; use them for hard tasks'}
-    style={{ padding: '6px 8px', background: palette.inputBg, color: palette.textSecondary,
-             border: `1px solid ${palette.inputBorder}`, borderRadius: '4px', fontSize: '12px', cursor: 'pointer' }}>
-    {models.length === 0 && <option value={model}>{model || 'default model'}</option>}
-    {models.map((m) => (
-      <option key={m.id} value={m.id} title={modelTitle(m)}>
-        {m.label}{m.tier === 'fable' || m.tier === 'mythos' ? ' ✦' : ''}
-      </option>
-    ))}
-  </select>
-  <button onClick={() => void sendChat()} disabled={asking || !ask.trim()}
-    style={{ padding: '6px 14px', background: palette.primaryBtn, color: '#fff', border: 'none',
-             borderRadius: '4px', fontSize: '13px', cursor: ask.trim() && !asking ? 'pointer' : 'default',
-             opacity: ask.trim() && !asking ? 1 : 0.5 }}>
-    {asking ? 'Editing…' : 'Ask'}
-  </button>
-  {chat.length > 0 && (
-    <button onClick={() => persistChat([])} title="Clear the conversation"
-      style={{ padding: '6px 10px', background: 'none', color: palette.textSecondary,
-               border: `1px solid ${palette.border}`, borderRadius: '4px', fontSize: '12px', cursor: 'pointer' }}>
-      Clear
-    </button>
-  )}
-  </div>
-  </div>
+    <ChatInput box={box} asking={asking} palette={palette} ctxStore={ctxStore} ctxColors={ctxColors}
+      docs={projectDocs.others} picker={picker} hasMessages={chat.length > 0} showCtxError={layout !== 'context'}
+      onSend={() => void sendChat()} onClear={() => persistChat([])} onOpenContext={() => setLayout('context')}
+      placeholder={(w) => (sel.length ? 'e.g. chamfer this edge 2mm  (targets your selection)'
+                 : w >= 560 && projectDocs.others.length ? 'Describe a change or ask a question; type @ to mention another part'
+                 : w >= 560 ? 'Describe a change — e.g. add four M4 corner bolt holes — or attach a photo or datasheet'
+                 : w >= 330 ? 'Describe a change — or attach a photo or datasheet' : 'Describe a change')} />
   );
 
   return (
