@@ -127,9 +127,21 @@ def sketch_pp(sk_doc, sketch: dict, params: dict) -> list[str]:
     solved with that have since been deleted."""
     if sk_doc is None or not sk_doc.project_id:
         return []
-    own = own_params(sk_doc)
     solved = sketch.get("solvedWith") if isinstance(sketch.get("solvedWith"), dict) else {}
+    if is_generated(sk_doc):
+        # what its code reads: its last run's reads and PP["…"] in the code
+        gen = sketch.get("generated") if isinstance(sketch.get("generated"), dict) else {}
+        reads = gen.get("reads") if isinstance(gen.get("reads"), dict) else {}
+        code = _data(sk_doc).get("code")
+        names = set(reads) | set(pp_names(code if isinstance(code, str) else "")) | set(solved)
+        return sorted(n for n in names if n in params or n in solved)
+    own = own_params(sk_doc)
     return sorted(n for n in expression_names(sketch) if n not in own and (n in params or n in solved))
+
+
+def is_generated(sk_doc) -> bool:
+    """A sketch document made by code (see modeling/generated_sketch.py)."""
+    return _data(sk_doc).get("source") == "generated"
 
 
 def sketch_title(sk_doc, sketch: dict) -> str:
@@ -161,6 +173,9 @@ def sketch_state(sk_doc, sketch: dict, params: dict) -> dict | None:
                 "message": f"{sketch_title(sk_doc, sketch)!r} can't be solved with {words}: "
                            f"{err.get('message') or 'its dimensions conflict'}"
                            + (f" (it keeps its shapes for {was})" if was else "")}
+    if is_generated(sk_doc):
+        return {"state": "pending", "names": changed, "held": {},
+                "message": f"{sketch_title(sk_doc, sketch)!r} hasn't been run for {words} yet"}
     return {"state": "pending", "names": changed, "held": {},
             "message": f"{sketch_title(sk_doc, sketch)!r} hasn't been solved for {words} yet: "
                        "open it, or a part that uses it, so the editor solves it"}
@@ -221,13 +236,25 @@ def resolve(code: str, part, user=None, refs: dict | None = None, pinned: dict |
             errors[alias] = (f"SK[{alias!r}]: {sk_doc.name!r} no longer has that sketch "
                              "(it was deleted; Use project sketch… to pick another)")
             continue
+        if sk_doc.project_id not in project_params:
+            project_params[sk_doc.project_id] = params_of(sk_doc.project) if sk_doc.project_id else {}
+        if is_generated(sk_doc):
+            # the server runs generated sketches: one not yet run for the
+            # project's parameters runs now (parts never run its code)
+            from .generated_sketch import rerun_if_pending
+
+            if rerun_if_pending(sk_doc, project_params[sk_doc.project_id]):
+                s = find_sketch(sk_doc, ref.get("sketch")) or s
         profile = s.get("profile")
         if not isinstance(profile, dict) or "items" not in profile:
+            if is_generated(sk_doc):
+                err = (s.get("generated") or {}).get("error") or {}
+                errors[alias] = (f"SK[{alias!r}]: {sk_doc.name!r} hasn't made anything yet"
+                                 + (f": its code fails ({err.get('message')})" if err.get("message") else ""))
+                continue
             errors[alias] = (f"SK[{alias!r}]: open {sk_doc.name!r} once in the sketch editor, "
                              "so it saves its shapes for parts to use")
             continue
-        if sk_doc.project_id not in project_params:
-            project_params[sk_doc.project_id] = params_of(sk_doc.project) if sk_doc.project_id else {}
         state = sketch_state(sk_doc, s, project_params[sk_doc.project_id])
         if state:
             unsolved[alias] = {"document": str(sk_doc.id), "sketch": s.get("id"),

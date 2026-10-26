@@ -8,6 +8,7 @@ from cam.api import router as cam_router
 from documents.api import router as documents_router
 from documents.context_api import router as context_router
 from modeling.api import router as modeling_router
+from modeling.sketch_api import router as sketch_router
 from projects.api import router as projects_router
 
 api = NinjaAPI(title="IntentCAD API", version="0.1.0")
@@ -16,6 +17,7 @@ api.add_router("/projects", projects_router)
 api.add_router("/documents", documents_router)
 api.add_router("/context", context_router)
 api.add_router("/build", modeling_router)
+api.add_router("/sketches", sketch_router)
 api.add_router("/cam", cam_router)
 
 

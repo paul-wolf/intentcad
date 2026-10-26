@@ -113,6 +113,7 @@ def create_document(request, payload: DocumentCreateIn):
     err = require_auth(request)
     if err:
         return err
+    payload.data = _keep_server_keys({}, payload.data)
     errors = validate_document_data(payload.data)
     if errors:
         return JsonResponse({"errors": errors}, status=422)
@@ -177,6 +178,20 @@ def get_document(request, doc_id: UUID):
     return doc
 
 
+def _keep_server_keys(old: dict, new: dict) -> dict:
+    """A generated sketch's code, runs and code history are the server's to
+    write (modeling/generated_sketch.py): a save of the document keeps them
+    as stored, and a drawn one can't become generated this way."""
+    from modeling.generated_sketch import SERVER_KEYS
+
+    if old.get("source") == "generated":
+        return {**{k: v for k, v in new.items() if k not in SERVER_KEYS},
+                **{k: old[k] for k in SERVER_KEYS if k in old}}
+    if new.get("source") == "generated":
+        return {k: v for k, v in new.items() if k not in ("source", "code", "codeHistory")}
+    return new
+
+
 @router.put("/{doc_id}", response=DocumentOut)
 def update_document(request, doc_id: UUID, payload: DocumentUpdateIn):
     err = require_auth(request)
@@ -213,6 +228,7 @@ def update_document(request, doc_id: UUID, payload: DocumentUpdateIn):
             if not (hist and isinstance(hist[-1], dict) and hist[-1].get("code") == old_code):
                 hist = [*hist, {"code": old_code, "at": int(time.time() * 1000), "label": "overwritten"}][-60:]
                 new = {**new, "modelCodeHistory": hist}
+        new = _keep_server_keys(old, new)
         errors = validate_document_data(new)
         if errors:
             return JsonResponse({"errors": errors}, status=422)

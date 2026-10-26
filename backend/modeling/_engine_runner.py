@@ -731,6 +731,26 @@ def _run(code: str, export: list | None = None,
     return result
 
 
+def _run_sketch(code: str, pp: dict | None = None, plane: dict | None = None) -> dict:
+    """Run a generated sketch's code (modeling/sketch_code.py): its outputs as
+    a shared-sketch profile, its checks and annotations, and the project
+    parameters it read. On an error: {"ok": False, "error", "line", "reads"}."""
+    from modeling import sketch_code
+
+    state: dict = {}
+    ns: dict = {"__name__": "__sketch__", "__editor_ops__": sketch_code.bind(pp, state)}
+    try:
+        src = f"from build123d import *; globals().update(__editor_ops__)\n{code}"
+        tree = _keep_editor_ops(ast.parse(src, "<script>"))
+        exec(compile(tree, "<script>", "exec"), ns)  # noqa: S102 - sandboxed subprocess
+        return sketch_code.result(state, plane)
+    except Exception as exc:
+        msg = _describe_error(exc, code)
+        m = re.match(r"line (\d+):", msg)
+        return {"ok": False, "error": msg, "line": int(m.group(1)) if m else None,
+                "reads": state.get("reads", {})}
+
+
 def _bed_dir(bed: dict | None) -> tuple | None:
     """The direction into the bed from the bed face's ref (its outward
     normal); None for the default (-Z) or a ref without one."""
@@ -798,6 +818,9 @@ def _merge_rounds(rounds: list[dict]) -> dict:
 def main() -> None:
     try:
         payload = json.loads(sys.stdin.read() or "{}")
+        if payload.get("mode") == "sketch":
+            sys.stdout.write(json.dumps(_run_sketch(payload.get("code", ""), payload.get("pp"), payload.get("plane"))))
+            return
         result = _run(payload.get("code", ""), payload.get("export"),
                       payload.get("assets"), payload.get("asset_refs"), payload.get("sketches"),
                       payload.get("bed"), payload.get("shared"))

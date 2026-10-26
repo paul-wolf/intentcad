@@ -238,6 +238,46 @@ def uses_shared(code: str) -> bool:
     return bool(sk_aliases(code) or pp_names(code))
 
 
+def _exchange(w: _Worker, payload: str, timeout: float, what: str) -> str:
+    """Send one request line to worker `w` (the caller holds the lock) and
+    read its reply line. A worker that crashed or overran is discarded."""
+    global _worker
+    try:
+        w.proc.stdin.write(payload + "\n")
+        w.proc.stdin.flush()
+    except (BrokenPipeError, OSError) as exc:
+        _worker = None
+        raise EngineError("engine worker crashed") from exc
+    line = _read_line(w.proc, timeout)
+    if line is None:                        # overran the timeout — kill it
+        _worker = None
+        w.proc.kill()
+        raise EngineError(f"{what} timed out after {timeout:.0f}s")
+    if line == "":                          # EOF — the worker died mid-run
+        _worker = None
+        raise EngineError(w.stderr_tail() or "engine worker crashed")
+    return line
+
+
+def run_sketch_code(code: str, pp: dict | None = None, *, plane: dict | None = None,
+                    timeout: float = 30.0) -> dict:
+    """Run a generated sketch's code on the warm worker with project
+    parameters `pp` (modeling/sketch_code.py). Returns the worker's result:
+    {"ok": True, profile, entities, outputs, checks, annotations, reads} or
+    {"ok": False, error, line, reads}. Raises EngineError only when the
+    worker itself fails (a crash, the timeout)."""
+    global _worker
+    payload = json.dumps({"mode": "sketch", "code": code, "pp": pp or {}, "plane": plane})
+    with _worker_lock:
+        if _worker is None or _worker.proc.poll() is not None:
+            _worker = _start_worker()
+        line = _exchange(_worker, payload, timeout, "the sketch code")
+    try:
+        return json.loads(line)
+    except json.JSONDecodeError as exc:
+        raise EngineError("engine returned malformed output") from exc
+
+
 def run_script(code: str, *, export: list[str] | None = None, timeout: float = 60.0,
                document_id: str | None = None, assets: dict[str, bytes] | None = None,
                sketches: dict[str, dict] | None = None, bed: dict | None = None,
@@ -289,20 +329,7 @@ def run_script(code: str, *, export: list[str] | None = None, timeout: float = 6
                 "bed": bed,
                 "shared": {k: shared[k] for k in ("sk", "pp", "errors") if shared.get(k)},
             })
-            try:
-                w.proc.stdin.write(payload + "\n")
-                w.proc.stdin.flush()
-            except (BrokenPipeError, OSError) as exc:
-                _worker = None
-                raise EngineError("engine worker crashed") from exc
-            line = _read_line(w.proc, timeout)
-            if line is None:                        # overran the timeout — kill it
-                _worker = None
-                w.proc.kill()
-                raise EngineError(f"build timed out after {timeout:.0f}s")
-            if line == "":                          # EOF — the worker died mid-build
-                _worker = None
-                raise EngineError(w.stderr_tail() or "engine worker crashed")
+            line = _exchange(w, payload, timeout, "build")
 
         try:
             result = json.loads(line)

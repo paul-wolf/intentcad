@@ -40,6 +40,11 @@ def main() -> None:
             continue
         try:
             req = json.loads(line)
+            if req.get("mode") == "sketch":     # a generated sketch's code
+                result = _engine_runner._run_sketch(req.get("code", ""), req.get("pp"), req.get("plane"))
+                proto.write(json.dumps(result) + "\n")
+                proto.flush()
+                continue
             result = _engine_runner._run(req.get("code", ""), req.get("export"),
                                          req.get("assets"), req.get("asset_refs"),
                                          req.get("sketches"), req.get("bed"), req.get("shared"))
