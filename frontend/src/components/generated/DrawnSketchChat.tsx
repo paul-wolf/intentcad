@@ -11,15 +11,19 @@ import { useThemeStore } from '@/theme';
 import { errorText, sketchApi, type SketchAskResponse } from '@/api/client';
 import { getBackendId, getProjectId, persistChat, setBackendId, subscribeProjectContext } from '@/api/autoSave';
 import { useDocumentStore } from '@/stores/documentStore';
+import { isAxis } from '@/utils/sketchAxes';
 import { addLog } from '@/stores/logStore';
-import type { ChatMessage } from '@/types/document';
+import type { ChatMessage, Entity } from '@/types/document';
 import { CardButton, ProposalCard, SketchChat, proposalMessage } from './SketchChat';
 
 const EMPTY: ChatMessage[] = [];
 
-/** Nothing drawn (and no part script): it can become generated in place. */
+/** Nothing drawn (the built-in axes aside; and no part script): it can become generated in place. */
+const nothingDrawn = (d: { modelCode?: string; sketches: { entities: Entity[] }[] }) =>
+  !d.modelCode?.trim() && d.sketches.every((k) => k.entities.every(isAxis));
+
 export function useSketchEmpty(): boolean {
-  return useDocumentStore((s) => !s.document.modelCode?.trim() && s.document.sketches.every((k) => !k.entities.length));
+  return useDocumentStore((s) => nothingDrawn(s.document));
 }
 
 /** Make this (empty) drawn sketch generated, in place: the drawn editor stops
@@ -53,7 +57,7 @@ export function DrawnSketchChat({ id, onGenerated }: { id: string; onGenerated: 
     if (!p) return;
     const done = change(i, 'accepted');
     try {
-      if (p.empty && useDocumentStore.getState().document.sketches.every((k) => !k.entities.length)) {
+      if (p.empty && nothingDrawn(useDocumentStore.getState().document)) {
         await convertInPlace(id, { code: p.code, name: p.name }, done, onGenerated);
         return;
       }

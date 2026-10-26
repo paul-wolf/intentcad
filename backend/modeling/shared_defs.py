@@ -42,6 +42,8 @@ from documents.models import Document, document_kind
 from .engine import pp_names, sk_aliases
 
 GROUP_USE = re.compile(r"""\.(group|named)\(\s*(["'])(.+?)\2""")
+GROUP_BY_NAME = re.compile(r"""\.(group|named)\(\s*[^\s"')]""")     # .group(g): the name is in a variable
+QUOTED = re.compile(r"""(["'])([^"'\n]+?)\1""")
 IDENT = re.compile(r"(?<![\w.])[A-Za-z_][A-Za-z0-9_]*")
 
 
@@ -334,11 +336,16 @@ def used_by(sk_doc) -> list[dict]:
     """The parts that use any of `sk_doc`'s sketches: [{id, name, uses:
     [{alias, sketch, groups, names}], stale}]. Groups and names are those the
     part's script asks for by .group("…") / .named("…"), any alias (so the
-    sketch editor can warn before one goes)."""
+    sketch editor can warn before one goes); with .group(g), any quoted name
+    of one of the sketch's groups counts (for g in ("holes", "slots"): …)."""
     qs = Document.objects.select_related("project")
     qs = (qs.filter(project_id=sk_doc.project_id) if sk_doc.project_id
           else qs.filter(project__isnull=True, created_by_id=sk_doc.created_by_id))
     out, doc_id, docs = [], str(sk_doc.id), {str(sk_doc.id): sk_doc}
+    sketches = [k for k in _data(sk_doc).get("sketches") or [] if isinstance(k, dict)]
+    known = {"group": {g.get("name") for k in sketches for g in k.get("groups") or [] if isinstance(g, dict)},
+             "named": {e.get("name") for k in sketches for e in k.get("entities") or []
+                       if isinstance(e, dict) and e.get("name")}}
     for d in qs.exclude(id=sk_doc.id).order_by("name"):
         data = _data(d)
         if document_kind(data) != "part":
@@ -353,6 +360,8 @@ def used_by(sk_doc) -> list[dict]:
         asked = {"group": set(), "named": set()}
         for m in GROUP_USE.finditer(code):
             asked[m.group(1)].add(m.group(3))
+        for kind in {m.group(1) for m in GROUP_BY_NAME.finditer(code)}:
+            asked[kind] |= {m.group(2) for m in QUOTED.finditer(code)} & known[kind]
         out.append({
             "id": str(d.id), "name": d.name,
             "uses": [{"alias": a, "sketch": r.get("sketch"), "in_script": a in aliases,

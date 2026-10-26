@@ -147,12 +147,16 @@ def new_data(name: str, code: str = STARTER) -> dict:
             "code": code, "codeHistory": [], "activeSketchId": s["id"], "sketches": [s]}
 
 
+AXES = {"axis-h", "axis-v", "axis-fh", "axis-fv"}    # the editor's built-in reference axes
+
+
 def is_empty_drawn(doc) -> bool:
     """A drawn sketch document with nothing drawn (it can become generated in place)."""
     data = shared_defs._data(doc)
     if data.get("source") == "generated" or (data.get("modelCode") or "").strip():
         return False
-    return not any(isinstance(s, dict) and s.get("entities") for s in data.get("sketches") or [])
+    return not any(isinstance(e, dict) and e.get("id") not in AXES
+                   for s in data.get("sketches") or [] if isinstance(s, dict) for e in s.get("entities") or [])
 
 
 def convert_in_place(doc, code: str = STARTER) -> None:

@@ -260,7 +260,8 @@ export function ChatInput({ box, asking, palette, ctxStore, ctxColors, docs, pic
       {box.uploading ? `Attaching ${box.uploading}…${box.sendQueued !== null ? ' Your message goes once it’s attached.' : ''}` : ctxStore.error}
     </div>
   )}
-  <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 16px' }}>
+  {/* in a narrow column the model, Ask and Clear wrap under the input */}
+  <div style={{ position: 'relative', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px', padding: '8px 16px' }}>
   {mention && (
     <MentionMenu docs={docs} query={mention.query} active={mention.active} palette={palette}
       onHover={(active) => setMention((mn) => (mn ? { ...mn, active } : mn))} onPick={(d) => box.pickMention(d.name)} />
@@ -296,7 +297,7 @@ export function ChatInput({ box, asking, palette, ctxStore, ctxColors, docs, pic
     }}
     placeholder={placeholder(box.inputW)}
     disabled={asking}
-    style={{ flex: 1, padding: '6px 10px', background: palette.inputBg,
+    style={{ flex: '1 1 140px', minWidth: 0, padding: '6px 10px', background: palette.inputBg,
              border: `1px solid ${palette.inputBorder}`, borderRadius: '4px',
              color: palette.text, fontSize: '13px', outline: 'none' }}
   />
@@ -304,7 +305,7 @@ export function ChatInput({ box, asking, palette, ctxStore, ctxColors, docs, pic
     disabled={asking || models.length === 0}
     title={models.find((m) => m.id === model) ? picker.modelTitle(models.find((m) => m.id === model)!)
            : 'Model for AI edits — stronger tiers cost more; use them for hard tasks'}
-    style={{ padding: '6px 8px', background: palette.inputBg, color: palette.textSecondary,
+    style={{ padding: '6px 8px', background: palette.inputBg, color: palette.textSecondary, maxWidth: 140,
              border: `1px solid ${palette.inputBorder}`, borderRadius: '4px', fontSize: '12px', cursor: 'pointer' }}>
     {models.length === 0 && <option value={model}>{model || 'default model'}</option>}
     {models.map((m) => (
@@ -314,14 +315,14 @@ export function ChatInput({ box, asking, palette, ctxStore, ctxColors, docs, pic
     ))}
   </select>
   <button onClick={onSend} disabled={asking || !ask.trim()}
-    style={{ padding: '6px 14px', background: palette.primaryBtn, color: '#fff', border: 'none',
+    style={{ flex: 'none', padding: '6px 14px', background: palette.primaryBtn, color: '#fff', border: 'none',
              borderRadius: '4px', fontSize: '13px', cursor: ask.trim() && !asking ? 'pointer' : 'default',
              opacity: ask.trim() && !asking ? 1 : 0.5 }}>
     {asking ? 'Editing…' : 'Ask'}
   </button>
   {hasMessages && (
     <button onClick={onClear} title="Clear the conversation"
-      style={{ padding: '6px 10px', background: 'none', color: palette.textSecondary,
+      style={{ flex: 'none', padding: '6px 10px', background: 'none', color: palette.textSecondary,
                border: `1px solid ${palette.border}`, borderRadius: '4px', fontSize: '12px', cursor: 'pointer' }}>
       Clear
     </button>

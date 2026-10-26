@@ -78,4 +78,11 @@ describe('Markdown', () => {
     expect(html).not.toContain('<img');
     expect(md('[x](javascript:alert(1))')).not.toContain('href');
   });
+
+  it('keeps underscores inside names', () => {
+    const md = (text: string) => renderToStaticMarkup(createElement(Markdown, { text, color: '#000', dim: '#666', border: '#ccc', codeBg: '#eee' }));
+    expect(md('from prop_d, tip_gap, arm_count and the brace_* values')).not.toContain('<em>');
+    expect(md('a _real_ note and __bold__')).toContain('<em>real</em>');
+    expect(md('a _real_ note and __bold__')).toContain('<strong>bold</strong>');
+  });
 });

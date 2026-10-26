@@ -212,7 +212,7 @@ def _bounds(parts: list) -> tuple[float, float] | None:
 
 def _describe(parts: list) -> tuple[str, int, str]:
     """(kind, count, size in words) of an output: "36 holes Ø3.4",
-    "239 × 248 mm", "4 points"."""
+    "circle Ø84", "239 × 248 mm", "4 points"."""
     loops = [v for k, v in parts if k == "loop"]
     points = [v for k, v in parts if k == "point"]
     opens = [v for k, v in parts if k == "open"]
@@ -220,8 +220,9 @@ def _describe(parts: list) -> tuple[str, int, str]:
     if loops and len(circles) == len(loops) and not opens and not points:
         ds = {round(2 * c["r"], 3) for c in circles}
         n = len(circles)
-        noun = "hole" if n == 1 else "holes"
-        return "holes", n, f"{n} {noun} Ø{_g(ds.pop())}" if len(ds) == 1 else f"{n} {noun}"
+        if n == 1:          # one circle may be a space rather than a hole: stack_space
+            return "holes", 1, f"circle Ø{_g(ds.pop())}"
+        return "holes", n, f"{n} holes Ø{_g(ds.pop())}" if len(ds) == 1 else f"{n} holes"
     if points and not loops and not opens:
         n = len(points)
         return "points", n, f"{n} point{'s' if n != 1 else ''}"

@@ -222,19 +222,19 @@ function GeneratedSummary({ gen, entities, alias, mono }: {
           {gen.error && <div style={{ color: palette.danger }}>Its code stopped: parts get its last good drawing.</div>}
         </div>
       </div>
-      <table style={{ borderCollapse: 'collapse', fontSize: '12px' }}>
-        <tbody>
-          {gen.outputs.map((o) => (
-            <tr key={o.name} style={{ borderTop: `1px solid ${palette.border}` }}>
-              <td style={{ padding: '3px 8px 3px 0', fontFamily: mono }}>{o.name}</td>
-              <td style={{ padding: '3px 8px 3px 0', color: palette.textSecondary }}>{o.description || o.size}{o.description ? ` (${o.size})` : ''}</td>
-              <td style={{ padding: '3px 0', fontFamily: mono, fontSize: '11px', color: palette.textMuted, whiteSpace: 'nowrap' }}>
-                SK["{alias}"].group("{o.name}")
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {/* one output per row: name and size, then what it is (the line above says how the script reads them) */}
+      <div style={{ fontSize: '12px' }}>
+        {gen.outputs.map((o) => (
+          <div key={o.name} title={`SK["${alias}"].group("${o.name}")`}
+               style={{ padding: '4px 0', borderTop: `1px solid ${palette.border}`, lineHeight: 1.4 }}>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <span style={{ fontFamily: mono, flex: 1, minWidth: 0 }}>{o.name}</span>
+              <span style={{ color: palette.textMuted, whiteSpace: 'nowrap' }}>{o.size}</span>
+            </div>
+            {o.description && <div style={{ color: palette.textSecondary }}>{o.description}</div>}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

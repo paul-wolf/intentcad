@@ -62,7 +62,8 @@ export function parseBlocks(src: string): Block[] {
   return out;
 }
 
-const INLINE = /(`[^`]+`)|(\*\*[^*]+\*\*|__[^_]+__)|(\*[^*\s][^*]*\*|_[^_\s][^_]*_)|(\[[^\]]+\]\([^)\s]+\))/;
+// _ and __ only at word edges, so names such as prop_d and tip_gap stay as written
+const INLINE = /(`[^`]+`)|(\*\*[^*]+\*\*|(?<!\w)__[^_]+__(?!\w))|(\*[^*\s][^*]*\*|(?<!\w)_[^_\s][^_]*_(?!\w))|(\[[^\]]+\]\([^)\s]+\))/;
 
 export function inline(text: string, codeStyle?: CSSProperties): ReactNode[] {
   const out: ReactNode[] = [];

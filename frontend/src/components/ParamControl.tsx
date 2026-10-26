@@ -161,19 +161,22 @@ export function TrialBar({ items, savedWord = 'saved', busy, note, onReset, onAp
   const words = items.map((i) => `${i.name} = ${fmt(i.value)} (${savedWord}: ${fmt(i.saved)})`).join(', ');
   return (
     <div role="status" aria-label="Trial values"
-         style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', borderRadius: 8, fontFamily: SANS,
+         style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, padding: '6px 10px', borderRadius: 8, fontFamily: SANS,
                   fontSize: '12.5px', background: t.accentSoft, border: `1px solid ${t.accent}`, color: t.text, ...style }}>
-      <span style={{ flex: 1, minWidth: 0 }}>
+      {/* in a narrow panel the buttons wrap under the words */}
+      <span style={{ flex: '1 1 180px', minWidth: 0 }}>
         Trying {words}. Not saved.
         {busy && <span style={{ color: t.textDim, marginLeft: 8 }}>building…</span>}
         {note && <span style={{ color: t.textDim, marginLeft: 8 }}>{note}</span>}
       </span>
-      <button onClick={onReset}
-        style={{ padding: '4px 10px', borderRadius: 6, fontSize: '12px', cursor: 'pointer', background: t.surface,
-                 color: t.textDim, border: `1px solid ${t.border2}` }}>Reset</button>
-      <button onClick={onApply}
-        style={{ padding: '4px 10px', borderRadius: 6, fontSize: '12px', fontWeight: 600, cursor: 'pointer',
-                 background: t.accent, color: '#fff', border: 'none' }}>{applyLabel}</button>
+      <span style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+        <button onClick={onReset}
+          style={{ padding: '4px 10px', borderRadius: 6, fontSize: '12px', cursor: 'pointer', background: t.surface,
+                   color: t.textDim, border: `1px solid ${t.border2}` }}>Reset</button>
+        <button onClick={onApply}
+          style={{ padding: '4px 10px', borderRadius: 6, fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+                   background: t.accent, color: '#fff', border: 'none' }}>{applyLabel}</button>
+      </span>
     </div>
   );
 }

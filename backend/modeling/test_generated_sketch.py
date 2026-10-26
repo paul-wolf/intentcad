@@ -4,6 +4,7 @@ on a parameter save making parts out of date; the warning before outputs parts
 use go; a failed run keeping the last good result; and who may run or save one."""
 import math
 
+from build123d import RegularPolygon
 from django.test import Client, SimpleTestCase
 
 from accounts.models import Organisation, User
@@ -13,6 +14,7 @@ from projects.models import Project
 from . import generated_sketch as gs
 from . import shared_defs
 from .engine import run_sketch_code
+from .shared_sketch import SharedSketch
 from .test_shared_defs import SharedWorld
 
 LAYOUT = '''\
@@ -52,6 +54,18 @@ class RunTests(SimpleTestCase):
         self.assertEqual(p["names"], {"plate": "g:plate:0"})
         self.assertEqual(len(p["items"]["circles"]), 2)
         self.assertTrue(all(e["generated"] for e in r["entities"]))
+
+    def test_one_circle_is_a_circle_not_a_hole(self):
+        r = run_sketch_code('output("stack_space", Circle(42))\n', {})
+        self.assertEqual(r["outputs"][0]["size"], "circle Ø84")
+
+    def test_an_output_along_the_outline_still_builds(self):
+        # a wall clipped to the plate shares its edge: the whole sketch is the plate less the wall
+        r = run_sketch_code('plate = RegularPolygon(50, 6)\noutput("plate", plate)\n'
+                            'output("wall", plate & (Pos(0, 46) * Rectangle(200, 10)))\n', {})
+        whole = SharedSketch.build(r["profile"], 'SK["layout"]')
+        wall = SharedSketch.build(r["profile"], 'SK["layout"]').group("wall")
+        self.assertAlmostEqual(whole.area, RegularPolygon(50, 6).area - wall.area, delta=0.01)
 
     def test_arcs_bulge_the_way_the_editor_draws_them(self):
         r = run_sketch_code('output("r", RectangleRounded(20, 10, 3))\n', {})
@@ -182,6 +196,14 @@ class GeneratedSketchTests(GeneratedWorld):
         self.assertEqual([(p["name"], p["via"]) for p in u["w"]["parts"]], [("Plate", ["Layout"])])
         self.assertEqual(gs.used_outputs(self.layout), {"holes": ["Plate"], "plate": ["Plate"]})
 
+    def test_used_by_sees_names_a_part_loops_over(self):
+        data = dict(self.part.data)
+        data["modelCode"] = ('part = extrude(SK["layout"].group("plate"), 2)\n'
+                             'for g in ("holes", "front"):\n    part -= extrude(SK["layout"].group(g), 2)\n')
+        Document.objects.filter(id=self.part.id).update(data=data)
+        # "front" is a label, not an output
+        self.assertEqual(gs.used_outputs(self.layout), {"holes": ["Plate"], "plate": ["Plate"]})
+
     def test_saving_code_keeps_a_revert_point(self):
         self.save_code(LAYOUT.replace("60", "50"), label="edited in Code")
         self.layout.refresh_from_db()
@@ -307,7 +329,9 @@ class StorageTests(GeneratedWorld):
     def test_an_empty_drawn_sketch_becomes_generated_in_place(self):
         empty = Document.objects.create(name="Empty", project=self.drone, created_by=self.user, data={
             "id": "e", "name": "Empty", "type": "sketch", "activeSketchId": "s",
-            "sketches": [{"id": "s", "name": "Sketch 1", "visible": True, "entities": [], "constraints": []}]})
+            "sketches": [{"id": "s", "name": "Sketch 1", "visible": True, "constraints": [], "entities": [
+                {"id": a, "type": "line", "points": [], "construction": True, "reference": True}
+                for a in ("axis-h", "axis-v")]}]})    # the editor's built-in axes aren't drawn shapes
         r = self.post("/api/sketches/create", {"from_document": str(empty.id), "code": LAYOUT}).json()
         self.assertEqual(r["id"], str(empty.id))
         self.assertFalse(r["created"])
