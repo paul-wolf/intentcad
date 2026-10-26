@@ -373,6 +373,49 @@ A sketch in a project sizes its shapes with the project's parameters, so one num
 
 ![A project sketch: its holes sized by bolt_d, the Project parameters panel, and a sketch-only parameter with Move to project](images/project-params-in-sketch.png)
 
+### Generated sketches
+
+A layout that follows rules (a frame plate from the prop size and arm count, with the
+brace holes where the braces go) is easier to describe than to draw. A generated
+sketch is drawn by code the AI writes from the project parameters, so it redraws
+itself when they change.
+
+- **Make one**: on the project page, click **New sketch**. Describe the layout in the
+  chat on the right ("a hexa frame plate from the project parameters, with holes for
+  the arm braces"). The AI proposes a generated sketch in one sentence; click **Make it
+  a generated sketch**. To start from code yourself, click **Write it as code instead**
+  over the empty sketch.
+- **Drawn or generated**: a sketch you draw is a drawn sketch; its chat answers
+  questions but can't move shapes, and offers a generated sketch instead. A drawn
+  sketch with shapes in it stays as it is; the generated one is a new sketch document.
+- **The drawing**: shows the shapes with their sizes and notes. It can't be edited by
+  hand: dragging a shape says so and points to the parameters and the chat.
+- **Outputs**: the panel on the right lists what parts can use (`plate_outline`,
+  `brace_holes`), with their sizes and the parts that use each one. Hover an output to
+  light it up in the drawing, or hover a shape to light up its output.
+- **Try a value**: the **Parameters** panel lists the project parameters the code
+  reads. Drag a slider or type a value and the drawing and checks follow; nothing is
+  saved. **Reset** goes back. **Apply to project** saves the values for the whole
+  project, after saying how many parts it affects. Those parts then show
+  **OUT OF DATE**; **Rebuild all** under **Used by parts** rebuilds them.
+- **Checks**: green or red lines such as "fits the 256 mm bed" or "holes 3 mm from the
+  edge". Click one to light up the output it checks. Ask the AI for more.
+- **Code**: click **Code** at the top. Edit it and click **Run** (⌘/Ctrl+Enter) to save
+  and redraw; an error shows on its line. **Earlier versions** lists the code before
+  each change, yours or the AI's; each AI change in the chat can be clicked to go back
+  to it too.
+- **When it fails**: the last good drawing stays, dimmed, with the reason. Parts keep
+  building from the last good result until it runs again.
+- **Removing an output a part uses**: the code isn't saved until you choose. The editor
+  (or the AI's change in the chat) lists the parts it would break; **Save anyway** or
+  **Apply anyway** goes ahead, **Undo** keeps the old code.
+- **Use it in a part**: click **Use in a part** at the top, or **Use project sketch** in
+  the part editor. The dialog shows each generated sketch with a picture and its
+  outputs. The script reads an output as `SK["layout"].group("brace_holes")`, the same
+  as a group in a drawn sketch.
+
+![A generated sketch: the frame layout with brace_holes lit up, its outputs and the parts that use them, and the parameter sliders](images/generated-sketch.png)
+
 ### Beyond 3D: 2D and CNC
 
 The 2D editor exports DXF, PDF and images, imports DXF, and turns sketches into G-code
