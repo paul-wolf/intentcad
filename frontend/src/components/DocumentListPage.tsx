@@ -4,7 +4,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { useDocumentStore } from '@/stores/documentStore';
 import { createEmptyDocument, createEmptyPart, generateNumberedName, migrateDocument } from '@/utils/document';
 import { api, type DocumentListItem } from '@/api/cachedClient';
-import { api as rawApi, errorText } from '@/api/client';
+import { api as rawApi, errorText, sketchApi } from '@/api/client';
 import { importScript, importLabel, partNameFor, STEP_ACCEPT } from '@/build/importStep';
 import { setBackendId, setProjectContext } from '@/api/autoSave';
 import type { Document } from '@/types/document';
@@ -95,6 +95,16 @@ export function DocumentListPage() {
   const uniqueName = (base: string) => generateNumberedName(base, docs.map((d) => d.name));
   const handleNew = () => createAndOpen(createEmptyDocument(uniqueName('Sketch')), (id) => `/edit/${id}`);
   const handleNewPart = () => createAndOpen(createEmptyPart(uniqueName('Part')), (id) => `/part/${id}`);
+  // A sketch drawn by code: the server makes it with the starter code and runs it.
+  const [sketchMenu, setSketchMenu] = useState(false);
+  const handleNewGenerated = async () => {
+    setSketchMenu(false);
+    try {
+      const d = await sketchApi.create({ project_id: projectId ?? null, name: uniqueName('Layout') });
+      setProjectContext(projectId ?? null, projectName);
+      navigate(`/edit/${d.id}`);
+    } catch (err) { fail("Couldn't create the sketch", err); }
+  };
 
   // New part from STEP: create the part, upload the file (trial-built server-side),
   // save the import script as its first version, then open it. A failed upload
@@ -219,7 +229,8 @@ export function DocumentListPage() {
   const cardOf = (d: DocumentListItem) => (
     <DocCard key={d.id}
       d={{ id: d.id, name: d.name, kind: d.kind, updated: relativeTime(d.updated_at), thumbnail: d.thumbnail, description: d.description,
-           stale: d.stale, pinned: d.pinned }}
+           stale: d.stale, pinned: d.pinned, generated: d.source === 'generated', outputs: d.outputs,
+           failingChecks: d.failing_checks }}
       onOpen={() => handleOpen(d)}
       onDoubleClick={() => { setEditingId(d.id); setEditName(d.name); }}
       onRename={() => { setEditingId(d.id); setEditName(d.name); }}
@@ -333,12 +344,30 @@ export function DocumentListPage() {
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /></svg>
                 Delete
               </button>
-              <button onClick={handleNew}
-                style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '9px 14px', background: t.surface, color: t.text,
-                         border: `1px solid ${t.border2}`, borderRadius: 9, fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
-                New sketch
-              </button>
+              <div style={{ position: 'relative', display: 'flex' }}>
+                <button onClick={handleNew} title="Draw a sketch"
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '9px 12px 9px 14px', background: t.surface, color: t.text,
+                           border: `1px solid ${t.border2}`, borderRadius: '9px 0 0 9px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+                  New sketch
+                </button>
+                <button onClick={() => setSketchMenu((o) => !o)} aria-label="More ways to make a sketch" title="More ways to make a sketch"
+                  style={{ padding: '9px 9px', background: t.surface, color: t.textDim, border: `1px solid ${t.border2}`, borderLeft: 'none',
+                           borderRadius: '0 9px 9px 0', fontSize: '11px', cursor: 'pointer' }}>▾</button>
+                {sketchMenu && (
+                  <div role="menu" style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, zIndex: 20, background: t.surface,
+                                            border: `1px solid ${t.border2}`, borderRadius: 9, boxShadow: t.shadow, minWidth: 250, padding: 4 }}>
+                    <button role="menuitem" onClick={() => void handleNewGenerated()}
+                      style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', borderRadius: 6,
+                               padding: '8px 10px', cursor: 'pointer', color: t.text, fontFamily: SANS }}>
+                      <div style={{ fontSize: '13px', fontWeight: 600 }}>Generated from code</div>
+                      <div style={{ fontSize: '11.5px', color: t.textDim, marginTop: 2 }}>
+                        A layout drawn by code from the project parameters. Parts use its outputs.
+                      </div>
+                    </button>
+                  </div>
+                )}
+              </div>
               <input ref={stepInput} type="file" accept={STEP_ACCEPT} style={{ display: 'none' }}
                 onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void handleNewPartFromStep(f); }} />
               <button onClick={() => stepInput.current?.click()} disabled={importing}

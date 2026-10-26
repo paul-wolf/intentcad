@@ -4,15 +4,24 @@
  * the part has, and adds one: pick a sketch document and one of its sketches,
  * and name it. The script then reads it as SK["alias"] (its closed shapes, its
  * .group("…") and .named("…") elements, .circles, .points), and the part goes
- * out of date whenever that sketch changes.
+ * out of date whenever that sketch changes. A generated sketch shows a
+ * picture of itself, its outputs (what each is, and how the script asks for
+ * it) and whether its checks pass.
  */
 import { useEffect, useState } from 'react';
 import { api, errorText, type DocumentListItem } from '@/api/client';
 import { useThemeStore } from '@/theme';
-import type { SketchRef } from '@/types/document';
+import type { Sketch, SketchRef } from '@/types/document';
 import { skAliases } from '@/build/sharedSketch';
+import { checksWords } from '@/build/generatedSketch';
+import type { GenRecord } from '@/types/generated';
+import { SketchDrawing } from './generated/SketchDrawing';
 
-interface SketchChoice { id: string; name: string; usable: boolean; groups: string[] }
+interface SketchChoice {
+  id: string; name: string; usable: boolean; groups: string[];
+  /** a generated sketch: its last run, and its drawing for the picture */
+  gen?: GenRecord; entities?: Sketch['entities'];
+}
 
 import { aliasFor } from '@/build/sketchToPart';
 
@@ -70,8 +79,10 @@ export function ProjectSketchDialog({ projectId, refs, code, onSave, onClose }: 
     setSketchId('');
     if (!id) return;
     api.getDocument(id).then((d) => {
-      const list = ((d.data.sketches as { id: string; name: string; profile?: { items?: unknown }; groups?: { name: string }[] }[]) ?? [])
-        .map((s) => ({ id: s.id, name: s.name, usable: !!s.profile?.items, groups: (s.groups ?? []).map((g) => g.name) }));
+      const list = ((d.data.sketches as (Sketch & { generated?: GenRecord })[]) ?? [])
+        .map((s) => ({ id: s.id, name: s.name, usable: !!(s.profile && 'items' in s.profile),
+                       groups: (s.groups ?? []).map((g) => g.name),
+                       ...(s.generated ? { gen: s.generated, entities: s.entities } : {}) }));
       setSketches(list);
       const first = list[0];
       if (first) { setSketchId(first.id); setAlias(aliasFor(list.length === 1 ? d.name : first.name)); }
@@ -146,7 +157,7 @@ export function ProjectSketchDialog({ projectId, refs, code, onSave, onClose }: 
             <label htmlFor="psd-doc">Sketch document</label>
             <select id="psd-doc" style={field} value={docId} onChange={(e) => pickDoc(e.target.value)}>
               <option value="">Choose…</option>
-              {docs.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+              {docs.map((d) => <option key={d.id} value={d.id}>{d.name}{d.source === 'generated' ? ' (generated)' : ''}</option>)}
             </select>
             {sketches.length > 1 && <>
               <label htmlFor="psd-sketch">Sketch</label>
@@ -163,9 +174,13 @@ export function ProjectSketchDialog({ projectId, refs, code, onSave, onClose }: 
                 {!chosen.usable ? 'Open this sketch document once in the sketch editor, so it saves its shapes for parts.'
                   : !aliasOk ? 'A short name of letters, digits and _, starting with a letter.'
                   : <>The script reads it as <code style={{ fontFamily: mono }}>SK["{alias.trim()}"]</code>
-                    {chosen.groups.length ? <>; its groups as <code style={{ fontFamily: mono }}>.group("{chosen.groups[0]}")</code></> : null}
+                    {chosen.groups.length ? <>; its {chosen.gen ? 'outputs' : 'groups'} as <code style={{ fontFamily: mono }}>.group("{chosen.groups[0]}")</code></> : null}
                     {refs[alias.trim()] ? ' (replaces the one of that name)' : ''}.</>}
               </span>
+            </>}
+            {chosen?.gen && <>
+              <span />
+              <GeneratedSummary gen={chosen.gen} entities={chosen.entities ?? []} alias={alias.trim() || 'name'} mono={mono} />
             </>}
             <span />
             <div>
@@ -177,6 +192,48 @@ export function ProjectSketchDialog({ projectId, refs, code, onSave, onClose }: 
             </div>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+/** A generated sketch in the picker: its picture, its outputs and how the
+ *  script asks for each, and its checks. */
+function GeneratedSummary({ gen, entities, alias, mono }: {
+  gen: GenRecord; entities: Sketch['entities']; alias: string; mono: string;
+}) {
+  const palette = useThemeStore((s) => s.palette);
+  const failing = gen.checks.filter((c) => !c.ok);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', gap: 10 }}>
+        <div style={{ width: 120, height: 96, flexShrink: 0, display: 'flex', border: `1px solid ${palette.border}`,
+                      borderRadius: 6, overflow: 'hidden', background: palette.background }}>
+          <SketchDrawing entities={entities} notes={null} outputs={gen.outputs} users={[]} lit={new Set()} interactive={false} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0, fontSize: '12px', lineHeight: 1.45 }}>
+          <div style={{ color: palette.textSecondary, marginBottom: 2 }}>A generated sketch: it is drawn from the project parameters.</div>
+          {gen.checks.length > 0 && (
+            <div style={{ color: failing.length ? palette.warning : palette.textSecondary }}>
+              {failing.length ? `⚠ ${failing.length} check${failing.length === 1 ? ' fails' : 's fail'}: ${failing.map((c) => c.name).join(', ')}`
+                : `Checks: ${checksWords(gen.checks)}`}
+            </div>
+          )}
+          {gen.error && <div style={{ color: palette.danger }}>Its code stopped: parts get its last good drawing.</div>}
+        </div>
+      </div>
+      {/* one output per row: name and size, then what it is (the line above says how the script reads them) */}
+      <div style={{ fontSize: '12px' }}>
+        {gen.outputs.map((o) => (
+          <div key={o.name} title={`SK["${alias}"].group("${o.name}")`}
+               style={{ padding: '4px 0', borderTop: `1px solid ${palette.border}`, lineHeight: 1.4 }}>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <span style={{ fontFamily: mono, flex: 1, minWidth: 0 }}>{o.name}</span>
+              <span style={{ color: palette.textMuted, whiteSpace: 'nowrap' }}>{o.size}</span>
+            </div>
+            {o.description && <div style={{ color: palette.textSecondary }}>{o.description}</div>}
+          </div>
+        ))}
       </div>
     </div>
   );

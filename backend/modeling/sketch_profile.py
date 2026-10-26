@@ -111,10 +111,18 @@ def profile_faces(profile: dict, name: str = "sketch") -> list[Face]:
         if depth[i] % 2:
             continue
         holes = [wires[k] for k in range(len(wires)) if parent[k] == i and depth[k] == depth[i] + 1]
-        f = Face(w, holes) if holes else fills[i]
-        if f.normal_at().dot(normal) < 0:
-            f = -f
-        faces.append(f)
+        if not holes:
+            pieces = [fills[i]]
+        else:
+            try:
+                pieces = [Face(w, holes)]
+            except Exception:  # noqa: BLE001 - a hole touches the outline (a wall along a plate edge)
+                cut = fills[i].cut(*[fills[k] for k in range(len(wires)) if parent[k] == i and depth[k] == depth[i] + 1])
+                pieces = cut.faces()
+        for f in pieces:
+            if f.normal_at().dot(normal) < 0:
+                f = -f
+            faces.append(f)
     return faces
 
 

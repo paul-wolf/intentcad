@@ -193,6 +193,8 @@ export async function solveSavedSketch(id: string, params: ProjectParameter[]):
     const saved = await api.getDocument(id);
     const doc = saved.data as unknown as Document;
     if (!doc || !Array.isArray(doc.sketches) || !isSketchDocument(doc)) return { status: 'unchanged', failed: [] };
+    // a generated sketch is drawn by its code, which the server runs again itself
+    if ((doc as { source?: string }).source === 'generated') return { status: 'unchanged', failed: [] };
     const r = solveDocument(doc, params);
     if (!r.changed) return { status: 'unchanged', failed: r.failed };
     const data = { ...r.document, sketches: withSharedProfiles(r.document.sketches) };

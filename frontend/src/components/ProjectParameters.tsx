@@ -7,6 +7,10 @@
  * a changed value are solved again (here: only the browser can), so their
  * parts can rebuild. Renaming one rewrites the scripts and sketches that use
  * it, once you've seen which. Used by lists them.
+ *
+ * A number's value has the shared ParamControl (field + slider): moving it
+ * only tries a value; the bar above the table says what that would affect,
+ * and Apply saves (Reset drops it). ⋯ sets the slider's range, saved at once.
  */
 import { useEffect, useState, type CSSProperties } from 'react';
 import { projectApi } from '@/api/projectClient';
@@ -14,11 +18,14 @@ import { errorText } from '@/api/client';
 import { saveProjectParameters, solvedWords } from '@/build/projectSketchSolve';
 import type { ParameterUses, ProjectDetail, ProjectParameter } from '@/types/project';
 import { useTokens, SANS, MONO } from '@/ui/tokens';
+import type { SavedRange } from '@/utils/paramRange';
+import { ParamControl, fmt } from './ParamControl';
 
 /** `was`: the name it has in the project, so a changed name is a rename */
-type Row = { name: string; value: string; unit: ProjectParameter['unit']; description: string; was?: string };
+type Row = { name: string; value: string; unit: ProjectParameter['unit']; description: string; was?: string } & SavedRange;
 
-const toRow = (p: ProjectParameter): Row => ({ name: p.name, value: String(p.value), unit: p.unit, description: p.description ?? '', was: p.name });
+const toRow = (p: ProjectParameter): Row => ({ name: p.name, value: String(p.value), unit: p.unit, description: p.description ?? '', was: p.name,
+                                              min: p.min ?? null, max: p.max ?? null, step: p.step ?? null });
 
 /** {old: new} for the rows whose name changed to one not otherwise kept */
 export const renamesOf = (rows: Row[]): Record<string, string> => {
@@ -39,7 +46,17 @@ export const parseValue = (v: string): number | string => (/^\s*-?\d+(\.\d+)?\s*
 export const toParameters = (rows: Row[]): ProjectParameter[] => rows
   .filter((r) => r.name.trim())
   .map((r) => ({ name: r.name.trim(), value: parseValue(r.value), unit: r.unit,
-                 ...(r.description.trim() ? { description: r.description.trim() } : {}) }));
+                 ...(r.description.trim() ? { description: r.description.trim() } : {}),
+                 ...(typeof parseValue(r.value) === 'number'
+                   ? Object.fromEntries((['min', 'max', 'step'] as const).filter((k) => r[k] != null).map((k) => [k, r[k]]))
+                   : {}) }));
+
+/** "It affects 3 parts (Top plate, Bottom plate, Arm brace)" for the parameters being tried. */
+export function affectsWords(names: string[], uses: ParameterUses): string {
+  const parts = [...new Set(names.flatMap((n) => uses[n]?.parts.map((p) => p.name) ?? []))];
+  if (!parts.length) return 'No part uses it yet.';
+  return `It affects ${parts.length} part${parts.length === 1 ? '' : 's'} (${parts.join(', ')}).`;
+}
 
 export function ProjectParameters({ project, onSaved }: { project: ProjectDetail; onSaved: (p: ProjectDetail) => void }) {
   const t = useTokens();
@@ -52,9 +69,11 @@ export function ProjectParameters({ project, onSaved }: { project: ProjectDetail
   // renames waiting for a yes, with what they rewrite
   const [confirm, setConfirm] = useState<{ rows: Row[]; renames: Record<string, string>; words: string[] } | null>(null);
   const savedKey = JSON.stringify(saved);
+  // values being tried (by saved name): not saved until Apply
+  const [trial, setTrial] = useState<Record<string, number>>({});
 
   // the project changed elsewhere (an accepted AI proposal): show it
-  useEffect(() => { setRows(saved.map(toRow)); }, [savedKey]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setRows(saved.map(toRow)); setTrial({}); }, [savedKey]);   // eslint-disable-line react-hooks/exhaustive-deps
   const loadUses = () => projectApi.parameterUses(project.id).then(setUses).catch(() => {});
   useEffect(() => { void loadUses(); }, [project.id, savedKey]);   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -84,31 +103,66 @@ export function ProjectParameters({ project, onSaved }: { project: ProjectDetail
   };
   const change = (i: number, patch: Partial<Row>) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   const remove = (i: number) => { const next = rows.filter((_, j) => j !== i); setRows(next); void save(next); };
+  const savedNumber = (r: Row): number | null => {
+    const p = r.was ? saved.find((q) => q.name === r.was) : undefined;
+    return p && typeof p.value === 'number' ? p.value : null;
+  };
+  const tried = Object.entries(trial).filter(([n, v]) => saved.some((p) => p.name === n && p.value !== v));
+  const applyTrial = () => {
+    const next = rows.map((r) => (r.was && r.was in trial ? { ...r, value: String(trial[r.was]) } : r));
+    setRows(next); setTrial({});
+    void save(next);
+  };
+  const setRange = (i: number, range: SavedRange | null) => {
+    const next = rows.map((r, j) => (j === i ? { ...r, min: range?.min ?? null, max: range?.max ?? null, step: range?.step ?? null } : r));
+    setRows(next); void save(next);
+  };
 
   const cell: CSSProperties = {
     width: '100%', background: 'transparent', border: '1px solid transparent', borderRadius: 5, color: t.text,
     fontFamily: SANS, fontSize: '13px', padding: '4px 6px', outline: 'none',
   };
-  const focus = (e: React.FocusEvent<HTMLInputElement | HTMLSelectElement>) => { e.currentTarget.style.borderColor = t.accent; };
+  const focus = (e: React.FocusEvent<HTMLInputElement | HTMLSelectElement>) => {
+    e.currentTarget.style.borderColor = t.accent; e.currentTarget.dataset.lit = '1';
+  };
   const th: CSSProperties = { textAlign: 'left', fontFamily: MONO, fontSize: '10.5px', letterSpacing: '1px', color: t.textMute, fontWeight: 500, padding: '8px 8px 6px' };
 
   return (
-    <div style={{ border: `1px solid ${t.border}`, borderRadius: 12, background: t.surface, marginBottom: 32, overflow: 'hidden' }}>
+    <div style={{ border: `1px solid ${t.border}`, borderRadius: 12, background: t.surface, marginBottom: 32 }}>
+      {tried.length > 0 && (
+        <div role="status" aria-label="Values being tried"
+             style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderBottom: `1px solid ${t.border}`,
+                      background: t.accentSoft, fontSize: '12.5px', color: t.text, borderRadius: '12px 12px 0 0' }}>
+          <span style={{ flex: 1 }}>
+            <span style={{ fontFamily: MONO }}>
+              {tried.map(([n, v]) => `${n} ${fmt(saved.find((p) => p.name === n)?.value)} → ${fmt(v)}`).join(', ')}
+            </span>
+            , not saved. {affectsWords(tried.map(([n]) => n), uses)}
+          </span>
+          <button onClick={() => setTrial({})}
+            style={{ padding: '4px 10px', borderRadius: 6, fontSize: '12px', cursor: 'pointer', background: t.surface,
+                     color: t.textDim, border: `1px solid ${t.border2}` }}>Reset</button>
+          <button onClick={applyTrial}
+            style={{ padding: '4px 10px', borderRadius: 6, fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+                     background: t.accent, color: '#fff', border: 'none' }}>Apply</button>
+        </div>
+      )}
       {rows.length > 0 && (
         <table style={{ width: '100%', borderCollapse: 'collapse' }}
                onBlur={(e) => {
                  // left a row (not just moved between its cells): save
                  const tr = (e.target as HTMLElement).closest('tr');
                  if (!tr || !tr.contains(e.relatedTarget as Node | null)) void save(rows);
-                 (e.target as HTMLElement).style.borderColor = 'transparent';
+                 const el = e.target as HTMLElement;
+                 if (el.dataset.lit) { el.style.borderColor = 'transparent'; delete el.dataset.lit; }
                }}>
           <thead>
             <tr style={{ borderBottom: `1px solid ${t.border}`, background: t.surface2 }}>
               <th style={{ ...th, width: '24%' }}>NAME</th>
-              <th style={{ ...th, width: '14%' }}>VALUE</th>
+              <th style={{ ...th, width: '20%' }}>VALUE</th>
               <th style={{ ...th, width: '10%' }}>UNIT</th>
               <th style={th}>DESCRIPTION</th>
-              <th style={{ ...th, width: '22%' }}>USED BY</th>
+              <th style={{ ...th, width: '20%' }}>USED BY</th>
               <th style={{ width: 32 }} />
             </tr>
           </thead>
@@ -119,9 +173,23 @@ export function ProjectParameters({ project, onSaved }: { project: ProjectDetail
                   <input aria-label="Name" style={{ ...cell, fontFamily: MONO }} value={r.name} placeholder="arm_od" onFocus={focus}
                          onChange={(e) => change(i, { name: e.target.value })} title={`Scripts read it as PP["${r.name || 'name'}"]`} />
                 </td>
-                <td style={{ padding: '2px 4px' }}>
-                  <input aria-label="Value" style={{ ...cell, fontFamily: MONO }} value={r.value} placeholder="30" onFocus={focus}
-                         onChange={(e) => change(i, { value: e.target.value })} />
+                <td style={{ padding: '4px 6px' }}>
+                  {(() => {
+                    const sv = savedNumber(r);
+                    // a saved number gets the slider; a new row or a text value is typed
+                    if (sv == null || typeof parseValue(r.value) !== 'number') {
+                      return <input aria-label="Value" style={{ ...cell, fontFamily: MONO }} value={r.value} placeholder="30" onFocus={focus}
+                                    onChange={(e) => change(i, { value: e.target.value })} />;
+                    }
+                    return (
+                      <ParamControl value={trial[r.was!] ?? sv} saved={sv} unit={r.unit} range={r}
+                        onChange={(v) => setTrial((tr) => {
+                          const { [r.was!]: _drop, ...rest } = tr;
+                          return v === sv ? rest : { ...tr, [r.was!]: v };
+                        })}
+                        onRange={(range) => setRange(i, range)} />
+                    );
+                  })()}
                 </td>
                 <td style={{ padding: '2px 4px' }}>
                   <select aria-label="Unit" style={cell} value={r.unit} onFocus={focus}

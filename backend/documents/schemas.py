@@ -82,6 +82,35 @@ class DocumentListOut(Schema):
     # what changed, e.g. ['SK["frame"] changed'] (modeling/shared_defs.stale)
     stale: list[str] = []
     pinned: bool = False   # restored to an old version's sketches and parameters
+    # (sketches) "generated" when code makes it, else "drawn"
+    source: str = "drawn"
+    # (generated sketches) its outputs' names and how many checks fail
+    outputs: list[str] = []
+    failing_checks: int = 0
+
+    @staticmethod
+    def resolve_source(obj) -> str:
+        data = obj.data if isinstance(obj.data, dict) else {}
+        return "generated" if data.get("source") == "generated" else "drawn"
+
+    @staticmethod
+    def _generated(obj) -> dict:
+        data = obj.data if isinstance(obj.data, dict) else {}
+        if data.get("source") != "generated":
+            return {}
+        s = next((s for s in data.get("sketches") or [] if isinstance(s, dict)), {})
+        g = s.get("generated")
+        return g if isinstance(g, dict) else {}
+
+    @staticmethod
+    def resolve_outputs(obj) -> list[str]:
+        return [o["name"] for o in DocumentListOut._generated(obj).get("outputs") or []
+                if isinstance(o, dict) and isinstance(o.get("name"), str)]
+
+    @staticmethod
+    def resolve_failing_checks(obj) -> int:
+        return sum(1 for c in DocumentListOut._generated(obj).get("checks") or []
+                   if isinstance(c, dict) and not c.get("ok"))
 
     @staticmethod
     def resolve_stale(obj) -> list[str]:

@@ -26,6 +26,16 @@ export interface DocCardData {
   stale?: string[];
   /** (parts) built with a restored version's sketches and parameters */
   pinned?: boolean;
+  /** (sketches) made by code rather than drawn */
+  generated?: boolean;
+  /** (generated sketches) its outputs' names, and how many of its checks fail */
+  outputs?: string[];
+  failingChecks?: number;
+}
+
+/** "plate_outline, brace_holes, +5" */
+export function outputsLine(names: string[], shown = 2): string {
+  return names.length > shown ? `${names.slice(0, shown).join(', ')}, +${names.length - shown}` : names.join(', ');
 }
 
 export interface DocCardEdit {
@@ -112,7 +122,7 @@ export function DocCard({ d, onOpen, onDoubleClick, onRename, onDescribe, onDupl
         <span style={{ position: 'absolute', top: 9, left: 9, zIndex: 2, fontFamily: MONO, fontSize: '9.5px',
                        fontWeight: 600, letterSpacing: '1px', color: badgeColor, background: badgeBg,
                        border: `1px solid ${badgeColor}`, borderRadius: 5, padding: '2px 6px' }}>
-          {isPart ? 'PART' : 'SKETCH'}
+          {isPart ? 'PART' : d.generated ? 'GENERATED' : 'SKETCH'}
         </span>
         {(d.pinned || !!d.stale?.length) && (
           <span title={d.pinned ? 'Built with the sketches and parameters of a restored version (Follow latest, in the part, unpins it)'
@@ -121,6 +131,14 @@ export function DocCard({ d, onOpen, onDoubleClick, onRename, onDescribe, onDupl
                      letterSpacing: '0.5px', color: d.pinned ? t.violet : t.danger, background: d.pinned ? t.violetSoft : t.surface,
                      border: `1px solid ${d.pinned ? t.violet : t.danger}`, borderRadius: 5, padding: '2px 6px' }}>
             {d.pinned ? 'PINNED' : 'OUT OF DATE'}
+          </span>
+        )}
+        {!!d.failingChecks && (
+          <span title="Open the sketch to see which of its checks fail"
+            style={{ position: 'absolute', bottom: 9, left: 9, zIndex: 2, fontFamily: MONO, fontSize: '9.5px', fontWeight: 600,
+                     letterSpacing: '0.5px', color: t.danger, background: t.surface, border: `1px solid ${t.danger}`,
+                     borderRadius: 5, padding: '2px 6px' }}>
+            {d.failingChecks === 1 ? '1 CHECK FAILS' : `${d.failingChecks} CHECKS FAIL`}
           </span>
         )}
         {d.thumbnail
@@ -152,6 +170,12 @@ export function DocCard({ d, onOpen, onDoubleClick, onRename, onDescribe, onDupl
             {d.description}
           </div>
         ) : null}
+        {d.generated && (
+          <div title={d.outputs?.length ? `Parts use its outputs: ${d.outputs.join(', ')}` : 'It has no outputs yet'}
+            style={{ fontFamily: MONO, fontSize: '11px', color: t.textDim, marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {d.outputs?.length ? `outputs: ${outputsLine(d.outputs)}` : 'no outputs yet'}
+          </div>
+        )}
         <div style={{ fontFamily: MONO, fontSize: '11px', color: t.textMute, marginTop: 5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {d.subtitle ? `${d.subtitle} · ${d.updated}` : d.updated}
         </div>

@@ -136,6 +136,11 @@ export interface DocumentListItem {
   stale?: string[];
   /** (parts) built with a restored version's inputs, not the latest */
   pinned?: boolean;
+  /** (sketches) made by code ("generated") or drawn */
+  source?: 'drawn' | 'generated';
+  /** (generated sketches) its outputs' names, and how many of its checks fail */
+  outputs?: string[];
+  failing_checks?: number;
 }
 
 /** A part that uses one of a sketch document's sketches (documents/api used-by). */
@@ -912,4 +917,61 @@ export interface ResolveResponse {
   indices?: number[];
   rationale?: string;
   question?: string;
+}
+
+/** Generated sketches (backend modeling/sketch_api.py). */
+export const sketchApi = {
+  /** A new generated sketch in the project (run once), or `from_document`:
+   *  an empty drawn sketch made generated in place (created false), any other
+   *  gets a new document. Blank code: the starter. */
+  create(body: { project_id?: string | null; name?: string; code?: string; from_document?: string }):
+    Promise<import('@/types/generated').GenDoc & { created: boolean }> {
+    return request('/sketches/create', { method: 'POST', body: JSON.stringify(body) });
+  },
+  /** Run with other parameter values (or unsaved code); saves nothing. */
+  run(id: string, body: { code?: string; pp?: Record<string, number | string> }):
+    Promise<{ result: import('@/types/generated').GenRunResult; broken: import('@/types/generated').BrokenOutput[] }> {
+    return request(`/sketches/${id}/run`, { method: 'POST', body: JSON.stringify({ pp: {}, ...body }) });
+  },
+  /** Save the code (the old code becomes a revert point) and run it. When it
+   *  would drop outputs parts use, nothing is saved unless `confirm`. */
+  saveCode(id: string, body: { code: string; label?: string; confirm?: boolean }):
+    Promise<{ saved: false; broken: import('@/types/generated').BrokenOutput[]; result: import('@/types/generated').GenRunResult }
+      | (import('@/types/generated').GenDoc & { saved: true; broken: import('@/types/generated').BrokenOutput[];
+                                                result: import('@/types/generated').GenRunResult })> {
+    return request(`/sketches/${id}/code`, { method: 'PUT', body: JSON.stringify(body) });
+  },
+  saveChat(id: string, chat: unknown[]): Promise<{ ok: boolean }> {
+    return request(`/sketches/${id}/chat`, { method: 'PUT', body: JSON.stringify({ chat }) });
+  },
+  /** One turn of a sketch's chat, drawn or generated. Saves nothing: an edit
+   *  is saved with saveCode, a proposed generated sketch made with create. */
+  ask(id: string, body: { instruction: string; history: { role: string; text: string }[]; model?: string;
+                          skip_context?: string[]; mentions?: string[] }): Promise<SketchAskResponse> {
+    return request(`/sketches/${id}/ask`, { method: 'POST', body: JSON.stringify(body) });
+  },
+};
+
+/** The sketch chat's reply: new code for a generated sketch (run, not saved;
+ *  `broken`: outputs parts use it no longer makes), a generated sketch offered
+ *  in a drawn one, an answer or a question. Spend fields for staff only. */
+export interface SketchAskResponse {
+  kind: 'edit' | 'proposal' | 'answer' | 'question';
+  code?: string;
+  note?: string;
+  result?: import('@/types/generated').GenRunResult;
+  broken?: import('@/types/generated').BrokenOutput[];
+  parameter_proposals?: (import('@/types/project').ProjectParameter & { reason: string })[];
+  brief_proposal?: { text: string; reason: string };
+  sentence?: string;
+  name?: string;
+  /** (proposal) the drawn sketch is empty: it becomes the generated one */
+  empty?: boolean;
+  question?: string;
+  answer?: string;
+  context_files: string[];
+  tokens_in?: number;
+  tokens_out?: number;
+  cache_read_tokens?: number;
+  cost_usd?: number;
 }

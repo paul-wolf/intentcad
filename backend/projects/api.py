@@ -138,6 +138,13 @@ def check_parameters(params: list[dict]) -> str | None:
         seen.add(name)
         if isinstance(p.get("value"), str) and not p["value"].strip():
             return f"{name!r} has no value"
+        lo, hi, step = p.get("min"), p.get("max"), p.get("step")
+        if (lo is not None or hi is not None or step is not None) and isinstance(p.get("value"), str):
+            return f"{name!r} is text, so it has no slider range"
+        if lo is not None and hi is not None and lo >= hi:
+            return f"{name!r}: the slider's lowest value must be below its highest"
+        if step is not None and step <= 0:
+            return f"{name!r}: the slider's step must be above 0"
     return None
 
 
@@ -157,7 +164,9 @@ def save_parameters(request, project_id: UUID, payload: ParametersIn):
     if err:
         return err
     params = [{"name": p.name.strip(), "value": p.value, "unit": p.unit.strip(),
-               "description": p.description.strip()} for p in payload.parameters]
+               "description": p.description.strip(),
+               **{k: getattr(p, k) for k in ("min", "max", "step") if getattr(p, k) is not None}}
+              for p in payload.parameters]
     why = check_parameters(params)
     if why:
         return 400, {"message": why}
@@ -173,6 +182,11 @@ def save_parameters(request, project_id: UUID, payload: ParametersIn):
         project.parameters = params
         project.save(update_fields=["parameters", "updated_at"])
         rename(project, renames)
+    # generated sketches that read a changed value run again now, so the parts
+    # that use them show as out of date (and build from the new shapes)
+    from modeling.generated_sketch import rerun_for_project
+
+    rerun_for_project(project)
     return project
 
 

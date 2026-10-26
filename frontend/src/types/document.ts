@@ -396,6 +396,9 @@ export interface Document {
   sketches: Sketch[];
   activeSketchId: string;
   parameters?: Record<string, number>;
+  /** slider ranges for the part's P values or the sketch's own parameters
+   *  (absent: automatic, utils/paramRange) */
+  paramRanges?: Record<string, import('@/utils/paramRange').SavedRange>;
   metadata?: DocumentMetadata;
   /** The 3D build feature tree (legacy op-list modeler). */
   buildFeatures?: import('@/api/client').BuildFeature[];
@@ -435,6 +438,14 @@ export interface ChatMessage {
   /** (assistant) project parameters it proposed (PP["name"]), to accept or reject */
   params?: { items: (import('./project').ProjectParameter & { reason: string })[]; status: 'pending' | 'accepted' | 'rejected' };
   code?: string;                // (assistant edit) the resulting script — a checkpoint
+  /** (sketch chat, drawn) a generated sketch it offers: outputs as "name (size)",
+   *  checks in words; the user makes it or declines */
+  proposal?: { name: string; code: string; empty: boolean; outputs: string[]; checks: string;
+               status: 'pending' | 'accepted' | 'declined' };
+  /** (sketch chat, generated) new code that stops making outputs parts use:
+   *  saved only when the user says so */
+  held?: { code: string; label: string; broken: { name: string; parts: string[] }[];
+           status: 'pending' | 'applied' | 'kept' };
   files?: string[];             // (user) the titles of the context files sent with it
   usage?: string;               // (assistant) tokens and cost of the call, cached input included
   at: number;

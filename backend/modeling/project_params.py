@@ -3,7 +3,8 @@ each one (the project page's Used by), names a sketch also has as its own
 parameter, and renaming one everywhere it is used.
 
 A part uses a parameter through its script (PP["name"]) or through a project
-sketch it reads (SK["alias"]) whose dimensions use it by name.
+sketch it reads (SK["alias"]) whose dimensions use it by name, or whose code
+reads it (a generated sketch).
 """
 from __future__ import annotations
 
@@ -129,6 +130,16 @@ def rename(project, renames: dict[str, str]) -> list[str]:
                 d.last_build = {**lb, "inputs": {**lb["inputs"], "pp": _keys(lb["inputs"]["pp"], renames)}}
                 Document.objects.filter(id=d.id).update(last_build=d.last_build)
         else:
+            if shared_defs.is_generated(d) and isinstance(data.get("code"), str):
+                code = out = data["code"]
+                for o, n in renames.items():
+                    out = _pp_rename(out, o, n)
+                if out != code:
+                    hist = data.get("codeHistory") if isinstance(data.get("codeHistory"), list) else []
+                    new["code"] = out
+                    new["codeHistory"] = [*hist, {"code": code, "at": int(time.time() * 1000),
+                                                  "label": "before renaming " + ", ".join(
+                                                      f"{o} to {n}" for o, n in renames.items())}][-60:]
             own = shared_defs.own_params(d)
             sketches = []
             for s in data.get("sketches") or []:
@@ -147,6 +158,9 @@ def rename(project, renames: dict[str, str]) -> list[str]:
                             e = {**e, "expression": expr}
                     ents.append(e)
                 s["entities"] = ents
+                gen = s.get("generated")
+                if isinstance(gen, dict) and isinstance(gen.get("reads"), dict):
+                    s["generated"] = {**gen, "reads": _keys(gen["reads"], renames)}
                 if isinstance(s.get("solvedWith"), dict):
                     s["solvedWith"] = _keys(s["solvedWith"], renames)
                 if isinstance(s.get("solveError"), dict) and isinstance(s["solveError"].get("with"), dict):

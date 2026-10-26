@@ -28,6 +28,7 @@ const KNOWN = new Set([
   'Sketch', 'Circle', 'Rectangle', 'Polyline', 'Line', 'Ellipse', 'RegularPolygon',
   'fillet', 'chamfer', 'extrude', 'revolve', 'loft', 'sweep', 'mirror', 'offset',
   'part', 'result',
+  'PP', 'P', 'SK', 'output', 'check', 'label', 'dim', 'holes',
   'dict', 'list', 'tuple', 'set', 'range', 'len', 'abs', 'min', 'max', 'round',
   'sum', 'enumerate', 'zip', 'map', 'filter', 'sorted', 'print', 'float', 'int',
   'str', 'bool',

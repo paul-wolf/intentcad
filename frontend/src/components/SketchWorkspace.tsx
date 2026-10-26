@@ -52,6 +52,8 @@ interface SketchWorkspaceProps {
   right?: ReactNode;
   /** Extra content inside the drawing row, over the canvas. */
   overlay?: ReactNode;
+  /** A column after the right panels (the sketch chat). */
+  aside?: ReactNode;
 }
 
 function createTool(type: ToolType): Tool {
@@ -106,6 +108,7 @@ export function SketchWorkspace({
   left,
   right,
   overlay,
+  aside,
 }: SketchWorkspaceProps) {
   const activeTool = useEditorStore((s) => s.activeTool);
   const setActiveTool = useEditorStore((s) => s.setActiveTool);
@@ -186,6 +189,7 @@ export function SketchWorkspace({
         />
         {overlay}
         {right ?? <><DocumentPropertiesPanel /><RightPanel /></>}
+        {aside}
       </div>
       <LogPanel />
       <StatusBar />

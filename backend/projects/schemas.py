@@ -31,6 +31,11 @@ class ProjectParameter(Schema):
     value: float | str
     unit: str = ""          # "mm", "deg" or "" (a count, or text)
     description: str = ""
+    # the slider's range (the number field can go beyond it); none: about
+    # 0.5× to 2× the value
+    min: float | None = None
+    max: float | None = None
+    step: float | None = None
 
 
 class ParametersIn(Schema):

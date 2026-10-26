@@ -42,6 +42,8 @@ from documents.models import Document, document_kind
 from .engine import pp_names, sk_aliases
 
 GROUP_USE = re.compile(r"""\.(group|named)\(\s*(["'])(.+?)\2""")
+GROUP_BY_NAME = re.compile(r"""\.(group|named)\(\s*[^\s"')]""")     # .group(g): the name is in a variable
+QUOTED = re.compile(r"""(["'])([^"'\n]+?)\1""")
 IDENT = re.compile(r"(?<![\w.])[A-Za-z_][A-Za-z0-9_]*")
 
 
@@ -127,9 +129,21 @@ def sketch_pp(sk_doc, sketch: dict, params: dict) -> list[str]:
     solved with that have since been deleted."""
     if sk_doc is None or not sk_doc.project_id:
         return []
-    own = own_params(sk_doc)
     solved = sketch.get("solvedWith") if isinstance(sketch.get("solvedWith"), dict) else {}
+    if is_generated(sk_doc):
+        # what its code reads: its last run's reads and PP["…"] in the code
+        gen = sketch.get("generated") if isinstance(sketch.get("generated"), dict) else {}
+        reads = gen.get("reads") if isinstance(gen.get("reads"), dict) else {}
+        code = _data(sk_doc).get("code")
+        names = set(reads) | set(pp_names(code if isinstance(code, str) else "")) | set(solved)
+        return sorted(n for n in names if n in params or n in solved)
+    own = own_params(sk_doc)
     return sorted(n for n in expression_names(sketch) if n not in own and (n in params or n in solved))
+
+
+def is_generated(sk_doc) -> bool:
+    """A sketch document made by code (see modeling/generated_sketch.py)."""
+    return _data(sk_doc).get("source") == "generated"
 
 
 def sketch_title(sk_doc, sketch: dict) -> str:
@@ -161,6 +175,9 @@ def sketch_state(sk_doc, sketch: dict, params: dict) -> dict | None:
                 "message": f"{sketch_title(sk_doc, sketch)!r} can't be solved with {words}: "
                            f"{err.get('message') or 'its dimensions conflict'}"
                            + (f" (it keeps its shapes for {was})" if was else "")}
+    if is_generated(sk_doc):
+        return {"state": "pending", "names": changed, "held": {},
+                "message": f"{sketch_title(sk_doc, sketch)!r} hasn't been run for {words} yet"}
     return {"state": "pending", "names": changed, "held": {},
             "message": f"{sketch_title(sk_doc, sketch)!r} hasn't been solved for {words} yet: "
                        "open it, or a part that uses it, so the editor solves it"}
@@ -221,13 +238,25 @@ def resolve(code: str, part, user=None, refs: dict | None = None, pinned: dict |
             errors[alias] = (f"SK[{alias!r}]: {sk_doc.name!r} no longer has that sketch "
                              "(it was deleted; Use project sketch… to pick another)")
             continue
+        if sk_doc.project_id not in project_params:
+            project_params[sk_doc.project_id] = params_of(sk_doc.project) if sk_doc.project_id else {}
+        if is_generated(sk_doc):
+            # the server runs generated sketches: one not yet run for the
+            # project's parameters runs now (parts never run its code)
+            from .generated_sketch import rerun_if_pending
+
+            if rerun_if_pending(sk_doc, project_params[sk_doc.project_id]):
+                s = find_sketch(sk_doc, ref.get("sketch")) or s
         profile = s.get("profile")
         if not isinstance(profile, dict) or "items" not in profile:
+            if is_generated(sk_doc):
+                err = (s.get("generated") or {}).get("error") or {}
+                errors[alias] = (f"SK[{alias!r}]: {sk_doc.name!r} hasn't made anything yet"
+                                 + (f": its code fails ({err.get('message')})" if err.get("message") else ""))
+                continue
             errors[alias] = (f"SK[{alias!r}]: open {sk_doc.name!r} once in the sketch editor, "
                              "so it saves its shapes for parts to use")
             continue
-        if sk_doc.project_id not in project_params:
-            project_params[sk_doc.project_id] = params_of(sk_doc.project) if sk_doc.project_id else {}
         state = sketch_state(sk_doc, s, project_params[sk_doc.project_id])
         if state:
             unsolved[alias] = {"document": str(sk_doc.id), "sketch": s.get("id"),
@@ -307,11 +336,16 @@ def used_by(sk_doc) -> list[dict]:
     """The parts that use any of `sk_doc`'s sketches: [{id, name, uses:
     [{alias, sketch, groups, names}], stale}]. Groups and names are those the
     part's script asks for by .group("…") / .named("…"), any alias (so the
-    sketch editor can warn before one goes)."""
+    sketch editor can warn before one goes); with .group(g), any quoted name
+    of one of the sketch's groups counts (for g in ("holes", "slots"): …)."""
     qs = Document.objects.select_related("project")
     qs = (qs.filter(project_id=sk_doc.project_id) if sk_doc.project_id
           else qs.filter(project__isnull=True, created_by_id=sk_doc.created_by_id))
     out, doc_id, docs = [], str(sk_doc.id), {str(sk_doc.id): sk_doc}
+    sketches = [k for k in _data(sk_doc).get("sketches") or [] if isinstance(k, dict)]
+    known = {"group": {g.get("name") for k in sketches for g in k.get("groups") or [] if isinstance(g, dict)},
+             "named": {e.get("name") for k in sketches for e in k.get("entities") or []
+                       if isinstance(e, dict) and e.get("name")}}
     for d in qs.exclude(id=sk_doc.id).order_by("name"):
         data = _data(d)
         if document_kind(data) != "part":
@@ -326,6 +360,8 @@ def used_by(sk_doc) -> list[dict]:
         asked = {"group": set(), "named": set()}
         for m in GROUP_USE.finditer(code):
             asked[m.group(1)].add(m.group(3))
+        for kind in {m.group(1) for m in GROUP_BY_NAME.finditer(code)}:
+            asked[kind] |= {m.group(2) for m in QUOTED.finditer(code)} & known[kind]
         out.append({
             "id": str(d.id), "name": d.name,
             "uses": [{"alias": a, "sketch": r.get("sketch"), "in_script": a in aliases,
