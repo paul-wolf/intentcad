@@ -388,7 +388,7 @@ export function GeneratedSketchEditor({ id }: { id: string }) {
           {errorBox}
           {tab === 'drawing' ? (
             <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-              <SketchDrawing entities={entities} notes={notes} outputs={outputs} users={users} lit={lit}
+              <SketchDrawing entities={entities} notes={notes} outputs={outputs} checks={checks} users={users} lit={lit}
                 onHover={setHover} onPick={setPicked} dimmed={dimmed} fitKey={fitKey}
                 hint={hint} onEditAttempt={editAttempt} />
             </div>
