@@ -38,16 +38,12 @@ SERVER_KEYS = ("source", "code", "codeHistory", "sketches", "activeSketchId")
 HISTORY = 60
 
 STARTER = '''\
-# A generated sketch: this code draws it. Parts use each output by name:
-# SK["this sketch"].group("plate").
-w = 120
-h = 80
-plate = Rectangle(w, h)
-output("plate", plate, "the outline")
-output("holes", holes([(x, y) for x in (-w / 2 + 8, w / 2 - 8) for y in (-h / 2 + 8, h / 2 - 8)], 3.4),
-       "4 corner holes")
-dim((-w / 2, -h / 2 - 6), (w / 2, -h / 2 - 6))
-check("fits a 256 mm bed", max(w, h) <= 256, f"{max(w, h):g} mm", output="plate")
+# Code that draws this sketch. Parts use what it outputs.
+# PP["name"] reads a project parameter.
+# output("name", shapes) gives parts SK[...].group("name").
+# check(...), label(...), dim(...) add checks and notes to the drawing.
+
+output("outline", Rectangle(80, 60))
 '''
 
 

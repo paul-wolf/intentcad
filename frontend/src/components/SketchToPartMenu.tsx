@@ -41,23 +41,47 @@ export function SketchToPartMenu() {
           </button>
         ))}
       </div>
-      {op && <TargetDialog op={op} docId={backendId} projectId={projectId} onClose={() => setOp(null)} />}
+      {op && <DrawnTargetDialog op={op} docId={backendId} projectId={projectId} onClose={() => setOp(null)} />}
     </>
   );
 }
 
-function TargetDialog({ op, docId, projectId, onClose }: { op: HandoffOp; docId: string; projectId: string; onClose: () => void }) {
-  const palette = useThemeStore((s) => s.palette);
-  const navigate = useNavigate();
+/** One of the shapes a part can take from the sketch: the whole sketch, a
+ *  group (a generated sketch's output) or a named element. */
+export interface PickOption { key: string; label: string; pick: SkPick }
+
+/** The drawn sketch open in the editor: its picks, the selection's group. */
+function DrawnTargetDialog({ op, docId, projectId, onClose }: { op: HandoffOp; docId: string; projectId: string; onClose: () => void }) {
   const sketch = useDocumentStore((s) => s.getActiveSketch())!;
   const sketches = useDocumentStore((s) => s.document.sketches);
   const docName = useDocumentStore((s) => s.document.name);
   const selected = useEditorStore((s) => s.selectedEntityIds);
+  const [initial] = useState<SkPick>(() => pickFor(sketch, [...selected]));
+  const picks: PickOption[] = [
+    { key: '', label: 'The whole sketch', pick: null },
+    ...(sketch.groups ?? []).map((g) => ({ key: `g:${g.name}`, label: `Group: ${g.name}`, pick: { kind: 'group' as const, name: g.name } })),
+    ...sketch.entities.filter((e) => e.name?.trim()).map((e) => ({ key: `n:${e.name!.trim()}`, label: `Named: ${e.name!.trim()}`, pick: { kind: 'named' as const, name: e.name!.trim() } })),
+  ];
+  return (
+    <TargetDialog op={op} docId={docId} projectId={projectId} sketchId={sketch.id} sketchName={sketch.name}
+      title={sketches.length === 1 ? docName : sketch.name} picks={picks} initialPick={initial}
+      flush={flushSaveAsync} onClose={onClose} />
+  );
+}
+
+/** Pick the parts to do `op` to (or a new part) and hand it to the part
+ *  editor. `title`: what the sketch is called in the project. `flush`: save
+ *  the sketch first (the parts read it as saved). */
+export function TargetDialog({ op, docId, projectId, sketchId, sketchName, title, picks, initialPick, flush, onClose }: {
+  op: HandoffOp; docId: string; projectId: string; sketchId: string; sketchName: string; title: string;
+  picks: PickOption[]; initialPick: SkPick; flush?: () => Promise<unknown>; onClose: () => void;
+}) {
+  const palette = useThemeStore((s) => s.palette);
+  const navigate = useNavigate();
   const [docs, setDocs] = useState<DocumentListItem[] | null>(null);
   const [parts, setParts] = useState<Set<string>>(new Set());
   const [newPart, setNewPart] = useState(op !== 'cut');
-  const [pick, setPick] = useState<SkPick>(() => pickFor(sketch, [...selected]));
-  const title = sketches.length === 1 ? docName : sketch.name;   // what the sketch is called in the project
+  const [pick, setPick] = useState<SkPick>(initialPick);
   const alias = aliasFor(title);   // what the scripts call it; a part that has one keeps its own
   const [partName, setPartName] = useState(() => partNameFor(title));
   const [busy, setBusy] = useState(false);
@@ -71,11 +95,6 @@ function TargetDialog({ op, docId, projectId, onClose }: { op: HandoffOp; docId:
   }, [projectId]);
 
   const toggle = (id: string) => setParts((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-  const picks: { key: string; label: string; pick: SkPick }[] = [
-    { key: '', label: 'The whole sketch', pick: null },
-    ...(sketch.groups ?? []).map((g) => ({ key: `g:${g.name}`, label: `Group: ${g.name}`, pick: { kind: 'group' as const, name: g.name } })),
-    ...sketch.entities.filter((e) => e.name?.trim()).map((e) => ({ key: `n:${e.name!.trim()}`, label: `Named: ${e.name!.trim()}`, pick: { kind: 'named' as const, name: e.name!.trim() } })),
-  ];
   const pickKey = pick ? `${pick.kind === 'group' ? 'g' : 'n'}:${pick.name}` : '';
   const chosen = (docs ?? []).filter((d) => parts.has(d.id));
   const count = chosen.length + (newPart ? 1 : 0);
@@ -84,16 +103,16 @@ function TargetDialog({ op, docId, projectId, onClose }: { op: HandoffOp; docId:
   const start = async () => {
     setBusy(true);
     try {
-      await flushSaveAsync();   // the parts read the sketch as saved
+      await flush?.();   // the parts read the sketch as saved
       const list: Handoff['parts'] = chosen.map((d) => ({ id: d.id, name: d.name }));
       if (newPart) {
         const want = partName.trim();
         const name = (docs ?? []).some((d) => d.name === want) ? generateNumberedName(want, (docs ?? []).map((d) => d.name)) : want;
-        const doc = { ...createEmptyPart(name), sketchRefs: { [alias]: { document: docId, sketch: sketch.id } } };
+        const doc = { ...createEmptyPart(name), sketchRefs: { [alias]: { document: docId, sketch: sketchId } } };
         const saved = await api.createDocument(name, doc as unknown as Record<string, unknown>, projectId);
         list.unshift({ id: saved.id, name, isNew: true });
       }
-      saveHandoff({ op, sketchDoc: docId, sketchId: sketch.id, sketchName: sketch.name, alias, pick,
+      saveHandoff({ op, sketchDoc: docId, sketchId, sketchName, alias, pick,
                     parts: list, at: 0, done: [], skipped: [] });
       navigate(`/part/${list[0]!.id}`);
     } catch (e) {

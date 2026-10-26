@@ -166,8 +166,9 @@ def _flatten(g, what: str, out: list) -> None:
 
 
 def _bulge(s: dict) -> float:
-    """A three-point arc as a polyline bulge (tan of a quarter of its angle;
-    positive bulges to the left of start → end, as utils/arcGeometry.ts)."""
+    """A three-point arc as a polyline bulge (tan of a quarter of its angle),
+    signed as utils/arcGeometry.ts: positive when the arc's middle is on the
+    side of (dy, -dx) from start → end, in sketch (y-down) coordinates."""
     if s["t"] != "arc":
         return 0.0
     (ax, ay), (mx, my), (bx, by) = s["p"]
@@ -176,7 +177,7 @@ def _bulge(s: dict) -> float:
     if d < 1e-12:
         return 0.0
     side = (mx - (ax + bx) / 2) * (-dy / d) + (my - (ay + by) / 2) * (dx / d)
-    return _r(2 * side / d)
+    return _r(-2 * side / d)
 
 
 def _entity(eid: str, kind: str, segs: list[dict], name: str = "") -> dict:

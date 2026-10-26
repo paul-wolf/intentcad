@@ -53,6 +53,23 @@ class RunTests(SimpleTestCase):
         self.assertEqual(len(p["items"]["circles"]), 2)
         self.assertTrue(all(e["generated"] for e in r["entities"]))
 
+    def test_arcs_bulge_the_way_the_editor_draws_them(self):
+        r = run_sketch_code('output("r", RectangleRounded(20, 10, 3))\n', {})
+        e, loop = r["entities"][0], r["profile"]["loops"][0]
+        pts = e["points"] + [e["points"][0]]
+        arcs = 0
+        for i, seg in enumerate(loop):
+            if seg["t"] != "arc":
+                continue
+            arcs += 1
+            (ax, ay), (bx, by), b = (pts[i]["x"], pts[i]["y"]), (pts[i + 1]["x"], pts[i + 1]["y"]), e["bulge"][i]
+            d = math.hypot(bx - ax, by - ay)
+            # utils/arcGeometry.ts arcMidpoint
+            mid = ((ax + bx) / 2 + b * d / 2 * (by - ay) / d, (ay + by) / 2 - b * d / 2 * (bx - ax) / d)
+            self.assertAlmostEqual(mid[0], seg["p"][1][0], places=3)
+            self.assertAlmostEqual(mid[1], seg["p"][1][1], places=3)
+        self.assertEqual(arcs, 4)
+
     def test_an_error_says_where(self):
         r = run_sketch_code(LAYOUT, {"w": 300})
         self.assertFalse(r["ok"])
@@ -295,6 +312,19 @@ class StorageTests(GeneratedWorld):
         self.assertEqual(r["name"], "Layout (2)")
         self.holes.refresh_from_db()
         self.assertNotIn("source", self.holes.data)
+
+    def test_a_new_one_starts_with_an_outline(self):
+        r = self.post("/api/sketches/create", {"project_id": str(self.drone.id), "name": "Blank"}).json()
+        self.assertEqual([o["name"] for o in r["data"]["sketches"][0]["generated"]["outputs"]], ["outline"])
+
+    def test_the_project_list_says_generated_and_its_outputs(self):
+        self.layout.data["sketches"][0]["generated"]["checks"].append({"name": "x", "ok": False, "message": ""})
+        self.layout.save()
+        rows = {d["name"]: d for d in self.client.get(f"/api/documents/?project={self.drone.id}").json()}
+        self.assertEqual(rows["Layout"]["source"], "generated")
+        self.assertEqual(rows["Layout"]["outputs"], ["plate", "holes"])
+        self.assertEqual(rows["Layout"]["failing_checks"], 1)
+        self.assertEqual(rows["Frame holes"]["source"], "drawn")
 
     def test_the_chat_is_kept_without_moving_updated_at(self):
         self.layout.refresh_from_db()

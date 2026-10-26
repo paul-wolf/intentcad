@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useRef, useCallback, useSyncExternalStore } from 'react';
+import { useMemo, useEffect, useRef, useCallback, useState, useSyncExternalStore } from 'react';
 import { useParams } from 'react-router-dom';
 import { DocumentDrawer } from './DocumentDrawer';
 import { SketchWorkspace } from './SketchWorkspace';
@@ -20,6 +20,8 @@ import { projectApi } from '@/api/projectClient';
 import { migrateDocument } from '@/utils/document';
 import type { Document } from '@/types/document';
 import { addLog } from '@/stores/logStore';
+import { api as rawApi } from '@/api/client';
+import { GeneratedSketchEditor } from './generated/GeneratedSketchEditor';
 
 function SimDepthIndicator() {
   const simState = useCamStore((s) => s.simState);
@@ -161,7 +163,42 @@ function SimDepthIndicator() {
   );
 }
 
+/** A sketch document opens in the editor of its kind: drawn (the sketch
+ *  workspace) or generated (drawn by code: generated/GeneratedSketchEditor). */
 export function EditorPage() {
+  const { id } = useParams<{ id: string }>();
+  const kind = useSketchKind(id);
+  const palette = useThemeStore((s) => s.palette);
+  if (!id || !kind) return <div style={{ position: 'fixed', inset: 0, background: palette.background }} />;
+  return kind === 'generated' ? <GeneratedSketchEditor key={id} id={id} /> : <DrawnSketchEditor />;
+}
+
+const storeKind = (id: string | undefined) =>
+  id && getBackendId() === id
+    ? ((useDocumentStore.getState().document as { source?: string }).source === 'generated' ? 'generated' : 'drawn')
+    : null;
+
+/** 'drawn' or 'generated': from the document already open, or asked of the
+ *  server (null until it answers). */
+function useSketchKind(id: string | undefined): 'drawn' | 'generated' | null {
+  const [kind, setKind] = useState<{ id: string; kind: 'drawn' | 'generated' } | null>(() => {
+    const k = storeKind(id);
+    return id && k ? { id, kind: k } : null;
+  });
+  useEffect(() => {
+    if (!id) return;
+    const k = storeKind(id);
+    if (k) { setKind({ id, kind: k }); return; }
+    let live = true;
+    rawApi.getDocument(id)
+      .then((full) => { if (live) setKind({ id, kind: (full.data as { source?: string })?.source === 'generated' ? 'generated' : 'drawn' }); })
+      .catch(() => { if (live) setKind({ id, kind: 'drawn' }); });   // offline: the drawn editor has the local copy
+    return () => { live = false; };
+  }, [id]);
+  return kind && kind.id === id ? kind.kind : null;
+}
+
+function DrawnSketchEditor() {
   const { id } = useParams<{ id: string }>();
   const camPanelOpen = useCamStore((s) => s.camPanelOpen);
 
