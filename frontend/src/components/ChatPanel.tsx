@@ -15,6 +15,7 @@ import { chooseModel, modelsStale } from '@/build/modelList';
 import { insertMention, matchMentions, mentionQuery } from '@/utils/mentions';
 import { Markdown } from '@/ui/Markdown';
 import { ParameterProposalCard } from './ParameterProposalCard';
+import { cardKey, withCardStatus } from './cardAction';
 import { BriefProposalCard, MentionMenu } from './ProjectChat';
 import { ContextChips, type ContextStore, type CtxColors } from './ContextPane';
 
@@ -147,10 +148,16 @@ const paperclip = (size: number) => (
 /** The conversation. `fill`: it takes the column's height (else at most 30%
  *  of the window). An edit with code is a checkpoint: clicking it calls
  *  `onRevert`. `scrollKey`: a change keeps the latest message in view. */
-export function ChatHistory({ messages, asking, fill, box, palette, projectId, onPersist, onRevert, onParamsAccepted, scrollKey,
+export function ChatHistory({ messages, scope, asking, fill, box, palette, projectId, onChange, onRevert, onParamsAccepted, scrollKey,
                               revertTitle = 'Revert the model to this version', revertWords = '↩ click to revert here', card }: {
-  messages: ChatMessage[]; asking: boolean; fill: boolean; box: ChatBox; palette: ThemePalette;
-  projectId: string | null; onPersist: (messages: ChatMessage[]) => void; onRevert: (code: string) => void;
+  messages: ChatMessage[];
+  /** whose chat it is (the document id): its cards' saves are kept under it */
+  scope: string;
+  asking: boolean; fill: boolean; box: ChatBox; palette: ThemePalette;
+  projectId: string | null;
+  /** change the chat as it is when the change is made, and persist it */
+  onChange: (change: (messages: ChatMessage[]) => ChatMessage[]) => void;
+  onRevert: (code: string) => void;
   onParamsAccepted: () => void; scrollKey?: unknown; revertTitle?: string; revertWords?: string;
   /** a card of the editor's own under a message (the sketch chat's proposals) */
   card?: (m: ChatMessage, i: number) => ReactNode;
@@ -203,13 +210,13 @@ export function ChatHistory({ messages, asking, fill, box, palette, projectId, o
               </button>
             )}
             {m.params && (
-              <ParameterProposalCard params={m.params} projectId={projectId} palette={palette}
-                onStatus={(status) => onPersist(messages.map((x, j) => (j === i && x.params ? { ...x, params: { ...x.params, status } } : x)))}
+              <ParameterProposalCard params={m.params} projectId={projectId} palette={palette} actionKey={cardKey(scope, 'params', m.at)}
+                onStatus={(status) => onChange((ms) => withCardStatus(ms, m.at, 'params', status))}
                 onAccepted={onParamsAccepted} />
             )}
             {m.brief && (
-              <BriefProposalCard brief={m.brief} projectId={projectId} palette={palette}
-                onStatus={(status) => onPersist(messages.map((x, j) => (j === i && x.brief ? { ...x, brief: { ...x.brief, status } } : x)))} />
+              <BriefProposalCard brief={m.brief} projectId={projectId} palette={palette} actionKey={cardKey(scope, 'brief', m.at)}
+                onStatus={(status) => onChange((ms) => withCardStatus(ms, m.at, 'brief', status))} />
             )}
             {card?.(m, i)}
             {chatUsageNote(user, m.usage) && (

@@ -9,7 +9,8 @@ import { useState, useSyncExternalStore } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useThemeStore } from '@/theme';
 import { errorText, sketchApi, type SketchAskResponse } from '@/api/client';
-import { getBackendId, getProjectId, persistChat, setBackendId, subscribeProjectContext } from '@/api/autoSave';
+import { getBackendId, getProjectId, persistChat, setBackendId, subscribeProjectContext, updateChat } from '@/api/autoSave';
+import { cardKey, withCardStatus } from '@/components/cardAction';
 import { useDocumentStore } from '@/stores/documentStore';
 import { isAxis } from '@/utils/sketchAxes';
 import { addLog } from '@/stores/logStore';
@@ -29,7 +30,7 @@ export function useSketchEmpty(): boolean {
 
 /** Make this (empty) drawn sketch generated, in place: the drawn editor stops
  *  saving first, so nothing it had pending overwrites the generated sketch. */
-async function convertInPlace(id: string, body: { code?: string; name?: string }, chat: ChatMessage[] | null,
+async function convertInPlace(id: string, body: { code?: string; name?: string }, chat: (() => ChatMessage[]) | null,
                               onGenerated: () => void) {
   setBackendId(null);
   try {
@@ -38,7 +39,7 @@ async function convertInPlace(id: string, body: { code?: string; name?: string }
     setBackendId(id);
     throw e;
   }
-  if (chat) await sketchApi.saveChat(id, chat).catch(() => {});
+  if (chat) await sketchApi.saveChat(id, chat()).catch(() => {});
   onGenerated();
 }
 
@@ -51,25 +52,22 @@ export function DrawnSketchChat({ id, onGenerated }: { id: string; onGenerated: 
   const [open, setOpen] = useState<boolean | null>(null);
   const shown = open ?? empty;
 
-  const change = (i: number, status: 'accepted' | 'declined') => messages.map((m, j) =>
-    (j === i && m.proposal ? { ...m, proposal: { ...m.proposal, status } } : m));
-  const accept = async (i: number) => {
-    const p = messages[i]?.proposal;
-    if (!p) return;
-    const done = change(i, 'accepted');
-    try {
-      if (p.empty && nothingDrawn(useDocumentStore.getState().document)) {
-        await convertInPlace(id, { code: p.code, name: p.name }, done, onGenerated);
-        return;
-      }
-      const r = await sketchApi.create({ from_document: id, code: p.code, name: p.name });
-      persistChat(done);
-      // the new sketch starts with this conversation, so its chat goes on from here
-      await sketchApi.saveChat(r.id, done.slice(-12)).catch(() => {});
-      navigate(`/edit/${r.id}`);
-    } catch (e) {
-      addLog('error', `Couldn't make the generated sketch: ${errorText(e)}`);
+  /** Make the proposal under the message at `at`; throws what went wrong (its card shows it). */
+  const accept = async (at: number) => {
+    const p = (useDocumentStore.getState().document.chat ?? []).find((m) => m.at === at)?.proposal;
+    if (!p || p.status !== 'pending') return;
+    // the chat as it is once it's made, not as it was when Make it was clicked
+    const done = () => withCardStatus(useDocumentStore.getState().document.chat ?? [], at, 'proposal', 'accepted');
+    if (p.empty && nothingDrawn(useDocumentStore.getState().document)) {
+      await convertInPlace(id, { code: p.code, name: p.name }, done, onGenerated);
+      return;
     }
+    const r = await sketchApi.create({ from_document: id, code: p.code, name: p.name });
+    const chat = done();
+    persistChat(chat);
+    // the new sketch starts with this conversation, so its chat goes on from here
+    await sketchApi.saveChat(r.id, chat.slice(-12)).catch(() => {});
+    navigate(`/edit/${r.id}`);
   };
   const onReply = async (r: SketchAskResponse, at: number): Promise<Partial<ChatMessage>> =>
     r.kind === 'proposal' ? proposalMessage(r, at) : { kind: 'answer', text: r.note || r.answer || '' };
@@ -92,16 +90,16 @@ export function DrawnSketchChat({ id, onGenerated }: { id: string; onGenerated: 
         <button onClick={() => setOpen(false)} aria-label="Fold the chat" title="Fold the chat"
           style={{ background: 'none', border: 'none', color: palette.textSecondary, cursor: 'pointer', fontSize: '14px' }}>›</button>
       </div>
-      <SketchChat docId={id} projectId={projectId} messages={messages} persist={persistChat} onReply={onReply}
+      <SketchChat docId={id} projectId={projectId} messages={messages} update={updateChat} onReply={onReply}
         onRevert={() => {}} fill
         // accepted project parameters: the Parameters panel and the dimensions that use them follow
         onParamsAccepted={() => void useProjectParamsStore.getState().refresh()}
         placeholder={empty
           ? 'Describe the layout, for example "a hexagon frame plate from the project parameters, with holes for the arm braces". The AI offers to generate it from code, so it follows the parameters.'
           : "Ask about this sketch, or add project parameters. The AI can't move drawn shapes; for a layout that follows rules it can make a generated sketch."}
-        card={(m, i) => m.proposal ? (
-          <ProposalCard proposal={m.proposal} at={m.at} onAccept={() => accept(i)}
-            onDecline={() => persistChat(change(i, 'declined'))} />
+        card={(m) => m.proposal ? (
+          <ProposalCard proposal={m.proposal} at={m.at} actionKey={cardKey(id, 'proposal', m.at)} onAccept={() => accept(m.at)}
+            onDecline={() => updateChat((ms) => withCardStatus(ms, m.at, 'proposal', 'declined'))} />
         ) : null} />
     </aside>
   );

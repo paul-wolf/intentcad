@@ -7,11 +7,11 @@
  * saying which can't be); Reject leaves the project as it was.
  */
 import { useEffect, useState } from 'react';
-import { errorText } from '@/api/client';
 import { projectApi } from '@/api/projectClient';
 import { saveProjectParameters, solvedWords } from '@/build/projectSketchSolve';
 import { previewParameters, previewWords, type PreviewStatus } from '@/utils/pasteParameters';
 import type { ThemePalette } from '@/theme';
+import { clearCardAction, useCardAction } from './cardAction';
 import type { ChatMessage } from '@/types/document';
 import type { ProjectParameter } from '@/types/project';
 
@@ -33,15 +33,29 @@ export function mergeParameters(now: ProjectParameter[], proposed: ProjectParame
   return out;
 }
 
-export function ParameterProposalCard({ params, projectId, palette, onStatus, onAccepted }: {
+/** Accept: add the proposed parameters to the project's as they are now (read
+ *  first, so a retry after a refused save merges into the newer ones), solve
+ *  its sketches, then `done`. What solving said, if anything went wrong there. */
+export async function acceptParameters(projectId: string | null, items: ProjectParameter[], done: () => void,
+                                       save = saveProjectParameters, read = projectApi.getProject): Promise<string> {
+  if (!projectId) throw new Error("This isn't in a project yet, so there's no Parameters table to add them to.");
+  const now = (await read(projectId)).parameters ?? [];
+  const r = await save(projectId, mergeParameters(now, items));
+  done();
+  const words = solvedWords(r);
+  return words ? `Saved, but ${words}` : '';
+}
+
+export function ParameterProposalCard({ params, projectId, palette, actionKey, onStatus, onAccepted }: {
   params: ParamProposal; projectId: string | null; palette: ThemePalette;
+  /** where its save is kept while it runs (see cardAction) */
+  actionKey: string;
   onStatus: (status: 'accepted' | 'rejected') => void;
   /** after the project has them: rebuild with them */
   onAccepted: () => void;
 }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  // the values now, to show what a proposal changes
+  const { busy, error, note, run } = useCardAction(actionKey);
+  // the values now, to show what a proposal changes (read again after a failed try)
   const [current, setCurrent] = useState<Record<string, ProjectParameter> | null>(null);
   const pending = params.status === 'pending';
   useEffect(() => {
@@ -51,20 +65,9 @@ export function ParameterProposalCard({ params, projectId, palette, onStatus, on
       .then((p) => { if (live) setCurrent(Object.fromEntries((p.parameters ?? []).map((x) => [x.name, x]))); })
       .catch(() => {});
     return () => { live = false; };
-  }, [projectId, pending]);
-  const accept = async () => {
-    if (!projectId) return;
-    setBusy(true); setError('');
-    try {
-      const now = (await projectApi.getProject(projectId)).parameters ?? [];
-      const r = await saveProjectParameters(projectId, mergeParameters(now, params.items));
-      const words = solvedWords(r);
-      if (words) setError(`Saved, but ${words}`);
-      onStatus('accepted');
-      onAccepted();
-    } catch (err) { setError(errorText(err)); }
-    finally { setBusy(false); }
-  };
+  }, [projectId, pending, error]);
+  const accept = () => void run(() => acceptParameters(projectId, params.items, () => { onStatus('accepted'); onAccepted(); }));
+  const reject = () => { clearCardAction(actionKey); onStatus('rejected'); };
   const preview = current && pending ? previewParameters(Object.values(current), params.items) : null;
   const tagColor: Record<PreviewStatus, string> = { new: '#1f9d55', changed: palette.accent, unchanged: palette.textMuted };
   const green = '#1f9d55';
@@ -103,21 +106,21 @@ export function ParameterProposalCard({ params, projectId, palette, onStatus, on
           </div>
         );
       })}
-      {params.status !== 'pending' && error && (
-        <div role="alert" style={{ padding: '6px 10px', borderTop: `1px solid ${palette.border}`, color: palette.danger }}>{error}</div>
+      {params.status !== 'pending' && note && (
+        <div role="alert" style={{ padding: '6px 10px', borderTop: `1px solid ${palette.border}`, color: palette.danger }}>{note}</div>
       )}
       {params.status === 'pending' && (
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '6px 10px', borderTop: `1px solid ${palette.border}` }}>
-          <span style={{ flex: '1 1 200px', color: error ? palette.danger : palette.textMuted }}>
+          <span role={error ? 'alert' : undefined} style={{ flex: '1 1 200px', color: error ? palette.danger : palette.textMuted }}>
             {error || `${preview && params.items.length > 1 ? `${previewWords(preview)}. ` : ''}Every part that reads it uses the project value. Nothing changes unless you accept.`}
           </span>
-          <button onClick={() => onStatus('rejected')} disabled={busy}
+          <button onClick={reject} disabled={busy}
             style={{ ...btn, background: 'none', color: palette.textSecondary, border: `1px solid ${palette.border}` }}>
             Reject
           </button>
-          <button onClick={() => void accept()} disabled={busy || !projectId}
-            style={{ ...btn, background: palette.accent, color: '#fff', border: 'none', fontWeight: 600 }}>
-            {busy ? 'Saving…' : 'Accept'}
+          <button onClick={accept} disabled={busy}
+            style={{ ...btn, background: palette.accent, color: '#fff', border: 'none', fontWeight: 600, opacity: busy ? 0.6 : 1 }}>
+            {busy ? 'Saving…' : error ? 'Try again' : 'Accept'}
           </button>
         </div>
       )}
