@@ -259,6 +259,69 @@ class EditTests(SimpleTestCase):
         self.assertIn("add a boss", seen["user"])
 
 
+class UnchangedShapeTests(SimpleTestCase):
+    """An edit that builds but leaves the shape exactly as it was (a cut that
+    misses the part) gets one corrective call; its note never claims a change."""
+    setUp, tearDown = EditTests.setUp, EditTests.tearDown
+    PLATE = "P = dict(t=3)\npart = Box(40, 40, P['t'])"
+    MISS = PLATE + "\npart -= Pos(100, 0, 0) * Cylinder(2, 10)"
+    HIT = PLATE + "\npart -= Cylinder(2, 10)"
+
+    def test_a_cut_that_misses_gets_a_second_try(self):
+        seen = []
+
+        def llm(system, user, tools):
+            seen.append(user)
+            return ({"code": self.MISS, "note": "Added a hole."} if len(seen) == 1
+                    else {"code": self.HIT, "note": "Added a Ø4 hole through the middle."})
+        r = edit_script(self.PLATE, "add a hole", llm=llm)
+        self.assertEqual(len(seen), 2)
+        self.assertIn("exactly the shape the current script makes", seen[1])
+        self.assertIn("volume 4800 mm³", seen[1])
+        self.assertEqual(r["code"], self.HIT)
+        self.assertEqual(r["note"], "Added a Ø4 hole through the middle.")
+
+    def test_still_no_change_says_so_in_the_note(self):
+        r = edit_script(self.PLATE, "add a hole", llm=_fake(
+            {"code": self.MISS, "note": "Added a hole."},
+            {"code": self.MISS, "note": "Added a hole, going all the way through."}))
+        self.assertEqual(r["code"], self.MISS)
+        self.assertTrue(r["note"].endswith("Note: this leaves the shape exactly as it was."))
+
+    def test_a_second_try_that_fails_keeps_the_first_edit(self):
+        r = edit_script(self.PLATE, "add a hole", llm=_fake(
+            {"code": self.MISS, "note": "Added a hole."},
+            {"code": "part = nope(", "note": "x"}))
+        self.assertEqual(r["code"], self.MISS)
+        self.assertIn("exactly as it was", r["note"])
+
+    def test_the_second_try_may_ask_which_feature(self):
+        r = edit_script(self.PLATE, "make these holes go through", llm=_fake(
+            {"code": self.MISS, "note": "Added a hole."},
+            {"kind": "question", "question": "Which holes: the ones under the legs?"}))
+        self.assertEqual(r["kind"], "question")
+
+    def test_parameters_and_comments_alone_are_not_questioned(self):
+        tidy = "P = dict(t=3, hole_d=4)  # for later\n\npart = Box(40, 40, P['t'])  # the plate"
+        r = edit_script(self.PLATE, "add a hole size parameter", llm=_fake({"code": tidy, "note": "Added hole_d."}))
+        self.assertEqual((r["code"], r["note"]), (tidy, "Added hole_d."))   # one call, note untouched
+
+    def test_a_current_script_that_fails_is_not_compared(self):
+        r = edit_script("part = nope(", "fix it", build_error="SyntaxError", llm=_fake(
+            {"code": self.PLATE, "note": "Fixed."}))
+        self.assertEqual(r["note"], "Fixed.")
+
+
+class CircleListingTests(SimpleTestCase):
+    def test_circles_by_size_with_centres(self):
+        from modeling.assistant import _circles
+        prof = {"loops": [[{"t": "circle", "c": [-40, -20], "r": 1.7}], [{"t": "circle", "c": [40, -20], "r": 1.7}],
+                          [{"t": "circle", "c": [0, 0], "r": 4}],
+                          [{"t": "line", "p": [[0, 0], [1, 0]]}, {"t": "line", "p": [[1, 0], [0, 1]]}]]}
+        self.assertEqual(_circles(prof), "; circles (in its own x/y): 2× Ø3.4 at (-40, -20), (40, -20); 1× Ø8 at (0, 0)")
+        self.assertEqual(_circles({"loops": []}), "")
+
+
 def _plane(i, center, normal, area=100.0):
     return {"index": i, "kind": "plane", "area": area, "center": center, "normal": normal, "radius": None}
 
@@ -335,14 +398,15 @@ class ImportedGeometryEditTests(SimpleTestCase):
         self.assertIn("z=5: 1 face, area 600", seen["user"])
         self.assertIn("Never invent, change or remove an ASSETS[...]", seen["system"])
 
-    def test_no_summary_without_assets(self):
+    def test_a_part_without_an_import_gets_a_summary_too(self):
         seen = {}
 
         def llm(system, user, tools):
             seen["user"] = user
             return {"code": "part = Box(2,2,2)", "note": "ok"}
-        edit_script("part = Box(1,1,1)", "bigger", llm=llm)
-        self.assertNotIn("GEOMETRY SUMMARY", seen["user"])
+        edit_script("part = Box(1,1,1) - Cylinder(0.2, 2)", "bigger", llm=llm)
+        self.assertIn("GEOMETRY SUMMARY", seen["user"])
+        self.assertIn("r=0.2 (dia 0.4) axis (0, 0, 1) center (0, 0, 0) hole", seen["user"])
 
     def test_an_edit_that_drops_the_import_is_retried(self):
         seen = []

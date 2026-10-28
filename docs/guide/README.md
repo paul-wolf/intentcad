@@ -105,6 +105,12 @@ check before printing.
   and every edit respects it.
 - **Fix with AI**: when a build fails (a fillet too big, say), one click asks the AI to
   repair it, keeping your intent.
+- **It checks its edits**: every edit the AI proposes is built before you see it. The AI
+  is told what the part looks like now (its faces, holes and bosses), so "these holes"
+  can mean holes that come from a sketch. An edit that builds the very same shape (a cut
+  that misses, holes cut again where they already go through) goes back to the AI once:
+  it fixes it or asks you which feature you mean. If it still changes nothing, its
+  message ends "this leaves the shape exactly as it was".
 
 ### Sketch
 

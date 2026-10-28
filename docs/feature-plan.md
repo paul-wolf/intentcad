@@ -50,6 +50,7 @@ operations cost nothing to support, they just don't get UI.
 - Paste project parameters: Paste… on the project's Parameters table takes lines of "name value [unit]", previews each as new, changed or unchanged (with the parts the changes affect and the lines it can't read) and saves them in one step; the chat's parameter card (part, drawn and generated sketch chats alike) marks its items the same way, a pasted list as one card
 - Find documents: a search box on the Projects page over every project (names, descriptions, project names, kind, a generated sketch's outputs; every word must match; / to focus), and Sort (last edited, name, created, project, kind) with a Grid / List switch there and on each project page; the list sorts by clicking a column heading, and each page remembers its choice
 - One sketch per step in the part editor: K on a base or construction plane with sketches already lists them and offers "New sketch on this plane" (as faces did); reopening a sketch that is extruded already starts its Extrude… panel from that step, and Update rewrites the same step instead of adding a second extrude
+- AI edits that change nothing are caught: the AI gets a summary of the current build (faces, holes, bosses) for every part, not only imported ones; an edit that builds the same shape (volume, area, bounding box, faces) gets one corrective call, and if it still changes nothing its note says so
 
 ## Foundation: edge selection ✓ done
 
