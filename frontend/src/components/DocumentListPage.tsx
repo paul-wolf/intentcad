@@ -13,6 +13,8 @@ import type { Project, ProjectDetail } from '@/types/project';
 import { TopNav } from '@/ui/TopNav';
 import { DocCard } from '@/ui/DocCard';
 import { useTokens, SANS, MONO } from '@/ui/tokens';
+import { DocList, DocListControls, useDocListPrefs } from '@/ui/DocList';
+import { searchDocs, sortDocs } from '@/utils/docSearch';
 import { ContextPane, useContextFiles, type CtxColors } from './ContextPane';
 import { AppLink } from '@/ui/links';
 import { ProjectBrief } from './ProjectBrief';
@@ -49,6 +51,7 @@ export function DocumentListPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
+  const prefs = useDocListPrefs('project');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [describingId, setDescribingId] = useState<string | null>(null);
@@ -215,8 +218,7 @@ export function DocumentListPage() {
     } catch (err) { fail("Couldn't save the description", new Error(errorText(err))); }
   };
 
-  const lower = search.toLowerCase();
-  const visible = lower ? docs.filter((d) => d.name.toLowerCase().includes(lower) || (d.description ?? '').toLowerCase().includes(lower)) : docs;
+  const visible = sortDocs(searchDocs(docs, search), prefs.sort);
   const parts = visible.filter((d) => d.kind === 'part');
   const sketches = visible.filter((d) => d.kind !== 'part');
   const latest = docs.length ? docs.reduce((a, b) => (a.updated_at > b.updated_at ? a : b)).updated_at : null;
@@ -253,6 +255,9 @@ export function DocumentListPage() {
   );
 
   const grid: CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(224px,1fr))', gap: 16, marginBottom: 40 };
+  const listOrGrid = (ds: DocumentListItem[]) => prefs.view === 'list'
+    ? <div style={{ marginBottom: 40 }}><DocList docs={ds} sort={prefs.sort} onSort={prefs.setSort} onOpen={handleOpen} /></div>
+    : <div style={grid}>{ds.map(cardOf)}</div>;
   const showParts = (filter === 'all' || filter === 'parts') && parts.length > 0;
   const showSketches = (filter === 'all' || filter === 'sketches') && sketches.length > 0;
 
@@ -403,21 +408,23 @@ export function DocumentListPage() {
               <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: t.textMute, display: 'flex' }}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4-4" /></svg>
               </span>
-              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search documents..."
+              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search this project…"
                 style={{ width: '100%', padding: '9px 12px 9px 36px', background: t.surface, border: `1px solid ${t.border}`,
                          borderRadius: 9, color: t.text, fontFamily: SANS, fontSize: '13px', outline: 'none' }}
                 onFocus={(e) => (e.currentTarget.style.borderColor = t.accent)}
                 onBlur={(e) => (e.currentTarget.style.borderColor = t.border)} />
             </div>
-            <div style={{ display: 'flex', gap: 6 }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <DocListControls view={prefs.view} sort={prefs.sort} onView={prefs.setView} onSort={prefs.setSort} />
+              <span style={{ width: 1, height: 22, background: t.border, margin: '0 4px' }} />
               <button onClick={() => setFilter('all')} style={seg(filter === 'all')}>All</button>
               <button onClick={() => setFilter('parts')} style={seg(filter === 'parts')}>Parts &middot; {docs.filter((d) => d.kind === 'part').length}</button>
               <button onClick={() => setFilter('sketches')} style={seg(filter === 'sketches')}>Sketches &middot; {docs.filter((d) => d.kind !== 'part').length}</button>
             </div>
           </div>
 
-          {showParts && (<>{sectionHeader(t.part, 'PARTS', parts.length)}<div style={grid}>{parts.map(cardOf)}</div></>)}
-          {showSketches && (<>{sectionHeader(t.sketch, 'SKETCHES', sketches.length)}<div style={grid}>{sketches.map(cardOf)}</div></>)}
+          {showParts && (<>{sectionHeader(t.part, 'PARTS', parts.length)}{listOrGrid(parts)}</>)}
+          {showSketches && (<>{sectionHeader(t.sketch, 'SKETCHES', sketches.length)}{listOrGrid(sketches)}</>)}
 
           {!showParts && !showSketches && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6,
