@@ -4,6 +4,7 @@ import { projectApi } from '@/api/projectClient';
 import type { ThemePalette } from '@/theme';
 import type { ChatMessage } from '@/types/document';
 import { diffStats, lineDiff } from '@/utils/lineDiff';
+import { clearCardAction, useCardAction } from './cardAction';
 import { matchMentions } from '@/utils/mentions';
 
 /** The part editor's view of its project: the other parts and sketches (for
@@ -61,29 +62,39 @@ export function MentionMenu({ docs, query, active, onPick, onHover, palette }: {
   );
 }
 
+/** Accept a brief proposal: save it, unless the brief changed since the AI
+ *  read it (then the brief as it is now, to show what accepting does to it;
+ *  saved once the user has seen that version, `seen`). Already the brief: done. */
+export async function acceptBrief(projectId: string | null, brief: NonNullable<ChatMessage['brief']>, seen: string | null,
+                                  read = projectApi.getProject, save = projectApi.saveBrief): Promise<'saved' | { changed: string }> {
+  if (!projectId) throw new Error("This isn't in a project yet, so there's no brief to change.");
+  const now = (await read(projectId)).brief ?? '';
+  if (now === brief.text) return 'saved';
+  if (now !== brief.base && now !== seen) return { changed: now };
+  await save(projectId, brief.text, `AI proposal: ${brief.reason}`.slice(0, 200));
+  return 'saved';
+}
+
 /** The AI's proposed change to the project brief, as a diff against the brief it
- *  read, with Accept (saved as a new brief version) and Reject. */
-export function BriefProposalCard({ brief, projectId, palette, onStatus }: {
+ *  read (or the brief now, if it changed since), with Accept (saved as a new brief version) and Reject. */
+export function BriefProposalCard({ brief, projectId, palette, actionKey, onStatus }: {
   brief: NonNullable<ChatMessage['brief']>; projectId: string | null; palette: ThemePalette;
+  /** where its save is kept while it runs (see cardAction) */
+  actionKey: string;
   onStatus: (status: 'accepted' | 'rejected') => void;
 }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const { busy, error, run } = useCardAction(actionKey);
   const [open, setOpen] = useState(brief.status === 'pending');
-  const lines = lineDiff(brief.base, brief.text);
+  // the brief now, when it changed since the AI read it: the diff is against it
+  const [now, setNow] = useState<string | null>(null);
+  const lines = lineDiff(now ?? brief.base, brief.text);
   const { added, removed } = diffStats(lines);
-  const accept = async () => {
-    if (!projectId) return;
-    setBusy(true); setError('');
-    try {
-      const now = (await projectApi.getProject(projectId)).brief ?? '';
-      if (now !== brief.base && !window.confirm('The brief has changed since the AI read it. Replace it with this proposal anyway?')) return;
-      await projectApi.saveBrief(projectId, brief.text, `AI proposal: ${brief.reason}`.slice(0, 200));
-      onStatus('accepted');
-      setOpen(false);
-    } catch (err) { setError(errorText(err)); }
-    finally { setBusy(false); }
-  };
+  const accept = () => void run(async () => {
+    const r = await acceptBrief(projectId, brief, now);
+    if (r === 'saved') { onStatus('accepted'); setOpen(false); }
+    else { setNow(r.changed); setOpen(true); }
+  });
+  const reject = () => { clearCardAction(actionKey); onStatus('rejected'); };
   const green = '#1f9d55', red = palette.danger;
   return (
     <div style={{ marginTop: 6, border: `1px solid ${palette.border}`, borderRadius: 8, background: palette.background, overflow: 'hidden', fontSize: '12.5px' }}>
@@ -117,16 +128,19 @@ export function BriefProposalCard({ brief, projectId, palette, onStatus }: {
           </div>
           {brief.status === 'pending' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderTop: `1px solid ${palette.border}` }}>
-              <span style={{ flex: 1, color: error ? palette.danger : palette.textMuted }}>
-                {error || 'The AI only proposes: nothing changes unless you accept.'}
+              <span role={error || now !== null ? 'alert' : undefined}
+                style={{ flex: 1, color: error ? palette.danger : now !== null ? (palette.warning ?? '#c78a1a') : palette.textMuted }}>
+                {error || (now !== null
+                  ? 'The brief changed since the AI read it. Above: what accepting does to the brief as it is now.'
+                  : 'The AI only proposes: nothing changes unless you accept.')}
               </span>
-              <button onClick={() => onStatus('rejected')} disabled={busy}
+              <button onClick={reject} disabled={busy}
                 style={{ padding: '4px 12px', background: 'none', color: palette.textSecondary, border: `1px solid ${palette.border}`, borderRadius: 4, cursor: 'pointer', fontSize: '12px' }}>
                 Reject
               </button>
-              <button onClick={() => void accept()} disabled={busy || !projectId}
+              <button onClick={accept} disabled={busy}
                 style={{ padding: '4px 12px', background: palette.primaryBtn, color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: '12px', opacity: busy ? 0.6 : 1 }}>
-                {busy ? 'Saving…' : 'Accept'}
+                {busy ? 'Saving…' : error ? 'Try again' : now !== null ? 'Replace it anyway' : 'Accept'}
               </button>
             </div>
           )}

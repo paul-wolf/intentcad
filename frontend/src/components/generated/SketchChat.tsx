@@ -20,6 +20,7 @@ import { ChatHistory, ChatInput, useChatBox, useModelPicker } from '@/components
 import { ContextPane, useContextFiles, type CtxColors } from '@/components/ContextPane';
 import { useProjectDocs } from '@/components/ProjectChat';
 import { SketchDrawing } from './SketchDrawing';
+import { clearCardAction, useCardAction } from '@/components/cardAction';
 
 /** The pictures of proposed sketches, by message time: kept for this visit only. */
 const pictures = new Map<number, GenRunResult>();
@@ -33,12 +34,13 @@ export function runWords(r: GenRunResult | undefined): string {
   return `${ok} of ${n} checks pass (fails: ${failed}).`;
 }
 
-export function SketchChat({ docId, projectId, messages, persist, onReply, onRevert, onParamsAccepted, card, askRef,
+export function SketchChat({ docId, projectId, messages, update, onReply, onRevert, onParamsAccepted, card, askRef,
                              placeholder, fill = false }: {
   docId: string;
   projectId: string | null;
   messages: ChatMessage[];
-  persist: (messages: ChatMessage[]) => void;
+  /** change the chat as it is when the change is made, and persist it */
+  update: (change: (messages: ChatMessage[]) => ChatMessage[]) => void;
   /** an edit or a proposal: the assistant message to add (the editor saves the code, or not) */
   onReply: (r: SketchAskResponse, at: number) => Promise<Partial<ChatMessage>>;
   onRevert: (code: string) => void;
@@ -67,9 +69,9 @@ export function SketchChat({ docId, projectId, messages, persist, onReply, onRev
     setShowCtx(false);
     box.setMention(null);
     const sent = filesToSend(ctxStore.files, box.skipCtx);
-    const base: ChatMessage[] = [...messages, { role: 'user', text: instruction, at: Date.now(),
-                                                ...(sent.length ? { files: sent.map((f) => f.title) } : {}) }];
-    persist(base);
+    const said0: ChatMessage = { role: 'user', text: instruction, at: Date.now(),
+                                 ...(sent.length ? { files: sent.map((f) => f.title) } : {}) };
+    update((ms) => [...ms, said0]);
     box.setAsk('');
     try {
       const r = await sketchApi.ask(docId, {
@@ -87,10 +89,11 @@ export function SketchChat({ docId, projectId, messages, persist, onReply, onRev
       if (r.kind === 'question') Object.assign(said, { kind: 'question', text: r.question || '' });
       else if (r.kind === 'answer') Object.assign(said, { kind: 'answer', text: r.answer || '' });
       else Object.assign(said, await onReply(r, at));
-      persist([...base, said]);
+      // onto the chat as it is now: a card accepted while the AI was thinking stays accepted
+      update((ms) => [...ms, said]);
     } catch (err) {
       const spent = err instanceof ApiError && err.usage ? usageLabel(err.usage) : undefined;
-      persist([...base, { role: 'assistant', kind: 'question', text: `⚠ ${errorText(err)}`, usage: spent, at: Date.now() }]);
+      update((ms) => [...ms, { role: 'assistant', kind: 'question', text: `⚠ ${errorText(err)}`, usage: spent, at: Date.now() }]);
     } finally {
       setAsking(false);
     }
@@ -113,8 +116,8 @@ export function SketchChat({ docId, projectId, messages, persist, onReply, onRev
           <ContextPane store={ctxStore} c={ctxColors} partOwned />
         </div>
       ) : (
-        <ChatHistory messages={messages} asking={asking} fill={fill} box={box} palette={palette} projectId={projectId}
-          onPersist={persist} onRevert={onRevert} onParamsAccepted={onParamsAccepted} card={card}
+        <ChatHistory messages={messages} scope={docId} asking={asking} fill={fill} box={box} palette={palette} projectId={projectId}
+          onChange={update} onRevert={onRevert} onParamsAccepted={onParamsAccepted} card={card}
           revertTitle="Go back to the code as it was after this change" revertWords="↩ click to go back to this version" />
       )}
       {!messages.length && !asking && !showCtx && (
@@ -122,7 +125,7 @@ export function SketchChat({ docId, projectId, messages, persist, onReply, onRev
       )}
       <ChatInput box={box} asking={asking} palette={palette} ctxStore={ctxStore} ctxColors={ctxColors}
         docs={projectDocs.others} picker={picker} hasMessages={messages.length > 0} showCtxError={!showCtx}
-        onSend={() => void send()} onClear={() => persist([])} onOpenContext={() => setShowCtx(true)}
+        onSend={() => void send()} onClear={() => update(() => [])} onOpenContext={() => setShowCtx(true)}
         placeholder={(w) => (w >= 420 && projectDocs.others.length ? 'Describe a change or ask; type @ to mention a part'
                              : w >= 260 ? 'Describe a change or ask a question' : 'Ask the AI')} />
     </div>
@@ -158,13 +161,16 @@ export function CardButton({ primary, busy, onClick, children }: {
 
 /** New code that stops making outputs parts use, or that needs project
  *  parameters not accepted yet: nothing is saved until the user says. */
-export function HeldCard({ held, onApply, onKeep }: {
+export function HeldCard({ held, actionKey, onApply, onKeep }: {
   held: NonNullable<ChatMessage['held']>;
+  /** where Apply is kept while it runs (see cardAction) */
+  actionKey: string;
+  /** throws what went wrong: the card shows it, with Try again */
   onApply: () => Promise<void>;
   onKeep: () => void;
 }) {
   const palette = useThemeStore((s) => s.palette);
-  const [busy, setBusy] = useState(false);
+  const { busy, error, run } = useCardAction(actionKey);
   if (held.status !== 'pending') {
     return (
       <div style={{ fontSize: '11.5px', color: palette.textMuted, marginTop: 3, paddingLeft: 4 }}>
@@ -188,11 +194,12 @@ export function HeldCard({ held, onApply, onKeep }: {
       ) : (
         <span>This code uses the new project parameters above. Accept them first, or apply it now and it shows an error until you do.</span>
       )}
+      {error && <span role="alert" style={{ color: palette.danger }}>Couldn't apply it: {error}</span>}
       <Buttons>
-        <CardButton primary busy={busy} onClick={() => { setBusy(true); void onApply().finally(() => setBusy(false)); }}>
-          {held.broken.length ? 'Apply anyway' : 'Apply now'}
+        <CardButton primary busy={busy} onClick={() => void run(onApply)}>
+          {busy ? 'Applying…' : error ? 'Try again' : held.broken.length ? 'Apply anyway' : 'Apply now'}
         </CardButton>
-        <CardButton busy={busy} onClick={onKeep}>Keep the old code</CardButton>
+        <CardButton busy={busy} onClick={() => { clearCardAction(actionKey); onKeep(); }}>Keep the old code</CardButton>
       </Buttons>
     </div>
   );
@@ -200,14 +207,17 @@ export function HeldCard({ held, onApply, onKeep }: {
 
 /** A generated sketch the AI offers in a drawn one: a picture of it, its
  *  outputs and checks, and Make it / No, I'll draw it. */
-export function ProposalCard({ proposal, at, onAccept, onDecline }: {
+export function ProposalCard({ proposal, at, actionKey, onAccept, onDecline }: {
   proposal: NonNullable<ChatMessage['proposal']>;
   at: number;
+  /** where Make it is kept while it runs (see cardAction) */
+  actionKey: string;
+  /** throws what went wrong: the card shows it, with Try again */
   onAccept: () => Promise<void>;
   onDecline: () => void;
 }) {
   const palette = useThemeStore((s) => s.palette);
-  const [busy, setBusy] = useState(false);
+  const { busy, error, run } = useCardAction(actionKey);
   const picture = pictures.get(at);
   if (proposal.status !== 'pending') {
     return (
@@ -233,11 +243,12 @@ export function ProposalCard({ proposal, at, onAccept, onDecline }: {
         </div>
       )}
       {proposal.checks && <div style={{ fontSize: '12px', color: palette.textSecondary }}>{proposal.checks}</div>}
+      {error && <span role="alert" style={{ color: palette.danger }}>Couldn't make it: {error}</span>}
       <Buttons>
-        <CardButton primary busy={busy} onClick={() => { setBusy(true); void onAccept().finally(() => setBusy(false)); }}>
-          {proposal.empty ? 'Make it a generated sketch' : 'Make a new generated sketch'}
+        <CardButton primary busy={busy} onClick={() => void run(onAccept)}>
+          {busy ? 'Making it…' : error ? 'Try again' : proposal.empty ? 'Make it a generated sketch' : 'Make a new generated sketch'}
         </CardButton>
-        <CardButton busy={busy} onClick={onDecline}>No, I'll draw it</CardButton>
+        <CardButton busy={busy} onClick={() => { clearCardAction(actionKey); onDecline(); }}>No, I'll draw it</CardButton>
       </Buttons>
       {!proposal.empty && (
         <div style={{ fontSize: '11.5px', color: palette.textMuted }}>

@@ -243,6 +243,11 @@ export function persistChat(chat: import('@/types/document').ChatMessage[]) {
   doSave(backendId, doc, history);
 }
 
+/** Change the chat as it is now (not as some component last saw it) and persist it. */
+export function updateChat(change: (chat: import('@/types/document').ChatMessage[]) => import('@/types/document').ChatMessage[]) {
+  persistChat(change(useDocumentStore.getState().document.chat ?? []));
+}
+
 /** Persist the part thumbnail (a PNG data URL) NOW, directly. */
 export function persistThumbnail(dataUrl: string) {
   useDocumentStore.getState().setThumbnail(dataUrl);

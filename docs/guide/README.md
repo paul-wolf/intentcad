@@ -271,7 +271,13 @@ The AI in a part's chat knows the project the part is in, not only the part.
 - **Brief changes**: when you settle something the whole project should remember (a
   bolt size, a bought part), the AI may propose a change to the brief. It shows as a
   diff under its reply; **Accept** saves it as a new brief version, **Reject** drops
-  it. The AI never changes the brief itself.
+  it. The AI never changes the brief itself. If someone changed the brief since the AI
+  read it, the card shows the diff against the brief as it is now; click **Replace it
+  anyway** to save it.
+- **Cards that fail**: if a card's **Accept** (or **Apply now**, or **Make it a
+  generated sketch**) can't save, the card says why and the button becomes **Try
+  again**. If something changed elsewhere while it saved, it reads the new state and
+  tries once more by itself.
 
 ![The project page: the brief at the top, the parts with their descriptions under it](images/project-brief.png)
 

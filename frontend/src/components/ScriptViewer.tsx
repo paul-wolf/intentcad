@@ -16,7 +16,7 @@ import { DescriptionLine, useProjectDocs } from './ProjectChat';
 import { ChatHistory, ChatInput, useChatBox, useModelPicker } from './ChatPanel';
 import { mentionedIds } from '@/utils/mentions';
 import { projectApi } from '@/api/projectClient';
-import { persistModelCode, persistSharedRefs, persistChat, persistThumbnail, persistName, persistProductionNotes, persistPrintBed, persistSketches, persistParamRanges, getBackendId, subscribeBackendId, getProjectId, getProjectName, subscribeProjectContext } from '@/api/autoSave';
+import { persistModelCode, persistSharedRefs, persistChat, updateChat, persistThumbnail, persistName, persistProductionNotes, persistPrintBed, persistSketches, persistParamRanges, getBackendId, subscribeBackendId, getProjectId, getProjectName, subscribeProjectContext } from '@/api/autoSave';
 import { createEmptyDocument, DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
 import type { BuildInputs, ChatMessage, Sketch, SketchRef } from '@/types/document';
 import { useNavigate } from 'react-router-dom';
@@ -3082,8 +3082,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     const sent = filesToSend(ctxStore.files, skipCtx);
     const userMsg: ChatMessage = { role: 'user', text: instruction, at: Date.now(),
                                    ...(sent.length ? { files: sent.map((f) => f.title) } : {}) };
-    const base = [...chat, userMsg];
-    persistChat(base);          // show the user's message immediately (and persist)
+    updateChat((ms) => [...ms, userMsg]);   // show the user's message immediately (and persist)
     setAsk('');
     try {
       const history = chat.slice(-8).map((m) => ({ role: m.role, text: m.text }));
@@ -3117,11 +3116,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         persistSharedRefs({ ...(doc.sketchRefs ?? {}), ...r.sketch_refs }, doc.pinned ?? null);
       }
       if (r.kind === 'question') {
-        persistChat([...base, { role: 'assistant', kind: 'question', text: r.question, usage: spent, at: Date.now(), ...proposal }]);
+        updateChat((ms) => [...ms, { role: 'assistant', kind: 'question', text: r.question, usage: spent, at: Date.now(), ...proposal }]);
       } else if (r.kind === 'answer') {
-        persistChat([...base, { role: 'assistant', kind: 'answer', text: r.answer || '', usage: spent, at: Date.now(), ...proposal }]);
+        updateChat((ms) => [...ms, { role: 'assistant', kind: 'answer', text: r.answer || '', usage: spent, at: Date.now(), ...proposal }]);
       } else {
-        persistChat([...base, { role: 'assistant', kind: 'edit', text: r.note || 'Done.', code: r.code, usage: spent, at: Date.now(), ...proposal }]);
+        updateChat((ms) => [...ms, { role: 'assistant', kind: 'edit', text: r.note || 'Done.', code: r.code, usage: spent, at: Date.now(), ...proposal }]);
         setCode(r.code);
         saveDraft(r.code);
         await build(r.code, r.note || instruction);
@@ -3131,7 +3130,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       const msg = `⚠ ${errorText(err)}`;
       // a failed edit can still have been billed (a script that didn't build, then a retry)
       const spent = err instanceof ApiError && err.usage ? usageLabel(err.usage) : undefined;
-      persistChat([...base, { role: 'assistant', kind: 'question', text: msg, usage: spent, at: Date.now() }]);
+      updateChat((ms) => [...ms, { role: 'assistant', kind: 'question', text: msg, usage: spent, at: Date.now() }]);
       if (spent) fetchUsage();
     } finally {
       setAsking(false);
@@ -3517,8 +3516,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     danger: palette.danger, warning: palette.warning,
   };
   const chatHistory = (
-    <ChatHistory messages={chat} asking={asking} fill={layout === 'chat'} box={box} palette={palette} projectId={projectId}
-      onPersist={persistChat} onRevert={restoreVersion} onParamsAccepted={() => build(codeRef.current, 'project parameters')}
+    <ChatHistory messages={chat} scope={docId ?? ''} asking={asking} fill={layout === 'chat'} box={box} palette={palette} projectId={projectId}
+      onChange={updateChat} onRevert={restoreVersion} onParamsAccepted={() => build(codeRef.current, 'project parameters')}
       scrollKey={layout} />
   );
   const chatInput = (

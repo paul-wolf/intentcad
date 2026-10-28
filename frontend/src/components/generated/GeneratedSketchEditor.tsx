@@ -34,6 +34,7 @@ import { SketchDrawing } from './SketchDrawing';
 import { CodeView } from './CodeView';
 import { ChecksPanel, OutputsPanel, ParametersPanel, UsedByPanel } from './SidePanels';
 import { HeldCard, SketchChat, runWords } from './SketchChat';
+import { cardKey, runCardAction, withCardStatus } from '@/components/cardAction';
 
 type Trial = { values: Record<string, number>; result: GenRunResult | null };
 const NO_TRIAL: Trial = { values: {}, result: null };
@@ -213,12 +214,16 @@ export function GeneratedSketchEditor({ id }: { id: string }) {
   };
 
   // ── chat ──
-  const persistChat = (messages: ChatMessage[]) => {
-    setChat(messages);
-    sketchApi.saveChat(id, messages).catch((e) => addLog('error', `Couldn't save the chat: ${errorText(e)}`));
+  // the chat's saves go in turn, so an older chat never lands after a newer one
+  const chatSaving = useRef<Promise<unknown>>(Promise.resolve());
+  /** Change the chat as it is now (not as a card last saw it) and save it. */
+  const updateChat = (change: (messages: ChatMessage[]) => ChatMessage[]) => {
+    const next = change(chatRef.current);
+    chatRef.current = next;
+    setChat(next);
+    chatSaving.current = chatSaving.current.then(() => sketchApi.saveChat(id, next))
+      .catch((e) => addLog('error', `Couldn't save the chat: ${errorText(e)}`));
   };
-  const changeMessage = (i: number, change: (m: ChatMessage) => ChatMessage) =>
-    persistChat(chatRef.current.map((m, j) => (j === i ? change(m) : m)));
   /** Save code the chat brought; null, or the outputs parts use it would drop (then nothing is saved). */
   const saveFromChat = async (c: string, label: string, confirmBroken: boolean): Promise<BrokenOutput[] | null> => {
     const r = await sketchApi.saveCode(id, { code: c, label, confirm: confirmBroken });
@@ -246,15 +251,12 @@ export function GeneratedSketchEditor({ id }: { id: string }) {
       return { kind: 'question', text: `${text}\n⚠ Couldn't save it: ${errorText(e)}` };
     }
   };
-  const applyHeld = async (i: number) => {
-    const h = chatRef.current[i]?.held;
-    if (!h) return;
-    try {
-      await saveFromChat(h.code, h.label, true);
-      changeMessage(i, (m) => ({ ...m, code: h.code, held: { ...h, status: 'applied' } }));
-    } catch (e) {
-      addLog('error', `Couldn't apply the change: ${errorText(e)}`);
-    }
+  /** Save the held code of the message at `at`; throws what went wrong (its card shows it). */
+  const applyHeld = async (at: number) => {
+    const h = chatRef.current.find((m) => m.at === at)?.held;
+    if (!h || h.status !== 'pending') return;
+    if (await saveFromChat(h.code, h.label, true)) throw new Error('the server didn\'t save it. Try again, or reload.');
+    updateChat((ms) => withCardStatus(ms, at, 'held', 'applied', { code: h.code }));
   };
   const revertTo = async (c: string) => {
     try {
@@ -269,8 +271,8 @@ export function GeneratedSketchEditor({ id }: { id: string }) {
     await useProjectParamsStore.getState().refresh();
     await reload();
     // code that waited for these parameters goes in now
-    const i = chatRef.current.map((m) => m.held?.status === 'pending' && !m.held.broken.length).lastIndexOf(true);
-    if (i >= 0) await applyHeld(i);
+    const waiting = chatRef.current.filter((m) => m.held?.status === 'pending' && !m.held.broken.length).pop();
+    if (waiting) await runCardAction(cardKey(id, 'held', waiting.at), () => applyHeld(waiting.at));   // its card shows how it went
     await refreshUsers(id);
   };
 
@@ -398,12 +400,12 @@ export function GeneratedSketchEditor({ id }: { id: string }) {
               onUndo={() => { setCode(saved); setBroken(null); }} onSaveAnyway={() => void runCode(true)}
               history={doc.data.codeHistory ?? []} goToLine={goTo} />
           )}
-          <SketchChat docId={id} projectId={projectId} messages={chat} persist={persistChat} onReply={onReply}
-            onRevert={(c) => void revertTo(c)} onParamsAccepted={() => void paramsAccepted()} askRef={askAi}
+          <SketchChat docId={id} projectId={projectId} messages={chat} update={updateChat} onReply={onReply}
+            onRevert={(c) => void revertTo(c)} onParamsAccepted={() => void paramsAccepted().catch((e) => addLog('error', `Couldn't reload after accepting: ${errorText(e)}`))} askRef={askAi}
             placeholder="Ask the AI to change the layout, add a check, or explain a size. It changes the code; click one of its changes to go back to it."
-            card={(m, i) => m.held ? (
-              <HeldCard held={m.held} onApply={() => applyHeld(i)}
-                onKeep={() => changeMessage(i, (x) => ({ ...x, held: { ...x.held!, status: 'kept' } }))} />
+            card={(m) => m.held ? (
+              <HeldCard held={m.held} actionKey={cardKey(id, 'held', m.at)} onApply={() => applyHeld(m.at)}
+                onKeep={() => updateChat((ms) => withCardStatus(ms, m.at, 'held', 'kept'))} />
             ) : null} />
         </div>
 

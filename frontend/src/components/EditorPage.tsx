@@ -234,6 +234,7 @@ function DrawnSketchEditor({ onGenerated }: { onGenerated: () => void }) {
         setTimeout(() => useEditorStore.getState().setViewportCommand('fit-entities'), 0);
         // Load project context
         if (full.project_id) {
+          setProjectContext(full.project_id, null);   // now: the chat's cards need it, the name can follow
           projectApi.getProject(full.project_id)
             .then((p) => { if (!cancelled) setProjectContext(full.project_id, p.name); })
             .catch(() => {});
