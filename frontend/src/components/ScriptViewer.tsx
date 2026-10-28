@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
+import { holdAiEdit, ppReads } from '@/build/aiEdit';
+import { cardKey, runCardAction, withCardStatus } from './cardAction';
+import { HeldCard } from './generated/SketchChat';
 import {
   api, buildApi, errorText, ApiError, type RunResponse, type RunEdge, type FaceRefReport, type UsageResponse, type DimInfo, type SizeFix,
   type FaceRefSpec, type HolePresets, type EdgeOpKind, type EdgeRefSpec, type ExtrudeExtent, type ExtrudeOp, type KeepItem, type OpAt, type Step,
@@ -3115,6 +3118,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     if (box.uploading) { box.setSendQueued(instruction); return; }
     setAsking(true);
     box.setMention(null);
+    const base = code;   // the version the AI works from: a change made meanwhile is never overwritten unasked
     const sent = filesToSend(ctxStore.files, skipCtx);
     const userMsg: ChatMessage = { role: 'user', text: instruction, at: Date.now(),
                                    ...(sent.length ? { files: sent.map((f) => f.title) } : {}) };
@@ -3156,10 +3160,19 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       } else if (r.kind === 'answer') {
         updateChat((ms) => [...ms, { role: 'assistant', kind: 'answer', text: r.answer || '', usage: spent, at: Date.now(), ...proposal }]);
       } else {
-        updateChat((ms) => [...ms, { role: 'assistant', kind: 'edit', text: r.note || 'Done.', code: r.code, usage: spent, at: Date.now(), ...proposal }]);
-        setCode(r.code);
-        saveDraft(r.code);
-        await build(r.code, r.note || instruction);
+        const why = holdAiEdit(base, codeRef.current, r.code, r.parameter_proposals);
+        if (why) {
+          // the part changed meanwhile, or the edit reads parameters not accepted yet: a card to apply it or not
+          const at = Date.now();
+          heldBase.current.set(at, codeRef.current);
+          updateChat((ms) => [...ms, { role: 'assistant', kind: 'edit', text: r.note || 'Done.', usage: spent, at, ...proposal,
+            held: { code: r.code, label: r.note || instruction, broken: [], status: 'pending', ...(why.changed ? { changed: true } : {}) } }]);
+        } else {
+          updateChat((ms) => [...ms, { role: 'assistant', kind: 'edit', text: r.note || 'Done.', code: r.code, usage: spent, at: Date.now(), ...proposal }]);
+          setCode(r.code);
+          saveDraft(r.code);
+          await build(r.code, r.note || instruction);
+        }
       }
       fetchUsage();
     } catch (err) {
@@ -3170,6 +3183,30 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       if (spent) fetchUsage();
     } finally {
       setAsking(false);
+    }
+  };
+
+  // an AI edit held on a card (see holdAiEdit): the part as it was when the card came, by the card's time
+  const heldBase = useRef(new Map<number, string>());
+  const heldAt = (at: number) => (useDocumentStore.getState().document.chat ?? []).find((m) => m.at === at)?.held;
+  /** Apply the held edit of the message at `at`. */
+  const applyHeld = async (at: number) => {
+    const h = heldAt(at);
+    if (!h || h.status !== 'pending') return;
+    setCode(h.code);
+    saveDraft(h.code);
+    updateChat((ms) => withCardStatus(ms, at, 'held', 'applied', { code: h.code }));
+    await build(h.code, h.label);
+  };
+  // the project parameters a held edit waited for are accepted: it goes in,
+  // unless the part changed since (then its card stays, to apply or not)
+  const paramsAccepted = () => {
+    const waiting = (useDocumentStore.getState().document.chat ?? [])
+      .filter((m) => m.held?.status === 'pending' && !m.held.changed).pop();
+    if (waiting && heldBase.current.get(waiting.at) === codeRef.current) {
+      void runCardAction(cardKey(docId ?? '', 'held', waiting.at), () => applyHeld(waiting.at));
+    } else {
+      void build(codeRef.current, 'project parameters');
     }
   };
 
@@ -3553,7 +3590,12 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   };
   const chatHistory = (
     <ChatHistory messages={chat} scope={docId ?? ''} asking={asking} fill={layout === 'chat'} box={box} palette={palette} projectId={projectId}
-      onChange={updateChat} onRevert={restoreVersion} onParamsAccepted={() => build(codeRef.current, 'project parameters')}
+      onChange={updateChat} onRevert={restoreVersion} onParamsAccepted={paramsAccepted}
+      card={(m) => m.held ? (
+        <HeldCard held={m.held} actionKey={cardKey(docId ?? '', 'held', m.at)} onApply={() => applyHeld(m.at)}
+          params={!!m.params && m.params.status === 'pending' && ppReads(m.held.code).some((n) => m.params!.items.some((p) => p.name === n))}
+          onKeep={() => updateChat((ms) => withCardStatus(ms, m.at, 'held', 'kept'))} />
+      ) : null}
       scrollKey={layout} />
   );
   const chatInput = (

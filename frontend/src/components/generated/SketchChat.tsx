@@ -159,10 +159,13 @@ export function CardButton({ primary, busy, onClick, children }: {
   );
 }
 
-/** New code that stops making outputs parts use, or that needs project
- *  parameters not accepted yet: nothing is saved until the user says. */
-export function HeldCard({ held, actionKey, onApply, onKeep }: {
+/** New code that stops making outputs parts use, that needs project
+ *  parameters not accepted yet, or (part chat) an AI edit of a part the user
+ *  changed while it worked: nothing is saved until the user says. */
+export function HeldCard({ held, params = false, actionKey, onApply, onKeep }: {
   held: NonNullable<ChatMessage['held']>;
+  /** (a changed part) the edit also reads project parameters not accepted yet */
+  params?: boolean;
   /** where Apply is kept while it runs (see cardAction) */
   actionKey: string;
   /** throws what went wrong: the card shows it, with Try again */
@@ -174,13 +177,18 @@ export function HeldCard({ held, actionKey, onApply, onKeep }: {
   if (held.status !== 'pending') {
     return (
       <div style={{ fontSize: '11.5px', color: palette.textMuted, marginTop: 3, paddingLeft: 4 }}>
-        {held.status === 'applied' ? '✓ applied' : 'Kept the old code'}
+        {held.status === 'applied' ? '✓ applied' : held.changed ? 'Kept your version' : 'Kept the old code'}
       </div>
     );
   }
   return (
     <div role="group" aria-label="Confirm the change" style={cardBox(palette, palette.warning)}>
-      {held.broken.length ? (
+      {held.changed ? (
+        <span>
+          You changed the part while the AI was working on it, so its edit wasn't applied. The edit is of the
+          part as it was when you asked: applying it replaces your change{params ? ', and it uses the new project parameters above (accept them first)' : ''}.
+        </span>
+      ) : held.broken.length ? (
         <>
           <span>
             This change stops making {held.broken.map((b) => b.name).join(', ')}, which{' '}
@@ -197,9 +205,11 @@ export function HeldCard({ held, actionKey, onApply, onKeep }: {
       {error && <span role="alert" style={{ color: palette.danger }}>Couldn't apply it: {error}</span>}
       <Buttons>
         <CardButton primary busy={busy} onClick={() => void run(onApply)}>
-          {busy ? 'Applying…' : error ? 'Try again' : held.broken.length ? 'Apply anyway' : 'Apply now'}
+          {busy ? 'Applying…' : error ? 'Try again' : held.changed ? 'Apply the AI\'s edit' : held.broken.length ? 'Apply anyway' : 'Apply now'}
         </CardButton>
-        <CardButton busy={busy} onClick={() => { clearCardAction(actionKey); onKeep(); }}>Keep the old code</CardButton>
+        <CardButton busy={busy} onClick={() => { clearCardAction(actionKey); onKeep(); }}>
+          {held.changed ? 'Keep my version' : 'Keep the old code'}
+        </CardButton>
       </Buttons>
     </div>
   );

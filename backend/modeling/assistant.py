@@ -151,6 +151,100 @@ def _operations(code: str) -> str | None:
     return ast.dump(tree)
 
 
+class UndefinedParams(EngineError):
+    """An edit uses parameters (P["x"], PP["x"]) that aren't defined; the
+    message tells the model how to fix it, `user_text` tells the user."""
+
+    def __init__(self, missing: list[str], in_project: bool = False):
+        self.missing = missing
+        names = ", ".join(missing)
+        verb = "isn't" if len(missing) == 1 else "aren't"
+        how = ["add each P one to the P = dict(...) at the top of the script, or use a P parameter it has"]
+        if any(m.startswith("PP[") for m in missing):
+            how.append("use a project parameter the project has, or propose a new one with set_project_parameter"
+                       if in_project else "this part isn't in a project, so it has no PP parameters: use P")
+        super().__init__(f"the script uses {names}, which {verb} defined: {'; '.join(how)}")
+        self.user_text = (f"The AI's edit wasn't saved: it uses {names}, which {verb} defined, even after "
+                          "it was asked to fix that. The part is as it was.")
+
+
+def _key(node: ast.AST, name: str) -> str | None:
+    """`name["key"]` → "key" (any other subscript of `name`: "")."""
+    if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) and node.value.id == name:
+        k = node.slice
+        return k.value if isinstance(k, ast.Constant) and isinstance(k.value, str) else ""
+    return None
+
+
+def _p_defined(tree: ast.AST) -> set[str] | None:
+    """The keys the script gives P (P = dict(...) / {...}, P["x"] = ...,
+    P.update(...), P.setdefault(...)); None when they can't be told without
+    running it (P built some other way, or a key that is computed)."""
+    keys: set[str] = set()
+
+    def literal(v: ast.AST) -> bool:
+        if isinstance(v, ast.Call) and isinstance(v.func, ast.Name) and v.func.id == "dict" and not v.args:
+            if any(kw.arg is None for kw in v.keywords):
+                return False
+            keys.update(kw.arg for kw in v.keywords)
+            return True
+        if isinstance(v, ast.Dict):
+            if not all(isinstance(k, ast.Constant) and isinstance(k.value, str) for k in v.keys):
+                return False
+            keys.update(k.value for k in v.keys)
+            return True
+        return False
+
+    for n in ast.walk(tree):
+        targets = n.targets if isinstance(n, ast.Assign) else [n.target] if isinstance(n, ast.AnnAssign) else []
+        for t in targets:
+            if isinstance(t, ast.Name) and t.id == "P" and not literal(n.value):
+                return None
+            k = _key(t, "P")
+            if k == "":
+                return None
+            if k:
+                keys.add(k)
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and isinstance(n.func.value, ast.Name)
+                and n.func.value.id == "P" and n.func.attr in ("update", "setdefault")):
+            if n.func.attr == "setdefault":
+                if not (n.args and isinstance(n.args[0], ast.Constant) and isinstance(n.args[0].value, str)):
+                    return None
+                keys.add(n.args[0].value)
+            elif not all(literal(a) for a in n.args) or any(kw.arg is None for kw in n.keywords):
+                return None
+            else:
+                keys.update(kw.arg for kw in n.keywords)
+    return keys
+
+
+def undefined_params(code: str, project: set[str] | None) -> list[str]:
+    """The parameters `code` reads that nothing defines, as written
+    (P["plate_t"], PP["arm_od"]): a P key the script never sets, or a PP name
+    that isn't in `project` (the project's parameters, and those proposed
+    with this edit; None: don't check PP). Reads with a default (P.get("x",
+    1)) are fine, as are scripts whose P can't be read without running them."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return []      # the build says what's wrong
+    p_keys = _p_defined(tree)
+    out: list[str] = []
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Subscript) and isinstance(n.ctx, ast.Store):
+            continue    # P["x"] = ... defines it
+        for name, known in (("P", p_keys), ("PP", project)):
+            k = _key(n, name)
+            if k and known is not None and k not in known:
+                out.append(f'{name}["{k}"]')
+    for n in ast.walk(tree):        # P["x"] += 1 reads it first
+        if isinstance(n, ast.AugAssign):
+            k = _key(n.target, "P")
+            if k and p_keys is not None and k not in p_keys:
+                out.append(f'P["{k}"]')
+    return list(dict.fromkeys(out))
+
+
 def _circles(prof: dict, most: int = 8) -> str:
     """The sketch's circles by size, with their centres in its own x/y, so the
     model can tell one sketch's holes from another's."""
@@ -907,7 +1001,25 @@ def edit_script(
         # raises EngineError if nothing builds
         return run_script(script, document_id=document_id, shared=shared, assets=assets)
 
+    known_pp: list[set[str]] = []    # the project's parameters (and pinned ones), read once
+
+    def check_params(script: str) -> None:
+        # a parameter nothing defines fails only when its line runs, or the
+        # part fails later (a proposed project parameter the user rejects):
+        # caught here, before anything is saved
+        if not known_pp:
+            from . import shared_defs
+
+            part = shared_defs._part(document_id) if document_id else None
+            pinned = (shared_defs._data(part).get("pinned") or {}) if part is not None else {}
+            known_pp.append(set(shared_defs._project_params(part))
+                            | set(pinned.get("pp") or {} if isinstance(pinned, dict) else {}))
+        missing = undefined_params(script, known_pp[0] | set(param_props))
+        if missing:
+            raise UndefinedParams(missing, in_project)
+
     def validate(script: str) -> dict:
+        check_params(script)
         # an uploaded file must survive the edit (an invented one fails to resolve)
         dropped = sorted(asset_refs(code) - asset_refs(script))
         if dropped:
@@ -978,6 +1090,8 @@ def edit_script(
             after = validate(new_code)
         except EngineError as exc2:
             fixed = apply_fix(new_code, exc2)
+            if fixed is None and isinstance(exc2, UndefinedParams):
+                raise AssistantError(exc2.user_text, usage=cost()) from exc2
             if fixed is None:
                 raise AssistantError(f"couldn't produce a script that builds: {exc2}",
                                      usage=cost()) from exc2

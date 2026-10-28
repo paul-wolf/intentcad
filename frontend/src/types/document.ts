@@ -442,10 +442,12 @@ export interface ChatMessage {
    *  checks in words; the user makes it or declines */
   proposal?: { name: string; code: string; empty: boolean; outputs: string[]; checks: string;
                status: 'pending' | 'accepted' | 'declined' };
-  /** (sketch chat, generated) new code that stops making outputs parts use:
-   *  saved only when the user says so */
+  /** new code saved only when the user says so: (sketch chat, generated) it
+   *  stops making outputs parts use, or reads project parameters not accepted
+   *  yet; (part chat) the same parameters, or `changed`: the user changed the
+   *  part while the AI worked on it */
   held?: { code: string; label: string; broken: { name: string; parts: string[] }[];
-           status: 'pending' | 'applied' | 'kept' };
+           status: 'pending' | 'applied' | 'kept'; changed?: boolean };
   files?: string[];             // (user) the titles of the context files sent with it
   usage?: string;               // (assistant) tokens and cost of the call, cached input included
   at: number;

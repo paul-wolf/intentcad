@@ -432,3 +432,51 @@ class PlaneSketchListingTests(TestCase):
         (line,) = _face_sketches(str(doc.id))
         self.assertIn('"Boss"', line)
         self.assertIn('construction plane PLANES["Lid"]', line)
+
+
+class UndefinedParamTests(SimpleTestCase):
+    """Every parameter an AI edit reads must be defined before it is saved:
+    one corrective call, then the error, and the part is left as it was."""
+    setUp, tearDown = EditTests.setUp, EditTests.tearDown
+    PLATE = "P = dict(t=3)\npart = Box(40, 40, P['t'])"
+
+    def test_reads_that_nothing_defines(self):
+        from modeling.assistant import undefined_params
+        self.assertEqual(undefined_params('P = dict(t=3)\nx = P["plate_t"] + P["t"]', set()), ['P["plate_t"]'])
+        # set later, set by update / setdefault, or read with a default: all fine
+        self.assertEqual(undefined_params('P = {"t": 3}\nP["w"] = 2\nP.update(h=1)\nP.setdefault("d", 4)\n'
+                                          'x = P["t"] + P["w"] + P["h"] + P["d"] + P.get("e", 1)', set()), [])
+        # a line that never runs still counts
+        self.assertEqual(undefined_params('P = dict(t=3)\nif False:\n    x = P["plate_t"]', set()), ['P["plate_t"]'])
+        self.assertEqual(undefined_params('P = dict(t=3)\nP["n"] += 1', set()), ['P["n"]'])
+        # a P that can't be read without running it is left to the build
+        self.assertEqual(undefined_params('P = dict(**base)\nx = P["any"]', set()), [])
+        # project parameters: those the project has (or this edit proposes)
+        self.assertEqual(undefined_params('x = PP["arm_od"] + PP["thick"]', {"thick"}), ['PP["arm_od"]'])
+        self.assertEqual(undefined_params('x = PP["arm_od"]', None), [])
+        self.assertEqual(undefined_params("part = nope(", set()), [])
+
+    def test_an_undefined_parameter_gets_one_corrective_call(self):
+        seen = []
+        bad = self.PLATE + "\nif False:\n    part -= Cylinder(P['hole_d'] / 2, 10)"
+        good = self.PLATE.replace("t=3", "t=3, hole_d=4") + "\npart -= Cylinder(P['hole_d'] / 2, 10)"
+
+        def llm(system, user, tools):
+            seen.append(user)
+            return {"code": bad if len(seen) == 1 else good, "note": "Added a hole."}
+        r = edit_script(self.PLATE, "add a hole", llm=llm)
+        self.assertEqual(len(seen), 2)
+        self.assertIn('the script uses P["hole_d"], which isn\'t defined', seen[1])
+        self.assertIn("P = dict(...)", seen[1])
+        self.assertEqual(r["code"], good)
+
+    def test_still_undefined_is_an_error_and_nothing_is_saved(self):
+        bad = self.PLATE.replace("P['t']", "P['plate_t']")
+        with self.assertRaisesRegex(AssistantError, r"wasn't saved: it uses P\[\"plate_t\"\], which isn't defined"):
+            edit_script(self.PLATE, "thicker", llm=_fake({"code": bad, "note": "x"}, {"code": bad, "note": "x"}))
+
+    def test_a_part_not_in_a_project_has_no_project_parameters(self):
+        with self.assertRaisesRegex(AssistantError, r'PP\["plate_t"\]'):
+            edit_script(self.PLATE, "thicker", llm=_fake(
+                {"code": "part = Box(40, 40, PP['plate_t'])", "note": "x"},
+                {"code": "part = Box(40, 40, PP['plate_t'])", "note": "x"}))

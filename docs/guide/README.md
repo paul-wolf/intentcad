@@ -111,6 +111,18 @@ check before printing.
   that misses, holes cut again where they already go through) goes back to the AI once:
   it fixes it or asks you which feature you mean. If it still changes nothing, its
   message ends "this leaves the shape exactly as it was".
+- **Your changes come first**: you can keep working while the AI thinks. If you change
+  the part before its answer comes (a dialog, a parameter, the script), its edit is not
+  applied. It waits on a card in the chat: **Apply the AI's edit** (it replaces your
+  change, since the AI worked on the part as it was when you asked) or **Keep my
+  version**. An edit that uses a project parameter it has just proposed waits the same
+  way, and goes in when you accept the parameter.
+- **No undefined parameters**: before an edit is saved, every `P["…"]` and `PP["…"]` it
+  reads must be defined (even on a line that doesn't run). If one isn't, the AI gets one
+  try to fix it; if it still isn't, the chat says which parameter, and the part stays
+  as it was.
+
+![An AI edit waiting on a card: the part was changed while the AI worked](images/ai-edit-held.png)
 
 ### Sketch
 
