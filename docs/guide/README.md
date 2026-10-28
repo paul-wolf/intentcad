@@ -157,8 +157,19 @@ faces of a part:
 - **Hole**: clearance, tapped, heat-set insert, counterbore and countersink, in M2 to M5,
   at sketch points; optionally on a **standoff** with a strengthening fillet at its foot.
 - **Shell**: hollow a solid into walls, leaving the faces you choose open.
+- **Regions of a sketch**: closed shapes that overlap split the sketch into regions.
+  The Extrude dialog (and the sketcher's **Extrude…** panel) shows a small map of them:
+  click a region to take it or leave it out. Taken regions are filled blue, the others
+  hatched. By default every shape is taken and a shape fully inside another is a hole
+  (a circle in a square is a hole). For a notch, draw a rectangle across the square's
+  edge and leave out its two pieces. **Default** goes back to the default.
+- **The pick is saved with the step**: it survives edits of the sketch that keep its
+  regions. If an edit removes a region the step uses, the step shows "a region picked
+  for this step is gone": reopen it and click the regions to use.
 
 ![Holes on standoffs, placed at sketch points](images/holes.png)
+
+![The Extrude dialog's regions: the square taken, the rectangle across its edge left out, for a notch](images/sketch-regions.png)
 
 ### Modify
 

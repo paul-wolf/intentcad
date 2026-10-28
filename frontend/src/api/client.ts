@@ -407,9 +407,15 @@ export const buildApi = {
    *  the one on `line`: an op change rewrites the operator and sign. */
   addExtrude(payload: { code: string; sketch: string; op: ExtrudeOp; depth: number; through: boolean; flip: boolean;
                         datum?: boolean; both?: boolean; line?: number | null;
-                        extent?: ExtrudeExtent; face?: FaceRefSpec | null; offset?: number | string; key?: string | null }):
+                        extent?: ExtrudeExtent; face?: FaceRefSpec | null; offset?: number | string; key?: string | null;
+                        regions?: [number, number][] | null }):
     Promise<{ code: string; param: string | null }> {
     return request('/build/add_extrude', { method: 'POST', body: JSON.stringify(payload) });
+  },
+  /** The regions a sketch's closed shapes split it into (the Extrude
+   *  dialogs' region picker): `error` when the shapes can't be built. */
+  sketchRegions(loops: unknown[]): Promise<{ regions: import('@/build/regions').SketchRegion[]; error: string | null }> {
+    return request('/build/sketch_regions', { method: 'POST', body: JSON.stringify({ profile: { loops } }) });
   },
   /** Append a revolve of a face sketch, or rewrite the one on `line`. The
    *  axis is a line of the sketch ({line: id}), X / Y / Z, a straight edge or

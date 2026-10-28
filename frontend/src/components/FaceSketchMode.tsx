@@ -19,11 +19,13 @@ import { planeBasis, sketchCamera, fitViewport, type PlaneBasis, type Rect } fro
 import {
   BASE_PLANES, boundPlane, extrudeDirectionText, extrudeGhost, extrudeSpan, faceLabel, faceSketchMenu, newFaceSketch, partSide,
   newConstructionSketch, newPlaneSketch, onTangentPlane, refreshOutline, sketchBasePlane, sketchBounds, sketchLoops, sketchSegments, type BasePlane,
-  type ConstructionPlane, type SketchBindings, drawnCount,
+  type ConstructionPlane, type SketchBindings, type XY, drawnCount,
 } from '@/build/faceSketch';
 import { resolveSketch } from '@/utils/resolveSketch';
 import { axisChoices, defaultAxis, lineProblem, type AxisChoice, type RevolveAxis } from '@/build/revolve';
 import type { Sketch } from '@/types/document';
+import { pickedOutline, type SketchRegion } from '@/build/regions';
+import { RegionPicker, useSketchRegions } from './RegionPicker';
 
 const FADE_MS = 250;
 const TURN_MS = 260;   // the viewer's turn into / out of the extrude preview
@@ -42,6 +44,8 @@ export interface ExtrudeOptions {
   /** Up to face / Up to next: the 3D Extrude dialog opens on Done, to pick
    *  the face and preview where it stops (default: distance, or through) */
   extent?: ExtrudeExtent;
+  /** a point inside each region of the sketch it takes (null: the default ones) */
+  regions?: XY[] | null;
 }
 
 /** The sketcher's Revolve…: the axis picked here; the angle and the rest are
@@ -238,6 +242,7 @@ export function useFaceSketch(
     setSession({ sketchId: sk.id, label, face,
                  plane: planeBasis(plane), datum, prevActive, phase: 'enter' });
     setUpdating(null);
+    setEx((e) => ({ ...e, regions: null }));   // a pick is the sketch's own
     const id = sk.id;
     void extrudeOfRef.current?.(sk.name).then((was) => {
       if (!was || sessionRef.current?.sketchId !== id) return;
@@ -482,6 +487,7 @@ export function useFaceSketch(
 
   const current = session ? sketches.find((x) => x.id === session.sketchId) : undefined;
   const shapes = useMemo(() => (current ? sketchLoops(current) : { loops: [], open: 0 }), [current]);
+  const regions = useSketchRegions(extruding && shapes.loops.length ? shapes.loops : null);
   const hasPartRef = useRef(hasPart);
   hasPartRef.current = hasPart;
   // the dialog offers New body only while there is no part, Cut / Join after
@@ -577,11 +583,12 @@ export function useFaceSketch(
     const span = untilOf(o) && extent
       ? extrudeSpan({ ...o, through: false, both: false, depth: Math.max(Math.abs(extent[0]), Math.abs(extent[1]), 1) }, extent)
       : extrudeSpan(o, extent);
-    const g = extrudeGhost(current, span, { origin: s.plane.origin, normal: s.plane.normal, xAxis: s.plane.xDir });
+    const g = extrudeGhost(current, span, { origin: s.plane.origin, normal: s.plane.normal, xAxis: s.plane.xDir },
+                           ex.regions && regions ? pickedOutline(regions, ex.regions) : undefined);
     setStrokes(false);   // the flat drawing doesn't line up once the view turns
     previewing.current = true;
     v.setExtrudePreview({ ...g, color: GHOST[ex.op] });
-  }, [extruding, ex, current, phase, viewerRef, resRef]);
+  }, [extruding, ex, current, phase, viewerRef, resRef, regions]);
   // where the part is from the plane: the extrude's words for a tilted plane
   const partM = session && hasPart() ? resRef.current?.metrics : undefined;
   const partAt = session && partM ? partSide(session.plane.origin, session.plane.normal, partM.bbox_min, partM.bbox_max) : undefined;
@@ -658,6 +665,7 @@ export function useFaceSketch(
                       onClick={exit}>Done</button>
               {extruding && (
                 <ExtrudeDialog value={ex} onChange={setEx} shapes={shapes.loops.length} open={shapes.open} datum={session.datum} updating={updating}
+                               regions={regions}
                                direction={extrudeDirectionText(shapeOf(ex, session.datum), session.plane.normal, partAt)}
                                onApply={applyExtrude} onCancel={() => setExtruding(false)} />
               )}
@@ -763,8 +771,10 @@ function MenuItem({ onClick, children }: { onClick: () => void; children: React.
   );
 }
 
-function ExtrudeDialog({ value, onChange, shapes, open, datum, updating, direction, onApply, onCancel }: {
+function ExtrudeDialog({ value, onChange, shapes, open, datum, updating, direction, regions, onApply, onCancel }: {
   value: ExtrudeOptions; onChange: (v: ExtrudeOptions) => void;
+  /** the sketch's regions, to pick which it takes */
+  regions: SketchRegion[] | null;
   shapes: number; open: number; datum: boolean; direction: string; onApply: () => void; onCancel: () => void;
   /** the step that extrudes this sketch already: Apply updates it */
   updating: string | null;
@@ -855,6 +865,7 @@ function ExtrudeDialog({ value, onChange, shapes, open, datum, updating, directi
                     background: palette.buttonBg }}>
         {direction}
       </div>
+      <RegionPicker regions={regions} value={value.regions} onChange={(r) => set({ regions: r })} />
       <div style={{ color: shapes ? palette.textSecondary : palette.danger, lineHeight: 1.4 }}>
         {shapes ? `${shapes} closed shape${shapes > 1 ? 's' : ''}` : 'No closed shapes to extrude'}
         {open ? ` · ${open} open (ignored)` : ''}
