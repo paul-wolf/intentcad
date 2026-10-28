@@ -2,19 +2,21 @@
 
 The model is a build123d script; the assistant rewrites it from natural language
 (with the user's current selection as the target), then we validate it by running
-it — one corrective retry on a build error. build123d does the CAD; the AI just
-authors the script. The Anthropic call is injected so the prompt/validation logic
-is testable with a fake llm.
+it — one corrective retry on a build error, and one on an edit that leaves the
+shape exactly as it was. build123d does the CAD; the AI just authors the script.
+The Anthropic call is injected so the prompt/validation logic is testable with a
+fake llm.
 """
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 from collections import defaultdict
 from typing import Callable
 
-from .engine import EngineError, asset_refs, load_assets, load_sketches, run_script, uses_shared
+from .engine import EngineError, asset_refs, load_assets, run_script, uses_shared
 from .paramedit import ParamError, set_params
 from .llm_models import call_cost, is_known, list_models
 
@@ -117,6 +119,50 @@ def geometry_summary(faces: list[dict], metrics: dict | None = None, max_lines: 
     if len(body) > room:
         body = body[:room - 1] + [f"  … {len(body) - room + 1} more lines omitted"]
     return "\n".join(lines + body)
+
+
+def same_shape(a: dict | None, b: dict | None) -> bool:
+    """Two builds (run_script results) with the same volume, surface area,
+    bounding box and number of faces: the same shape, as far as anyone can see."""
+    ma, mb = (a or {}).get("metrics") or {}, (b or {}).get("metrics") or {}
+    if ma.get("volume") is None or mb.get("volume") is None:
+        return False
+
+    def close(x: float, y: float) -> bool:
+        return abs(x - y) <= 1e-6 * max(1.0, abs(x), abs(y))
+
+    if not (close(ma["volume"], mb["volume"]) and close(ma.get("area", 0), mb.get("area", 0))):
+        return False
+    for k in ("bbox_min", "bbox_max"):
+        if not ma.get(k) or not mb.get(k) or not all(close(x, y) for x, y in zip(ma[k], mb[k])):
+            return False
+    return len(a.get("faces") or []) == len(b.get("faces") or [])
+
+
+def _operations(code: str) -> str | None:
+    """The script without its comments, its layout and its P values: two
+    scripts that differ only there make the same operations."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None
+    tree.body = [n for n in tree.body
+                 if not (isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "P" for t in n.targets))]
+    return ast.dump(tree)
+
+
+def _circles(prof: dict, most: int = 8) -> str:
+    """The sketch's circles by size, with their centres in its own x/y, so the
+    model can tell one sketch's holes from another's."""
+    by_d: dict[float, list] = defaultdict(list)
+    for lp in prof.get("loops") or []:
+        if len(lp) == 1 and lp[0].get("t") == "circle" and lp[0].get("c") and lp[0].get("r"):
+            by_d[round(2 * lp[0]["r"], 2)].append(lp[0]["c"])
+    out = []
+    for d, cs in sorted(by_d.items()):
+        at = ", ".join(_vec(c) for c in cs[:most]) + (", …" if len(cs) > most else "")
+        out.append(f"{len(cs)}× Ø{_fmt(d)} at {at}")
+    return f"; circles (in its own x/y): {'; '.join(out)}" if out else ""
 
 
 # How the AI uses reference files (context files) and says where each number
@@ -592,7 +638,7 @@ def _face_sketches(document_id: str | None) -> list[str]:
         face = prof.get("face") or {}
         on = f"drawn on the {face['hint']}, " if face.get("hint") else ""
         ids = list(prof.get("lines") or {}) or ["axis-h", "axis-v"]
-        lines = f"; its lines for sketch_line(): {', '.join(json.dumps(i) for i in ids)}"
+        lines = f"{_circles(prof)}; its lines for sketch_line(): {', '.join(json.dumps(i) for i in ids)}"
         if prof.get("planeRef"):
             out.append(f"- {json.dumps(s.get('name'))}: "
                        f"{len(prof.get('loops') or [])} closed shape(s), drawn on the construction plane "
@@ -708,8 +754,10 @@ def edit_script(
     only models the Models API currently offers are honoured). `build_error` is
     the error the current `code` fails with, if any — the model is asked to
     repair it as part of the edit. `document_id` resolves the uploaded files
-    the script imports (ASSETS[...]); for such a script the prompt also gets a
-    GEOMETRY SUMMARY of the current build. `files` are content blocks for the
+    the script imports (ASSETS[...]). The prompt gets a GEOMETRY SUMMARY of the
+    current build, and an edit that builds the very same shape (volume, area,
+    bounding box, faces) gets one corrective call; if it still changes nothing,
+    its note says so. `files` are content blocks for the
     context files (documents/context.py ai_blocks), sent before the prompt
     text, which lists them (`file_listing`) so the model can cite them.
 
@@ -729,16 +777,7 @@ def edit_script(
     model = model if model and is_known(model) else list_models()["default"]
     llm = llm or (lambda s, u, t, turns=None: _anthropic_call(s, u, t, model=model, **({"turns": turns} if turns else {})))
 
-    # an imported file's geometry isn't readable from the script: describe it
-    assets = load_assets(code, document_id) if asset_refs(code) else {}
-    summary = ""
-    if assets:
-        try:
-            cur = run_script(code, assets=assets, sketches=load_sketches(code, document_id))
-            summary = geometry_summary(cur.get("faces", []), cur.get("metrics"))
-        except EngineError:
-            pass    # the current script doesn't build: no inventory to describe
-
+    summary = ""    # the current build's faces, holes and bosses (set below)
     drawn = _face_sketches(document_id)
     from . import project_context as pc
     project = pc.project_context(document_id) if document_id else ""
@@ -857,12 +896,7 @@ def edit_script(
             "model": model,
         }
 
-    def validate(script: str) -> None:
-        # an uploaded file must survive the edit (an invented one fails to resolve)
-        dropped = sorted(asset_refs(code) - asset_refs(script))
-        if dropped:
-            raise EngineError(f'the script no longer imports ASSETS["{dropped[0]}"]; '
-                              "keep every ASSETS[...] line exactly as it was")
+    def build(script: str, assets: dict | None = None) -> dict:
         shared = None
         if uses_shared(script):
             from . import shared_defs
@@ -870,9 +904,19 @@ def edit_script(
             base = sketch_refs if sketch_refs is not None else shared_defs.saved_refs(document_id)
             shared = shared_defs.resolve(script, document_id, refs={**(base or {}), **added_refs})
             shared["pp"].update({n: p["value"] for n, p in param_props.items()})
-        r = run_script(script, document_id=document_id, shared=shared)  # raises EngineError if nothing builds
+        # raises EngineError if nothing builds
+        return run_script(script, document_id=document_id, shared=shared, assets=assets)
+
+    def validate(script: str) -> dict:
+        # an uploaded file must survive the edit (an invented one fails to resolve)
+        dropped = sorted(asset_refs(code) - asset_refs(script))
+        if dropped:
+            raise EngineError(f'the script no longer imports ASSETS["{dropped[0]}"]; '
+                              "keep every ASSETS[...] line exactly as it was")
+        r = build(script)
         if r.get("warning"):    # an operation failed partway — treat as a build error
             raise EngineError(r["warning"], fix=r.get("fix"))
+        return r
 
     def apply_fix(script: str, exc: EngineError) -> str | None:
         """The engine measured the size that fits and it lives in a param: set it
@@ -888,6 +932,16 @@ def edit_script(
             return None
         return fixed
 
+    # the current build: the model is told where the material, holes and bosses
+    # are (it can't see that in a script that extrudes sketches or imports a
+    # file), and an edit that leaves it exactly as it was is caught below
+    before = None
+    try:
+        before = build(code, assets=load_assets(code, document_id) if asset_refs(code) else None)
+        summary = geometry_summary(before.get("faces", []), before.get("metrics"))
+    except EngineError:
+        pass    # the current script doesn't build: nothing to describe or compare
+
     out = call()
     if out.get("kind") == "question":
         return done({"kind": "question", "question": out.get("question", ""), **cost()})
@@ -895,8 +949,9 @@ def edit_script(
         return done({"kind": "answer", "answer": out.get("text", ""), **cost()})
 
     new_code = out.get("code", "")
+    after = None    # the edit's build, when it built first time or after a corrective call
     try:
-        validate(new_code)
+        after = validate(new_code)
     except EngineError as exc:
         fixed = apply_fix(new_code, exc)
         if fixed is not None:
@@ -920,7 +975,7 @@ def edit_script(
             return done({"kind": "answer", "answer": out.get("text", ""), **cost()})
         new_code = out.get("code", "")
         try:
-            validate(new_code)
+            after = validate(new_code)
         except EngineError as exc2:
             fixed = apply_fix(new_code, exc2)
             if fixed is None:
@@ -928,4 +983,37 @@ def edit_script(
                                      usage=cost()) from exc2
             new_code = fixed
 
-    return done({"kind": "edit", "code": new_code, "note": out.get("note", ""), **cost()})
+    note = out.get("note", "")
+
+    def unchanged(script: str, r: dict | None) -> bool:
+        return (before is not None and not before.get("warning") and same_shape(before, r)
+                and _operations(script) != _operations(code))
+
+    if unchanged(new_code, after):
+        m = before["metrics"]
+        out = call(
+            f"\nYour script builds, but the shape it makes is exactly the shape the current "
+            f"script makes (volume {_fmt(m['volume'])} mm³, surface area {_fmt(m.get('area', 0))} mm², "
+            f"the same bounding box and {len(before.get('faces') or [])} faces): the lines you "
+            "added or changed add or remove no material. Check the GEOMETRY SUMMARY for where "
+            "the material, holes and bosses really are: a cut has to pass through solid "
+            "material, and a hole meant to go through a boss or leg has to be cut after that "
+            "boss is made, along its whole length. If you can't tell which feature the user "
+            "means, ask with ask_clarification. If the request needs no change to the shape "
+            "(a parameter, a rename, a tidy-up), return the same script and say so in the "
+            "note. Otherwise return a corrected complete script; its note is what the user reads.")
+        if out.get("kind") == "question":
+            return done({"kind": "question", "question": out.get("question", ""), **cost()})
+        if out.get("kind") == "answer":
+            return done({"kind": "answer", "answer": out.get("text", ""), **cost()})
+        try:
+            again = out.get("code", "")
+            after = validate(again)
+            new_code, note = again, out.get("note", "")
+        except EngineError:
+            pass    # keep the first edit; it builds
+        if unchanged(new_code, after):
+            # never let the note claim a change the shape doesn't show
+            note = f"{note} Note: this leaves the shape exactly as it was.".strip()
+
+    return done({"kind": "edit", "code": new_code, "note": note, **cost()})
