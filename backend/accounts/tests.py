@@ -178,3 +178,44 @@ class BackfillTests(TestCase):
         self.assertEqual(UserEvent.objects.get(kind="login").ip_address, "10.0.0.1")
         backfill(apps, None)   # only ever into an empty table
         self.assertEqual(UserEvent.objects.count(), 4)
+
+
+class SeedTestUserTests(TestCase):
+    """manage.py seed_test_user: the local test user from accounts/dev_seed.py."""
+
+    def _seed(self):
+        from io import StringIO
+        from django.core.management import call_command
+        call_command("seed_test_user", stdout=StringIO())
+
+    def test_signs_in_and_joins_the_guide_project_s_organisation(self):
+        from projects.models import Project
+        from .dev_seed import GUIDE_PROJECT, TEST_USER
+        Organisation.objects.create(name="Other", slug="other")
+        org = Organisation.objects.create(name="Guides", slug="guides")
+        Project.objects.create(name=GUIDE_PROJECT, organisation=org)
+        self._seed()
+        user = User.objects.get(username=TEST_USER["username"])
+        self.assertEqual(user.organisation, org)
+        r = _post(Client(), "/api/auth/login", {"username": TEST_USER["email"], "password": TEST_USER["password"]})
+        self.assertEqual(r.status_code, 200)
+
+    def test_running_it_again_resets_the_password_and_lockout(self):
+        from .dev_seed import TEST_USER
+        self._seed()
+        user = User.objects.get(username=TEST_USER["username"])
+        user.set_password("something else")
+        user.failed_login_attempts, user.locked_until = 9, timezone.now() + timedelta(hours=1)
+        user.save()
+        self._seed()
+        user.refresh_from_db()
+        self.assertTrue(user.check_password(TEST_USER["password"]))
+        self.assertIsNone(user.locked_until)
+        self.assertEqual(User.objects.filter(username=TEST_USER["username"]).count(), 1)
+
+    def test_refuses_anything_but_sqlite(self):
+        from django.core.management.base import CommandError
+        from django.test import override_settings
+        with override_settings(DATABASES={"default": {"ENGINE": "django.db.backends.postgresql"}}):
+            with self.assertRaises(CommandError):
+                self._seed()
