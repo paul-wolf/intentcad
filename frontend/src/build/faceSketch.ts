@@ -217,13 +217,18 @@ export function refreshOutline(sk: Sketch, face: FaceInfo | undefined, edges: Ru
  *  new one. null: none yet, start one straight away. */
 export interface FaceSketchMenu { face: FaceInfo; items: { id: string; name: string; count: number }[] }
 
+/** How many things are drawn in a sketch (not its references or dimensions). */
+export function drawnCount(s: Sketch): number {
+  return s.entities.filter((e) => !isRef(e) && e.type !== 'dimension').length;
+}
+
 export function faceSketchMenu(sketches: Sketch[], face: FaceInfo, bound?: SketchBindings | null): FaceSketchMenu | null {
   const items: { id: string; name: string; count: number; d: number }[] = [];
   for (const s of sketches) {
     const d = acrossDistance(s, face, bound);
     if (d == null) continue;
     items.push({ id: s.id, name: s.name, d,
-                 count: s.entities.filter((e) => !isRef(e) && e.type !== 'dimension').length });
+                 count: drawnCount(s) });
   }
   if (!items.length) return null;
   items.sort((a, b) => a.d - b.d);
