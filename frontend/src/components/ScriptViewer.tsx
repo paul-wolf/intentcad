@@ -3,7 +3,7 @@ import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
 import {
   api, buildApi, errorText, ApiError, type RunResponse, type RunEdge, type FaceRefReport, type UsageResponse, type DimInfo, type SizeFix,
-  type FaceRefSpec, type HolePresets, type EdgeOpKind, type EdgeRefSpec, type ExtrudeExtent, type ExtrudeOp, type KeepItem, type Step,
+  type FaceRefSpec, type HolePresets, type EdgeOpKind, type EdgeRefSpec, type ExtrudeExtent, type ExtrudeOp, type KeepItem, type OpAt, type Step,
   type PlaneReport, type MirrorPlane, type PatternReport, type PatternSpec, type PlaneOpKind, type RunFace, type SharedInputs,
 } from '@/api/client';
 import { pinnedChanges, usesShared, withSharedProfiles } from '@/build/sharedSketch';
@@ -70,6 +70,7 @@ import {
   axisWords, boxSegments, chipPoints, defaultPattern, dirOfEdge, dirOfFace, instanceCount, patternBodyLine, patternHandles,
   patternSkip, patternSpec, patternValues, placeInstances, remapSkip, reportsOn, toggleSkip, wayWords, type PatternValues,
 } from '@/build/pattern';
+import { extrudeStepOf, sketcherOptions, withSketcherOptions } from '@/build/sketchExtrude';
 import { messageLine, reopenableAt, stepIcon, stepInputs, stepLabel, stepProblems, suppressedNote } from '@/build/steps';
 import {
   BASE_PLANES, boundPlane, extrudeDirectionText, faceLabel, findFaceSketch, partSide, referencedProfiles, referencedSketchNames,
@@ -139,6 +140,17 @@ type PlaneOp = { line: number | null; own: string | null }
 /** The Extrude dialog: reopened on its line, or new (`line` null: the
  *  sketcher's Up to face / Up to next, finished here with a 3D pick and preview). */
 interface ExtrudeEdit { line: number | null; v: ExtrudeValues; param: string | null; firstBody: boolean }
+/** An extrude line (as /build/op_at reads it) in the Extrude dialog's terms. */
+function extrudeEditOf(op: OpAt): ExtrudeEdit {
+  const a = op.args as { sketch: string; op: ExtrudeOp; extent?: ExtrudeExtent; depth: number | null; through: boolean;
+                         flip: boolean; both: boolean; datum: boolean; face?: FaceRefSpec | null; offset?: number };
+  return {
+    line: op.line, firstBody: a.op === 'new', param: op.params.depth ?? null,
+    v: { sketch: a.sketch, op: a.op, extent: a.extent ?? (a.through ? 'through' : 'distance'), depth: a.depth ?? 5,
+         through: a.through, flip: a.flip, both: a.both, datum: a.datum, face: a.face ?? null,
+         offset: op.exprs?.offset ?? a.offset ?? 0 },
+  };
+}
 /** The Revolve dialog: `line` the line it was reopened from (null: a new
  *  revolve), `firstBody` it makes the part (New body, nothing else). */
 interface RevolveEdit { line: number | null; v: RevolveValues; firstBody: boolean }
@@ -556,7 +568,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   codeRef.current = code;
   const faceSketch = useFaceSketch(viewerRef, canvasRef, resRef, (name, ex, rev) => { void sketchDoneRef.current(name, ex, rev); },
                                    () => hasPartRef.current, () => partParams(codeRef.current, paramBase.current),
-                                   getProjectId() ? (id) => { void saveToProjectRef.current(id); } : undefined);
+                                   getProjectId() ? (id) => { void saveToProjectRef.current(id); } : undefined,
+                                   async (name) => {
+                                     const was = await sketchExtrudeRef.current(name);
+                                     return was && { label: was.label, options: sketcherOptions(was.edit.v) };
+                                   });
   const faceSketchRef = useRef(faceSketch);
   faceSketchRef.current = faceSketch;
   const [sketchTip, setSketchTip] = useState<{ name: string; x: number; y: number } | null>(null);
@@ -1251,13 +1267,28 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       if (referencedProfiles(code, useDocumentStore.getState().document.sketches)[name]) await build(code);
       return;
     }
+    // the sketch is extruded already: its step is updated, not a second one added
+    const was = await sketchExtrude(name);
     if (ex.op !== 'new' && (ex.extent === 'face' || ex.extent === 'next')) {
       // Up to face / Up to next: the dialog on the part, to pick the face and
       // preview where it stops
       if (code.trim()) await build(code, `Edit sketch ${name}`);
-      setExtrudeOp({ line: null, firstBody: false, param: null,
+      const keep = was && !was.edit.firstBody ? was.edit : null;
+      setExtrudeOp({ line: keep?.line ?? null, firstBody: false, param: keep?.param ?? null,
                      v: { sketch: name, op: ex.op, extent: ex.extent, depth: ex.depth > 0 ? ex.depth : 5, through: false,
-                          flip: ex.flip, both: false, datum: !!ex.datum, face: null, offset: 0 } });
+                          flip: ex.flip, both: false, datum: !!ex.datum,
+                          face: keep?.v.extent === 'face' ? keep.v.face : null, offset: keep?.v.offset ?? 0 } });
+      return;
+    }
+    if (was) {
+      try {
+        const r = await extrudeLine({ ...was.edit, v: withSketcherOptions(was.edit.v, was.edit.firstBody, ex) });
+        setCode(r.code);
+        const out = await build(r.code, `Update ${was.label}`);
+        if (out.kind === 'ok') saveDraft(r.code);
+      } catch (err) {
+        setMessage(errorText(err));
+      }
       return;
     }
     try {
@@ -1271,6 +1302,18 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       setMessage(errorText(err));
     }
   };
+  // the step that extrudes face sketch `name` already (the last one, if
+  // several): reopening the sketch and pressing Extrude… edits that step
+  const sketchExtrude = async (name: string): Promise<{ edit: ExtrudeEdit; label: string } | null> => {
+    const st = extrudeStepOf(steps, name);
+    if (!st) return null;
+    try {
+      const op = await buildApi.opAt(codeRef.current, st.line, stepIn.datum);
+      return op.op === 'extrude' ? { edit: extrudeEditOf(op), label: stepLabel(st) } : null;
+    } catch { return null; }
+  };
+  const sketchExtrudeRef = useRef(sketchExtrude);
+  sketchExtrudeRef.current = sketchExtrude;
   // a reopened extrude whose sketch is being edited: its panel comes back on Done
   const sketchBackRef = useRef<ExtrudeEdit | null>(null);
   const sketchDoneRef = useRef(sketchDone);
@@ -2649,14 +2692,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         setMirrorOp({ kind: 'body', line: op.line, lines: [],
                       v: { plane: a.plane, join, gap, face: 'face' in a.plane ? a.plane.face : null } });
       } else if (op.op === 'extrude') {
-        const a = op.args as { sketch: string; op: ExtrudeOp; extent?: ExtrudeExtent; depth: number | null; through: boolean;
-                               flip: boolean; both: boolean; datum: boolean; face?: FaceRefSpec | null; offset?: number };
-        setExtrudeOp({
-          line: op.line, firstBody: a.op === 'new', param: op.params.depth ?? null,
-          v: { sketch: a.sketch, op: a.op, extent: a.extent ?? (a.through ? 'through' : 'distance'), depth: a.depth ?? 5,
-               through: a.through, flip: a.flip, both: a.both, datum: a.datum, face: a.face ?? null,
-               offset: op.exprs?.offset ?? a.offset ?? 0 },
-        });
+        setExtrudeOp(extrudeEditOf(op));
       } else if (op.op === 'revolve') {
         const a = op.args as { sketch: string; op: ExtrudeOp; axis: RevolveValues['axis']; angle: number; both: boolean; flip: boolean };
         setRevolveOp({

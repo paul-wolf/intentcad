@@ -128,6 +128,16 @@ faces of a part:
 - Select a flat face or a construction plane and press K: the full sketcher opens on it.
   With nothing selected, K offers the Top, Front and Right planes. Done or Esc takes
   you back to the part, with the sketch drawn on it.
+- **One sketch per step**: the usual way to build a part. Sketch on the Top plane and
+  extrude the outline. Then select a face, press K, choose **New sketch on this face**,
+  draw what to remove, and extrude it as a Cut. Each sketch becomes one step in the list.
+- **A face or plane with sketches already**: K lists them (with how many shapes each
+  has) and **New sketch on this face** or **on this plane** at the bottom. Pick one to
+  change it, or start another.
+- **Change a sketch that's extruded already**: open it again (K, or double-click it on
+  the part). Its **Extrude…** panel starts from that step's settings and says
+  "Updates the step …". Click **Update**: the same step changes, and no second extrude
+  is added. Just Done rebuilds the part with the new shapes.
 - The face's outline comes into the sketch as reference geometry; click other edges of
   the part to bring them in too, and dimension to them.
 - Sketches **follow the part**: if the face moves or its edges change, the sketch moves

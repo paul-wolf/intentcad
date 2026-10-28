@@ -19,7 +19,7 @@ import { planeBasis, sketchCamera, fitViewport, type PlaneBasis, type Rect } fro
 import {
   BASE_PLANES, boundPlane, extrudeDirectionText, extrudeGhost, extrudeSpan, faceLabel, faceSketchMenu, newFaceSketch, partSide,
   newConstructionSketch, newPlaneSketch, onTangentPlane, refreshOutline, sketchBasePlane, sketchBounds, sketchLoops, sketchSegments, type BasePlane,
-  type ConstructionPlane, type FaceSketchMenu, type SketchBindings,
+  type ConstructionPlane, type SketchBindings, drawnCount,
 } from '@/build/faceSketch';
 import { resolveSketch } from '@/utils/resolveSketch';
 import { axisChoices, defaultAxis, lineProblem, type AxisChoice, type RevolveAxis } from '@/build/revolve';
@@ -47,6 +47,17 @@ export interface ExtrudeOptions {
 /** The sketcher's Revolve…: the axis picked here; the angle and the rest are
  *  set in the 3D Revolve dialog that opens on Done (with a preview). */
 export interface RevolveStart { axis: RevolveAxis | null }
+
+/** K on a face or plane that has sketches already: them, and a new one. */
+interface SketchMenu {
+  title: string;
+  items: { id: string; name: string; count: number }[];
+  /** the face to highlight while sketching (−1: a plane) */
+  face: number;
+  newLabel: string;
+  onNew: () => void;
+  x: number; y: number;
+}
 
 interface Session {
   sketchId: string;
@@ -107,9 +118,10 @@ export interface FaceSketchApi {
   menuOpen: boolean;
   /** Sketch on this planar face: reopen its sketch, or start one. */
   enter(face: FaceRange): void;
-  /** Sketch on a base plane through the origin: reopen its sketch, or start one. */
+  /** Sketch on a base plane through the origin: start one, or (it has
+   *  sketches) ask which, or a new one. */
   enterPlane(which: BasePlane): void;
-  /** Sketch on the construction plane `name`: reopen its sketch, or start one. */
+  /** Sketch on the construction plane `name`: as on a base plane. */
   enterConstruction(name: string, plane: ConstructionPlane): void;
   /** Reopen a stored face sketch (double-click on the part). */
   open(sketchId: string): void;
@@ -135,6 +147,9 @@ export function useFaceSketch(
   /** Save to project (a part in a project): the sketch, closed, becomes a
    *  project sketch the script reads as SK["…"]. */
   onSaveToProject?: (sketchId: string) => void,
+  /** The step that extrudes this sketch already, if one does: the Extrude
+   *  panel starts from its settings, and Done updates it. */
+  extrudeOf?: (sketchName: string) => Promise<{ label: string; options: ExtrudeOptions } | null>,
 ): FaceSketchApi {
   const palette = useThemeStore((s) => s.palette);
   const [session, setSession] = useState<Session | null>(null);
@@ -151,6 +166,10 @@ export function useFaceSketch(
   const [extruding, setExtruding] = useState(false);   // the Extrude dialog is open
   const [ex, setEx] = useState<ExtrudeOptions>({ op: 'cut', depth: 5, through: true, flip: false });
   const pendingExtrude = useRef<ExtrudeOptions | null>(null);
+  // the step this sketch's extrude is already (its label): Extrude… updates it
+  const [updating, setUpdating] = useState<string | null>(null);
+  const extrudeOfRef = useRef(extrudeOf);
+  extrudeOfRef.current = extrudeOf;
   const [revolving, setRevolving] = useState(false);   // the Revolve panel is open
   const [revAxis, setRevAxis] = useState<string | null>(null);   // the sketch line it turns round
   const pendingRevolve = useRef<RevolveStart | null>(null);
@@ -167,7 +186,8 @@ export function useFaceSketch(
   const partVarsRef = useRef(partVars);
   partVarsRef.current = partVars;
   // K on a face with sketches already: which one (or a new one)
-  const [menu, setMenu] = useState<(FaceSketchMenu & { x: number; y: number }) | null>(null);
+  // (or on a base or construction plane with sketches already)
+  const [menu, setMenu] = useState<SketchMenu | null>(null);
   const pointer = useRef<{ x: number; y: number } | null>(null);
   useEffect(() => {
     const at = (e: PointerEvent) => { pointer.current = { x: e.clientX, y: e.clientY }; };
@@ -217,6 +237,13 @@ export function useFaceSketch(
     es.setProjectSource(res?.edges?.length ? { edges: res.edges, plane: planeBasis(plane), clipped: !datum } : null);
     setSession({ sketchId: sk.id, label, face,
                  plane: planeBasis(plane), datum, prevActive, phase: 'enter' });
+    setUpdating(null);
+    const id = sk.id;
+    void extrudeOfRef.current?.(sk.name).then((was) => {
+      if (!was || sessionRef.current?.sketchId !== id) return;
+      setUpdating(was.label);
+      setEx(was.options);
+    });
   }, [resRef]);
 
   // a new sketch on the face
@@ -236,20 +263,25 @@ export function useFaceSketch(
     const m = faceSketchMenu(doc.sketches, f, resRef.current?.sketches);
     if (!m) { startNew(f); return; }
     // the face has sketches: ask which (even with one — a second sketch on a face is a fair thing to want)
+    ask({ title: `Sketches on the ${faceLabel(f.normal)}`, items: m.items, face: f.index,
+          newLabel: 'New sketch on this face', onNew: () => startNew(f) });
+  }, [resRef, startNew]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // the which-sketch menu, at the pointer
+  const ask = (m: Omit<SketchMenu, 'x' | 'y'>) => {
     const r = canvasRef.current?.getBoundingClientRect();
     const at = pointer.current ?? (r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : { x: 200, y: 200 });
     setMenu({ ...m, x: at.x, y: at.y });
-  }, [resRef, canvasRef, startNew]);
+  };
 
   const pick = useCallback((id: string | null) => {
     const m = menu;
     setMenu(null);
     if (!m) return;
-    const f = m.face as FaceRange;
-    if (id == null) { startNew(f); return; }
+    if (id == null) { m.onNew(); return; }
     const sk = useDocumentStore.getState().document.sketches.find((s) => s.id === id);
-    if (sk) start(sk, f.index);
-  }, [menu, start, startNew]);
+    if (sk) start(sk, m.face);
+  }, [menu, start]);
 
   useEffect(() => {
     if (!menu) return;
@@ -262,35 +294,36 @@ export function useFaceSketch(
     return () => window.removeEventListener('keydown', onKey, true);
   }, [menu]);
 
+  // a new sketch on a base or construction plane, named after it
+  const addSketch = (base: string, make: (name: string) => Sketch) => {
+    const doc = useDocumentStore.getState().document;
+    let name = base;
+    for (let i = 2; doc.sketches.some((s) => s.name === name); i++) name = `${base} ${i}`;
+    const sk = make(name);
+    useDocumentStore.setState((s) => ({ document: { ...s.document, sketches: [...s.document.sketches, sk] } }));
+    start(sk, -1);
+  };
+  // a plane with sketches already: which one, or a new one (as on a face)
+  const onPlane = (label: string, on: Sketch[], startNewOne: () => void) => {
+    if (!on.length) { startNewOne(); return; }
+    ask({ title: `Sketches on the ${label}`, face: -1, newLabel: 'New sketch on this plane', onNew: startNewOne,
+          items: on.map((s) => ({ id: s.id, name: s.name, count: drawnCount(s) })) });
+  };
+
   const enterPlane = useCallback((which: BasePlane) => {
     if (sessionRef.current) return;
     const doc = useDocumentStore.getState().document;
-    let sk = doc.sketches.find((s) => sketchBasePlane(s) === which);
-    if (!sk) {
-      const base = `Sketch on ${BASE_PLANES[which].name}`;
-      let name = base;
-      for (let i = 2; doc.sketches.some((s) => s.name === name); i++) name = `${base} ${i}`;
-      sk = newPlaneSketch(name, which);
-      const added = sk;
-      useDocumentStore.setState((s) => ({ document: { ...s.document, sketches: [...s.document.sketches, added] } }));
-    }
-    start(sk, -1);
-  }, [start]);
+    const p = BASE_PLANES[which].name;
+    onPlane(p, doc.sketches.filter((s) => sketchBasePlane(s) === which),
+            () => addSketch(`Sketch on ${p}`, (name) => newPlaneSketch(name, which)));
+  }, [start]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const enterConstruction = useCallback((name: string, plane: ConstructionPlane) => {
     if (sessionRef.current) return;
     const doc = useDocumentStore.getState().document;
-    let sk = doc.sketches.find((s) => s.planeRef === name);
-    if (!sk) {
-      const base = `Sketch on ${name}`;
-      let label = base;
-      for (let i = 2; doc.sketches.some((s) => s.name === label); i++) label = `${base} ${i}`;
-      sk = newConstructionSketch(label, name, plane);
-      const added = sk;
-      useDocumentStore.setState((s) => ({ document: { ...s.document, sketches: [...s.document.sketches, added] } }));
-    }
-    start(sk, -1);
-  }, [start]);
+    onPlane(`plane ${name}`, doc.sketches.filter((s) => s.planeRef === name),
+            () => addSketch(`Sketch on ${name}`, (label) => newConstructionSketch(label, name, plane)));
+  }, [start]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const open = useCallback((id: string) => {
     const sk = useDocumentStore.getState().document.sketches.find((s) => s.id === id);
@@ -456,7 +489,8 @@ export function useFaceSketch(
     if (!extruding) {
       setRevolving(false);
       const part = hasPartRef.current();
-      setEx((e) => (part ? (e.op === 'new' ? { ...e, op: 'cut' } : e) : { ...e, op: 'new', depth: e.op === 'new' ? e.depth : 10 }));
+      // (the step that makes the part stays a New body)
+      if (!updating) setEx((e) => (part ? (e.op === 'new' ? { ...e, op: 'cut' } : e) : { ...e, op: 'new', depth: e.op === 'new' ? e.depth : 10 }));
     }
     setExtruding((o) => !o);
   };
@@ -560,14 +594,14 @@ export function useFaceSketch(
   const menuOverlay = menu && !session && (
     <>
       <div style={{ position: 'fixed', inset: 0, zIndex: 30 }} onMouseDown={() => setMenu(null)} />
-      <div role="menu" aria-label="Sketch on this face"
+      <div role="menu" aria-label={menu.title}
            style={{ position: 'fixed', zIndex: 31, minWidth: 220,
                     left: Math.max(8, Math.min(menu.x, window.innerWidth - 240)),
                     top: Math.max(8, Math.min(menu.y, window.innerHeight - 60 - 30 * menu.items.length)),
                     padding: '4px', background: palette.panelBg, border: `1px solid ${palette.border}`,
                     borderRadius: '6px', boxShadow: '0 4px 14px rgba(0,0,0,0.3)', fontSize: '12px', color: palette.text }}>
         <div style={{ padding: '3px 8px 5px', color: palette.textSecondary }}>
-          Sketches on the {faceLabel(menu.face.normal)}
+          {menu.title}
         </div>
         {menu.items.map((it) => (
           <MenuItem key={it.id} onClick={() => pick(it.id)}>
@@ -576,7 +610,7 @@ export function useFaceSketch(
           </MenuItem>
         ))}
         <div style={{ borderTop: `1px solid ${palette.border}`, margin: '4px 0' }} />
-        <MenuItem onClick={() => pick(null)}><span>New sketch on this face</span></MenuItem>
+        <MenuItem onClick={() => pick(null)}><span>{menu.newLabel}</span></MenuItem>
       </div>
     </>
   );
@@ -623,7 +657,7 @@ export function useFaceSketch(
               <button style={{ ...btn, background: palette.accent, borderColor: palette.accent, color: '#fff' }}
                       onClick={exit}>Done</button>
               {extruding && (
-                <ExtrudeDialog value={ex} onChange={setEx} shapes={shapes.loops.length} open={shapes.open} datum={session.datum}
+                <ExtrudeDialog value={ex} onChange={setEx} shapes={shapes.loops.length} open={shapes.open} datum={session.datum} updating={updating}
                                direction={extrudeDirectionText(shapeOf(ex, session.datum), session.plane.normal, partAt)}
                                onApply={applyExtrude} onCancel={() => setExtruding(false)} />
               )}
@@ -729,9 +763,11 @@ function MenuItem({ onClick, children }: { onClick: () => void; children: React.
   );
 }
 
-function ExtrudeDialog({ value, onChange, shapes, open, datum, direction, onApply, onCancel }: {
+function ExtrudeDialog({ value, onChange, shapes, open, datum, updating, direction, onApply, onCancel }: {
   value: ExtrudeOptions; onChange: (v: ExtrudeOptions) => void;
   shapes: number; open: number; datum: boolean; direction: string; onApply: () => void; onCancel: () => void;
+  /** the step that extrudes this sketch already: Apply updates it */
+  updating: string | null;
 }) {
   const palette = useThemeStore((s) => s.palette);
   const until = untilOf(value);
@@ -756,6 +792,11 @@ function ExtrudeDialog({ value, onChange, shapes, open, datum, direction, onAppl
                   display: 'flex', flexDirection: 'column', gap: '9px', textAlign: 'left',
                   background: palette.panelBg, border: `1px solid ${palette.border}`, borderRadius: '6px',
                   boxShadow: '0 4px 14px rgba(0,0,0,0.3)', fontSize: '12px' }}>
+      {updating && (
+        <div style={{ color: palette.textSecondary, lineHeight: 1.4 }}>
+          Updates the step <b style={{ color: palette.text }}>{updating}</b>
+        </div>
+      )}
       {value.op === 'new' ? (
         <div style={{ color: palette.text, lineHeight: 1.4 }}>
           <b>New body</b>
@@ -826,7 +867,7 @@ function ExtrudeDialog({ value, onChange, shapes, open, datum, direction, onAppl
         <button onClick={onApply} disabled={!ok}
                 style={{ fontSize: '12px', padding: '2px 10px', cursor: ok ? 'pointer' : 'default', borderRadius: '4px', opacity: ok ? 1 : 0.5,
                          background: palette.accent, color: '#fff', border: `1px solid ${palette.accent}` }}>
-          {until ? 'Continue…' : value.op === 'cut' ? 'Cut' : value.op === 'join' ? 'Join' : 'Create'}
+          {until ? 'Continue…' : updating ? 'Update' : value.op === 'cut' ? 'Cut' : value.op === 'join' ? 'Join' : 'Create'}
         </button>
       </div>
     </div>
