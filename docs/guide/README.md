@@ -147,7 +147,15 @@ faces of a part:
 - The face's outline comes into the sketch as reference geometry; click other edges of
   the part to bring them in too, and dimension to them.
 - Sketches **follow the part**: if the face moves or its edges change, the sketch moves
-  with it.
+  with it. A deeper or shallower extrude, a fillet or a hole made earlier keeps it on
+  the same face.
+- **A sketch that lost its face**: if an earlier change removes the face, or leaves only
+  a face that looks nothing like it, the sketch isn't moved anywhere else. Its step shows
+  as failed: "Sketch 'X' lost its face — pick a new one". Select the face it belongs on,
+  press K and choose **Move 'X' here**: the drawing is kept, the new face's outline comes
+  in, and the part rebuilds.
+
+![A sketch that lost its face, offered a new one](images/sketch-lost-face.png)
 
 ### Build the part
 

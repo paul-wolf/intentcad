@@ -19,7 +19,7 @@ import { planeBasis, sketchCamera, fitViewport, type PlaneBasis, type Rect } fro
 import {
   BASE_PLANES, boundPlane, extrudeDirectionText, extrudeGhost, extrudeSpan, faceLabel, faceSketchMenu, newFaceSketch, partSide,
   newConstructionSketch, newPlaneSketch, onTangentPlane, refreshOutline, sketchBasePlane, sketchBounds, sketchLoops, sketchSegments, type BasePlane,
-  type ConstructionPlane, type SketchBindings, drawnCount,
+  type ConstructionPlane, type SketchBindings, drawnCount, lostSketches, moveFaceSketch,
 } from '@/build/faceSketch';
 import { resolveSketch } from '@/utils/resolveSketch';
 import { axisChoices, defaultAxis, lineProblem, type AxisChoice, type RevolveAxis } from '@/build/revolve';
@@ -56,6 +56,8 @@ interface SketchMenu {
   face: number;
   newLabel: string;
   onNew: () => void;
+  /** face sketches that lost their face, to put on this one */
+  moves?: { id: string; name: string; count: number }[];
   x: number; y: number;
 }
 
@@ -261,9 +263,12 @@ export function useFaceSketch(
     if (sessionRef.current || f.kind !== 'plane') return;
     const doc = useDocumentStore.getState().document;
     const m = faceSketchMenu(doc.sketches, f, resRef.current?.sketches);
-    if (!m) { startNew(f); return; }
+    // sketches whose face the last build lost: offered to move here
+    const moves = lostSketches(doc.sketches, resRef.current?.sketches)
+      .map((s) => ({ id: s.id, name: s.name, count: drawnCount(s) }));
+    if (!m && !moves.length) { startNew(f); return; }
     // the face has sketches: ask which (even with one — a second sketch on a face is a fair thing to want)
-    ask({ title: `Sketches on the ${faceLabel(f.normal)}`, items: m.items, face: f.index,
+    ask({ title: `Sketches on the ${faceLabel(f.normal)}`, items: m?.items ?? [], face: f.index, moves,
           newLabel: 'New sketch on this face', onNew: () => startNew(f) });
   }, [resRef, startNew]);   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -282,6 +287,21 @@ export function useFaceSketch(
     const sk = useDocumentStore.getState().document.sketches.find((s) => s.id === id);
     if (sk) start(sk, m.face);
   }, [menu, start]);
+
+  // a sketch that lost its face, put on the menu's face and opened there
+  const move = useCallback((id: string) => {
+    const m = menu;
+    setMenu(null);
+    const f = m ? resRef.current?.faces?.find((x) => x.index === m.face) : undefined;
+    const sk = useDocumentStore.getState().document.sketches.find((s) => s.id === id);
+    if (!f || !sk) return;
+    const next = moveFaceSketch(sk, f, resRef.current?.edges ?? []);
+    useDocumentStore.setState((st) => ({
+      document: { ...st.document, sketches: st.document.sketches.map((x) => (x.id === id ? next : x)) },
+    }));
+    persistSketches();
+    start(next, f.index);
+  }, [menu, resRef, start]);
 
   useEffect(() => {
     if (!menu) return;
@@ -597,7 +617,7 @@ export function useFaceSketch(
       <div role="menu" aria-label={menu.title}
            style={{ position: 'fixed', zIndex: 31, minWidth: 220,
                     left: Math.max(8, Math.min(menu.x, window.innerWidth - 240)),
-                    top: Math.max(8, Math.min(menu.y, window.innerHeight - 60 - 30 * menu.items.length)),
+                    top: Math.max(8, Math.min(menu.y, window.innerHeight - 60 - 30 * (menu.items.length + (menu.moves?.length ?? 0)))),
                     padding: '4px', background: palette.panelBg, border: `1px solid ${palette.border}`,
                     borderRadius: '6px', boxShadow: '0 4px 14px rgba(0,0,0,0.3)', fontSize: '12px', color: palette.text }}>
         <div style={{ padding: '3px 8px 5px', color: palette.textSecondary }}>
@@ -609,6 +629,18 @@ export function useFaceSketch(
             <span style={{ color: palette.textSecondary }}>{it.count} {it.count === 1 ? 'shape' : 'shapes'}</span>
           </MenuItem>
         ))}
+        {!!menu.moves?.length && (
+          <>
+            {!!menu.items.length && <div style={{ borderTop: `1px solid ${palette.border}`, margin: '4px 0' }} />}
+            {menu.moves.map((it) => (
+              <MenuItem key={`move:${it.id}`} onClick={() => move(it.id)}
+                        title={`'${it.name}' lost its face when the part rebuilt: put it on this face, keeping what's drawn in it`}>
+                <span>Move '{it.name}' here</span>
+                <span style={{ color: palette.warning ?? palette.textSecondary }}>lost its face</span>
+              </MenuItem>
+            ))}
+          </>
+        )}
         <div style={{ borderTop: `1px solid ${palette.border}`, margin: '4px 0' }} />
         <MenuItem onClick={() => pick(null)}><span>{menu.newLabel}</span></MenuItem>
       </div>
@@ -750,11 +782,11 @@ function RevolvePanel({ choices, axis, onAxis, problem, onApply, onCancel }: {
   );
 }
 
-function MenuItem({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+function MenuItem({ onClick, title, children }: { onClick: () => void; title?: string; children: React.ReactNode }) {
   const palette = useThemeStore((s) => s.palette);
   const [hover, setHover] = useState(false);
   return (
-    <button role="menuitem" onClick={onClick} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+    <button role="menuitem" onClick={onClick} title={title} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
             style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', width: '100%', padding: '5px 8px',
                      border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px', textAlign: 'left',
                      background: hover ? palette.buttonBg : 'transparent', color: palette.text }}>

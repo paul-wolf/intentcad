@@ -63,7 +63,9 @@ export function suppressedNote(steps: Step[], line: number | null): string | nul
 /** The last line of a build message: what went wrong, without where. */
 function gist(message: string): string {
   const rows = message.split('\n').map((l) => l.trim()).filter(Boolean);
-  return rows.find((r, i) => i > 0 || !/^line \d+:/.test(r)) ?? rows[0] ?? message;
+  const row = rows.find((r, i) => i > 0 || !/^line \d+:/.test(r)) ?? rows[0] ?? message;
+  // a sketch's own words need no type in front ("Sketch 'X' lost its face …")
+  return row.replace(/^SketchError: /, '');
 }
 
 /** The build's problems, each on the step that caused it: the failing line

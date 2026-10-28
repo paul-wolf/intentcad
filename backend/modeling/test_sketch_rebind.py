@@ -123,7 +123,29 @@ class RebindTests(SimpleTestCase):
         self.assertEqual(rep["status"], "not_found")
         self.assertEqual(rep["moved_by"], 0)
         self.assertEqual(rep["plane"], ear["plane"])
-        self.assertFalse(r.get("warning"))
+        # the step stops there, saying so, rather than cutting where the ear was
+        self.assertIn("line 2: part -= extrude(sketch(\"pin\")", r["warning"])
+        self.assertIn("Sketch 'pin' lost its face (face) — pick a new one", r["warning"])
+        self.assertIn("press K and choose Move 'pin' here", r["warning"])
+        self.assertAlmostEqual(r["metrics"]["volume"], 40 * 40 * 6, delta=0.01)
+
+    def test_a_face_that_only_faces_the_same_way_is_not_taken(self):
+        # a bracket: a 50 x 40 base, 5 thick, and an upright at its -X end; the
+        # sketch on the upright's inner face (x = 5, 40 x 40 above the base)
+        mount = {"plane": {"origin": [5, 0, 0], "normal": [1, 0, 0], "xAxis": [0, 1, 0]},
+                 "loops": [_rect(-10, -30, 10, -20)],
+                 "face": {"center": [5, 0, 25], "normal": [1, 0, 0], "area": 1600.0,
+                          "box": [-20, 5, 20, 45], "hint": "right face"}}
+        code = ('P = dict(height={h})\npart = Pos(25, 0, 2.5) * Box(50, 40, 5)\n'
+                'part += Pos(2.5, 0, P["height"]/2) * Box(5, 40, P["height"])\n'
+                'part -= extrude(sketch("Mount"), amount=-10)\n')
+        r = run_script(code.format(h=45), sketches={"Mount": mount})
+        self.assertEqual(r["sketches"]["Mount"]["status"], "same")
+        # lowered into the base: only the base's 5 mm end strip at x = 50 faces +X
+        r = run_script(code.format(h=3), sketches={"Mount": mount})
+        self.assertEqual(r["sketches"]["Mount"]["status"], "not_found")
+        self.assertIn("Sketch 'Mount' lost its face (right face)", r["warning"])
+        self.assertAlmostEqual(r["metrics"]["volume"], 50 * 40 * 5, delta=0.01)
 
     def test_equally_good_faces_are_ambiguous_and_the_best_is_used(self):
         code = ('part = Pos(0, 0, 3) * Box(60, 40, 6)\n'
@@ -238,3 +260,55 @@ class OutlineTests(SimpleTestCase):
         r = run_script(PLATE.format(t=6) + HOLE, sketches={"hole": {"plane": TOP, "loops": [_circle(10, 0, 2.5)], "face": far}})
         self.assertEqual(r["sketches"]["hole"]["status"], "not_found")
         self.assertNotIn("outline", r["sketches"]["hole"])
+        self.assertIn("Sketch 'hole' lost its face (top face)", r["warning"])
+
+
+# The plate as drawn in the app: K on the Top plane, a 60 x 60 square,
+# Extrude 5; K on its top face, New sketch, two rectangles, cut through all.
+BASE = {"plane": {"origin": [0, 0, 0], "normal": [0, 0, 1], "xAxis": [1, 0, 0]},
+        "loops": [_rect(-30, -30, 30, 30)]}
+CUT = {"plane": {"origin": [0, 0, 5], "normal": [0, 0, 1], "xAxis": [1, 0, 0]},
+       "loops": [_rect(-20, -20, -5, 20), _rect(5, -20, 20, 20)],
+       "face": {"center": [0, 0, 5], "normal": [0, 0, 1], "area": 3600.0,
+                "box": [-30, -30, 30, 30], "perimeter": 240.0, "edges": 4, "hint": "top face"}}
+SLOTS = 2 * 15 * 40
+
+
+class PlateScenarioTests(SimpleTestCase):
+    """The cut sketch stays on the plate's top face when the extrude before it
+    changes depth, and when a fillet or a hole goes in before the cut."""
+
+    def _build(self, depth, before=""):
+        code = (f'P = dict(depth={depth})\npart = extrude(sketch("Base"), amount=P["depth"])\n{before}'
+                'part -= extrude(sketch("Cut"), amount=-part.bounding_box().diagonal)\n')
+        r = run_script(code, sketches={"Base": BASE, "Cut": CUT})
+        self.assertFalse(r.get("warning"), r.get("warning"))
+        rep = r["sketches"]["Cut"]
+        self.assertAlmostEqual(rep["plane"]["origin"][2], depth, places=6)
+        self.assertEqual(rep["plane"]["normal"], [0, 0, 1])
+        return r, rep
+
+    def test_the_depth_it_was_drawn_at(self):
+        r, rep = self._build(5)
+        self.assertEqual(rep["status"], "same")
+        self.assertAlmostEqual(r["metrics"]["volume"], 60 * 60 * 5 - SLOTS * 5, delta=0.01)
+
+    def test_deeper_and_shallower(self):
+        for depth in (10, 3):
+            with self.subTest(depth=depth):
+                r, rep = self._build(depth)
+                self.assertEqual(rep["status"], "moved")
+                self.assertAlmostEqual(rep["moved_by"], depth - 5, places=6)
+                self.assertAlmostEqual(r["metrics"]["volume"], 60 * 60 * depth - SLOTS * depth, delta=0.01)
+
+    def test_a_fillet_on_the_top_edges_before_the_cut(self):
+        for depth in (5, 10):
+            with self.subTest(depth=depth):
+                self._build(depth, 'part = fillet(part.edges().group_by(Axis.Z)[-1], radius=1)\n')
+
+    def test_a_hole_before_the_cut(self):
+        for depth in (5, 10, 3):
+            with self.subTest(depth=depth):
+                r, _ = self._build(depth, 'part -= Pos(25, 25, 0) * Cylinder(2, 100)\n')
+                hole = math.pi * 4 * depth
+                self.assertAlmostEqual(r["metrics"]["volume"], 60 * 60 * depth - SLOTS * depth - hole, delta=0.05)
