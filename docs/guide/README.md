@@ -219,6 +219,21 @@ faces of a part:
   Click the name to go back to the project.
 - Keep your place: Cmd-click (Ctrl-click on Windows) or middle-click the IntentCAD logo,
   Home, Project, a project or a part card to open it in a new tab.
+- **Find a part or sketch**: the search box at the top of the Projects page (the home
+  page) searches every project you can open. Click it, or press **/**, and type. It
+  matches names, descriptions, project names, "part" or "sketch", and a generated
+  sketch's outputs. With several words, each must match: "drone plate" finds the
+  plates in the Drone project. Escape clears it.
+- **Sort and list**: under the projects, the documents of all projects show as cards.
+  Use **Sort** to order them by last edited (newest or oldest first), name (A to Z or
+  Z to A), created date, project, or parts before sketches. Click **List** for one row
+  each, with the kind, project, last edited and created dates; click a column heading
+  to sort by it, and again to reverse it. Click a row to open it, or the project name
+  to go to the project. **Show all** lists the cards past the first eight.
+- A project page has the same **Sort** and **Grid / List** controls for its parts and
+  sketches; its search box searches that project only. Rename, Describe, Duplicate,
+  Move and Delete are on the cards, so switch to Grid for those. Each page remembers
+  its sort and view in this browser.
 - Every successful build is a version; restore any of them.
 - **Duplicate** makes a copy of a part or sketch in the same project. Hover over its
   card in the project and click the two-squares button (between Rename and Move). The

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/stores/authStore';
 import { projectApi } from '@/api/projectClient';
@@ -13,6 +13,8 @@ import { ShareProjectModal } from './ShareProjectModal';
 import { TopNav } from '@/ui/TopNav';
 import { DocCard } from '@/ui/DocCard';
 import { useTokens, SANS, MONO } from '@/ui/tokens';
+import { DocList, DocListControls, useDocListPrefs } from '@/ui/DocList';
+import { searchDocs, sortDocs } from '@/utils/docSearch';
 
 function relativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -26,6 +28,7 @@ function relativeTime(iso: string): string {
 }
 
 const COLS = 'minmax(0,1fr) 130px 150px 190px 46px';
+const GRID_FIRST = 8;   // cards shown before "Show all", when not searching
 
 export function ProjectListPage() {
   const navigate = useNavigate();
@@ -33,7 +36,11 @@ export function ProjectListPage() {
   const { user } = useAuthStore();
   const setDocument = useDocumentStore((s) => s.setDocument);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [recentDocs, setRecentDocs] = useState<DocumentListItem[]>([]);
+  const [allDocs, setAllDocs] = useState<DocumentListItem[]>([]);
+  const [query, setQuery] = useState('');
+  const [showAll, setShowAll] = useState(false);
+  const prefs = useDocListPrefs('home');
+  const searchBox = useRef<HTMLInputElement | null>(null);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
@@ -54,11 +61,30 @@ export function ProjectListPage() {
         finalProjects = await projectApi.listProjects();
       }
       setProjects(finalProjects);
-      setRecentDocs([...docList].sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 8));
+      setAllDocs(docList);
     } catch { /* ignore */ } finally { setLoading(false); }
   }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // "/" anywhere on the page (outside a text box) goes to the search box
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey || el?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      e.preventDefault();
+      searchBox.current?.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const projectName = useCallback((id: string | null) => projects.find((p) => p.id === id)?.name ?? '', [projects]);
+  const searching = query.trim() !== '';
+  const shownDocs = useMemo(
+    () => sortDocs(searchDocs(allDocs, query, projectName), prefs.sort, projectName),
+    [allDocs, query, projectName, prefs.sort]);
+  const cappedDocs = !searching && prefs.view === 'grid' && !showAll ? shownDocs.slice(0, GRID_FIRST) : shownDocs;
 
   const handleNew = async () => {
     const existing = new Set(projects.map((p) => p.name));
@@ -115,6 +141,24 @@ export function ProjectListPage() {
                 {projects.length} projects &middot; {totalDocs} documents
               </div>
             </div>
+            <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end' }}>
+              <div style={{ position: 'relative', width: '100%', maxWidth: 420 }}>
+                <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: t.textMute, display: 'flex' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4-4" /></svg>
+                </span>
+                <input ref={searchBox} value={query} onChange={(e) => setQuery(e.target.value)} type="search" aria-label="Search all parts and sketches"
+                  placeholder="Search all parts and sketches…" title="Matches names, descriptions, project names and a sketch's outputs. Press / to come here."
+                  onKeyDown={(e) => { if (e.key === 'Escape') { setQuery(''); e.currentTarget.blur(); } }}
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '10px 34px 10px 36px', background: t.surface, border: `1px solid ${t.border}`,
+                           borderRadius: 9, color: t.text, fontFamily: SANS, fontSize: '13.5px', outline: 'none' }}
+                  onFocus={(e) => (e.currentTarget.style.borderColor = t.accent)}
+                  onBlur={(e) => (e.currentTarget.style.borderColor = t.border)} />
+                {!query && (
+                  <span style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', fontFamily: MONO, fontSize: '11px',
+                                 color: t.textMute, border: `1px solid ${t.border2}`, borderRadius: 4, padding: '0 5px', pointerEvents: 'none' }}>/</span>
+                )}
+              </div>
+            </div>
             <button onClick={handleNew}
               style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '10px 16px', background: t.accent, color: '#fff',
                        border: 'none', borderRadius: 9, fontFamily: SANS, fontSize: '13.5px', fontWeight: 600, cursor: 'pointer',
@@ -124,8 +168,8 @@ export function ProjectListPage() {
             </button>
           </div>
 
-          {/* Projects table (capped height, scrolls, so the doc grid stays visible) */}
-          <div style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 14, overflow: 'auto',
+          {/* Projects table (capped height, scrolls, so the doc grid stays visible); hidden while searching */}
+          {!searching && <div style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 14, overflow: 'auto',
                         maxHeight: '46vh', marginBottom: 44 }}>
             <div style={{ position: 'sticky', top: 0, zIndex: 1, background: t.surface,
                           display: 'grid', gridTemplateColumns: COLS, gap: 14, padding: '12px 20px', borderBottom: `1px solid ${t.border}`,
@@ -184,24 +228,43 @@ export function ProjectListPage() {
                 </div>
               </div>
             ))}
-          </div>
+          </div>}
 
-          {/* Recently edited */}
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 11, marginBottom: 16 }}>
-            <h2 style={{ margin: 0, fontSize: '17px', fontWeight: 700, letterSpacing: '-0.3px', color: t.text }}>Recently edited</h2>
-            <span style={{ fontFamily: MONO, fontSize: '11.5px', color: t.textMute }}>across all projects</span>
+          {/* Every document across the projects: searched, sorted, as cards or rows */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 11 }}>
+              <h2 style={{ margin: 0, fontSize: '17px', fontWeight: 700, letterSpacing: '-0.3px', color: t.text }}>
+                {searching ? 'Search results' : prefs.sort === 'recent' && prefs.view === 'grid' && !showAll ? 'Recently edited' : 'All documents'}
+              </h2>
+              <span style={{ fontFamily: MONO, fontSize: '11.5px', color: t.textMute }}>
+                {searching ? `${shownDocs.length} of ${allDocs.length} match` : `across all projects · ${allDocs.length}`}
+              </span>
+            </div>
+            <DocListControls view={prefs.view} sort={prefs.sort} onView={prefs.setView} onSort={prefs.setSort} acrossProjects />
           </div>
-          {recentDocs.length === 0 ? (
-            <div style={{ fontSize: '13px', color: t.textMute }}>No documents yet.</div>
+          {shownDocs.length === 0 ? (
+            <div style={{ fontSize: '13px', color: t.textMute }}>
+              {allDocs.length === 0 ? 'No documents yet.' : <>Nothing matches &ldquo;{query.trim()}&rdquo;. Try fewer words, or part of a name.</>}
+            </div>
+          ) : prefs.view === 'list' ? (
+            <DocList docs={cappedDocs} sort={prefs.sort} onSort={prefs.setSort} onOpen={handleOpenDoc} projectName={projectName} />
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(224px,1fr))', gap: 16 }}>
-              {recentDocs.map((d) => (
+              {cappedDocs.map((d) => (
                 <DocCard key={d.id}
                   d={{ id: d.id, name: d.name, kind: d.kind, updated: relativeTime(d.updated_at), thumbnail: d.thumbnail,
-                       subtitle: projects.find((p) => p.id === d.project_id)?.name }}
+                       description: d.description, stale: d.stale, pinned: d.pinned, generated: d.source === 'generated',
+                       outputs: d.outputs, failingChecks: d.failing_checks, subtitle: projectName(d.project_id) || undefined }}
                   onOpen={() => handleOpenDoc(d)} />
               ))}
             </div>
+          )}
+          {cappedDocs.length < shownDocs.length && (
+            <button onClick={() => setShowAll(true)}
+              style={{ marginTop: 16, padding: '8px 14px', background: t.surface, color: t.accent, border: `1px solid ${t.border}`,
+                       borderRadius: 8, fontFamily: SANS, fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
+              Show all {shownDocs.length}
+            </button>
           )}
         </div>
       )}
