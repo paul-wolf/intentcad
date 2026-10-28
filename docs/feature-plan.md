@@ -51,6 +51,7 @@ operations cost nothing to support, they just don't get UI.
 - Find documents: a search box on the Projects page over every project (names, descriptions, project names, kind, a generated sketch's outputs; every word must match; / to focus), and Sort (last edited, name, created, project, kind) with a Grid / List switch there and on each project page; the list sorts by clicking a column heading, and each page remembers its choice
 - One sketch per step in the part editor: K on a base or construction plane with sketches already lists them and offers "New sketch on this plane" (as faces did); reopening a sketch that is extruded already starts its Extrude… panel from that step, and Update rewrites the same step instead of adding a second extrude
 - AI edits that change nothing are caught: the AI gets a summary of the current build (faces, holes, bosses) for every part, not only imported ones; an edit that builds the same shape (volume, area, bounding box, faces) gets one corrective call, and if it still changes nothing its note says so
+- Extrude direction and depth: a depth is never stored below 0 (typing, dragging or setting it below 0 turns Flip direction on and keeps it positive; older parts with negative depths open as positive and flipped, building the same shape); a cut from a sketch on a face goes into the part and an add grows out of it; the Extrude dialog and the steps list say which way in plain words ("Cut 5 mm into the part, down (−Z)", "5 mm up (+Z)", "cuts nothing there" for a cut pointing away)
 
 ## Foundation: edge selection ✓ done
 

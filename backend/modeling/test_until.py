@@ -316,6 +316,6 @@ class ScriptTests(SimpleTestCase):
                 f'part += extrude(sketch("Rib"), until=face_ref({pe._lit(FACE)}), offset=0.2)\n')
         s = pe.steps(code)
         self.assertEqual([x["reopenable"] for x in s[1:]], [True, True])
-        self.assertEqual(s[1]["summary"], "Join 'Boss' up to next · flipped")
-        self.assertEqual(s[2]["summary"], "Join 'Rib' up to slanted wall 0.2 mm past")
+        self.assertEqual(s[1]["summary"], "Join 'Boss' up to next, into the part")
+        self.assertEqual(s[2]["summary"], "Join 'Rib' up to slanted wall 0.2 mm past, out of the face")
         self.assertEqual(s[2]["faces"], [FACE])

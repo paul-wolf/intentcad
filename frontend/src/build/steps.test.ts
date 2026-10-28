@@ -81,6 +81,12 @@ describe('steps', () => {
   it('collects the sketches the backend needs to know', () => {
     expect(stepInputs([{ name: 'Sketch on Top plane', basePlane: true, points: 0 },
                        { name: 'PCB', basePlane: false, points: 4 }]))
-      .toEqual({ datum: ['Sketch on Top plane'], points: { PCB: 4 } });
+      .toEqual({ datum: ['Sketch on Top plane'], points: { PCB: 4 }, normals: {} });
+  });
+
+  it('sends each sketch plane\'s normal, so an extrude step names its axis', () => {
+    expect(stepInputs([{ name: 'Slots', basePlane: false, points: 0, normal: [0, 1e-12, 0.99999999] },
+                       { name: 'Loose', basePlane: false, points: 0, normal: null }]).normals)
+      .toEqual({ Slots: [0, 0, 1] });
   });
 });

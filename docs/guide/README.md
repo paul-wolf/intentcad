@@ -153,6 +153,17 @@ faces of a part:
 
 - **Extrude**: add, cut or start a new body; to a depth, both ways, through everything,
   up to a face, or up to the next face.
+- **Which way it goes**: a cut from a sketch on a face goes into the part, and an add
+  grows out of the face. The Extrude dialog and the steps list say it in words, e.g.
+  "Cut 5 mm into the part, down (−Z)" or "New body 'Plate' 5 mm up (+Z)". If a cut
+  points away from the part, it says "cuts nothing there".
+- **Depths are never negative**: tick **Flip direction** to go the other way. Typing a
+  depth below 0, or dragging or setting a depth parameter below 0, turns Flip on and
+  keeps the depth positive. Older parts with negative depths open as positive depths,
+  flipped, and build the same shape.
+
+![The Extrude dialog: "Cut 5 mm into the part, down (−Z)"](images/extrude-direction.png)
+
 - **Revolve**: knobs, spacers, pulleys, grooves; full or partial turns.
 - **Hole**: clearance, tapped, heat-set insert, counterbore and countersink, in M2 to M5,
   at sketch points; optionally on a **standoff** with a strengthening fillet at its foot.

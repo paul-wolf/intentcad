@@ -16,8 +16,8 @@ from . import shared_defs
 from . import hole_presets
 from .llm_models import list_models
 from .paramedit import (ParamError, add_edge_op, add_extrude, add_holes, add_revolve, add_mirror_body, add_plane, add_shell,
-                        add_pattern_body, delete_step, edit_args, mirror_steps, op_at, pattern_steps, rename_plane,
-                        set_params, set_pattern, steps, suppress, unlink)
+                        add_pattern_body, delete_step, edit_args, mirror_steps, op_at, pattern_steps, positive_depths,
+                        rename_plane, set_params, set_pattern, steps, suppress, unlink)
 from .schemas import (
     AddEdgeOpRequest,
     AddExtrudeRequest,
@@ -194,15 +194,18 @@ def export_model(request, payload: ExportRequest):
 @router.post("/set_params", response=SetParamsResponse)
 def set_params_endpoint(request, payload: SetParamsRequest):
     """Change values in the script's params dict (preserving formatting), and
-    return the updated script — the source of truth stays the script."""
+    return the updated script — the source of truth stays the script. An
+    extrude depth set below zero turns positive and its line flips instead
+    (positive_depths), so no depth is ever negative; with no values, that is
+    all it does (a part opened with negative depths from before)."""
     err = require_auth(request)
     if err:
         return err
     try:
-        code = set_params(payload.code, payload.params)
+        code, flipped = positive_depths(set_params(payload.code, payload.params))
     except (ParamError, SyntaxError) as exc:
         return JsonResponse({"message": str(exc)}, status=422)
-    return SetParamsResponse(code=code)
+    return SetParamsResponse(code=code, flipped=flipped)
 
 
 @router.post("/add_extrude", response=AddExtrudeResponse)
@@ -353,7 +356,7 @@ def steps_endpoint(request, payload: StepsRequest):
     err = require_auth(request)
     if err:
         return err
-    return StepsResponse(steps=steps(payload.code, payload.datum, payload.points))
+    return StepsResponse(steps=steps(payload.code, payload.datum, payload.points, payload.normals))
 
 
 @router.post("/suppress_step", response=CodeResponse)

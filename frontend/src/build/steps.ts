@@ -103,10 +103,12 @@ export function stepProblems(steps: Step[], res: RunResponse | null, failure: st
 
 /** The sketch names on a base plane, and each sketch's hole points: what
  *  /build/steps and /build/op_at need to read the script as the editor wrote it. */
-export function stepInputs(sketches: { name: string; basePlane: boolean; points: number }[]):
-  { datum: string[]; points: Record<string, number> } {
+export function stepInputs(sketches: { name: string; basePlane: boolean; points: number; normal?: number[] | null }[]):
+  { datum: string[]; points: Record<string, number>; normals: Record<string, number[]> } {
   return {
     datum: sketches.filter((s) => s.basePlane).map((s) => s.name),
     points: Object.fromEntries(sketches.filter((s) => s.points > 0).map((s) => [s.name, s.points])),
+    // an extrude's step names the axis it goes along
+    normals: Object.fromEntries(sketches.filter((s) => s.normal).map((s) => [s.name, s.normal!.map((x) => Math.round(x * 1e4) / 1e4)])),
   };
 }

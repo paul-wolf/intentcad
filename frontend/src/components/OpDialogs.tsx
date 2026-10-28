@@ -8,6 +8,7 @@ import {
 import type { Viewer, ViewerMesh } from '@/build/webglViewer';
 import type { Vec3 } from '@/build/dragHandle';
 import { faceLabel } from '@/build/faceSketch';
+import { DepthInput } from './DepthInput';
 import { sameEdgeRef } from '@/build/edgePick';
 import {
   amountText, amountValue, edgeSummary, offsetSummary, planeNameProblem, tangentRefLabel, tangentSummary, tangentZero,
@@ -782,10 +783,11 @@ export function ExtrudeDialog({ value, onChange, editing = true, firstBody, para
         </div>
       ) : (
         <div style={{ display: 'flex' }}>
-          <button style={{ ...seg(value.op === 'cut'), borderRadius: '4px 0 0 4px' }} onClick={() => set({ op: 'cut' })}
-                  title="Remove the shapes from the part (holes, pockets)">Cut</button>
+          <button style={{ ...seg(value.op === 'cut'), borderRadius: '4px 0 0 4px' }} onClick={() => set({ op: 'cut', flip: value.op === 'cut' && value.flip })}
+                  title="Remove the shapes from the part (holes, pockets): into the part">Cut</button>
           <button style={{ ...seg(value.op === 'join'), borderRadius: '0 4px 4px 0', borderLeft: 'none' }}
-                  onClick={() => set({ op: 'join' })} title="Add the shapes to the part (pegs, bosses)">Join</button>
+                  onClick={() => set({ op: 'join', flip: value.op === 'join' && value.flip })}
+                  title="Add the shapes to the part (pegs, bosses): out of the face">Join</button>
         </div>
       )}
       {extents.length > 1 && (
@@ -806,8 +808,8 @@ export function ExtrudeDialog({ value, onChange, editing = true, firstBody, para
       {!until && (
         <label style={{ ...row, opacity: through ? 0.45 : 1 }}>
           <span style={{ width: 56 }}>{both ? 'Each way' : value.op === 'cut' ? 'Depth' : 'Height'}</span>
-          <input type="number" min={0} step={0.5} value={value.depth} disabled={through} autoFocus
-                 onChange={(e) => set({ depth: parseFloat(e.target.value) })} style={num} />
+          <DepthInput depth={value.depth} flip={value.flip} both={both} disabled={through} autoFocus
+                      onChange={set} style={num} />
           <span style={{ color: palette.textSecondary, flex: 1 }}>mm</span>
           {param && !through && <ParamChip name={param} />}
         </label>
@@ -851,8 +853,8 @@ export function ExtrudeDialog({ value, onChange, editing = true, firstBody, para
         Flip direction
       </label>
       <div style={note}>
-        {extrudeSummary({ ...value, extent }, off)}
-        {extent !== 'face' && <div><b>{direction}</b></div>}
+        {until ? extrudeSummary({ ...value, extent }, off) : <b>{direction}</b>}
+        {extent === 'next' && direction && <div><b>{direction}</b></div>}
         {extent === 'next' && (
           <div style={{ color: palette.textSecondary, marginTop: 2 }}>
             The preview shows where it stops.

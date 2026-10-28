@@ -436,7 +436,7 @@ class LinkTests(SimpleTestCase):
     def test_steps_show_copies_with_their_original(self):
         rows = {s["line"]: s for s in pe.steps(self.code)}
         self.assertEqual((rows[6]["pattern_of"], rows[6]["pattern"]), (4, "8 × 3, 2 skipped"))
-        self.assertEqual(rows[6]["summary"], "Cut 'Vent' 2 mm · pattern 8 × 3, 2 skipped")
+        self.assertEqual(rows[6]["summary"], "Cut 'Vent' 2 mm into the part · pattern 8 × 3, 2 skipped")
         self.assertEqual(rows[7]["pattern_of"], 5)
         self.assertTrue(rows[6]["reopenable"])
         self.assertIsNone(rows[4]["pattern_of"])

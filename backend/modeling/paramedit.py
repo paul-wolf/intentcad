@@ -325,6 +325,8 @@ def _read_extrude(stmt, call, pv: dict, datum_sketches) -> tuple[dict, str | Non
     into = op == "cut" and not datum
     flip = False if both or (through and datum) else neg != into
     depth = pv.get(key) if key else None
+    if isinstance(depth, (int, float)) and depth < 0:     # read as the dialog writes it: positive, the other way
+        depth, flip = -depth, flip if both else not flip
     return ({"sketch": sketch, "op": op, "extent": "through" if through else "distance", "depth": depth,
              "through": through, "flip": flip, "both": both, "datum": datum, "face": None, "offset": 0.0},
             key, exprs)
@@ -387,7 +389,9 @@ def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
             raise ParamError("pick the face to extrude up to")
         until = '"next"' if extent == "next" else f"face_ref({_lit(face)})"
         both = False
-    elif not through and not float(depth) > 0:
+    elif not through and float(depth) < 0:   # below zero: the other way (both ways: the same), never a negative depth
+        depth, flip = -float(depth), flip if both else not flip
+    if extent == "distance" and not float(depth) > 0:
         raise ParamError("the depth must be more than 0")
     names = param_names(code)
     offset_src = None
@@ -441,6 +445,60 @@ def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
     if old_key and old_key != new_key:
         code = drop_param(code, old_key)
     return code, new_key
+
+
+def positive_depths(code: str) -> tuple[str, list[str]]:
+    """Extrude depths are never negative: the way an extrude goes is its sign
+    (Flip), not its depth's. A P key below zero that is only ever an extrude's
+    amount (amount=P["k"] or amount=-P["k"], in any number of lines, linked
+    copies included) becomes positive and each of those lines' signs turns
+    over, so the part builds the same. A both-ways extrude has no sign to
+    turn. A key used anywhere else (an expression, another operation) is left
+    alone. Returns (code, the keys turned positive)."""
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return code, []
+    pv = _p_values(code)
+    neg = {k for k, v in pv.items() if isinstance(v, (int, float)) and v < 0}
+    if not neg:
+        return code, []
+    uses: dict[str, list] = {}            # key -> [(node to replace, its new text) | None]
+    amounts: dict[int, tuple] = {}        # id(P["k"] node) -> (the amount node, both)
+    for call in ast.walk(tree):
+        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "extrude"):
+            continue
+        kw = {k.arg: k.value for k in call.keywords}
+        amt = kw.get("amount")
+        if amt is None:
+            continue
+        inner = amt.operand if isinstance(amt, ast.UnaryOp) and isinstance(amt.op, ast.USub) else amt
+        both = isinstance(kw.get("both"), ast.Constant) and kw["both"].value is True
+        if _p_key(inner) is not None:
+            amounts[id(inner)] = (amt, both)
+    for node in ast.walk(tree):
+        k = _p_key(node)
+        if k not in neg:
+            continue
+        hit = amounts.get(id(node))
+        if hit is None:
+            uses.setdefault(k, []).append(None)
+            continue
+        amt, both = hit
+        src = f'P["{k}"]' if node.value.id == "P" else f'params["{k}"]'
+        text = None if both else src if amt is not node else f"-{src}"
+        uses.setdefault(k, []).append((amt, text))
+    keys = sorted(k for k, us in uses.items() if None not in us)
+    if not keys:
+        return code, []
+    edits = [e for k in keys for e in uses[k] if e[1] is not None]
+    lines = code.split("\n")
+    for node, text in sorted(edits, key=lambda e: (e[0].lineno, e[0].col_offset), reverse=True):
+        if node.lineno != node.end_lineno:
+            continue
+        b = lines[node.lineno - 1].encode()
+        lines[node.lineno - 1] = (b[:node.col_offset] + text.encode() + b[node.end_col_offset:]).decode()
+    return set_params("\n".join(lines), {k: -pv[k] for k in keys}), keys
 
 
 # --- Revolve: a sketch's closed shapes turned around an axis (modeling/revolve.py)
@@ -1539,6 +1597,52 @@ TITLES = {"extrude": "Extrude", "revolve": "Revolve", "shell": "Shell", "holes":
           "pattern_body": "Pattern body"}
 _EXTRUDE_TITLES = {"cut": "Cut", "join": "Join", "new": "New body"}
 
+_DIR_WORDS = (((0, 0, 1), "up", "+Z"), ((0, 0, -1), "down", "−Z"), ((0, -1, 0), "toward the front", "−Y"),
+               ((0, 1, 0), "toward the back", "+Y"), ((1, 0, 0), "to the right", "+X"), ((-1, 0, 0), "to the left", "−X"))
+
+
+def _extrude_words(a: dict, normal=None) -> str:
+    """How far an extrude goes and which way, in plain words (its op and
+    sketch said before): "5 mm into the part, down (−Z)", "5 mm out of the
+    face, up (+Z)", "5 mm up (+Z)" on a base plane, "4 mm each way (±Y)".
+    `normal`: its sketch plane's (None: not known, no axis named). A face
+    sketch's normal points out of the part, so a cut goes in and a join grows
+    out; Flip reverses (extrudeDirectionText in the frontend says the same)."""
+    datum, cut = a["datum"], a["op"] == "cut"
+    s = -1 if (cut and not datum) != a["flip"] else 1
+    def axis(sign, both=False):
+        if not normal:
+            return None
+        for v, word, name in _DIR_WORDS:
+            d = sum(x * y for x, y in zip(v, normal)) * sign
+            if d > 0.999 or (both and d < -0.999):
+                return f"(±{name[1]})" if both else f"{word} ({name})"
+        return None
+    extent = a.get("extent") or ("through" if a["through"] else "distance")
+    way = "" if datum else "into the part" if s < 0 else "out of the face"
+    if extent in ("next", "face"):
+        how = "up to next" if extent == "next" else f"up to {(a['face'] or {}).get('hint') or 'face'}"
+        off = a.get("offset") or 0
+        if extent == "face" and off:
+            how += f" {_mm(abs(off))} {'past' if off > 0 else 'short'}"
+        rest = [w for w in (way, axis(s)) if w]
+        return how + (f", {', '.join(rest)}" if rest else " · flipped" if a["flip"] else "")
+    through = cut and a["through"]
+    if through and datum:
+        return "through the part, both ways"
+    if a["both"] and not through:
+        return f"{_mm(a['depth'])} each way" + (f" {axis(1, True)}" if axis(1, True) else "")
+    far = "through the part" if through else _mm(a["depth"])
+    if datum:
+        ax = axis(s)
+        return f"{far} {ax}" if ax else far + (" · flipped" if a["flip"] else "")
+    ax = axis(s)
+    if through:
+        text = far + (f", {way}" if s > 0 else "")
+    else:
+        text = f"{far} {way}"
+    return text + (f", {ax}" if ax else "") + (" — cuts nothing there" if cut and s > 0 else "")
+
 
 def _sk_words(sketch: str) -> str:
     """A step's sketch: 'Holes' (a face sketch), or the SK source as written."""
@@ -1552,7 +1656,7 @@ def _deg(v) -> str:
         return "?"
 
 
-def _summary(op: str, a: dict, points: dict) -> str:
+def _summary(op: str, a: dict, points: dict, normals: dict | None = None) -> str:
     if op == "pattern_body":
         return f"Pattern body {pattern_label(a['pattern'])} · " + ("joined" if a["join"] else "separate bodies")
     if op == "mirror_body":
@@ -1574,16 +1678,7 @@ def _summary(op: str, a: dict, points: dict) -> str:
             else f" from {ref['face'].get('hint') or 'face'}"
         return f"Plane {a['name']!r} · tangent at {_deg(a['angle'])}{frm} on {face}"
     if op == "extrude":
-        how = "through all" if a["through"] else _mm(a["depth"])
-        if a.get("extent") == "next":
-            how = "up to next"
-        elif a.get("extent") == "face":
-            how = f"up to {(a['face'] or {}).get('hint') or 'face'}"
-            off = a.get("offset") or 0
-            if off:
-                how += f" {_mm(abs(off))} {'past' if off > 0 else 'short'}"
-        return (f"{_EXTRUDE_TITLES[a['op']]} {_sk_words(a['sketch'])} {how}" + (" both ways" if a["both"] else "")
-                + (" · flipped" if a["flip"] else ""))
+        return f"{_EXTRUDE_TITLES[a['op']]} {_sk_words(a['sketch'])} {_extrude_words(a, (normals or {}).get(a['sketch']))}"
     if op == "revolve":
         return (f"{_EXTRUDE_TITLES[a['op']]} {_sk_words(a['sketch'])} revolved {_deg(a['angle'])} about the "
                 f"{revolve_axis_label(a['axis'])}" + (" both ways" if a["both"] else "")
@@ -1616,7 +1711,8 @@ def _variant(stmt) -> str | None:
         and getattr(stmt.value.func, "id", None) in SKETCH_OPS else None
 
 
-def _op_step(code: str, stmt, call, op: str, pv: dict, datum, points: dict, shift: int, off: bool) -> dict:
+def _op_step(code: str, stmt, call, op: str, pv: dict, datum, points: dict, shift: int, off: bool,
+             normals: dict | None = None) -> dict:
     step = {"kind": "op", "op": op, "variant": _variant(stmt), "line": stmt.lineno + shift,
             "end_line": (stmt.end_lineno or stmt.lineno) + shift, "off": off, "reopenable": False,
             "sketch": None, "faces": [], "edges": [], "plane": _plane_name(stmt),
@@ -1642,7 +1738,7 @@ def _op_step(code: str, stmt, call, op: str, pv: dict, datum, points: dict, shif
         elif wrap is not None and step["mirror_plane"]:
             step["summary"] += f" · mirrored across {step['mirror_plane']}"
         return step
-    step["summary"] = _summary(op, a, points)
+    step["summary"] = _summary(op, a, points, normals)
     step["reopenable"] = not off
     if wrap is not None and step["pattern"]:     # copies elsewhere: nothing of its own to show
         step["summary"] += f" · pattern {step['pattern']}"
@@ -1675,7 +1771,7 @@ def _op_step(code: str, stmt, call, op: str, pv: dict, datum, points: dict, shif
     return step
 
 
-def steps(code: str, datum=(), points: dict | None = None) -> list[dict]:
+def steps(code: str, datum=(), points: dict | None = None, normals: dict | None = None) -> list[dict]:
     """The steps list: every operation of the script in order, switched off
     or not, as {"kind": "op", "op", "variant" (an extrude's cut / join /
     new), "line", "end_line", "summary", "reopenable", "off", "sketch",
@@ -1684,7 +1780,8 @@ def steps(code: str, datum=(), points: dict | None = None) -> list[dict]:
     linked to, else None)}, and each run of other
     statements as {"kind": "script", "line", "end_line", "count"} (the
     imports and P left out). `datum`: the sketches on a base plane; `points`:
-    each sketch's number of hole points."""
+    each sketch's number of hole points; `normals`: each sketch plane's normal
+    (an extrude's summary names the axis it goes along)."""
     try:
         tree = ast.parse(code)
     except SyntaxError:
@@ -1700,7 +1797,7 @@ def steps(code: str, datum=(), points: dict | None = None) -> list[dict]:
             continue       # a docstring
         hit = _recognise(node)
         if hit:
-            raw.append(_op_step(code, node, *hit, pv, datum, points, 0, False))
+            raw.append(_op_step(code, node, *hit, pv, datum, points, 0, False, normals))
         else:
             raw.append({"kind": "script", "line": node.lineno, "end_line": node.end_lineno or node.lineno, "off": False})
     for a, b, text in _off_blocks(code):
@@ -1710,7 +1807,7 @@ def steps(code: str, datum=(), points: dict | None = None) -> list[dict]:
             sub = []
         hit = _recognise(sub[0]) if len(sub) == 1 else None
         if hit:
-            raw.append(_op_step(text, sub[0], *hit, pv, datum, points, a - 1, True))
+            raw.append(_op_step(text, sub[0], *hit, pv, datum, points, a - 1, True, normals))
         else:
             raw.append({"kind": "op", "op": "script", "variant": None, "line": a, "end_line": b, "off": True,
                         "reopenable": False, "summary": "Script", "sketch": None, "faces": [], "edges": [],

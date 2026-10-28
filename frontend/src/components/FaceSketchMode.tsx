@@ -24,6 +24,7 @@ import {
 import { resolveSketch } from '@/utils/resolveSketch';
 import { axisChoices, defaultAxis, lineProblem, type AxisChoice, type RevolveAxis } from '@/build/revolve';
 import type { Sketch } from '@/types/document';
+import { DepthInput } from './DepthInput';
 
 const FADE_MS = 250;
 const TURN_MS = 260;   // the viewer's turn into / out of the extrude preview
@@ -658,7 +659,7 @@ export function useFaceSketch(
                       onClick={exit}>Done</button>
               {extruding && (
                 <ExtrudeDialog value={ex} onChange={setEx} shapes={shapes.loops.length} open={shapes.open} datum={session.datum} updating={updating}
-                               direction={extrudeDirectionText(shapeOf(ex, session.datum), session.plane.normal, partAt)}
+                               direction={extrudeDirectionText({ ...shapeOf(ex, session.datum), until: !!untilOf(ex) }, session.plane.normal, partAt)}
                                onApply={applyExtrude} onCancel={() => setExtruding(false)} />
               )}
               {revolving && (
@@ -804,10 +805,11 @@ function ExtrudeDialog({ value, onChange, shapes, open, datum, updating, directi
         </div>
       ) : (
         <div style={{ display: 'flex' }}>
-          <button style={{ ...seg(value.op === 'cut'), borderRadius: '4px 0 0 4px' }} onClick={() => set({ op: 'cut' })}
-                  title="Remove the shapes from the part (holes, pockets)">Cut</button>
+          <button style={{ ...seg(value.op === 'cut'), borderRadius: '4px 0 0 4px' }} onClick={() => set({ op: 'cut', flip: value.op === 'cut' && value.flip })}
+                  title="Remove the shapes from the part (holes, pockets): into the part">Cut</button>
           <button style={{ ...seg(value.op === 'join'), borderRadius: '0 4px 4px 0', borderLeft: 'none' }}
-                  onClick={() => set({ op: 'join' })} title="Add the shapes to the part (pegs, bosses)">Join</button>
+                  onClick={() => set({ op: 'join', flip: value.op === 'join' && value.flip })}
+                  title="Add the shapes to the part (pegs, bosses): out of the face">Join</button>
         </div>
       )}
       {value.op !== 'new' && (
@@ -832,8 +834,7 @@ function ExtrudeDialog({ value, onChange, shapes, open, datum, updating, directi
       ) : (
       <label style={{ ...row, opacity: through ? 0.45 : 1 }}>
         <span style={{ width: 52 }}>{both ? 'Each way' : value.op === 'cut' ? 'Depth' : 'Height'}</span>
-        <input type="number" min={0} step={0.5} value={value.depth} disabled={through}
-               onChange={(e) => set({ depth: parseFloat(e.target.value) })}
+        <DepthInput depth={value.depth} flip={value.flip} both={both} disabled={through} onChange={set}
                style={{ width: 70, fontSize: '12px', padding: '2px 4px', background: palette.inputBg,
                         color: palette.text, border: `1px solid ${palette.border}`, borderRadius: '3px' }} />
         <span style={{ color: palette.textSecondary }}>mm</span>

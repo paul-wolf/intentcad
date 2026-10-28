@@ -847,6 +847,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // never seed the starter over a document that simply hasn't arrived yet.
   useEffect(() => {
     let done = false;
+    let gone = false;   // unmounted
     let tries = 0;
     const start = (initial: string) => {
       setCode(initial);
@@ -878,7 +879,15 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         setMessage(sketchOnFace ? 'Edit the script or ask the AI, then Build — or press K to sketch the first shape.'
                                 : 'Edit the script or ask the AI, then Build.');
       }
-      else build(initial);
+      else {
+        // a depth saved below zero (from before Flip kept them positive) loads
+        // as a positive depth, flipped: the same shape
+        void buildApi.setParams(initial, {}).then((r) => r.code, () => initial).then((c) => {
+          if (gone) return;
+          if (c !== initial) { setCode(c); saveDraft(c); }
+          build(c);
+        });
+      }
     };
     const seedWhenLoaded = () => {
       if (done) return;
@@ -892,7 +901,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       }
     };
     seedWhenLoaded();
-    return () => { done = true; viewerRef.current?.dispose(); viewerRef.current = null; };
+    return () => { done = true; gone = true; viewerRef.current?.dispose(); viewerRef.current = null; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1153,9 +1162,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     setParamReject(null);
     try {
       const r = await buildApi.setParams(code, vals);
+      // a depth taken below zero flips its extrude instead (set_params)
+      const flipped = r.flipped?.length ? ` (${r.flipped.join(', ')} below 0: flipped, kept positive)` : '';
       setCode(r.code);
-      if (!guarded) { saveDraft(r.code); await build(r.code, words); return; }
-      const out = await build(r.code, words);
+      if (!guarded) { saveDraft(r.code); await build(r.code, words + flipped); return; }
+      const out = await build(r.code, words + flipped);
       if (out.kind === 'ok') { saveDraft(r.code); return; }
       if (out.kind === 'aborted') return;
       setCode(prevCode);
@@ -1435,13 +1446,14 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // sketches on a base plane, and each one's hole points, tell it how)
   const stepInKey = JSON.stringify(stepInputs(docSketches.map((sk) => ({
     name: sk.name, basePlane: !!sketchBasePlane(sk) || (!!sk.planeRef && !onTangentPlane(sk, resRef.current?.planes)), points: sketchHolePoints(sk).length,
+    normal: sk.plane?.normal ?? null,
   }))));
   const stepIn = useMemo(() => JSON.parse(stepInKey) as ReturnType<typeof stepInputs>, [stepInKey]);
   const [steps, setSteps] = useState<Step[]>([]);
   useEffect(() => {
     const ac = new AbortController();
     const t = window.setTimeout(() => {
-      buildApi.steps(code, stepIn.datum, stepIn.points)
+      buildApi.steps(code, stepIn.datum, stepIn.points, stepIn.normals)
         .then((r) => { if (!ac.signal.aborted) setSteps(r.steps); })
         .catch(() => { if (!ac.signal.aborted) setSteps([]); });   // a script that doesn't parse: none
     }, 250);
@@ -3807,7 +3819,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                   ? (() => { const f = resRef.current?.faces.find((x) => x.index === hoverPickFace); return f ? faceHint(f) : null; })()
                   : null}
                 firstBody={extrudeOp.firstBody} param={extrudeOp.param} preview={extrudePreview.preview}
-                direction={extrudeNormal ? extrudeDirectionText(extrudeOp.v, extrudeNormal, extrudePartAt) : ''}
+                direction={extrudeNormal ? extrudeDirectionText({ ...extrudeOp.v,
+                  until: extrudeOp.v.extent === 'next' || extrudeOp.v.extent === 'face' }, extrudeNormal, extrudePartAt) : ''}
                 placement={placementRow(extrudeOp.v.sketch)}
                 onEditSketch={editExtrudeSketch} onApply={() => void applyExtrude()} onCancel={closeOp} />
             )}
