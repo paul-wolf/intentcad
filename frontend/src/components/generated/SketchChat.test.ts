@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GenRunResult } from '@/types/generated';
-import { projectCards, proposalMessage, runWords } from './SketchChat';
+import { heldBecause, projectCards, proposalMessage, runWords } from './SketchChat';
 
 const run: GenRunResult = {
   ok: true, profile: {}, entities: [], annotations: { labels: [], dims: [] }, reads: { w: 100 },
@@ -35,5 +35,14 @@ describe('sketch chat words', () => {
     expect(projectCards({ kind: 'answer', context_files: [] }, 'Old brief')).toEqual({});
     // outside a project there is no brief to change
     expect(projectCards({ kind: 'answer', context_files: [], brief_proposal: { text: 'x', reason: '' } }, null)).toEqual({});
+  });
+});
+
+describe('an AI edit of a generated sketch', () => {
+  it('waits on its card when the editor has code the AI did not edit', () => {
+    expect(heldBecause('saved', 'saved', 'saved')).toBeNull();                       // nothing changed: saved
+    expect(heldBecause('typing', 'saved', 'typing')).toBeNull();                     // asked again on the unsaved code
+    expect(heldBecause('typing', 'saved', 'saved')).toEqual({ changed: true, unsaved: true });
+    expect(heldBecause('saved2', 'saved2', 'saved')).toEqual({ changed: true });     // saved here while it worked
   });
 });

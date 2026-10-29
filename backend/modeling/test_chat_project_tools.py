@@ -6,7 +6,7 @@ parameters in one reply (a pasted list) come back together, for one card.
 "Can't edit drawn shapes" covers only a drawn sketch's drawing."""
 from documents.models import Document
 
-from .assistant import edit_script
+from .assistant import AssistantError, edit_script
 from .sketch_chat import sketch_chat
 from .test_generated_sketch import LAYOUT, PART
 from .test_project_context import _scripted
@@ -126,3 +126,31 @@ class ProjectToolsInEveryChat(SketchChatWorld):
         sketch_chat(loose, "hello", llm=llm)
         self.assertNotIn("set_project_parameter", seen[0]["tools"])
         self.assertNotIn("propose_brief_edit", seen[0]["tools"])
+
+
+class PartEditParameterTests(ProjectToolsInEveryChat):
+    """A part edit may read the project's parameters and those it proposes;
+    any other PP["name"] is refused before anything is saved."""
+    def edit(self, *replies):
+        llm, seen = _scripted(*replies)
+        return edit_script(PART, "thicker", document_id=str(self.part.id), llm=llm), seen
+
+    def code(self, extra):
+        return PART.rstrip("\n") + extra + "\n"
+
+    def test_a_project_parameter_or_a_proposed_one_is_defined(self):
+        r, _ = self.edit({"kind": "edit", "code": self.code(' + Pos(0, 0, PP["thick"]) * Box(1, 1, 1)'),
+                          "note": "ok", "usage": {}, "side": []})
+        self.assertEqual(r["kind"], "edit")
+        r, seen = self.edit(calls(("boss_h", 4, "mm")),
+                            {"kind": "edit", "code": self.code(' + Pos(0, 0, PP["boss_h"]) * Box(1, 1, 1)'),
+                             "note": "ok", "usage": {}, "side": []})
+        self.assertEqual((r["kind"], len(seen)), ("edit", 2))
+        self.assertEqual(r["parameter_proposals"][0]["name"], "boss_h")
+
+    def test_an_unknown_project_parameter_is_refused(self):
+        bad = {"kind": "edit", "code": self.code(' + Pos(0, 0, PP["plate_t"]) * Box(1, 1, 1)'),
+               "note": "x", "usage": {}, "side": []}
+        with self.assertRaisesRegex(AssistantError, r'PP\["plate_t"\], which isn\'t defined'):
+            self.edit(bad, bad)
+        self.assertNothingSaved()

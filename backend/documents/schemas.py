@@ -21,6 +21,11 @@ class DocumentUpdateIn(Schema):
     version_label: str = ""              # optional label for the version snapshot
     snapshot: bool = True                # whether this save should record an immutable version
                                          # (False for in-progress drafts between builds)
+    # the version of the part's script this client last had from the server
+    # (DocumentOut.code_version): a save that changes the script is refused
+    # (409, code_changed) if the saved script isn't that version any more; one
+    # that leaves it as it was keeps the newer saved script
+    code_base: str | None = None
 
 
 class DescriptionIn(Schema):
@@ -36,6 +41,12 @@ class DocumentOut(Schema):
     project_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
+    code_version: str = ""   # the version of data.modelCode (documents/versions.py)
+
+    @staticmethod
+    def resolve_code_version(obj):
+        from .versions import saved_code_version
+        return saved_code_version(obj)
 
 
 class VersionListOut(Schema):

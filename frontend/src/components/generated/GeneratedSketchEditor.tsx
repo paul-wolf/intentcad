@@ -33,8 +33,8 @@ import type { SketchAskResponse } from '@/api/client';
 import { SketchDrawing } from './SketchDrawing';
 import { CodeView } from './CodeView';
 import { ChecksPanel, OutputsPanel, ParametersPanel, UsedByPanel } from './SidePanels';
-import { HeldCard, SketchChat, runWords } from './SketchChat';
-import { cardKey, runCardAction, withCardStatus } from '@/components/cardAction';
+import { HeldCard, SketchChat, heldBecause, runWords } from './SketchChat';
+import { cardKey, clearCardAction, runCardAction, withCardStatus } from '@/components/cardAction';
 
 type Trial = { values: Record<string, number>; result: GenRunResult | null };
 const NO_TRIAL: Trial = { values: {}, result: null };
@@ -66,7 +66,10 @@ export function GeneratedSketchEditor({ id }: { id: string }) {
   const [chat, setChat] = useState<ChatMessage[]>([]);
   const chatRef = useRef(chat);
   chatRef.current = chat;
-  const askAi = useRef<((text: string) => void) | null>(null);
+  const askAi = useRef<((text: string, code?: string) => boolean) | null>(null);
+  // the editor's code and the saved code now, for a reply that comes back later
+  const codeRef = useRef('');
+  const savedRef = useRef('');
   // the chat's saves go in turn, so an older chat never lands after a newer one
   const chatSaving = useRef<Promise<unknown>>(Promise.resolve());
   const users = useSyncExternalStore(subscribeSharedUses, getUsers);
@@ -124,6 +127,8 @@ export function GeneratedSketchEditor({ id }: { id: string }) {
   const rec = sketch.generated;
   const saved = doc.data.code;
   const dirty = code !== saved;
+  codeRef.current = code;
+  savedRef.current = saved;
   const trying = Object.keys(trial.values).length > 0;
   const trialOk = trying && trial.result?.ok ? trial.result : null;
   const trialFail = trying && trial.result && !trial.result.ok ? trial.result : null;
@@ -224,12 +229,19 @@ export function GeneratedSketchEditor({ id }: { id: string }) {
     chatSaving.current = chatSaving.current.then(() => sketchApi.saveChat(id, next))
       .catch((e) => addLog('error', `Couldn't save the chat: ${errorText(e)}`));
   };
-  /** Save code the chat brought; null, or the outputs parts use it would drop (then nothing is saved). */
-  const saveFromChat = async (c: string, label: string, confirmBroken: boolean): Promise<BrokenOutput[] | null> => {
-    const r = await sketchApi.saveCode(id, { code: c, label, confirm: confirmBroken });
-    if (!r.saved) return r.broken;
+  /** Save code the chat brought; null, the outputs parts use it would drop, or
+   *  (with `expect`, the saved code's version the AI started from) 'changed':
+   *  it was saved in another tab or browser since. Then nothing is saved. */
+  const saveFromChat = async (c: string, label: string, confirmBroken: boolean, expect?: string):
+      Promise<BrokenOutput[] | 'changed' | null> => {
+    // the editor's unsaved code it replaces goes to Earlier versions, not away
+    const replaced = codeRef.current !== savedRef.current && codeRef.current !== c ? codeRef.current : undefined;
+    const r = await sketchApi.saveCode(id, { code: c, label, confirm: confirmBroken,
+                                             ...(expect !== undefined ? { expect_version: expect } : {}),
+                                             ...(replaced !== undefined ? { replaced } : {}) });
+    if (!r.saved) return r.changed ? 'changed' : r.broken;
     const { saved: _s, broken: _b, result: _r, ...d } = r;
-    if (dirty) addLog('info', 'The code you were editing was replaced by the AI\'s change (your saved versions are in the Code tab\'s history).');
+    if (replaced !== undefined) addLog('info', 'The code you were editing was replaced; it is in Earlier versions as "your unsaved changes".');
     setDoc(d as GenDoc);
     setCode(c);
     setBroken(null);
@@ -237,15 +249,27 @@ export function GeneratedSketchEditor({ id }: { id: string }) {
     await refreshUsers(id);
     return null;
   };
-  const onReply = async (r: SketchAskResponse): Promise<Partial<ChatMessage>> => {
+  const onReply = async (r: SketchAskResponse, _at: number, instruction: string): Promise<Partial<ChatMessage>> => {
     const text = [r.note || 'Done.', runWords(r.result)].filter(Boolean).join(' ');
     if (r.kind !== 'edit' || !r.code) return { kind: 'answer', text: r.sentence || text };
     const label = `before AI: ${r.note || 'a change'}`.slice(0, 80);
-    const held = (broken: BrokenOutput[]) => ({ kind: 'edit' as const, text, held: { code: r.code!, label, broken, status: 'pending' as const } });
+    const held = (broken: BrokenOutput[], why: Partial<NonNullable<ChatMessage['held']>> = {}) =>
+      ({ kind: 'edit' as const, text, held: { code: r.code!, label, broken, status: 'pending' as const, ask: instruction, ...why } });
+    // the editor's code isn't what the AI edited: unsaved code it didn't see,
+    // or code saved here while it worked. Yours stays; the card asks.
+    const why = heldBecause(codeRef.current, savedRef.current, r.base_code ?? savedRef.current);
+    if (why) return held([], why);
     // new outputs parts would lose, or project parameters not accepted yet: the user says first
     if (r.broken?.length || r.parameter_proposals?.length) return held(r.broken ?? []);
     try {
-      const lost = await saveFromChat(r.code, label, false);
+      const lost = await saveFromChat(r.code, label, false, r.base_version);
+      if (lost === 'changed') {
+        // saved in another tab or browser since: show that, unless there's unsaved code here
+        const keep = codeRef.current !== savedRef.current;
+        if (keep) setDoc((await rawApi.getDocument(id)) as unknown as GenDoc);
+        else await reload();
+        return held([], { changed: true, elsewhere: keep ? 'unsaved' : 'shown' });
+      }
       return lost ? held(lost) : { kind: 'edit', text, code: r.code };
     } catch (e) {
       return { kind: 'question', text: `${text}\n⚠ Couldn't save it: ${errorText(e)}` };
@@ -255,14 +279,28 @@ export function GeneratedSketchEditor({ id }: { id: string }) {
   const applyHeld = async (at: number) => {
     const h = chatRef.current.find((m) => m.at === at)?.held;
     if (!h || h.status !== 'pending') return;
-    if (await saveFromChat(h.code, h.label, true)) throw new Error('the server didn\'t save it. Try again, or reload.');
+    // a changed sketch: replace it (the user said), but still ask about outputs parts use
+    const lost = await saveFromChat(h.code, h.label, !h.changed || h.broken.length > 0);
+    if (lost && lost !== 'changed' && lost.length && !h.broken.length) {
+      updateChat((ms) => ms.map((m) => (m.at === at && m.held ? { ...m, held: { ...m.held, broken: lost } } : m)));
+      throw new Error('it would stop making outputs parts use (listed above). Apply again to save it anyway.');
+    }
+    if (lost) throw new Error('the server didn\'t save it. Try again, or reload.');
     updateChat((ms) => withCardStatus(ms, at, 'held', 'applied', { code: h.code }));
+  };
+  /** Ask the AI again, on the editor's code as it is now, for the edit held at `at`. */
+  const askAgain = (at: number) => {
+    const h = chatRef.current.find((m) => m.at === at)?.held;
+    if (!h || h.status !== 'pending') return;
+    if (!askAi.current?.(h.ask || h.label, codeRef.current !== savedRef.current ? codeRef.current : undefined)) return;
+    clearCardAction(cardKey(id, 'held', at));
+    updateChat((ms) => withCardStatus(ms, at, 'held', 'again'));
   };
   const revertTo = async (c: string) => {
     try {
       const lost = await saveFromChat(c, 'before going back', false);
       // it would drop outputs parts use: the Code tab asks, as for a hand edit
-      if (lost) { setTab('code'); setCode(c); setBroken(lost); }
+      if (lost && lost !== 'changed') { setTab('code'); setCode(c); setBroken(lost); }
     } catch (e) {
       addLog('error', `Couldn't go back: ${errorText(e)}`);
     }
@@ -271,7 +309,7 @@ export function GeneratedSketchEditor({ id }: { id: string }) {
     await useProjectParamsStore.getState().refresh();
     await reload();
     // code that waited for these parameters goes in now
-    const waiting = chatRef.current.filter((m) => m.held?.status === 'pending' && !m.held.broken.length).pop();
+    const waiting = chatRef.current.filter((m) => m.held?.status === 'pending' && !m.held.broken.length && !m.held.changed).pop();
     if (waiting) await runCardAction(cardKey(id, 'held', waiting.at), () => applyHeld(waiting.at));   // its card shows how it went
     await refreshUsers(id);
   };
@@ -405,7 +443,8 @@ export function GeneratedSketchEditor({ id }: { id: string }) {
             placeholder="Ask the AI to change the layout, add a check, or explain a size. It changes the code; click one of its changes to go back to it."
             card={(m) => m.held ? (
               <HeldCard held={m.held} actionKey={cardKey(id, 'held', m.at)} onApply={() => applyHeld(m.at)}
-                onKeep={() => updateChat((ms) => withCardStatus(ms, m.at, 'held', 'kept'))} />
+                onKeep={() => updateChat((ms) => withCardStatus(ms, m.at, 'held', 'kept'))}
+                onAskAgain={() => askAgain(m.at)} what="sketch" />
             ) : null} />
         </div>
 

@@ -190,6 +190,49 @@ class EditSpendTests(TestCase):
         self.assertEqual(AiEdit.objects.get().cost_usd, 0.02)
 
 
+class EditBaseVersionTests(TestCase):
+    """An edit carries the version of the saved script the editor had
+    (code_base); if another tab or browser saved a new script meanwhile, the
+    reply says so (changed_elsewhere) and the editor holds the edit."""
+
+    def setUp(self):
+        from accounts.models import Organisation
+        from documents.models import Document
+        from projects.models import Project
+        org = Organisation.objects.create(name="O", slug="o")
+        user = get_user_model().objects.create_user(username="e", email="e@example.com", password="pw", organisation=org)
+        self.client = Client()
+        self.client.force_login(user)
+        project = Project.objects.create(name="P", organisation=org, created_by=user)
+        self.doc = Document.objects.create(name="Part", project=project, created_by=user,
+                                           data={"modelCode": PART, "sketches": []})
+
+    def _edit(self, base, saved_meanwhile=None):
+        from unittest import mock
+        def edit(*a, **k):
+            if saved_meanwhile:
+                self.doc.data = {**self.doc.data, "modelCode": saved_meanwhile}
+                self.doc.save()
+            return {"kind": "edit", "code": PART + "\n", "note": "Made it."}
+        with mock.patch("modeling.api.edit_script", side_effect=edit):
+            resp = self.client.post("/api/build/edit", data=json.dumps(
+                {"code": PART, "instruction": "x", "document_id": str(self.doc.id),
+                 **({"code_base": base} if base is not None else {})}), content_type="application/json")
+        self.assertEqual(resp.status_code, 200)
+        return resp.json()
+
+    def test_saved_script_unchanged(self):
+        from documents.versions import code_version
+        self.assertIs(self._edit(code_version(PART))["changed_elsewhere"], False)
+
+    def test_saved_meanwhile_elsewhere(self):
+        from documents.versions import code_version
+        self.assertIs(self._edit(code_version(PART), saved_meanwhile="part = Box(1, 1, 1)")["changed_elsewhere"], True)
+
+    def test_no_base_no_check(self):
+        self.assertNotIn("changed_elsewhere", self._edit(None, saved_meanwhile="part = Box(1, 1, 1)"))
+
+
 class UsageTests(TestCase):
     def setUp(self):
         self.client = Client()

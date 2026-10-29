@@ -92,7 +92,13 @@ function withProfiles(doc: Record<string, unknown>): Record<string, unknown> {
   return { ...doc, sketches: withSharedProfiles(doc.sketches as Sketch[]) };
 }
 
-function doSave(id: string, doc: Record<string, unknown>, history?: unknown, versionLabel?: string, snapshot = false) {
+/** How a save went: saved, refused because the server has a newer version
+ *  ('conflict'; `codeChanged` when it was the script), or not sent / failed. */
+export type SaveOutcome = { saved: true } | { saved: false; conflict: boolean; codeChanged: boolean };
+const NOT_SENT: SaveOutcome = { saved: false, conflict: false, codeChanged: false };
+
+function doSave(id: string, doc: Record<string, unknown>, history?: unknown, versionLabel?: string, snapshot = false,
+                codeBase?: string | null): Promise<SaveOutcome> {
   // A save supersedes an older debounced snapshot of the same doc — e.g. one
   // queued while a script-less part was sketched, before New body wrote its code
   if (pendingId === id) {
@@ -107,37 +113,48 @@ function doSave(id: string, doc: Record<string, unknown>, history?: unknown, ver
   } else if (sawModelCode) {
     addLog('error', 'Blocked a save that would blank the model (store reset?). Reload to recover.');
     console.warn('[autoSave] blocked a blank-model save over a document that had model code');
-    return;
+    return Promise.resolve(NOT_SENT);
   }
   doc = withProfiles(doc);
   // a sketch save that would drop a group or name a part uses waits for the user
-  if (isSketchDoc(doc) && !guardSave(id, doc.sketches as Sketch[], () => send(id, doc, history, versionLabel, snapshot))) return;
-  send(id, doc, history, versionLabel, snapshot);
+  if (isSketchDoc(doc) && !guardSave(id, doc.sketches as Sketch[], () => void send(id, doc, history, versionLabel, snapshot))) {
+    return Promise.resolve(NOT_SENT);
+  }
+  return send(id, doc, history, versionLabel, snapshot, codeBase);
 }
 
-function send(id: string, doc: Record<string, unknown>, history?: unknown, versionLabel?: string, snapshot = false) {
-  api.updateDocument(id, {
+function send(id: string, doc: Record<string, unknown>, history?: unknown, versionLabel?: string, snapshot = false,
+              codeBase?: string | null): Promise<SaveOutcome> {
+  return api.updateDocument(id, {
     name: (doc as { name: string }).name,
     data: doc,
     history,
     version_label: versionLabel,
     snapshot,
-  }).then(() => {
+  }, codeBase).then((saved): SaveOutcome => {
     addLog('info', 'Document saved');
     if (isSketchDoc(doc)) void refreshUsers(id);   // the parts using it may now be out of date
-  }).catch((err: unknown) => {
+    else if (saved.data?.modelCode !== doc.modelCode) {
+      // this save didn't change the script, and another tab or browser had: the server kept theirs
+      addLog('info', 'This part\'s script was changed in another tab or browser; the server kept that version. Reload to see it.');
+    }
+    return { saved: true };
+  }).catch((err: unknown): SaveOutcome => {
     if (err instanceof Error && (err as Error & { conflict?: boolean }).conflict) {
+      const codeChanged = !!(err as Error & { codeChanged?: boolean }).codeChanged;
       // The server had a newer version (another tab saved). We did NOT overwrite it.
       // Our local edits are preserved in this tab's memory; the store still holds them.
       addLog('error',
         'This part was changed in another tab/session, so this save was refused to protect that newer work. Reload to see the latest — your unsaved changes here are still on screen.');
       console.warn('[autoSave] save refused: newer version exists on the server (conflict)');
+      return { saved: false, conflict: true, codeChanged };
     } else if (err instanceof Error && (err as Error & { queued?: boolean }).queued) {
       addLog('info', 'Offline — changes saved locally, will sync when reconnected');
     } else {
       console.error('[autoSave] Save failed:', err);
       addLog('error', `Save failed: ${err}`);
     }
+    return NOT_SENT;
   });
 }
 
@@ -161,13 +178,27 @@ export function persistBuildFeatures(features: unknown[]) {
 /** Persist the build123d model script NOW, directly.
  *  `snapshot` records an immutable version (true = a build-verified snapshot;
  *  false = an in-progress draft between builds — persisted but not versioned). */
-export function persistModelCode(code: string, label?: string, snapshot = true) {
+export function persistModelCode(code: string, label?: string, snapshot = true, codeBase?: string | null): Promise<SaveOutcome> {
   useDocumentStore.getState().setModelCode(code, label);
-  if (!backendId) return;
+  if (!backendId) return Promise.resolve(NOT_SENT);
   const state = useDocumentStore.getState();
   const doc = { ...state.document } as unknown as Record<string, unknown>;
   const history = { undo: state.undoStack, redo: state.redoStack };
-  doSave(backendId, doc, history, label, snapshot);
+  // `codeBase`: (an AI edit) the script version it started from, so it isn't
+  // saved over one saved elsewhere since (see cachedClient's codeBase)
+  return doSave(backendId, doc, history, label, snapshot, codeBase);
+}
+
+/** Save an AI edit's script, only over the saved version it started from
+ *  (`codeBase`; null: over any, an overwrite the user chose). Refused (the
+ *  part changed in another tab or browser), this tab's script stays as it was. */
+export async function persistAiCode(code: string, codeBase: string | null | undefined): Promise<SaveOutcome> {
+  const { modelCode, modelCodeLabel, modelCodeHistory } = useDocumentStore.getState().document;
+  const out = await persistModelCode(code, undefined, false, codeBase);
+  if (!out.saved && out.conflict) {
+    useDocumentStore.setState((s) => ({ document: { ...s.document, modelCode, modelCodeLabel, modelCodeHistory } }));
+  }
+  return out;
 }
 
 /** Persist a part's shared sketch aliases and pinned inputs NOW (with its

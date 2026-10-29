@@ -111,6 +111,23 @@ check before printing.
   that misses, holes cut again where they already go through) goes back to the AI once:
   it fixes it or asks you which feature you mean. If it still changes nothing, its
   message ends "this leaves the shape exactly as it was".
+- **Your changes come first**: you can keep working while the AI thinks. If you change
+  the part before its answer comes (a dialog, a parameter, the script), its edit is not
+  applied. It waits on a card in the chat: **Apply the AI's edit** (it replaces your
+  change, since the AI worked on the part as it was when you asked), **Keep my
+  version**, or **Ask again on my version** (the same request, sent again on the part
+  as it is now). The same holds when the part was changed in another tab or browser:
+  the server refuses the AI's save, this tab shows the newer version, and the card
+  says so. If this tab has script changes the server hasn't taken (not saved yet, or
+  refused because of that other change), they stay on screen instead, and applying the
+  AI's edit keeps them in **Earlier versions**. An edit that uses a project parameter it has just proposed waits the same
+  way, and goes in when you accept the parameter.
+- **No undefined parameters**: before an edit is saved, every `P["…"]` and `PP["…"]` it
+  reads must be defined (even on a line that doesn't run). If one isn't, the AI gets one
+  try to fix it; if it still isn't, the chat says which parameter, and the part stays
+  as it was.
+
+![An AI edit waiting on a card: the part was changed while the AI worked](images/ai-edit-held.png)
 
 ### Sketch
 
@@ -491,6 +508,12 @@ itself when they change.
   and redraw; an error shows on its line. **Earlier versions** lists the code before
   each change, yours or the AI's; each AI change in the chat can be clicked to go back
   to it too.
+- **Your code comes first**: if you have unsaved code in **Code**, or the code was
+  saved here or in another tab or browser while the AI worked, its change doesn't
+  replace yours. It waits on a card in the chat: **Apply the AI's edit**, **Keep my
+  version**, or **Ask again on my version** (the AI edits the code as it is in the
+  editor, unsaved changes included). Applying it keeps your unsaved code in
+  **Earlier versions**, labelled "your unsaved changes".
 - **When it fails**: the last good drawing stays, dimmed, with the reason. Parts keep
   building from the last good result until it runs again.
 - **Removing an output a part uses**: the code isn't saved until you choose. The editor

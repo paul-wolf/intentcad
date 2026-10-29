@@ -527,8 +527,26 @@ def edit_model(request, payload: EditRequest):
         code=r.get("code", ""), note=r.get("note"), question=r.get("question", ""),
         answer=r.get("answer", ""), brief_proposal=r.get("brief_proposal"),
         sketch_refs=r.get("sketch_refs"), parameter_proposals=r.get("parameter_proposals"),
+        changed_elsewhere=_changed_elsewhere(payload) if r.get("kind", "edit") == "edit" else None,
         context_files=[str(cf.id) for cf in sent], **spend,
     )
+
+
+def _changed_elsewhere(payload) -> bool | None:
+    """Whether the part's saved script is no longer the version the editor had
+    when it asked (another tab or browser saved one meanwhile); None when the
+    request didn't say which version that was."""
+    from django.core.exceptions import ValidationError
+    from documents.models import Document
+    from documents.versions import saved_code_version
+
+    if payload.code_base is None or not payload.document_id:
+        return None
+    try:
+        doc = Document.objects.filter(id=payload.document_id).only("id", "data").first()
+    except (ValidationError, ValueError):
+        return None
+    return bool(doc) and saved_code_version(doc) != payload.code_base
 
 
 def context_files_for(document_id: str, skip: list[str]) -> list:

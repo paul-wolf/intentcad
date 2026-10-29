@@ -14,6 +14,7 @@ from ninja import Router, Schema
 
 from documents.api import document_or_error
 from documents.models import Document
+from documents.versions import saved_code_version
 from projects.access import require_auth, require_project_access
 from projects.models import Project
 
@@ -40,6 +41,12 @@ class CodeIn(Schema):
     code: str
     label: str = ""          # what the change was ("AI: added wall holes", "edited in Code")
     confirm: bool = False    # save even though outputs parts use would go
+    # (an AI edit) the version of the saved code it started from (the ask's
+    # base_version): nothing is saved if the saved code isn't that any more
+    expect_version: str | None = None
+    # (an AI edit applied over unsaved code in the editor) that code: kept as
+    # a revert point too, so applying never loses it
+    replaced: str | None = None
 
 
 class ChatIn(Schema):
@@ -57,6 +64,7 @@ class AskIn(Schema):
     model: str = ""
     skip_context: list[str] = []     # context files not to send with this message
     mentions: list[str] = []         # ids of the parts @-mentioned
+    code: str | None = None          # (generated) the editor's unsaved code, to edit instead of the saved code
 
 
 def _generated(request, doc_id):
@@ -141,11 +149,14 @@ def save_code(request, doc_id: UUID, payload: CodeIn):
     doc, err = _generated(request, doc_id)
     if err:
         return err
+    if payload.expect_version is not None and saved_code_version(doc, "code") != payload.expect_version:
+        # changed in another tab or browser since the AI started: the editor holds the edit
+        return {"saved": False, "changed": True, "broken": []}
     trial = gs.run(doc, code=payload.code)
     broken = gs.broken_outputs(doc, trial)
     if broken and not payload.confirm:
         return {"saved": False, "broken": broken, "result": trial}
-    r = gs.save_code(doc, payload.code, payload.label, request.user, result=trial)
+    r = gs.save_code(doc, payload.code, payload.label, request.user, result=trial, replaced=payload.replaced)
     return _out(doc, r, saved=True, broken=broken)
 
 
@@ -175,6 +186,11 @@ def ask(request, doc_id: UUID, payload: AskIn):
     doc, err = document_or_error(request, doc_id)
     if err:
         return err
+    generated = gs.is_generated(doc)
+    base_version = saved_code_version(doc, "code")
+    if generated and payload.code is not None:   # edit the editor's code (not saved, and not saved by this)
+        doc.data = {**shared_defs._data(doc), "code": payload.code}
+    base_code = shared_defs._data(doc).get("code") or ""
     sent = context_files_for(str(doc.id), payload.skip_context)
     try:
         prepared = ai_blocks(sent)
@@ -192,4 +208,6 @@ def ask(request, doc_id: UUID, payload: AskIn):
     spend = {"cost_usd": r.get("cost_usd", 0.0), **usage} if sees_spend(request.user) else {}
     keep = ("kind", "code", "note", "result", "broken", "parameter_proposals", "sentence", "name",
             "empty", "question", "answer")
-    return {**{k: r[k] for k in keep if k in r}, "context_files": [str(cf.id) for cf in sent], **spend}
+    # an edit says what it was made from: the code it edited, and the saved code's version then
+    base = {"base_code": base_code, "base_version": base_version} if generated and r.get("kind") == "edit" else {}
+    return {**{k: r[k] for k in keep if k in r}, **base, "context_files": [str(cf.id) for cf in sent], **spend}

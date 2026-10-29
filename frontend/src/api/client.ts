@@ -86,12 +86,15 @@ export class ApiError extends Error {
   revolves?: import('@/build/revolve').RevolveReport[];
   /** For a failed AI edit: what its calls cost before it gave up. */
   usage?: CallSpend;
+  /** For a refused save (409): the part's script was changed in another tab or browser. */
+  codeChanged?: boolean;
   constructor(status: number, body: string) {
     let detail = body;
     let fix: SizeFix | undefined;
     let params: Record<string, number> | undefined;
     let usage: ApiError['usage'];
     let revolves: ApiError['revolves'];
+    let codeChanged = false;
     try {
       const j = JSON.parse(body);
       if (j && typeof j.message === 'string') detail = j.message;
@@ -102,6 +105,7 @@ export class ApiError extends Error {
       if (j && j.fix && typeof j.fix === 'object') fix = j.fix as SizeFix;
       if (j && j.params && typeof j.params === 'object') params = j.params as Record<string, number>;
       if (j && Array.isArray(j.revolves)) revolves = j.revolves;
+      if (j && j.code_changed === true) codeChanged = true;
     } catch { /* not JSON — keep the raw body */ }
     super(`API ${status}: ${detail}`);
     this.name = 'ApiError';
@@ -111,6 +115,7 @@ export class ApiError extends Error {
     this.params = params;
     this.usage = usage;
     this.revolves = revolves;
+    if (codeChanged) this.codeChanged = true;
   }
 }
 
@@ -167,6 +172,8 @@ export interface DocumentFull {
   project_id: string | null;
   created_at: string;
   updated_at: string;
+  /** the version of data.modelCode (a fingerprint): a save sends it back as code_base */
+  code_version?: string;
 }
 
 export const api = {
@@ -186,7 +193,7 @@ export const api = {
     });
   },
 
-  updateDocument(id: string, payload: { name?: string; data?: Record<string, unknown>; history?: unknown; project_id?: string; base_updated_at?: string; version_label?: string; snapshot?: boolean }): Promise<DocumentFull> {
+  updateDocument(id: string, payload: { name?: string; data?: Record<string, unknown>; history?: unknown; project_id?: string; base_updated_at?: string; version_label?: string; snapshot?: boolean; code_base?: string }): Promise<DocumentFull> {
     return request(`/documents/${id}`, {
       method: 'PUT',
       body: JSON.stringify(payload),
@@ -388,7 +395,9 @@ export const buildApi = {
                   /** the ids of the project's parts and sketches @-mentioned in the instruction */
                   mentions?: string[];
                   /** the part's SK aliases as the editor has them */
-                  sketch_refs?: Record<string, import('@/types/document').SketchRef> }): Promise<EditResponse> {
+                  sketch_refs?: Record<string, import('@/types/document').SketchRef>;
+                  /** the version of the saved script the editor has (DocumentFull.code_version) */
+                  code_base?: string }): Promise<EditResponse> {
     return request('/build/edit', { method: 'POST', body: JSON.stringify(payload) });
   },
   /** The Claude models the AI edit can use right now (discovered server-side
@@ -551,6 +560,8 @@ export interface EditResponse {
   cache_read_tokens?: number; cache_write_tokens?: number;
   /** the ids of the context files sent */
   context_files?: string[];
+  /** (edit) the saved script changed since code_base (another tab or browser): hold the edit */
+  changed_elsewhere?: boolean;
 }
 
 /** One AI call's spend. */
@@ -943,9 +954,11 @@ export const sketchApi = {
     return request(`/sketches/${id}/run`, { method: 'POST', body: JSON.stringify({ pp: {}, ...body }) });
   },
   /** Save the code (the old code becomes a revert point) and run it. When it
-   *  would drop outputs parts use, nothing is saved unless `confirm`. */
-  saveCode(id: string, body: { code: string; label?: string; confirm?: boolean }):
-    Promise<{ saved: false; broken: import('@/types/generated').BrokenOutput[]; result: import('@/types/generated').GenRunResult }
+   *  would drop outputs parts use, nothing is saved unless `confirm`; with
+   *  `expect_version` (an AI edit), nothing is saved if the saved code isn't
+   *  that version any more (`changed`: saved in another tab or browser). */
+  saveCode(id: string, body: { code: string; label?: string; confirm?: boolean; expect_version?: string; replaced?: string }):
+    Promise<{ saved: false; changed?: boolean; broken: import('@/types/generated').BrokenOutput[]; result?: import('@/types/generated').GenRunResult }
       | (import('@/types/generated').GenDoc & { saved: true; broken: import('@/types/generated').BrokenOutput[];
                                                 result: import('@/types/generated').GenRunResult })> {
     return request(`/sketches/${id}/code`, { method: 'PUT', body: JSON.stringify(body) });
@@ -956,7 +969,9 @@ export const sketchApi = {
   /** One turn of a sketch's chat, drawn or generated. Saves nothing: an edit
    *  is saved with saveCode, a proposed generated sketch made with create. */
   ask(id: string, body: { instruction: string; history: { role: string; text: string }[]; model?: string;
-                          skip_context?: string[]; mentions?: string[] }): Promise<SketchAskResponse> {
+                          skip_context?: string[]; mentions?: string[];
+                          /** (generated) the editor's unsaved code, to edit instead of the saved code */
+                          code?: string }): Promise<SketchAskResponse> {
     return request(`/sketches/${id}/ask`, { method: 'POST', body: JSON.stringify(body) });
   },
 };
@@ -978,6 +993,9 @@ export interface SketchAskResponse {
   empty?: boolean;
   question?: string;
   answer?: string;
+  /** (generated, edit) the code the AI edited, and the saved code's version when asked */
+  base_code?: string;
+  base_version?: string;
   context_files: string[];
   tokens_in?: number;
   tokens_out?: number;

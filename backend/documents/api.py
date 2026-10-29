@@ -32,6 +32,7 @@ from .schemas import (
     VersionOut,
 )
 from .validators import validate_document_data
+from .versions import code_version
 
 router = Router()
 
@@ -228,6 +229,20 @@ def update_document(request, doc_id: UUID, payload: DocumentUpdateIn):
             if not (hist and isinstance(hist[-1], dict) and hist[-1].get("code") == old_code):
                 hist = [*hist, {"code": old_code, "at": int(time.time() * 1000), "label": "overwritten"}][-60:]
                 new = {**new, "modelCodeHistory": hist}
+        # (3) A script changed elsewhere since this client had it: keep it, or
+        # refuse a save that would replace it (see DocumentUpdateIn.code_base)
+        if payload.code_base is not None and isinstance(new.get("modelCode"), str):
+            saved = code_version(old_code)
+            mine = code_version(new.get("modelCode"))
+            if payload.code_base != saved and mine != saved:
+                if mine != payload.code_base:
+                    return JsonResponse(
+                        {"message": "This part's script was changed in another tab or browser; nothing was saved.",
+                         "code_changed": True, "updated_at": doc.updated_at.isoformat()},
+                        status=409,
+                    )
+                # this client didn't change the script (a chat or a name saved): keep the newer one
+                new = {**new, "modelCode": old_code, "modelCodeHistory": old.get("modelCodeHistory") or []}
         new = _keep_server_keys(old, new)
         errors = validate_document_data(new)
         if errors:
