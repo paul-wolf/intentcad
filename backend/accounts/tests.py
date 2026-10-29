@@ -183,10 +183,13 @@ class BackfillTests(TestCase):
 class SeedTestUserTests(TestCase):
     """manage.py seed_test_user: the local test user from accounts/dev_seed.py."""
 
-    def _seed(self):
+    def _seed(self, debug=True):
+        # the test runner turns DEBUG off: a test server has it on
         from io import StringIO
         from django.core.management import call_command
-        call_command("seed_test_user", stdout=StringIO())
+        from django.test import override_settings
+        with override_settings(DEBUG=debug):
+            call_command("seed_test_user", stdout=StringIO())
 
     def test_signs_in_and_joins_the_guide_project_s_organisation(self):
         from projects.models import Project
@@ -216,6 +219,15 @@ class SeedTestUserTests(TestCase):
     def test_refuses_anything_but_sqlite(self):
         from django.core.management.base import CommandError
         from django.test import override_settings
+        from .dev_seed import TEST_USER
         with override_settings(DATABASES={"default": {"ENGINE": "django.db.backends.postgresql"}}):
-            with self.assertRaises(CommandError):
+            with self.assertRaisesMessage(CommandError, "SQLite"):
                 self._seed()
+        self.assertFalse(User.objects.filter(username=TEST_USER["username"]).exists())
+
+    def test_refuses_with_debug_off(self):
+        from django.core.management.base import CommandError
+        from .dev_seed import TEST_USER
+        with self.assertRaisesMessage(CommandError, "DEBUG"):
+            self._seed(debug=False)
+        self.assertFalse(User.objects.filter(username=TEST_USER["username"]).exists())
