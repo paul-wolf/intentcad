@@ -235,13 +235,14 @@ export function GeneratedSketchEditor({ id }: { id: string }) {
    *  it was saved in another tab or browser since. Then nothing is saved. */
   const saveFromChat = async (c: string, label: string, confirmBroken: boolean, expect?: string):
       Promise<BrokenOutput[] | 'changed' | null> => {
+    // the editor's unsaved code it replaces goes to Earlier versions, not away
+    const replaced = codeRef.current !== savedRef.current && codeRef.current !== c ? codeRef.current : undefined;
     const r = await sketchApi.saveCode(id, { code: c, label, confirm: confirmBroken,
-                                             ...(expect !== undefined ? { expect_version: expect } : {}) });
+                                             ...(expect !== undefined ? { expect_version: expect } : {}),
+                                             ...(replaced !== undefined ? { replaced } : {}) });
     if (!r.saved) return r.changed ? 'changed' : r.broken;
     const { saved: _s, broken: _b, result: _r, ...d } = r;
-    if (codeRef.current !== savedRef.current && codeRef.current !== c) {
-      addLog('info', 'The code you were editing was replaced by the AI\'s change (your saved versions are in the Code tab\'s history).');
-    }
+    if (replaced !== undefined) addLog('info', 'The code you were editing was replaced; it is in Earlier versions as "your unsaved changes".');
     setDoc(d as GenDoc);
     setCode(c);
     setBroken(null);

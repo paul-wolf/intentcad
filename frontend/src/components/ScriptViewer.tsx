@@ -9,7 +9,7 @@ import {
   type FaceRefSpec, type HolePresets, type EdgeOpKind, type EdgeRefSpec, type ExtrudeExtent, type ExtrudeOp, type KeepItem, type OpAt, type Step,
   type PlaneReport, type MirrorPlane, type PatternReport, type PatternSpec, type PlaneOpKind, type RunFace, type SharedInputs,
 } from '@/api/client';
-import { api as cachedApi, codeBaseOf } from '@/api/cachedClient';
+import { api as cachedApi, codeBaseOf, savedCodeOf } from '@/api/cachedClient';
 import { pinnedChanges, usesShared, withSharedProfiles } from '@/build/sharedSketch';
 import { solvePending, type Unsolved } from '@/build/projectSketchSolve';
 import { addLog } from '@/stores/logStore';
@@ -3174,7 +3174,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                     ...(version ? { version } : {}), ...(why.changed ? { changed: true } : {}),
                     ...(why.elsewhere ? { elsewhere: shown ? 'shown' as const : 'unsaved' as const } : {}) } }]);
         };
-        const unsaved = codeRef.current !== useDocumentStore.getState().document.modelCode;
+        const unsaved = scriptUnsaved();
         const why = holdAiEdit(base, codeRef.current, r.code, r.parameter_proposals);
         if (r.changed_elsewhere) await hold({ changed: true, elsewhere: true });
         else if (why) await hold(why);
@@ -3204,6 +3204,12 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // an AI edit held on a card (see holdAiEdit): the part as it was when the card came, by the card's time
   const heldBase = useRef(new Map<number, string>());
   const heldAt = (at: number) => (useDocumentStore.getState().document.chat ?? []).find((m) => m.at === at)?.held;
+  /** This tab's script isn't the one the server has: typed and not saved
+   *  yet, or saved here but refused by the server (changed elsewhere). */
+  const scriptUnsaved = () => {
+    const saved = savedCodeOf(getBackendId() ?? '');
+    return codeRef.current !== (saved ?? useDocumentStore.getState().document.modelCode);
+  };
   /** The part's script was changed in another tab or browser: this tab
    *  shows that version now, unless it has script changes not saved
    *  (`unsaved`: they stay on screen). Whether it took the saved one. */
@@ -3222,7 +3228,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const applyHeld = async (at: number) => {
     const h = heldAt(at);
     if (!h || h.status !== 'pending') return;
-    const unsaved = codeRef.current !== useDocumentStore.getState().document.modelCode;
+    const unsaved = scriptUnsaved();
+    // this tab's unsaved script goes to Earlier versions, not away
+    if (codeRef.current !== useDocumentStore.getState().document.modelCode) {
+      useDocumentStore.getState().setModelCode(codeRef.current, 'your unsaved changes');
+    }
     // over a change from elsewhere the user chose to replace (never seen here: no check); else only
     // over the version the edit started from (a card that waited for parameters) or this tab's
     const over = h.elsewhere === 'unsaved' ? null : h.changed ? undefined : h.version;

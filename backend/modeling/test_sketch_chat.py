@@ -199,6 +199,17 @@ class AskEndpointTests(SketchChatWorld):
         r = self.save_code(WIDER, expect_version=code_version(LAYOUT + "# from another tab\n"))
         self.assertTrue(r["saved"])
 
+    def test_unsaved_code_an_edit_replaces_is_kept(self):
+        """Applied over unsaved code in the editor (`replaced`), that code is a
+        revert point after the saved one."""
+        r = self.save_code(WIDER, label="before AI: wider", replaced=LAYOUT + "# mine\n")
+        self.assertTrue(r["saved"])
+        self.layout.refresh_from_db()
+        hist = self.layout.data["codeHistory"]
+        self.assertEqual([(h["code"], h["label"]) for h in hist[-2:]],
+                         [(LAYOUT, "before AI: wider"), (LAYOUT + "# mine\n", "your unsaved changes")])
+        self.assertEqual(self.layout.data["code"], WIDER)
+
     def test_a_stranger_cant_ask(self):
         other = Organisation.objects.create(name="Other", slug="other")
         stranger = Client()

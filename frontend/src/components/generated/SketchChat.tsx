@@ -204,10 +204,10 @@ export function HeldCard({ held, params = false, actionKey, onApply, onKeep, onA
         <span>
           {held.elsewhere
             ? `The ${what} was changed in another tab or browser while the AI was working on it, so its edit wasn't applied${
-                held.elsewhere === 'shown' ? '; this tab now shows that version' : ''}.`
+                held.elsewhere === 'shown' ? '; this tab now shows that version' : '; your unsaved changes here are still on screen'}.`
             : held.unsaved ? `Your ${what} has changes the AI didn't see, so its edit wasn't applied.`
             : `You changed the ${what} while the AI was working on it, so its edit wasn't applied.`}{' '}
-          The edit is of the {what} as it was when you asked: applying it replaces {held.elsewhere ? 'that' : 'your'} change{params ? ', and it uses the new project parameters above (accept them first)' : ''}.
+          The edit is of the {what} as it was when you asked: applying it replaces {held.elsewhere === 'unsaved' ? 'that change and yours' : held.elsewhere ? 'that change' : 'your change'} (kept in Earlier versions){params ? ', and it uses the new project parameters above (accept them first)' : ''}.
         </span>
       ) : held.broken.length ? (
         <>

@@ -118,7 +118,9 @@ check before printing.
   version**, or **Ask again on my version** (the same request, sent again on the part
   as it is now). The same holds when the part was changed in another tab or browser:
   the server refuses the AI's save, this tab shows the newer version, and the card
-  says so. An edit that uses a project parameter it has just proposed waits the same
+  says so. If this tab has script changes the server hasn't taken (not saved yet, or
+  refused because of that other change), they stay on screen instead, and applying the
+  AI's edit keeps them in **Earlier versions**. An edit that uses a project parameter it has just proposed waits the same
   way, and goes in when you accept the parameter.
 - **No undefined parameters**: before an edit is saved, every `P["…"]` and `PP["…"]` it
   reads must be defined (even on a line that doesn't run). If one isn't, the AI gets one
@@ -475,7 +477,8 @@ itself when they change.
   saved here or in another tab or browser while the AI worked, its change doesn't
   replace yours. It waits on a card in the chat: **Apply the AI's edit**, **Keep my
   version**, or **Ask again on my version** (the AI edits the code as it is in the
-  editor, unsaved changes included).
+  editor, unsaved changes included). Applying it keeps your unsaved code in
+  **Earlier versions**, labelled "your unsaved changes".
 - **When it fails**: the last good drawing stays, dimmed, with the reason. Parts keep
   building from the last good result until it runs again.
 - **Removing an output a part uses**: the code isn't saved until you choose. The editor

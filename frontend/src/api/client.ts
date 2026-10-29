@@ -948,7 +948,7 @@ export const sketchApi = {
    *  would drop outputs parts use, nothing is saved unless `confirm`; with
    *  `expect_version` (an AI edit), nothing is saved if the saved code isn't
    *  that version any more (`changed`: saved in another tab or browser). */
-  saveCode(id: string, body: { code: string; label?: string; confirm?: boolean; expect_version?: string }):
+  saveCode(id: string, body: { code: string; label?: string; confirm?: boolean; expect_version?: string; replaced?: string }):
     Promise<{ saved: false; changed?: boolean; broken: import('@/types/generated').BrokenOutput[]; result?: import('@/types/generated').GenRunResult }
       | (import('@/types/generated').GenDoc & { saved: true; broken: import('@/types/generated').BrokenOutput[];
                                                 result: import('@/types/generated').GenRunResult })> {

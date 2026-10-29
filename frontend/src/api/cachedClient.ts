@@ -29,16 +29,26 @@ function inTurn<T>(id: string, run: () => Promise<T>): Promise<T> {
 // saved since (it refuses a save that changes the script, and keeps the newer
 // script under one that doesn't). Per tab, not in IDB, which tabs share.
 const codeBase = new Map<string, string>();
+// ...and its script, so a tab can tell code it hasn't saved (typed, or a save
+// the server refused) from the server's
+const savedCode = new Map<string, string>();
 
 /** The version of the script this tab has of document `id` (none: not known, no check). */
 export function codeBaseOf(id: string): string | undefined {
   return codeBase.get(id);
 }
 
+/** The script of that version (none: not known). */
+export function savedCodeOf(id: string): string | undefined {
+  return savedCode.get(id);
+}
+
 /** This tab now shows the script of that version (it took the saved one). */
-export function adoptCodeVersion(id: string, version: string | undefined) {
+export function adoptCodeVersion(id: string, version: string | undefined, code?: unknown) {
   if (version) codeBase.set(id, version);
   else codeBase.delete(id);
+  if (version && typeof code === 'string') savedCode.set(id, code);
+  else savedCode.delete(id);
 }
 
 export const api = {
@@ -90,7 +100,7 @@ export const api = {
         confirmedAt >= server.updated_at;
 
       if (idbHasLocalChanges) {
-        codeBase.delete(id);   // unconfirmed local changes: not a version the server has
+        adoptCodeVersion(id, undefined);   // unconfirmed local changes: not a version the server has
         triggerSync();
         return {
           id: cached!.id,
@@ -116,10 +126,10 @@ export const api = {
       if (pending > 0) {
         await db.syncQueue.where('[table+entityId]').equals(['documents', id]).delete();
       }
-      adoptCodeVersion(id, server.code_version);
+      adoptCodeVersion(id, server.code_version, server.data?.modelCode);
       return server;
     } catch {
-      codeBase.delete(id);
+      adoptCodeVersion(id, undefined);
       // Offline — fall back to IDB
       if (cached && cached.data && Object.keys(cached.data).length > 0) {
         return {
@@ -201,7 +211,7 @@ export const api = {
                                                          ...(codeVersion ? { code_base: codeVersion } : {}) });
         // the server saved this tab's script: that is its version now (when it
         // kept a newer one instead, this tab still has the old one)
-        if (result.data?.modelCode === payload.data?.modelCode) adoptCodeVersion(id, result.code_version);
+        if (result.data?.modelCode === payload.data?.modelCode) adoptCodeVersion(id, result.code_version, result.data?.modelCode);
         // Update IDB with the server's confirmed timestamp
         await db.documents.put({
           id: result.id,

@@ -16,7 +16,7 @@ vi.mock('./client', () => ({ api: { updateDocument: (...a: unknown[]) => updateD
                                     getDocument: (...a: unknown[]) => getDocument(...a) } }));
 vi.mock('./syncEngine', () => ({ triggerSync: () => undefined }));
 
-const { adoptCodeVersion, api, codeBaseOf } = await import('./cachedClient');
+const { adoptCodeVersion, api, codeBaseOf, savedCodeOf } = await import('./cachedClient');
 
 describe('updateDocument', () => {
   beforeEach(() => {
@@ -65,6 +65,7 @@ describe("updateDocument and this tab's script version", () => {
     await api.updateDocument('p', { data: { modelCode: 'b' } });
     expect(updateDocument.mock.calls[0]![1].code_base).toBe('v1');
     expect(codeBaseOf('p')).toBe('v2');
+    expect(savedCodeOf('p')).toBe('b');
   });
 
   it('keeps its old version when the server kept a newer script (saved elsewhere) instead of this one', async () => {
@@ -84,10 +85,12 @@ describe("updateDocument and this tab's script version", () => {
   });
 
   it('a script changed elsewhere refuses the save: it throws a conflict that says so', async () => {
-    adoptCodeVersion('p', 'v1');
     updateDocument.mockRejectedValueOnce(Object.assign(new Error('API 409: changed'), { codeChanged: true }));
     getDocument.mockResolvedValueOnce(saved('theirs', 'v3'));
+    adoptCodeVersion('p', 'v1', 'a');
     await expect(api.updateDocument('p', { data: { modelCode: 'mine' } })).rejects.toMatchObject({ conflict: true, codeChanged: true });
     expect(codeBaseOf('p')).toBe('v1');
+    // the refused script is not the saved one: the tab can tell it is unsaved
+    expect(savedCodeOf('p')).toBe('a');
   });
 });

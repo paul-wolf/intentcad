@@ -44,6 +44,9 @@ class CodeIn(Schema):
     # (an AI edit) the version of the saved code it started from (the ask's
     # base_version): nothing is saved if the saved code isn't that any more
     expect_version: str | None = None
+    # (an AI edit applied over unsaved code in the editor) that code: kept as
+    # a revert point too, so applying never loses it
+    replaced: str | None = None
 
 
 class ChatIn(Schema):
@@ -153,7 +156,7 @@ def save_code(request, doc_id: UUID, payload: CodeIn):
     broken = gs.broken_outputs(doc, trial)
     if broken and not payload.confirm:
         return {"saved": False, "broken": broken, "result": trial}
-    r = gs.save_code(doc, payload.code, payload.label, request.user, result=trial)
+    r = gs.save_code(doc, payload.code, payload.label, request.user, result=trial, replaced=payload.replaced)
     return _out(doc, r, saved=True, broken=broken)
 
 

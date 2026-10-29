@@ -193,15 +193,19 @@ def broken_outputs(doc, result: dict) -> list[dict]:
             if n in had and n not in made]
 
 
-def save_code(doc, code: str, label: str = "", user=None, result: dict | None = None) -> dict:
+def save_code(doc, code: str, label: str = "", user=None, result: dict | None = None,
+              replaced: str | None = None) -> dict:
     """Save new code (the old code goes into codeHistory, a revert point), run
-    it and keep the result (saved). Returns the run's result."""
+    it and keep the result (saved). `replaced`: the editor's unsaved code this
+    replaces, a revert point after the old code. Returns the run's result."""
     data = dict(shared_defs._data(doc))
     old = data.get("code") if isinstance(data.get("code"), str) else ""
     if old != code:
         hist = data.get("codeHistory") if isinstance(data.get("codeHistory"), list) else []
         if old.strip() and not (hist and isinstance(hist[-1], dict) and hist[-1].get("code") == old):
             hist = [*hist, {"code": old, "at": _now_ms(), "label": label or "before a change"}][-HISTORY:]
+        if isinstance(replaced, str) and replaced.strip() and replaced not in (old, code):
+            hist = [*hist, {"code": replaced, "at": _now_ms(), "label": "your unsaved changes"}][-HISTORY:]
         data["codeHistory"] = hist
         data["code"] = code
     doc.data = data
