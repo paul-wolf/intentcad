@@ -160,6 +160,37 @@ class DocumentAPITests(TestCase):
             content_type="application/json")
         self.assertEqual(stale.status_code, 409)
 
+    def test_a_script_changed_elsewhere_is_never_overwritten(self):
+        """code_base: the script version this client had. Two tabs open the
+        part; one saves a new script, then the other saves."""
+        d = dict(_valid_doc_data(), modelCode="part = Box(1,1,1)")
+        doc_id = self.client.post("/api/documents/", data=json.dumps({"name": "P", "data": d}),
+                                  content_type="application/json").json()["id"]
+        put = lambda body: self.client.put(f"/api/documents/{doc_id}", data=json.dumps(body),
+                                           content_type="application/json")
+        base = self.client.get(f"/api/documents/{doc_id}").json()["code_version"]
+        mine = put({"data": dict(d, modelCode="part = Box(2,2,2)"), "code_base": base})
+        self.assertEqual(mine.status_code, 200)
+        newer = mine.json()["code_version"]
+        self.assertNotEqual(newer, base)
+        # the other tab changes the script too: refused, the newer one stays
+        theirs = put({"data": dict(d, modelCode="part = Box(9,9,9)"), "code_base": base})
+        self.assertEqual(theirs.status_code, 409)
+        self.assertTrue(theirs.json()["code_changed"])
+        # the other tab saves its chat (its old script with it): the chat is saved, the newer script kept
+        chat = put({"data": dict(d, modelCode="part = Box(1,1,1)", chat=[{"role": "user", "text": "hi", "at": 1}]),
+                    "code_base": base})
+        self.assertEqual(chat.status_code, 200)
+        self.assertEqual(chat.json()["data"]["modelCode"], "part = Box(2,2,2)")
+        self.assertEqual(chat.json()["data"]["chat"][0]["text"], "hi")
+        self.assertEqual(chat.json()["code_version"], newer)
+        # with the newer version as its base, it saves
+        ok = put({"data": dict(d, modelCode="part = Box(3,3,3)"), "code_base": newer})
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(ok.json()["data"]["modelCode"], "part = Box(3,3,3)")
+        # a save without a base is as before (no check)
+        self.assertEqual(put({"data": dict(d, modelCode="part = Box(4,4,4)")}).status_code, 200)
+
     def test_delete(self):
         resp = self.client.post(
             "/api/documents/",

@@ -162,6 +162,43 @@ class AskEndpointTests(SketchChatWorld):
         from .models import AiEdit
         self.assertEqual(AiEdit.objects.get().document_id, str(self.layout.id))
 
+    def test_an_edit_says_what_it_was_made_from(self):
+        """base_code: the code the AI edited; base_version: the saved code's
+        version when asked (PUT /code's expect_version)."""
+        from documents.versions import code_version
+        with mock.patch("modeling.sketch_chat._anthropic_call", return_value=edit(WIDER)):
+            r = self.ask(self.client, self.layout, {"instruction": "check the width"}).json()
+        self.assertEqual((r["kind"], r["base_code"], r["base_version"]), ("edit", LAYOUT, code_version(LAYOUT)))
+
+    def test_ask_again_on_unsaved_code(self):
+        """With `code`, the AI edits the editor's unsaved code; nothing is saved."""
+        from documents.versions import code_version
+        mine = LAYOUT + "# mine\n"
+        with mock.patch("modeling.sketch_chat._anthropic_call", return_value=edit(WIDER + "# mine\n")) as call:
+            r = self.ask(self.client, self.layout, {"instruction": "check the width", "code": mine}).json()
+        self.assertIn("# mine", call.call_args.args[1])
+        self.assertEqual((r["base_code"], r["base_version"]), (mine, code_version(LAYOUT)))
+        self.layout.refresh_from_db()
+        self.assertEqual(self.layout.data["code"], LAYOUT)
+
+    def test_an_answer_has_no_base(self):
+        with mock.patch("modeling.sketch_chat._anthropic_call",
+                        return_value={"kind": "answer", "text": "100 mm.", "side": [], "usage": {}}):
+            r = self.ask(self.client, self.layout, {}).json()
+        self.assertNotIn("base_version", r)
+
+    def test_an_ai_edit_isnt_saved_over_code_saved_meanwhile(self):
+        from documents.versions import code_version
+        asked = code_version(LAYOUT)
+        self.save_code(LAYOUT + "# from another tab\n")
+        r = self.save_code(WIDER, expect_version=asked)
+        self.assertEqual((r["saved"], r["changed"]), (False, True))
+        self.layout.refresh_from_db()
+        self.assertEqual(self.layout.data["code"], LAYOUT + "# from another tab\n")
+        # with the saved code's version, it saves
+        r = self.save_code(WIDER, expect_version=code_version(LAYOUT + "# from another tab\n"))
+        self.assertTrue(r["saved"])
+
     def test_a_stranger_cant_ask(self):
         other = Organisation.objects.create(name="Other", slug="other")
         stranger = Client()

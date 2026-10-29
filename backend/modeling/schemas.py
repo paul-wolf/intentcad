@@ -674,6 +674,9 @@ class EditRequest(Schema):
     skip_context: list[str] = []   # context file ids left out of this message only
     mentions: list[str] = []       # ids of the project's parts the user @-mentioned
     sketch_refs: dict | None = None   # the part's SK aliases as the editor has them (else the saved ones)
+    # the version of the saved script the editor had when asking (DocumentOut.code_version):
+    # if the saved script isn't that version when the edit is ready, the reply says so
+    code_base: str | None = None
 
 
 class ModelInfo(Schema):
@@ -708,6 +711,7 @@ class EditResponse(Schema):
     brief_proposal: BriefProposal | None = None   # a new project brief, for the user to accept
     sketch_refs: dict | None = None               # aliases use_sketch added: merge into data.sketchRefs
     parameter_proposals: list[dict] | None = None # project parameters, for the user to accept
+    changed_elsewhere: bool | None = None         # (edit) the saved script changed since code_base: hold the edit
     # the spend, for staff only: left out of the response for everyone else
     tokens_in: int | None = None           # all input read, cached or not
     tokens_out: int | None = None

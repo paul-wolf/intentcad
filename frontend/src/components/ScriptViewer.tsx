@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { useThemeStore } from '@/theme';
 import { useDocumentStore } from '@/stores/documentStore';
 import { holdAiEdit, ppReads } from '@/build/aiEdit';
-import { cardKey, runCardAction, withCardStatus } from './cardAction';
+import { cardKey, clearCardAction, runCardAction, withCardStatus } from './cardAction';
 import { HeldCard } from './generated/SketchChat';
 import {
   api, buildApi, errorText, ApiError, type RunResponse, type RunEdge, type FaceRefReport, type UsageResponse, type DimInfo, type SizeFix,
   type FaceRefSpec, type HolePresets, type EdgeOpKind, type EdgeRefSpec, type ExtrudeExtent, type ExtrudeOp, type KeepItem, type OpAt, type Step,
   type PlaneReport, type MirrorPlane, type PatternReport, type PatternSpec, type PlaneOpKind, type RunFace, type SharedInputs,
 } from '@/api/client';
+import { api as cachedApi, codeBaseOf } from '@/api/cachedClient';
 import { pinnedChanges, usesShared, withSharedProfiles } from '@/build/sharedSketch';
 import { solvePending, type Unsolved } from '@/build/projectSketchSolve';
 import { addLog } from '@/stores/logStore';
@@ -19,7 +20,7 @@ import { DescriptionLine, useProjectDocs } from './ProjectChat';
 import { ChatHistory, ChatInput, useChatBox, useModelPicker } from './ChatPanel';
 import { mentionedIds } from '@/utils/mentions';
 import { projectApi } from '@/api/projectClient';
-import { persistModelCode, persistSharedRefs, persistChat, updateChat, persistThumbnail, persistName, persistProductionNotes, persistPrintBed, persistSketches, persistParamRanges, getBackendId, subscribeBackendId, getProjectId, getProjectName, subscribeProjectContext } from '@/api/autoSave';
+import { persistAiCode, persistModelCode, persistSharedRefs, persistChat, updateChat, persistThumbnail, persistName, persistProductionNotes, persistPrintBed, persistSketches, persistParamRanges, getBackendId, subscribeBackendId, getProjectId, getProjectName, subscribeProjectContext } from '@/api/autoSave';
 import { createEmptyDocument, DEFAULT_PRODUCTION_NOTES } from '@/utils/document';
 import type { BuildInputs, ChatMessage, Sketch, SketchRef } from '@/types/document';
 import { useNavigate } from 'react-router-dom';
@@ -3119,6 +3120,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     setAsking(true);
     box.setMention(null);
     const base = code;   // the version the AI works from: a change made meanwhile is never overwritten unasked
+    // the saved script's version: another tab's or browser's save meanwhile isn't overwritten either
+    const version = codeBaseOf(getBackendId() ?? '');
     const sent = filesToSend(ctxStore.files, skipCtx);
     const userMsg: ChatMessage = { role: 'user', text: instruction, at: Date.now(),
                                    ...(sent.length ? { files: sent.map((f) => f.title) } : {}) };
@@ -3139,6 +3142,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
         mentions: mentionedIds(instruction, projectDocs.others),
         // the shared sketches it has (saved or not), for use_sketch and the check build
         sketch_refs: useDocumentStore.getState().document.sketchRefs ?? {},
+        ...(version ? { code_base: version } : {}),
       });
       setSkipCtx(new Set());
       const spent = spendNote(r);
@@ -3160,18 +3164,29 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       } else if (r.kind === 'answer') {
         updateChat((ms) => [...ms, { role: 'assistant', kind: 'answer', text: r.answer || '', usage: spent, at: Date.now(), ...proposal }]);
       } else {
-        const why = holdAiEdit(base, codeRef.current, r.code, r.parameter_proposals);
-        if (why) {
-          // the part changed meanwhile, or the edit reads parameters not accepted yet: a card to apply it or not
+        const hold = async (why: { changed: boolean; elsewhere?: boolean }) => {
+          // the part changed meanwhile (here or elsewhere), or the edit reads parameters not accepted yet: a card to apply it or not
+          const shown = why.elsewhere ? await takeSavedVersion(unsaved) : false;
           const at = Date.now();
           heldBase.current.set(at, codeRef.current);
           updateChat((ms) => [...ms, { role: 'assistant', kind: 'edit', text: r.note || 'Done.', usage: spent, at, ...proposal,
-            held: { code: r.code, label: r.note || instruction, broken: [], status: 'pending', ...(why.changed ? { changed: true } : {}) } }]);
-        } else {
-          updateChat((ms) => [...ms, { role: 'assistant', kind: 'edit', text: r.note || 'Done.', code: r.code, usage: spent, at: Date.now(), ...proposal }]);
-          setCode(r.code);
-          saveDraft(r.code);
-          await build(r.code, r.note || instruction);
+            held: { code: r.code, label: r.note || instruction, broken: [], status: 'pending', ask: instruction,
+                    ...(version ? { version } : {}), ...(why.changed ? { changed: true } : {}),
+                    ...(why.elsewhere ? { elsewhere: shown ? 'shown' as const : 'unsaved' as const } : {}) } }]);
+        };
+        const unsaved = codeRef.current !== useDocumentStore.getState().document.modelCode;
+        const why = holdAiEdit(base, codeRef.current, r.code, r.parameter_proposals);
+        if (r.changed_elsewhere) await hold({ changed: true, elsewhere: true });
+        else if (why) await hold(why);
+        else {
+          // saved only over the version it started from (else held: changed elsewhere just now)
+          const saved = await persistAiCode(r.code, version);
+          if (!saved.saved && saved.conflict) await hold({ changed: true, elsewhere: true });
+          else {
+            updateChat((ms) => [...ms, { role: 'assistant', kind: 'edit', text: r.note || 'Done.', code: r.code, usage: spent, at: Date.now(), ...proposal }]);
+            setCode(r.code);
+            await build(r.code, r.note || instruction);
+          }
         }
       }
       fetchUsage();
@@ -3189,14 +3204,47 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   // an AI edit held on a card (see holdAiEdit): the part as it was when the card came, by the card's time
   const heldBase = useRef(new Map<number, string>());
   const heldAt = (at: number) => (useDocumentStore.getState().document.chat ?? []).find((m) => m.at === at)?.held;
-  /** Apply the held edit of the message at `at`. */
+  /** The part's script was changed in another tab or browser: this tab
+   *  shows that version now, unless it has script changes not saved
+   *  (`unsaved`: they stay on screen). Whether it took the saved one. */
+  const takeSavedVersion = async (unsaved: boolean): Promise<boolean> => {
+    const id = getBackendId();
+    if (!id || unsaved) return false;
+    const d = await cachedApi.getDocument(id).catch(() => null);   // its version becomes this tab's
+    const saved = (d?.data as { modelCode?: unknown } | undefined)?.modelCode;
+    if (typeof saved !== 'string' || !saved.trim()) return false;
+    useDocumentStore.getState().setModelCode(saved, 'changed in another tab or browser');
+    setCode(saved);
+    void build(saved, 'changed in another tab or browser');
+    return true;
+  };
+  /** Apply the held edit of the message at `at`; throws what went wrong (its card shows it). */
   const applyHeld = async (at: number) => {
     const h = heldAt(at);
     if (!h || h.status !== 'pending') return;
+    const unsaved = codeRef.current !== useDocumentStore.getState().document.modelCode;
+    // over a change from elsewhere the user chose to replace (never seen here: no check); else only
+    // over the version the edit started from (a card that waited for parameters) or this tab's
+    const over = h.elsewhere === 'unsaved' ? null : h.changed ? undefined : h.version;
+    const saved = await persistAiCode(h.code, over);
+    if (!saved.saved && saved.conflict) {
+      const shown = await takeSavedVersion(unsaved);
+      updateChat((ms) => ms.map((m) => (m.at === at && m.held
+        ? { ...m, held: { ...m.held, changed: true, elsewhere: shown ? 'shown' as const : 'unsaved' as const } } : m)));
+      throw new Error(`the part was just changed in another tab or browser${shown ? ', and this tab now shows that version' : ''}. `
+                      + 'Apply again to replace it, or ask again on this version.');
+    }
     setCode(h.code);
-    saveDraft(h.code);
     updateChat((ms) => withCardStatus(ms, at, 'held', 'applied', { code: h.code }));
     await build(h.code, h.label);
+  };
+  /** Ask the AI again, on the part as it is now, for the edit held at `at`. */
+  const askAgain = (at: number) => {
+    const h = heldAt(at);
+    if (!h || h.status !== 'pending' || asking) return;
+    clearCardAction(cardKey(docId ?? '', 'held', at));
+    updateChat((ms) => withCardStatus(ms, at, 'held', 'again'));
+    void sendChat(h.ask || h.label);
   };
   // the project parameters a held edit waited for are accepted: it goes in,
   // unless the part changed since (then its card stays, to apply or not)
@@ -3593,6 +3641,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       onChange={updateChat} onRevert={restoreVersion} onParamsAccepted={paramsAccepted}
       card={(m) => m.held ? (
         <HeldCard held={m.held} actionKey={cardKey(docId ?? '', 'held', m.at)} onApply={() => applyHeld(m.at)}
+          onAskAgain={asking ? undefined : () => askAgain(m.at)}
           params={!!m.params && m.params.status === 'pending' && ppReads(m.held.code).some((n) => m.params!.items.some((p) => p.name === n))}
           onKeep={() => updateChat((ms) => withCardStatus(ms, m.at, 'held', 'kept'))} />
       ) : null}

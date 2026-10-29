@@ -447,7 +447,19 @@ export interface ChatMessage {
    *  yet; (part chat) the same parameters, or `changed`: the user changed the
    *  part while the AI worked on it */
   held?: { code: string; label: string; broken: { name: string; parts: string[] }[];
-           status: 'pending' | 'applied' | 'kept'; changed?: boolean };
+           /** 'again': asked again on the user's version (Ask again on my version) */
+           status: 'pending' | 'applied' | 'kept' | 'again';
+           /** the part changed while the AI worked (in this tab, or `elsewhere`) */
+           changed?: boolean;
+           /** it changed in another tab or browser: this tab now 'shown' that version, or
+            *  kept its own unsaved changes on screen ('unsaved') */
+           elsewhere?: 'shown' | 'unsaved';
+           /** (generated sketch) the editor had unsaved code the AI didn't see */
+           unsaved?: boolean;
+           /** the saved script's version the AI started from: its save is refused over another */
+           version?: string;
+           /** what the user asked (Ask again on my version sends it again) */
+           ask?: string };
   files?: string[];             // (user) the titles of the context files sent with it
   usage?: string;               // (assistant) tokens and cost of the call, cached input included
   at: number;

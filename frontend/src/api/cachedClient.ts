@@ -23,6 +23,24 @@ function inTurn<T>(id: string, run: () => Promise<T>): Promise<T> {
   return next;
 }
 
+// The version of each part's script this tab last had from the server
+// (DocumentFull.code_version), in memory: every save sends it as code_base, so
+// the server never lets this tab overwrite a script another tab or browser
+// saved since (it refuses a save that changes the script, and keeps the newer
+// script under one that doesn't). Per tab, not in IDB, which tabs share.
+const codeBase = new Map<string, string>();
+
+/** The version of the script this tab has of document `id` (none: not known, no check). */
+export function codeBaseOf(id: string): string | undefined {
+  return codeBase.get(id);
+}
+
+/** This tab now shows the script of that version (it took the saved one). */
+export function adoptCodeVersion(id: string, version: string | undefined) {
+  if (version) codeBase.set(id, version);
+  else codeBase.delete(id);
+}
+
 export const api = {
   async listDocuments(projectId?: string): Promise<DocumentListItem[]> {
     try {
@@ -72,6 +90,7 @@ export const api = {
         confirmedAt >= server.updated_at;
 
       if (idbHasLocalChanges) {
+        codeBase.delete(id);   // unconfirmed local changes: not a version the server has
         triggerSync();
         return {
           id: cached!.id,
@@ -97,8 +116,10 @@ export const api = {
       if (pending > 0) {
         await db.syncQueue.where('[table+entityId]').equals(['documents', id]).delete();
       }
+      adoptCodeVersion(id, server.code_version);
       return server;
     } catch {
+      codeBase.delete(id);
       // Offline — fall back to IDB
       if (cached && cached.data && Object.keys(cached.data).length > 0) {
         return {
@@ -148,9 +169,14 @@ export const api = {
     }
   },
 
-  updateDocument(id: string, payload: { name?: string; data?: Record<string, unknown>; history?: unknown; project_id?: string; version_label?: string; snapshot?: boolean }): Promise<DocumentFull> {
+  /** `codeBase`: the script version to send as code_base (default: this tab's,
+   *  see codeBase; null: none, an overwrite the user chose). A refused save
+   *  throws {conflict: true}, with codeChanged when it was the script. */
+  updateDocument(id: string, payload: { name?: string; data?: Record<string, unknown>; history?: unknown; project_id?: string; version_label?: string; snapshot?: boolean },
+                 codeBaseFor?: string | null): Promise<DocumentFull> {
     // one save of a document at a time (see inTurn)
     return inTurn(id, async () => {
+      const codeVersion = codeBaseFor === undefined ? codeBase.get(id) : codeBaseFor ?? undefined;
       // sketch axes are derived on load, not saved
       payload = { ...payload, ...(payload.data ? { data: savedData(payload.data) } : {}), ...(payload.history ? { history: savedHistory(payload.history) } : {}) };
       const now = new Date().toISOString();
@@ -171,7 +197,11 @@ export const api = {
       try {
         // Send the version we last saw so the server can reject a stale overwrite.
         const base = existing?.server_confirmed_updated_at ?? existing?.updated_at;
-        const result = await rawApi.updateDocument(id, base ? { ...payload, base_updated_at: base } : payload);
+        const result = await rawApi.updateDocument(id, { ...payload, ...(base ? { base_updated_at: base } : {}),
+                                                         ...(codeVersion ? { code_base: codeVersion } : {}) });
+        // the server saved this tab's script: that is its version now (when it
+        // kept a newer one instead, this tab still has the old one)
+        if (result.data?.modelCode === payload.data?.modelCode) adoptCodeVersion(id, result.code_version);
         // Update IDB with the server's confirmed timestamp
         await db.documents.put({
           id: result.id,
@@ -198,7 +228,7 @@ export const api = {
               server_confirmed_updated_at: server.updated_at,
             });
           } catch { /* ignore refetch failure */ }
-          throw Object.assign(new Error('conflict'), { conflict: true });
+          throw Object.assign(new Error('conflict'), { conflict: true, codeChanged: !!(err as { codeChanged?: boolean }).codeChanged });
         }
         if (msg.includes('API 4')) {
           // 4xx — validation/auth error, queuing would not help

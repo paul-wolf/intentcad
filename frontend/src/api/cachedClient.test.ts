@@ -11,10 +11,12 @@ vi.mock('./db', () => ({
   },
 }));
 const updateDocument = vi.fn();
-vi.mock('./client', () => ({ api: { updateDocument: (...a: unknown[]) => updateDocument(...a) } }));
+const getDocument = vi.fn();
+vi.mock('./client', () => ({ api: { updateDocument: (...a: unknown[]) => updateDocument(...a),
+                                    getDocument: (...a: unknown[]) => getDocument(...a) } }));
 vi.mock('./syncEngine', () => ({ triggerSync: () => undefined }));
 
-const { api } = await import('./cachedClient');
+const { adoptCodeVersion, api, codeBaseOf } = await import('./cachedClient');
 
 describe('updateDocument', () => {
   beforeEach(() => {
@@ -43,5 +45,49 @@ describe('updateDocument', () => {
     expect(results.map((r) => r.status)).toEqual(['rejected', 'fulfilled']);
     // the optimistic write of the failed save kept the last confirmed version as the base
     expect(updateDocument.mock.calls.map((c) => c[1].base_updated_at)).toEqual(['T0', 'T0']);
+  });
+});
+
+describe("updateDocument and this tab's script version", () => {
+  const saved = (code: string, v: string) => ({ id: 'p', name: 'Plate', data: { modelCode: code }, project_id: null,
+                                                updated_at: 'T1', code_version: v });
+  beforeEach(() => {
+    store.clear();
+    updateDocument.mockReset();
+    getDocument.mockReset();
+    adoptCodeVersion('p', undefined);
+    store.set('p', { id: 'p', name: 'Plate', data: {}, project_id: null, updated_at: 'T0', server_confirmed_updated_at: 'T0' });
+  });
+
+  it('sends the version it has as code_base, and has the new one once the server saved its script', async () => {
+    adoptCodeVersion('p', 'v1');
+    updateDocument.mockResolvedValueOnce(saved('b', 'v2'));
+    await api.updateDocument('p', { data: { modelCode: 'b' } });
+    expect(updateDocument.mock.calls[0]![1].code_base).toBe('v1');
+    expect(codeBaseOf('p')).toBe('v2');
+  });
+
+  it('keeps its old version when the server kept a newer script (saved elsewhere) instead of this one', async () => {
+    adoptCodeVersion('p', 'v1');
+    updateDocument.mockResolvedValueOnce(saved('theirs', 'v3'));
+    await api.updateDocument('p', { data: { modelCode: 'a' } });
+    expect(codeBaseOf('p')).toBe('v1');
+  });
+
+  it('sends no code_base for an overwrite the user chose (null), or when it has no version', async () => {
+    adoptCodeVersion('p', 'v1');
+    updateDocument.mockResolvedValue(saved('b', 'v2'));
+    await api.updateDocument('p', { data: { modelCode: 'b' } }, null);
+    adoptCodeVersion('p', undefined);
+    await api.updateDocument('p', { data: { modelCode: 'c' } });
+    expect(updateDocument.mock.calls.map((c) => 'code_base' in c[1])).toEqual([false, false]);
+  });
+
+  it('a script changed elsewhere refuses the save: it throws a conflict that says so', async () => {
+    adoptCodeVersion('p', 'v1');
+    updateDocument.mockRejectedValueOnce(Object.assign(new Error('API 409: changed'), { codeChanged: true }));
+    getDocument.mockResolvedValueOnce(saved('theirs', 'v3'));
+    await expect(api.updateDocument('p', { data: { modelCode: 'mine' } })).rejects.toMatchObject({ conflict: true, codeChanged: true });
+    expect(codeBaseOf('p')).toBe('v1');
   });
 });

@@ -34,6 +34,14 @@ export function runWords(r: GenRunResult | undefined): string {
   return `${ok} of ${n} checks pass (fails: ${failed}).`;
 }
 
+/** Why an AI edit of `base` (the code it edited) waits on its card instead of
+ *  replacing the editor's code: unsaved code it didn't see, or code saved here
+ *  while it worked. Null: nothing here changed, it can be saved. */
+export function heldBecause(editor: string, saved: string, base: string): { changed: true; unsaved?: true } | null {
+  if (editor === base) return null;
+  return editor !== saved ? { changed: true, unsaved: true } : { changed: true };
+}
+
 export function SketchChat({ docId, projectId, messages, update, onReply, onRevert, onParamsAccepted, card, askRef,
                              placeholder, fill = false }: {
   docId: string;
@@ -42,12 +50,14 @@ export function SketchChat({ docId, projectId, messages, update, onReply, onReve
   /** change the chat as it is when the change is made, and persist it */
   update: (change: (messages: ChatMessage[]) => ChatMessage[]) => void;
   /** an edit or a proposal: the assistant message to add (the editor saves the code, or not) */
-  onReply: (r: SketchAskResponse, at: number) => Promise<Partial<ChatMessage>>;
+  onReply: (r: SketchAskResponse, at: number, instruction: string) => Promise<Partial<ChatMessage>>;
   onRevert: (code: string) => void;
   onParamsAccepted: () => void;
   card?: (m: ChatMessage, i: number) => ReactNode;
-  /** set to a function that sends a message (Fix with AI) */
-  askRef?: { current: ((text: string) => void) | null };
+  /** set to a function that sends a message (Fix with AI); with `code`, the
+   *  AI edits that (the editor's unsaved code) instead of the saved code.
+   *  False: not sent (the AI is still on the last message). */
+  askRef?: { current: ((text: string, code?: string) => boolean) | null };
   placeholder: string;
   /** the chat takes its column's height */
   fill?: boolean;
@@ -61,7 +71,7 @@ export function SketchChat({ docId, projectId, messages, update, onReply, onReve
   const [showCtx, setShowCtx] = useState(false);
   const box = useChatBox({ docs: projectDocs.others, ctxStore, send: (text) => void send(text) });
 
-  const send = async (text?: string) => {
+  const send = async (text?: string, code?: string) => {
     const instruction = (text ?? box.ask).trim();
     if (!instruction || asking) return;
     if (box.uploading) { box.setSendQueued(instruction); return; }
@@ -79,6 +89,7 @@ export function SketchChat({ docId, projectId, messages, update, onReply, onReve
         history: messages.slice(-8).map((m) => ({ role: m.role, text: m.text })),
         skip_context: skipList(ctxStore.files, box.skipCtx),
         mentions: mentionedIds(instruction, projectDocs.others),
+        ...(code !== undefined ? { code } : {}),
       });
       box.setSkipCtx(new Set());
       const at = Date.now();
@@ -88,7 +99,7 @@ export function SketchChat({ docId, projectId, messages, update, onReply, onReve
       Object.assign(said, projectCards(r, brief));
       if (r.kind === 'question') Object.assign(said, { kind: 'question', text: r.question || '' });
       else if (r.kind === 'answer') Object.assign(said, { kind: 'answer', text: r.answer || '' });
-      else Object.assign(said, await onReply(r, at));
+      else Object.assign(said, await onReply(r, at, instruction));
       // onto the chat as it is now: a card accepted while the AI was thinking stays accepted
       update((ms) => [...ms, said]);
     } catch (err) {
@@ -98,7 +109,7 @@ export function SketchChat({ docId, projectId, messages, update, onReply, onReve
       setAsking(false);
     }
   };
-  if (askRef) askRef.current = (t) => void send(t);
+  if (askRef) askRef.current = (t, c) => { if (asking) return false; void send(t, c); return true; };
 
   const ctxColors: CtxColors = {
     text: palette.text, dim: palette.textSecondary, mute: palette.textMuted, border: palette.border,
@@ -160,9 +171,10 @@ export function CardButton({ primary, busy, onClick, children }: {
 }
 
 /** New code that stops making outputs parts use, that needs project
- *  parameters not accepted yet, or (part chat) an AI edit of a part the user
- *  changed while it worked: nothing is saved until the user says. */
-export function HeldCard({ held, params = false, actionKey, onApply, onKeep }: {
+ *  parameters not accepted yet, or an AI edit of a part or sketch changed
+ *  while it worked (here, or in another tab or browser): nothing is saved
+ *  until the user says. */
+export function HeldCard({ held, params = false, actionKey, onApply, onKeep, onAskAgain, what = 'part' }: {
   held: NonNullable<ChatMessage['held']>;
   /** (a changed part) the edit also reads project parameters not accepted yet */
   params?: boolean;
@@ -171,13 +183,18 @@ export function HeldCard({ held, params = false, actionKey, onApply, onKeep }: {
   /** throws what went wrong: the card shows it, with Try again */
   onApply: () => Promise<void>;
   onKeep: () => void;
+  /** (a changed part or sketch) send the same request again, on the version there is now */
+  onAskAgain?: () => void;
+  /** what was changed, in the card's words */
+  what?: 'part' | 'sketch';
 }) {
   const palette = useThemeStore((s) => s.palette);
   const { busy, error, run } = useCardAction(actionKey);
   if (held.status !== 'pending') {
     return (
       <div style={{ fontSize: '11.5px', color: palette.textMuted, marginTop: 3, paddingLeft: 4 }}>
-        {held.status === 'applied' ? '✓ applied' : held.changed ? 'Kept your version' : 'Kept the old code'}
+        {held.status === 'applied' ? '✓ applied' : held.status === 'again' ? 'Asked again on your version'
+          : held.changed ? 'Kept your version' : 'Kept the old code'}
       </div>
     );
   }
@@ -185,8 +202,12 @@ export function HeldCard({ held, params = false, actionKey, onApply, onKeep }: {
     <div role="group" aria-label="Confirm the change" style={cardBox(palette, palette.warning)}>
       {held.changed ? (
         <span>
-          You changed the part while the AI was working on it, so its edit wasn't applied. The edit is of the
-          part as it was when you asked: applying it replaces your change{params ? ', and it uses the new project parameters above (accept them first)' : ''}.
+          {held.elsewhere
+            ? `The ${what} was changed in another tab or browser while the AI was working on it, so its edit wasn't applied${
+                held.elsewhere === 'shown' ? '; this tab now shows that version' : ''}.`
+            : held.unsaved ? `Your ${what} has changes the AI didn't see, so its edit wasn't applied.`
+            : `You changed the ${what} while the AI was working on it, so its edit wasn't applied.`}{' '}
+          The edit is of the {what} as it was when you asked: applying it replaces {held.elsewhere ? 'that' : 'your'} change{params ? ', and it uses the new project parameters above (accept them first)' : ''}.
         </span>
       ) : held.broken.length ? (
         <>
@@ -210,6 +231,7 @@ export function HeldCard({ held, params = false, actionKey, onApply, onKeep }: {
         <CardButton busy={busy} onClick={() => { clearCardAction(actionKey); onKeep(); }}>
           {held.changed ? 'Keep my version' : 'Keep the old code'}
         </CardButton>
+        {held.changed && onAskAgain && <CardButton busy={busy} onClick={onAskAgain}>Ask again on my version</CardButton>}
       </Buttons>
     </div>
   );
