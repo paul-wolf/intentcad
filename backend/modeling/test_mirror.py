@@ -330,7 +330,7 @@ class StepsAndBodyTests(SimpleTestCase):
     def test_steps_show_copies_with_their_original(self):
         code, _, _ = pe.mirror_steps(CODE, [5, 7], {"plane": "Mid"})
         rows = {s["line"]: s for s in pe.steps(code)}
-        self.assertEqual(rows[8]["summary"], "Cut 'USB' 5 mm · mirrored across Mid")
+        self.assertEqual(rows[8]["summary"], "Cut 'USB' 5 mm into the part · mirrored across Mid")
         self.assertEqual((rows[8]["mirror_of"], rows[8]["mirror_plane"]), (5, "Mid"))
         self.assertEqual((rows[9]["mirror_of"], rows[9]["mirror_plane"]), (7, "Mid"))
         self.assertIsNone(rows[8]["sketch"])               # nothing of its own to highlight

@@ -403,6 +403,7 @@ class SetParamsRequest(Schema):
 
 class SetParamsResponse(Schema):
     code: str                       # the script with those values changed
+    flipped: list[str] = []         # extrude depth keys that were below zero: now positive, their lines flipped
 
 
 class AddExtrudeRequest(Schema):
@@ -473,6 +474,7 @@ class StepsRequest(Schema):
     code: str
     datum: list[str] = []           # the sketches on a base plane
     points: dict[str, int] = {}     # sketch -> its number of hole points
+    normals: dict[str, list[float]] = {}   # sketch -> its plane's normal (an extrude says its axis)
 
 
 class Step(Schema):

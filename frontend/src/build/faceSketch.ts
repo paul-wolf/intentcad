@@ -588,6 +588,7 @@ export interface ExtrudeShape {
   flip: boolean;
   both?: boolean;     // symmetric: `depth` each way (not with through)
   datum?: boolean;    // on a base plane, not a part face
+  until?: boolean;    // up to a face or the next one: no depth to say
 }
 
 /** +1: along the plane normal, −1: against it. A face sketch's normal points
@@ -597,6 +598,21 @@ export interface ExtrudeShape {
 export function extrudeSign(o: ExtrudeShape): 1 | -1 {
   const into = o.op === 'cut' && !o.datum;
   return into !== o.flip ? -1 : 1;
+}
+
+/** A depth typed or dragged below zero: the extrude goes the other way
+ *  (Flip) and the depth stays positive — a depth is never negative. Both
+ *  ways (symmetric) has no other way: just the size. */
+export function typedDepth(x: number, flip: boolean, both = false): { depth: number; flip: boolean } {
+  return x < 0 ? { depth: -x, flip: both ? flip : !flip } : { depth: x, flip };
+}
+
+/** What typing `raw` into a depth field does: a number sets the depth (below
+ *  0: positive, flipped); anything else (a lone "-", an empty field) is text
+ *  still being typed, kept in the field without touching the depth. */
+export function depthEdit(raw: string, flip: boolean, both = false): { depth: number; flip: boolean } | { draft: string } {
+  const x = raw.trim() === '' ? NaN : Number(raw);
+  return Number.isFinite(x) ? typedDepth(x, flip, both) : { draft: raw };
 }
 
 /** The offsets along the plane normal an extrude spans, [from, to] (from ≤ to).
@@ -627,26 +643,39 @@ const AXIS_WORDS: [Vec3, string, string][] = [
 export const partSide = (origin: Vec3, normal: Vec3, min: readonly number[], max: readonly number[]): number =>
   dot(sub(scale(add(min as Vec3, max as Vec3), 0.5), origin), normal);
 
-/** Where the extrude goes, in words: "Into the part · down (−Z)". `partAt`
- *  (partSide) says, for a tilted plane with no axis to name, whether it goes
- *  toward the part or away from it. */
+/** A depth in words: 5, 2.5 (no float noise); "?" when it isn't a number. */
+const mmWords = (d: number): string => (Number.isFinite(d) ? `${Math.round(d * 1000) / 1000}` : '?');
+
+/** What the extrude does and which way, in plain words: "Cut 5 mm into the
+ *  part, down (−Z)", "Add 5 mm out of the face, up (+Z)", "5 mm up (+Z)" (a
+ *  new body), "Add 4 mm each way (±Y)". `partAt` (partSide) says, for a
+ *  tilted plane with no axis to name, whether it goes toward the part or away
+ *  from it. Matches the steps list's (paramedit._extrude_words). */
 export function extrudeDirectionText(o: ExtrudeShape, normal: Vec3, partAt?: number): string {
-  const d = scale(normal, extrudeSign(o));
-  const ax = AXIS_WORDS.find(([v]) => dot(v, d) > 0.999);
-  if (o.op === 'cut' && o.through && o.datum) return 'Through the part, both ways from the plane';
-  if (o.both && !(o.op === 'cut' && o.through)) return `Both ways from the plane${ax ? ` (±${ax[2]})` : ''}`;
   const s = extrudeSign(o);
-  const what = o.datum
-    ? 'From the plane'
-    : o.op === 'cut'
-      ? (s < 0 ? 'Into the part' : 'Out of the face — cuts nothing there')
-      : (s > 0 ? 'Out of the face' : 'Into the part');
-  if (!ax) {
-    if (!o.datum || partAt === undefined || Math.abs(partAt) < 1e-6) return what;
-    return `${what} · ${partAt * s > 0 ? 'toward the part' : 'away from the part'}`;
+  const d = scale(normal, s);
+  const ax = AXIS_WORDS.find(([v]) => dot(v, d) > 0.999);
+  const axBoth = AXIS_WORDS.find(([v]) => Math.abs(dot(v, d)) > 0.999);
+  const verb = o.op === 'cut' ? 'Cut ' : o.op === 'join' ? 'Add ' : '';
+  const through = o.op === 'cut' && o.through;
+  if (through && o.datum) return `${verb}through the part, both ways from the plane`;
+  if (o.both && !through) return `${verb}${mmWords(o.depth)} mm each way ${axBoth ? `(±${axBoth[2]})` : 'from the plane'}`;
+  if (o.until) {
+    const way = o.datum ? '' : s < 0 ? 'into the part' : 'out of the face';
+    return `${verb}${[way, ax ? `${ax[1]} (${dot(ax[0], [1, 1, 1]) > 0 ? '+' : '−'}${ax[2]})` : ''].filter(Boolean).join(', ')
+      || 'along the plane'}`.trim();
   }
-  const sign = dot(ax[0], [1, 1, 1]) > 0 ? '+' : '−';
-  return `${what} · ${ax[1]} (${sign}${ax[2]})`;
+  const far = through ? 'through the part' : `${mmWords(o.depth)} mm`;
+  const sign = ax ? (dot(ax[0], [1, 1, 1]) > 0 ? '+' : '−') : '';
+  const axis = ax ? `${ax[1]} (${sign}${ax[2]})` : '';
+  if (o.datum) {
+    if (axis) return `${verb}${far} ${axis}`;
+    if (partAt === undefined || Math.abs(partAt) < 1e-6) return `${verb}${far} from the plane`;
+    return `${verb}${far} ${partAt * s > 0 ? 'toward the part' : 'away from the part'}`;
+  }
+  const where = s < 0 ? 'into the part' : 'out of the face';
+  const nothing = o.op === 'cut' && s > 0 ? ' — cuts nothing there' : '';
+  return `${verb}${through ? `through the part${s > 0 ? ', ' + where : ''}` : `${far} ${where}`}${axis ? `, ${axis}` : ''}${nothing}`;
 }
 
 // a closed shape as a sketch-space polyline, plus its corners (where side

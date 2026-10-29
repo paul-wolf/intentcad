@@ -306,7 +306,7 @@ class StepsTests(SimpleTestCase):
         self.assertEqual([(s["kind"], s.get("summary"), s["line"]) for s in st], [
             ("script", None, 3),
             ("op", "Shell 2 mm, top open", 5),
-            ("op", "Cut 'USB cutout' 5 mm", 6),
+            ("op", "Cut 'USB cutout' 5 mm into the part", 6),
             ("op", "Fillet 1 mm · 4 edges", 7),
             ("op", "Holes M3 insert ×4 + standoffs", 8),
             ("op", "Round 1 mm, blends 2 mm", 9),
@@ -325,7 +325,7 @@ class StepsTests(SimpleTestCase):
                 "part = shell(part, thickness=1.5, inside=False)\n"
                 + TRUSS + "part = shell(part, remove=[part.faces().sort_by(Axis.Z)[-1]], thickness=2)\n")
         got = [s["summary"] for s in steps(code)[1:]]
-        self.assertEqual(got, ["Join 'Boss' 3 mm both ways", "Cut 'Slot' through all",
+        self.assertEqual(got, ["Join 'Boss' 3 mm each way", "Cut 'Slot' through the part",
                                "Shell 1.5 mm, closed · walls outward", "Lighten: rim ?, rib 4 mm, fan",
                                "Shell · written in code"])
 

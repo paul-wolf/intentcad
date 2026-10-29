@@ -400,7 +400,9 @@ export const buildApi = {
   usage(documentId: string): Promise<UsageResponse> {
     return request(`/build/usage?document=${encodeURIComponent(documentId)}`);
   },
-  setParams(code: string, params: Record<string, number>): Promise<{ code: string }> {
+  /** Set P values; an extrude depth set below zero comes back positive with
+   *  its line flipped (`flipped`: those keys). With none, just that tidying. */
+  setParams(code: string, params: Record<string, number>): Promise<{ code: string; flipped?: string[] }> {
     return request('/build/set_params', { method: 'POST', body: JSON.stringify({ code, params }) });
   },
   /** Append an extrude of a face sketch (its depth a new P key), or rewrite
@@ -461,8 +463,9 @@ export const buildApi = {
     return request('/build/edit_args', { method: 'POST', body: JSON.stringify(payload) });
   },
   /** The steps list: every operation in order, summed up. */
-  steps(code: string, datum: string[] = [], points: Record<string, number> = {}): Promise<{ steps: Step[] }> {
-    return request('/build/steps', { method: 'POST', body: JSON.stringify({ code, datum, points }) });
+  steps(code: string, datum: string[] = [], points: Record<string, number> = {},
+        normals: Record<string, number[]> = {}): Promise<{ steps: Step[] }> {
+    return request('/build/steps', { method: 'POST', body: JSON.stringify({ code, datum, points, normals }) });
   },
   /** Switch the step on `line` off ("# off: " in front of it) or back on;
    *  `withCopies`: its mirrored copies follow. */

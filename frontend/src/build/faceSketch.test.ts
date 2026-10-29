@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Entity, Sketch } from '@/types/document';
 import {
-  boundPlane, extrudeDirectionText, extrudeGhost, extrudeSign, extrudeSpan, newConstructionSketch, newPlaneSketch, partSide,
+  boundPlane, extrudeDirectionText, extrudeGhost, extrudeSign, extrudeSpan, newConstructionSketch, newPlaneSketch, partSide, typedDepth, depthEdit,
   onTangentPlane, planeSketches, renamePlaneRefs, sketchBasePlane, sketchLoops, sketchProfile, type ExtrudeShape,
 } from './faceSketch';
 
@@ -168,19 +168,38 @@ describe('extrude preview', () => {
     expect(extrudeSpan(ex({ through: true, datum: true }), [-3, 20])).toEqual([-3, 20]);
   });
 
-  it('says where it goes in words', () => {
+  it('turns a depth below zero into Flip, keeping it positive', () => {
+    expect(typedDepth(-3, false)).toEqual({ depth: 3, flip: true });
+    expect(typedDepth(-3, true)).toEqual({ depth: 3, flip: false });
+    expect(typedDepth(4, true)).toEqual({ depth: 4, flip: true });
+    expect(typedDepth(-2, false, true)).toEqual({ depth: 2, flip: false });   // both ways: no other way
+    // a lone "-" or an empty field is still being typed: the depth is left alone
+    expect(depthEdit('-', false)).toEqual({ draft: '-' });
+    expect(depthEdit('', true)).toEqual({ draft: '' });
+    expect(depthEdit('-2', false)).toEqual({ depth: 2, flip: true });
+    expect(depthEdit("0.5", true)).toEqual({ depth: 0.5, flip: true });
+  });
+
+  it('says what it does and where it goes in plain words', () => {
     // the arch on a left face: a join grows out to the left; flipped it crosses the part
     const left: [number, number, number] = [-1, 0, 0];
-    expect(extrudeDirectionText(ex({ op: 'join' }), left)).toBe('Out of the face · to the left (−X)');
-    expect(extrudeDirectionText(ex({ op: 'join', flip: true }), left)).toBe('Into the part · to the right (+X)');
-    expect(extrudeDirectionText(ex({ flip: true }), [0, 0, 1])).toBe('Out of the face — cuts nothing there · up (+Z)');
-    expect(extrudeDirectionText(ex({ op: 'join', datum: true }), [0, -1, 0])).toBe('From the plane · toward the front (−Y)');
-    expect(extrudeDirectionText(ex({ op: 'join', datum: true, both: true }), [0, -1, 0])).toBe('Both ways from the plane (±Y)');
+    expect(extrudeDirectionText(ex({ op: 'join' }), left)).toBe('Add 5 mm out of the face, to the left (−X)');
+    expect(extrudeDirectionText(ex({ op: 'join', flip: true }), left)).toBe('Add 5 mm into the part, to the right (+X)');
+    // a cut on a top face goes down into the part; flipped it reaches nothing
+    expect(extrudeDirectionText(ex({}), [0, 0, 1])).toBe('Cut 5 mm into the part, down (−Z)');
+    expect(extrudeDirectionText(ex({ through: true }), [0, 0, 1])).toBe('Cut through the part, down (−Z)');
+    expect(extrudeDirectionText(ex({ flip: true }), [0, 0, 1])).toBe('Cut 5 mm out of the face, up (+Z) — cuts nothing there');
+    // a base plane has no inside: the direction is the axis
+    expect(extrudeDirectionText(ex({ op: 'new', datum: true, depth: 2.5 }), [0, 0, 1])).toBe('2.5 mm up (+Z)');
+    expect(extrudeDirectionText(ex({ op: 'join', datum: true }), [0, -1, 0])).toBe('Add 5 mm toward the front (−Y)');
+    expect(extrudeDirectionText(ex({ op: 'join', datum: true, both: true, depth: 4 }), [0, -1, 0])).toBe('Add 4 mm each way (±Y)');
+    expect(extrudeDirectionText(ex({ through: true, datum: true }), [0, 0, 1])).toBe('Cut through the part, both ways from the plane');
     // a tilted plane has no axis to name: toward or away from the part instead
     const tilt: [number, number, number] = [0, -0.5, Math.sqrt(3) / 2];
-    expect(extrudeDirectionText(ex({ datum: true, depth: 20 }), tilt, -12)).toBe('From the plane · away from the part');
-    expect(extrudeDirectionText(ex({ datum: true, depth: 20, flip: true }), tilt, -12)).toBe('From the plane · toward the part');
-    expect(extrudeDirectionText(ex({ datum: true }), tilt)).toBe('From the plane');
+    expect(extrudeDirectionText(ex({ datum: true, depth: 20 }), tilt, -12)).toBe('Cut 20 mm away from the part');
+    expect(extrudeDirectionText(ex({ datum: true, depth: 20, flip: true }), tilt, -12)).toBe('Cut 20 mm toward the part');
+    expect(extrudeDirectionText(ex({ datum: true }), tilt)).toBe('Cut 5 mm from the plane');
+    expect(extrudeDirectionText(ex({ op: 'join', datum: true, both: true }), tilt)).toBe('Add 5 mm each way from the plane');
     expect(partSide([0, 0, 15], [0, 0, 1], [-30, -30, -15], [30, 30, 15])).toBeCloseTo(-15, 9);
   });
 
