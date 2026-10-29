@@ -149,6 +149,8 @@ faces of a part:
 - Sketches **follow the part**: if the face moves or its edges change, the sketch moves
   with it.
 
+![K on a face that has a sketch already: Device mount (3 shapes), and New sketch on this face](images/sketch-per-step.png)
+
 ### Build the part
 
 - **Extrude**: add, cut or start a new body; to a depth, both ways, through everything,
@@ -250,6 +252,9 @@ faces of a part:
   sketches; its search box searches that project only. Rename, Describe, Duplicate,
   Move and Delete are on the cards, so switch to Grid for those. Each page remembers
   its sort and view in this browser.
+
+![Search on the Projects page: "plate" finds 7 of 36 parts and sketches across the projects](images/doc-search.png)
+
 - Every successful build is a version; restore any of them.
 - **Duplicate** makes a copy of a part or sketch in the same project. Hover over its
   card in the project and click the two-squares button (between Rename and Move). The

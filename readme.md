@@ -45,6 +45,22 @@ npm run dev
 Open `http://localhost:5951`. The frontend calls the API at `http://localhost:8951/api`;
 set `VITE_API_BASE` to point it elsewhere.
 
+### A test user
+
+For trying the app on a second, test server (UI checks, the guide's screenshots), seed
+the test user into its SQLite database:
+
+```sh
+cd backend && DB_HOST= .venv/bin/python manage.py seed_test_user
+```
+
+It signs in with the username or email and the password in
+`backend/accounts/dev_seed.py`, and joins the organisation that owns the "Guide
+examples" project. Running it again resets the password and any lockout. It refuses
+to run against PostgreSQL. A test frontend on another port needs that origin allowed:
+start the test backend with `CORS_ALLOWED_ORIGINS` and `CSRF_TRUSTED_ORIGINS` set to
+it (e.g. `http://127.0.0.1:5965`).
+
 ### Tests
 
 ```sh
