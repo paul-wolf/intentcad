@@ -83,11 +83,14 @@ def _edges(pl: Plane, loop: list[dict]) -> list[Edge]:
 
 
 def profile_faces(profile: dict, name: str = "sketch") -> list[Face]:
-    """The profile's loops as faces (holes cut out) on its plane."""
+    """The profile's loops as faces (holes cut out) on its plane. Shapes that
+    cross each other go by regions: the default ones (see profile_regions)."""
     pl = _plane(profile.get("plane") or {})
     loops = profile.get("loops") or []
     if not loops:
         raise SketchError(f"sketch {name!r} has no closed shapes to extrude")
+    if len(loops) > 1 and _nesting(_fills(profile, name)[1])[1]:
+        return picked_faces(profile, name, [r.point for r in profile_regions(profile, name) if r.default])
     wires: list[Wire] = []
     for loop in loops:
         try:
@@ -124,6 +127,153 @@ def profile_faces(profile: dict, name: str = "sketch") -> list[Face]:
                 f = -f
             faces.append(f)
     return faces
+
+
+# --- Regions: closed shapes that overlap split the sketch into regions (a
+#     square with a rectangle across its edge: the square without it, the
+#     overlap, and the part outside). An extrude may pick some of them:
+#         sketch("Plate", regions=[(x, y), ...])
+#     each (x, y) a point inside a picked region, in sketch coordinates; with no
+#     regions it takes what profile_faces() makes (the default: shapes that
+#     overlap add up, a shape fully inside another is a hole in it).
+
+def _faces(shape) -> list[Face]:
+    if shape is None:
+        return []
+    found = [f for s in shape for f in s.faces()] if isinstance(shape, list) else shape.faces()
+    return [f for f in found if f.area > 1e-9]
+
+
+def _inner_point(f: Face) -> Vector:
+    """A point well inside face `f`: of its centre and the centres of its
+    triangles, the one furthest from its edges."""
+    verts, tris = f.tessellate(0.05, 0.2)
+    candidates = [f.center()] + [(verts[a] + verts[b] + verts[c]) / 3 for a, b, c in tris]
+    edges = f.edges()
+    best, room = candidates[0], -1.0
+    for p in candidates:
+        if f.distance_to(p) > 1e-7:
+            continue
+        r = min(e.distance_to(p) for e in edges)
+        if r > room:
+            best, room = p, r
+    return best
+
+
+def _sketch_xy(pl: Plane, v: Vector) -> list[float]:
+    u = pl.to_local_coords(v)
+    return [round(u.X, 4) + 0.0, round(-u.Y, 4) + 0.0]      # no -0.0
+
+
+class Region:
+    """One region of a sketch: its `face` on the sketch's plane, a `point`
+    inside it (sketch x, y) and whether the default extrude takes it."""
+
+    def __init__(self, face: Face, point: list[float], default: bool):
+        self.face, self.point, self.default = face, point, default
+
+
+def _fills(profile: dict, name: str) -> tuple[Plane, list[Face]]:
+    pl = _plane(profile.get("plane") or {})
+    loops = profile.get("loops") or []
+    if not loops:
+        raise SketchError(f"sketch {name!r} has no closed shapes to extrude")
+    fills = []
+    for loop in loops:
+        try:
+            fills.append(Face(Wire(_edges(pl, loop))))
+        except Exception as exc:  # noqa: BLE001 - OCCT raises plain Standard_Failure
+            raise SketchError(f"sketch {name!r}: a closed shape could not be built ({exc})") from exc
+    return pl, fills
+
+
+def _nesting(fills: list[Face]) -> tuple[list[int], bool]:
+    """How many shapes fully enclose each shape, and whether any two shapes
+    cross (overlap without one holding the other)."""
+    boxes = [f.bounding_box() for f in fills]
+    depth, crossing = [0] * len(fills), False
+    for i in range(len(fills)):
+        for j in range(i + 1, len(fills)):
+            a, b = boxes[i], boxes[j]
+            if (a.min.X > b.max.X or b.min.X > a.max.X or a.min.Y > b.max.Y or b.min.Y > a.max.Y
+                    or a.min.Z > b.max.Z or b.min.Z > a.max.Z):
+                continue
+            small, big = (i, j) if fills[i].area <= fills[j].area else (j, i)
+            if not _faces(fills[small].cut(fills[big])):
+                depth[small] += 1
+            elif _faces(fills[small].intersect(fills[big])):
+                crossing = True
+    return depth, crossing
+
+
+def profile_regions(profile: dict, name: str = "sketch") -> list[Region]:
+    """The regions the profile's closed shapes split its plane into, in a
+    steady order (by their points). The default takes a region when the
+    innermost shapes holding it are outlines: shapes that cross add up, a
+    shape fully inside another is a hole in it (one inside that hole an
+    island again)."""
+    pl, fills = _fills(profile, name)
+    depth, _ = _nesting(fills)
+    pieces: list[Face] = []
+    for f in fills:          # split what is there by each shape, and add what of it is new
+        nxt = []
+        for p in pieces:
+            nxt += _faces(p.intersect(f)) + _faces(p.cut(f))
+        nxt += _faces(f.cut(*pieces)) if pieces else [f]
+        pieces = nxt
+    out = []
+    for f in pieces:
+        p = _inner_point(f)
+        held = [depth[i] for i, g in enumerate(fills) if g.distance_to(p) < 1e-6]
+        out.append(Region(f, _sketch_xy(pl, p), bool(held) and max(held) % 2 == 0))
+    return sorted(out, key=lambda r: (r.point[1], r.point[0]))
+
+
+def picked_faces(profile: dict, name: str, points) -> list[Face]:
+    """The regions holding `points` (sketch x, y), joined into faces facing
+    the plane's normal. A point in no region (an edit took its region away)
+    is an error: the step is flagged, nothing is guessed."""
+    pl = _plane(profile.get("plane") or {})
+    regions = profile_regions(profile, name)
+    picked: list[Face] = []
+    for xy in points:
+        try:
+            x, y = (float(c) for c in xy)
+        except (TypeError, ValueError) as exc:
+            raise SketchError(f"sketch {name!r}: regions must be (x, y) points") from exc
+        at = pl.from_local_coords((x, -y))
+        hit = next((r.face for r in regions if r.face.distance_to(at) < 1e-6), None)
+        if hit is None:
+            raise SketchError(f"sketch {name!r} changed: a region picked for this step is gone. "
+                              "Reopen the step and pick its regions again")
+        if all(hit is not f for f in picked):
+            picked.append(hit)
+    if not picked:
+        raise SketchError(f"sketch {name!r}: no regions picked")
+    joined = picked[0].fuse(*picked[1:]).clean() if len(picked) > 1 else picked[0]
+    out = []
+    for f in _faces(joined):
+        out.append(-f if f.normal_at().dot(pl.z_dir) < 0 else f)
+    return out
+
+
+def region_view(profile: dict, name: str = "sketch") -> list[dict]:
+    """The regions for the Extrude dialog, in sketch coordinates: each one's
+    point, whether the default takes it, its area, its triangles (to fill) and
+    its edges as polylines (to outline)."""
+    flat = {**profile, "plane": {"origin": [0, 0, 0], "normal": [0, 0, 1], "xAxis": [1, 0, 0]}}
+    pl = _plane(flat["plane"])
+    out = []
+    for r in profile_regions(flat, name):
+        verts, tris = r.face.tessellate(0.05, 0.2)
+        xy = [_sketch_xy(pl, v) for v in verts]
+        edges = []
+        for e in r.face.edges():
+            n = 2 if e.geom_type == GeomType.LINE else 24
+            edges.append([_sketch_xy(pl, v) for v in e.positions([i / (n - 1) for i in range(n)])])
+        out.append({"point": r.point, "default": r.default, "area": round(r.face.area, 3),
+                    "tris": [[xy[a], xy[b], xy[c]] for a, b, c in tris], "edges": edges})
+    return out
 
 
 class Points(list):
@@ -261,8 +411,9 @@ def bind(profiles: dict, ns: dict | None = None, report: dict | None = None) -> 
     ({name: profile}, sent by the engine with the build). A face sketch is
     rebound onto the script's `part` as it is when sketch() is called (`ns`
     is the script namespace); where each went is recorded in `report`."""
-    def sketch(name: str):
-        """The face sketch `name` as a Face (or a Compound of faces) on its plane."""
+    def sketch(name: str, regions=None):
+        """The face sketch `name` as a Face (or a Compound of faces) on its
+        plane; with `regions` ((x, y) points), only the regions holding them."""
         if name not in profiles:
             raise SketchError(f"no sketch named {name!r} in this part")
         profile = profiles[name]
@@ -271,7 +422,7 @@ def bind(profiles: dict, ns: dict | None = None, report: dict | None = None) -> 
             report[name] = where
         if where["plane"]:
             profile = {**profile, "plane": where["plane"]}
-        faces = profile_faces(profile, name)
+        faces = picked_faces(profile, name, regions) if regions is not None else profile_faces(profile, name)
         out = faces[0] if len(faces) == 1 else Compound(faces)
         out._sketch_name = name        # how an until extrude's message names it
         return out

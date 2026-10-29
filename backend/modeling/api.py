@@ -15,6 +15,7 @@ from .engine import EngineError, run_script, uses_shared
 from . import shared_defs
 from . import hole_presets
 from .llm_models import list_models
+from .sketch_profile import SketchError, region_view
 from .paramedit import (ParamError, add_edge_op, add_extrude, add_holes, add_revolve, add_mirror_body, add_plane, add_shell,
                         add_pattern_body, delete_step, edit_args, mirror_steps, op_at, pattern_steps, positive_depths,
                         rename_plane, set_params, set_pattern, steps, suppress, unlink)
@@ -22,6 +23,8 @@ from .schemas import (
     AddEdgeOpRequest,
     AddExtrudeRequest,
     AddExtrudeResponse,
+    SketchRegionsRequest,
+    SketchRegionsResponse,
     AddHolesRequest,
     AddMirrorBodyRequest,
     AddPatternBodyRequest,
@@ -219,10 +222,23 @@ def add_extrude_endpoint(request, payload: AddExtrudeRequest):
     try:
         code, param = add_extrude(payload.code, payload.sketch, payload.op, payload.depth,
                                   payload.through, payload.flip, payload.datum, payload.both, payload.line,
-                                  payload.extent, payload.face, payload.offset, payload.key)
+                                  payload.extent, payload.face, payload.offset, payload.key, payload.regions)
     except (ParamError, SyntaxError) as exc:
         return JsonResponse({"message": str(exc)}, status=422)
     return AddExtrudeResponse(code=code, param=param)
+
+
+@router.post("/sketch_regions", response=SketchRegionsResponse)
+def sketch_regions(request, payload: SketchRegionsRequest):
+    """The regions a sketch's closed shapes split it into, for the Extrude
+    dialog's region picker (modeling/sketch_profile.region_view)."""
+    err = require_auth(request)
+    if err:
+        return err
+    try:
+        return SketchRegionsResponse(regions=region_view(payload.profile))
+    except SketchError as exc:
+        return SketchRegionsResponse(error=str(exc))
 
 
 @router.post("/add_revolve", response=CodeResponse)

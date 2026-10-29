@@ -716,7 +716,7 @@ function loopOutline(loop: ProfileSegment[]): { pts: Point[]; corners: Point[] }
  *  `span` (and on the plane, when the span crosses it), side edges at their
  *  corners, and arrows from the shapes' middle showing which way it goes. */
 export function extrudeGhost(
-  sketch: Sketch, span: [number, number], plane: Sketch['plane'] = sketch.plane,
+  sketch: Sketch, span: [number, number], plane: Sketch['plane'] = sketch.plane, outline?: XY[][],
 ): { edges: number[]; arrows: number[] } {
   const edges: number[] = [], arrows: number[] = [];
   if (!plane) return { edges, arrows };
@@ -728,8 +728,14 @@ export function extrudeGhost(
   const levels = [span[0], span[1]];
   if (span[0] < -1e-6 && span[1] > 1e-6) levels.push(0);
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const loop of sketchLoops(sketch).loops) {
-    const { pts, corners } = loopOutline(loop);
+  // the regions picked: their outline, else every closed shape
+  const outlines = outline
+    ? outline.map((e) => {
+      const pts = e.map(([x, y]) => ({ x, y }));
+      return { pts, corners: [pts[0]!, pts[pts.length - 1]!] };
+    })
+    : sketchLoops(sketch).loops.map(loopOutline);
+  for (const { pts, corners } of outlines) {
     for (const off of levels) {
       for (let i = 0; i + 1 < pts.length; i++) edges.push(...at(pts[i]!, off), ...at(pts[i + 1]!, off));
     }

@@ -202,10 +202,45 @@ def _shared_src(sketch: str) -> dict:
     return p
 
 
-def _sketch_src(sketch: str) -> str:
+def _sketch_src(sketch: str, regions=None) -> str:
     """The source of an operation's sketch: sketch("name"), or a shared
-    sketch's SK[...] written the editor's way."""
-    return _shared_text(_shared_src(sketch)) if is_shared_src(sketch) else f"sketch({json.dumps(sketch)})"
+    sketch's SK[...] written the editor's way. `regions` ((x, y) points, one
+    inside each region picked): sketch("name", regions=[(x, y), ...])."""
+    if is_shared_src(sketch):
+        if regions:
+            raise ParamError("regions can only be picked in a sketch of this part")
+        return _shared_text(_shared_src(sketch))
+    if regions:
+        return f"sketch({json.dumps(sketch)}, regions={_regions_src(regions)})"
+    return f"sketch({json.dumps(sketch)})"
+
+
+def _coord(v) -> str:
+    t = f"{round(float(v), 3):.3f}".rstrip("0").rstrip(".")
+    return "0" if t in ("-0", "") else t
+
+
+def _regions_src(regions) -> str:
+    try:
+        pts = [(_coord(x), _coord(y)) for x, y in regions]
+    except (TypeError, ValueError) as exc:
+        raise ParamError("regions are (x, y) points") from exc
+    return "[" + ", ".join(f"({x}, {y})" for x, y in pts) + "]"
+
+
+def _read_regions(node) -> tuple[str, list] | None:
+    """sketch("name", regions=[(x, y), ...]) → (name, [[x, y], ...]), else None."""
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "sketch"
+            and len(node.args) == 1 and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+            and [k.arg for k in node.keywords] == ["regions"]):
+        return None
+    try:
+        pts = ast.literal_eval(node.keywords[0].value)
+        out = [[float(x), float(y)] for x, y in pts]
+    except (ValueError, TypeError, SyntaxError):
+        return None
+    return (node.args[0].value, out) if out else None
 
 
 def _read_sketch_arg(node) -> str | None:
@@ -236,14 +271,15 @@ EXTENTS = ("distance", "through", "next", "face")
 
 
 def _extrude_text(sketch: str, op: str, key: str | None, through: bool, flip: bool,
-                  datum: bool, both: bool, until: str | None = None, offset_src: str | None = None) -> str:
+                  datum: bool, both: bool, until: str | None = None, offset_src: str | None = None,
+                  regions=None) -> str:
     """The script line of an extrude (add_extrude's doc says what each option
     does); `key` is the P key of its depth (None for a through cut or an
     until extrude). `until`: the source of its end, '"next"' or
     'face_ref({...})', with `offset_src` the offset's source (None: none)."""
     into = op == "cut" and not datum      # negative amount: into the part
     sign = "-" if into != flip else ""
-    head = f"part {_EXTRUDE_SYM[op]} extrude({_sketch_src(sketch)}, "
+    head = f"part {_EXTRUDE_SYM[op]} extrude({_sketch_src(sketch, regions)}, "
     if until is not None:
         offset = f", offset={offset_src}" if offset_src else ""
         return head + f"until={until}{offset}" + (", dir=-1" if sign else "") + ")"
@@ -270,7 +306,8 @@ def _read_extrude(stmt, call, pv: dict, datum_sketches) -> tuple[dict, str | Non
     if len(call.args) != 1 or len(set(kws)) != len(kws) or not (
             set(kws) <= {"until", "offset", "dir"} if until else kws in (["amount"], ["amount", "both"])):
         raise bad
-    sketch = _read_sketch_arg(call.args[0])
+    picked = _read_regions(call.args[0])
+    sketch, regions = picked if picked else (_read_sketch_arg(call.args[0]), None)
     if sketch is None:
         raise bad
     kw = {k.arg: k.value for k in call.keywords}
@@ -302,7 +339,8 @@ def _read_extrude(stmt, call, pv: dict, datum_sketches) -> tuple[dict, str | Non
             neg = dv == -1
         into = op == "cut" and not datum
         return ({"sketch": sketch, "op": op, "extent": extent, "depth": None, "through": False,
-                 "flip": neg != into, "both": False, "datum": datum, "face": face, "offset": offset},
+                 "flip": neg != into, "both": False, "datum": datum, "face": face, "offset": offset,
+                 "regions": regions},
                 None, exprs)
     both = "both" in kw
     if both and not (isinstance(kw["both"], ast.Constant) and kw["both"].value is True):
@@ -328,7 +366,8 @@ def _read_extrude(stmt, call, pv: dict, datum_sketches) -> tuple[dict, str | Non
     if isinstance(depth, (int, float)) and depth < 0:     # read as the dialog writes it: positive, the other way
         depth, flip = -depth, flip if both else not flip
     return ({"sketch": sketch, "op": op, "extent": "through" if through else "distance", "depth": depth,
-             "through": through, "flip": flip, "both": both, "datum": datum, "face": None, "offset": 0.0},
+             "through": through, "flip": flip, "both": both, "datum": datum, "face": None, "offset": 0.0,
+             "regions": regions},
             key, exprs)
 
 
@@ -343,7 +382,8 @@ def _part_before(tree: ast.Module, line: int) -> bool:
 def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
                 through: bool = False, flip: bool = False, datum: bool = False,
                 both: bool = False, line: int | None = None, extent: str | None = None,
-                face: dict | None = None, offset=0.0, key: str | None = None) -> tuple[str, str | None]:
+                face: dict | None = None, offset=0.0, key: str | None = None,
+                regions=None) -> tuple[str, str | None]:
     """Append an extrude of sketch `sketch` to the script: op "cut" removes
     it from `part`, "join" adds it, "new" makes it the part (a script with no
     `part` yet). The depth becomes a new P key (unless `through`: a cut
@@ -368,6 +408,9 @@ def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
     until extrude: the depth stays in P, and `key` (the depth key the dialog
     remembers) takes it back when it is switched back to a distance. New is
     only for the line that makes the part first.
+
+    `regions` ((x, y) sketch points, one inside each region picked; None: the
+    default regions) go on the sketch: sketch("name", regions=[...]).
 
     Returns (code, the depth's param name or None; for an until extrude the
     depth key kept in P, if any)."""
@@ -408,7 +451,7 @@ def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
         if extent == "distance":
             new_key = _unique(names, *_EXTRUDE_KEY[op])
             code = add_param(code, new_key, float(depth))
-        text = _extrude_text(sketch, op, new_key, through, flip, datum, both, until, offset_src)
+        text = _extrude_text(sketch, op, new_key, through, flip, datum, both, until, offset_src, regions)
         code = code.strip() if blank else code.rstrip("\n")
         gap = "\n\n" if op == "new" else "\n"
         return code + gap + text + "\n", new_key
@@ -428,7 +471,7 @@ def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
     if is_shared_src(sk):
         datum = _shared_datum(sk)
     if until is not None:          # the old depth stays in P, for switching back
-        code = _write_op(code, _extrude_text(sk, op, None, False, flip, datum, False, until, offset_src),
+        code = _write_op(code, _extrude_text(sk, op, None, False, flip, datum, False, until, offset_src, regions),
                          line, "extrude")
         return code, old_key
     new_key = None
@@ -439,7 +482,8 @@ def add_extrude(code: str, sketch: str, op: str, depth: float = 10.0,
             new_key = None
         if new_key is None:
             new_key = _unique(names, *_EXTRUDE_KEY[op])
-    code = _write_op(code, _extrude_text(sk, op, new_key, through, flip, datum, both), line, "extrude")
+    code = _write_op(code, _extrude_text(sk, op, new_key, through, flip, datum, both, regions=regions),
+                     line, "extrude")
     if new_key:
         code = set_params(code, {new_key: float(depth)}) if new_key in names else add_param(code, new_key, float(depth))
     if old_key and old_key != new_key:
@@ -1678,7 +1722,9 @@ def _summary(op: str, a: dict, points: dict, normals: dict | None = None) -> str
             else f" from {ref['face'].get('hint') or 'face'}"
         return f"Plane {a['name']!r} · tangent at {_deg(a['angle'])}{frm} on {face}"
     if op == "extrude":
-        return f"{_EXTRUDE_TITLES[a['op']]} {_sk_words(a['sketch'])} {_extrude_words(a, (normals or {}).get(a['sketch']))}"
+        picked = a.get("regions")
+        return (f"{_EXTRUDE_TITLES[a['op']]} {_sk_words(a['sketch'])} {_extrude_words(a, (normals or {}).get(a['sketch']))}"
+                + (f" · {_plural(len(picked), 'region')} picked" if picked else ""))
     if op == "revolve":
         return (f"{_EXTRUDE_TITLES[a['op']]} {_sk_words(a['sketch'])} revolved {_deg(a['angle'])} about the "
                 f"{revolve_axis_label(a['axis'])}" + (" both ways" if a["both"] else "")

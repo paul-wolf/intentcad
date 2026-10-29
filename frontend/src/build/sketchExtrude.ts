@@ -19,7 +19,8 @@ export function extrudeStepOf(steps: Step[], name: string): Step | null {
 
 /** An extrude line's values as the sketcher's Extrude panel shows them. */
 export function sketcherOptions(v: ExtrudeValues): ExtrudeOptions {
-  return { op: v.op, depth: v.depth, through: v.through, flip: v.flip, both: v.both, datum: v.datum, extent: v.extent };
+  return { op: v.op, depth: v.depth, through: v.through, flip: v.flip, both: v.both, datum: v.datum, extent: v.extent,
+           regions: v.regions ?? null };
 }
 
 /** The line's values after the sketcher's Extrude panel: what the panel set,
@@ -32,5 +33,6 @@ export function withSketcherOptions(v: ExtrudeValues, firstBody: boolean, ex: Ex
     depth: ex.depth > 0 ? ex.depth : v.depth,
     through: !firstBody && !!ex.through, flip: ex.flip, both: !!ex.both,
     extent: firstBody ? 'distance' : ex.extent ?? (ex.through ? 'through' : 'distance'),
+    regions: ex.regions !== undefined ? ex.regions : v.regions ?? null,
   };
 }

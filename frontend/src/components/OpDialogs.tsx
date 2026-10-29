@@ -697,6 +697,8 @@ export interface ExtrudeValues {
   datum: boolean;
   face: FaceRefSpec | null;
   offset: Amount;
+  /** a point inside each region of the sketch it takes (null: the default ones) */
+  regions?: XY[] | null;
 }
 
 const EXTENT_TEXT: Record<ExtrudeExtent, string> = {
@@ -723,10 +725,12 @@ export function extrudeSummary(v: ExtrudeValues, offset: number | null): string 
 }
 
 export function ExtrudeDialog({ value, onChange, editing = true, firstBody, param, params, direction, hoverHint, preview,
-  placement, onEditSketch, onApply, onCancel }: {
+  placement, regions, onEditSketch, onApply, onCancel }: {
   value: ExtrudeValues; onChange: (v: ExtrudeValues) => void;
   /** a project sketch: where its shapes go (its own plane, a plane, a face) */
   placement?: ReactNode;
+  /** the sketch's regions to pick from (its region picker) */
+  regions?: ReactNode;
   /** reopened from its line (Update) rather than new (Cut / Join) */
   editing?: boolean;
   /** the line makes the part: New body, and nothing else */
@@ -776,6 +780,7 @@ export function ExtrudeDialog({ value, onChange, editing = true, firstBody, para
         </button>
       </div>
       {placement}
+      {regions}
       {firstBody ? (
         <div style={{ color: palette.text, lineHeight: 1.4 }}>
           <b>New body</b>

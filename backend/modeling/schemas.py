@@ -420,6 +420,26 @@ class AddExtrudeRequest(Schema):
     face: dict | None = None        # the face ref to extrude up to (extent 'face')
     offset: float | str = 0.0       # past the face (negative: short of it): a number or an expression of P names
     key: str | None = None          # the depth key kept in P while it was an until extrude
+    # a point inside each region of the sketch to extrude, in sketch (x, y);
+    # None: the default regions
+    regions: list[list[float]] | None = None
+
+
+class SketchRegionsRequest(Schema):
+    profile: dict                   # {loops} (the plane is not needed)
+
+
+class SketchRegion(Schema):
+    point: list[float]              # inside it, in sketch (x, y): what a step stores
+    default: bool                   # the step takes it when no regions are picked
+    area: float
+    tris: list[list[list[float]]]   # its triangles, to fill
+    edges: list[list[list[float]]]  # its edges as polylines, to outline
+
+
+class SketchRegionsResponse(Schema):
+    regions: list[SketchRegion] = []
+    error: str | None = None
 
 
 class AddRevolveRequest(Schema):

@@ -45,7 +45,17 @@ describe('withSketcherOptions', () => {
   });
 
   it('round-trips through the panel', () => {
-    const v = values({ op: 'join', depth: 4, flip: true, extent: 'distance' });
+    const v = values({ op: 'join', depth: 4, flip: true, extent: 'distance', regions: null });
     expect(withSketcherOptions(v, false, sketcherOptions(v))).toEqual(v);
+  });
+
+  it('keeps the regions picked for the step, or takes the panel\'s', () => {
+    const v = values({ regions: [[0, 0]] });
+    expect(sketcherOptions(v).regions).toEqual([[0, 0]]);
+    expect(withSketcherOptions(v, false, { op: 'cut', depth: 3, through: false, flip: false }).regions).toEqual([[0, 0]]);
+    expect(withSketcherOptions(v, false, { op: 'cut', depth: 3, through: false, flip: false, regions: null }).regions)
+      .toBeNull();
+    expect(withSketcherOptions(v, false, { op: 'cut', depth: 3, through: false, flip: false, regions: [[1, 2]] }).regions)
+      .toEqual([[1, 2]]);
   });
 });

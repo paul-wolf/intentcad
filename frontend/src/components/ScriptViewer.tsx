@@ -93,6 +93,7 @@ import {
   saveRecent, stepLayout, toggleOps, type Layout, type OpContext, type OpModel, type OpSelection, type Operation,
 } from '@/build/operations';
 import { OperationsPanel, Kbd } from './OperationsPanel';
+import { RegionPicker, useSketchRegions } from './RegionPicker';
 import { OpIcon, OPS_GRID_ICON } from './OpIcons';
 import { ContextPane, useContextFiles, type CtxColors } from './ContextPane';
 import { AppLink } from '@/ui/links';
@@ -143,12 +144,13 @@ interface ExtrudeEdit { line: number | null; v: ExtrudeValues; param: string | n
 /** An extrude line (as /build/op_at reads it) in the Extrude dialog's terms. */
 function extrudeEditOf(op: OpAt): ExtrudeEdit {
   const a = op.args as { sketch: string; op: ExtrudeOp; extent?: ExtrudeExtent; depth: number | null; through: boolean;
-                         flip: boolean; both: boolean; datum: boolean; face?: FaceRefSpec | null; offset?: number };
+                         flip: boolean; both: boolean; datum: boolean; face?: FaceRefSpec | null; offset?: number;
+                         regions?: [number, number][] | null };
   return {
     line: op.line, firstBody: a.op === 'new', param: op.params.depth ?? null,
     v: { sketch: a.sketch, op: a.op, extent: a.extent ?? (a.through ? 'through' : 'distance'), depth: a.depth ?? 5,
          through: a.through, flip: a.flip, both: a.both, datum: a.datum, face: a.face ?? null,
-         offset: op.exprs?.offset ?? a.offset ?? 0 },
+         offset: op.exprs?.offset ?? a.offset ?? 0, regions: a.regions ?? null },
   };
 }
 /** The Revolve dialog: `line` the line it was reopened from (null: a new
@@ -1288,7 +1290,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
       setExtrudeOp({ line: keep?.line ?? null, firstBody: false, param: keep?.param ?? null,
                      v: { sketch: name, op: ex.op, extent: ex.extent, depth: ex.depth > 0 ? ex.depth : 5, through: false,
                           flip: ex.flip, both: false, datum: !!ex.datum,
-                          face: keep?.v.extent === 'face' ? keep.v.face : null, offset: keep?.v.offset ?? 0 } });
+                          face: keep?.v.extent === 'face' ? keep.v.face : null, offset: keep?.v.offset ?? 0,
+                          regions: ex.regions ?? null } });
       return;
     }
     if (was) {
@@ -2156,7 +2159,7 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
     // New body starts the script over when it is still the unbuilt starter
     code: o.v.op === 'new' && codeRef.current === STARTER ? '' : codeRef.current, sketch: o.v.sketch, op: o.v.op, depth: o.v.depth, through: o.v.through, flip: o.v.flip,
     both: o.v.both, datum: o.v.datum, line: o.line, extent: o.v.extent, face: o.v.face,
-    offset: o.v.extent === 'face' ? o.v.offset : 0, key: o.param,
+    offset: o.v.extent === 'face' ? o.v.offset : 0, key: o.param, regions: o.v.regions ?? null,
   });
   const extrudeOk = (o: ExtrudeEdit) => o.v.extent === 'next' ? o.v.op !== 'new'
     : o.v.extent === 'face' ? o.v.op !== 'new' && !!o.v.face && amountValue(o.v.offset, paramVals) !== null
@@ -2179,6 +2182,11 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
   const extrudeSketch = useMemo(() => (extrudeOp ? sketchNamed(extrudeOp.v.sketch) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [extrudeOp?.v.sketch, docSketches, sharedSks]);
+  // its regions, to pick from (a project sketch's are its own, not picked here)
+  const extrudeRegions = useSketchRegions(useMemo(
+    () => (extrudeSketch && !isSkSource(extrudeOp?.v.sketch ?? '') ? sketchLoops(extrudeSketch).loops : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [extrudeSketch]));
   const extrudeAt = extrudeSketch ? boundPlane(extrudeSketch, null, resRef.current?.planes) : null;
   const extrudeNormal = (extrudeOp && (resRef.current?.sketches?.[extrudeOp.v.sketch]?.plane?.normal
     ?? extrudeAt?.normal)) as Vec3 | undefined;
@@ -3822,6 +3830,8 @@ export function ScriptViewer({ onClose, onHome, onProject, sketchOnFace = false 
                 direction={extrudeNormal ? extrudeDirectionText({ ...extrudeOp.v,
                   until: extrudeOp.v.extent === 'next' || extrudeOp.v.extent === 'face' }, extrudeNormal, extrudePartAt) : ''}
                 placement={placementRow(extrudeOp.v.sketch)}
+                regions={<RegionPicker regions={extrudeRegions} value={extrudeOp.v.regions}
+                  onChange={(r) => setExtrudeOp((o) => o && { ...o, v: { ...o.v, regions: r } })} />}
                 onEditSketch={editExtrudeSketch} onApply={() => void applyExtrude()} onCancel={closeOp} />
             )}
             {revolveOp && (
