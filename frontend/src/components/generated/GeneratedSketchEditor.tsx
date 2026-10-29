@@ -67,6 +67,8 @@ export function GeneratedSketchEditor({ id }: { id: string }) {
   const chatRef = useRef(chat);
   chatRef.current = chat;
   const askAi = useRef<((text: string) => void) | null>(null);
+  // the chat's saves go in turn, so an older chat never lands after a newer one
+  const chatSaving = useRef<Promise<unknown>>(Promise.resolve());
   const users = useSyncExternalStore(subscribeSharedUses, getUsers);
   const params = useProjectParamsStore((s) => s.params);
   const projectId = doc?.project_id ?? null;
@@ -214,8 +216,6 @@ export function GeneratedSketchEditor({ id }: { id: string }) {
   };
 
   // ── chat ──
-  // the chat's saves go in turn, so an older chat never lands after a newer one
-  const chatSaving = useRef<Promise<unknown>>(Promise.resolve());
   /** Change the chat as it is now (not as a card last saw it) and save it. */
   const updateChat = (change: (messages: ChatMessage[]) => ChatMessage[]) => {
     const next = change(chatRef.current);
