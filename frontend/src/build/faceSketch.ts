@@ -51,11 +51,15 @@ export interface SketchBinding {
 export type SketchBindings = Record<string, SketchBinding>;
 
 /** The plane a sketch is on in the last build: where its face went, else as drawn.
- *  (The stored plane is never changed — the build works it out each time.) */
+ *  (The stored plane is never changed — the build works it out each time —
+ *  except by Move 'X' here, for a sketch whose face the build lost: its
+ *  binding is the old plane then, so the sketch's own is used.) */
 export function boundPlane(s: Sketch, bound?: SketchBindings | null,
                            planes?: Record<string, ConstructionPlane> | null): Sketch['plane'] {
   const on = s.planeRef ? planes?.[s.planeRef] : null;
-  return (s.plane && bound?.[s.name]?.plane) || (on ? { origin: on.origin, normal: on.normal, xAxis: on.xAxis } : s.plane);
+  const b = bound?.[s.name];
+  return (s.plane && b?.status !== 'not_found' && b?.plane)
+    || (on ? { origin: on.origin, normal: on.normal, xAxis: on.xAxis } : s.plane);
 }
 
 /** A construction plane's geometry, as the build reports it (RunResponse.planes). */
@@ -95,8 +99,8 @@ function acrossDistance(s: Sketch, face: FaceInfo, bound?: SketchBindings | null
 }
 
 /** What the last build did with the face sketches, for the status line: how
- *  many followed their face, and a warning for each that lost it or matched
- *  more than one. */
+ *  many followed their face, and a warning for each that matched more than
+ *  one (one that lost its face fails its step instead). */
 export function sketchBindNotes(bound: SketchBindings | null | undefined, sketches: Sketch[],
                                 prev?: SketchBindings | null): { moved: number; warnings: string[] } {
   let moved = 0;
@@ -112,11 +116,10 @@ export function sketchBindNotes(bound: SketchBindings | null | undefined, sketch
     const s = sketches.find((k) => k.name === name);
     if (!s?.face) continue;   // a base-plane sketch has no face to follow
     const hint = s.face.hint ?? faceLabel(s.face.normal);
-    if (b.status === 'not_found') warnings.push(`Sketch '${name}' lost its face (${hint}); drawn where it was`);
-    else {
-      if (followed(name, b)) moved++;
-      if (b.status === 'ambiguous') warnings.push(`Sketch '${name}' matched more than one face (${hint}); used the closest`);
-    }
+    // a lost face stops the build at its step, which says so: nothing to add here
+    if (b.status === 'not_found') continue;
+    if (followed(name, b)) moved++;
+    if (b.status === 'ambiguous') warnings.push(`Sketch '${name}' matched more than one face (${hint}); used the closest`);
   }
   return { moved, warnings };
 }
@@ -189,6 +192,46 @@ export function newFaceSketch(name: string, face: FaceInfo, edges: RunEdge[]): S
   return {
     id: generateId('sk'), name, visible: true, entities: out.entities,
     constraints: out.entities.map((e): Constraint => ({ id: generateId('c'), type: 'fixed', entityId: e.id })),
+    plane: { origin: round(plane.origin), normal: round(plane.normal), xAxis: round(plane.xAxis) },
+    face: {
+      center: face.center, normal: face.normal, area: face.area,
+      ...(out.count ? { box: out.box, perimeter: out.perimeter, edges: out.count } : {}),
+      hint: faceLabel(face.normal),
+    },
+  };
+}
+
+/** The face sketches the last build couldn't find a face for (their step
+ *  stops the build: sketch_profile.lost_face), for K on a face to offer
+ *  "Move 'X' here". */
+export function lostSketches(sketches: Sketch[], bound?: SketchBindings | null): Sketch[] {
+  return sketches.filter((s) => !!s.face && bound?.[s.name]?.status === 'not_found');
+}
+
+/** Sketch `sk` put on `face` instead of the one it lost: what's drawn in it
+ *  kept, its old reference outline and projected edges (and constraints to
+ *  them) dropped, the new face's outline added. On a face facing the same way
+ *  the drawing stays where it was, seen along the normal (the plane slides
+ *  onto the face, its axes kept); on any other face it is placed as a new
+ *  sketch would be (the plane through the origin's foot on it). */
+export function moveFaceSketch(sk: Sketch, face: FaceInfo, edges: RunEdge[]): Sketch {
+  const old = sk.plane;
+  const n = face.normal;
+  const plane = old && dot(planeBasis(old).normal, n) > 0.999
+    ? { origin: add(old.origin as Vec3, scale(n, dot(sub(face.center, old.origin as Vec3), n))), normal: n, xAxis: old.xAxis as Vec3 }
+    : planeForFace(face.center, n);
+  const out = faceOutline(face, edges, planeBasis(plane));
+  const kept = sk.entities.filter((e) => !isRef(e));
+  const gone = new Set(sk.entities.filter(isRef).map((e) => e.id));
+  const touches = (c: Constraint) => Object.values(c).some((v) =>
+    (typeof v === 'string' && gone.has(v)) || (Array.isArray(v) && v.some((x) => typeof x === 'string' && gone.has(x))));
+  return {
+    ...sk,
+    entities: [...out.entities, ...kept],
+    constraints: [
+      ...out.entities.map((e): Constraint => ({ id: generateId('c'), type: 'fixed', entityId: e.id })),
+      ...sk.constraints.filter((c) => !touches(c)),
+    ],
     plane: { origin: round(plane.origin), normal: round(plane.normal), xAxis: round(plane.xAxis) },
     face: {
       center: face.center, normal: face.normal, area: face.area,

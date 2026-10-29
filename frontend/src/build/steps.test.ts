@@ -67,6 +67,15 @@ describe('steps', () => {
     expect(stepProblems(STEPS, null, '').size).toBe(0);
   });
 
+  it('shows a sketch that lost its face as a broken step, in its own words', () => {
+    const p = stepProblems(STEPS, null,
+      "line 4: part -= extrude(sketch(\"Slots\"), amount=-5)\nSketchError: Sketch 'Slots' lost its face (top face) — pick a new one: "
+      + "select the face it belongs on, press K and choose Move 'Slots' here");
+    expect([...p.values()].flat()).toEqual([
+      "Failed: Sketch 'Slots' lost its face (top face) — pick a new one: select the face it belongs on, press K and choose Move 'Slots' here",
+    ]);
+  });
+
   it('flags a plane whose face or edge is not certain', () => {
     const steps = [...STEPS, op(10, 10, { op: 'offset_plane', plane: 'Lid', summary: "Plane 'Lid' · 5 mm from the top face" })];
     const res = { planes: {

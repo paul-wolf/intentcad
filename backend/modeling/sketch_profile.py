@@ -337,17 +337,40 @@ def face_outline(face: Face, pl: Plane) -> list[dict]:
     return out
 
 
+# A face no part of whose outline box covers the old one's (seen along the
+# normal) and whose area is under half or over twice the old is another face,
+# not this one moved: the bracket's upright lowered into the base leaves the
+# base's 5 mm end strip as the only face facing the same way, and a sketch of
+# the upright's face put there would be a silent jump.
+UNLIKE_AREA = 2.0
+
+
+def _unlike(face: dict, found, pl) -> bool:
+    box0 = face.get("box")
+    if not box0:
+        return False
+    try:
+        ov = face_ref.overlap(box0, face_ref.box(found, pl))
+        ratio = found.area / float(face["area"])
+    except Exception:  # noqa: BLE001 - nothing to compare: keep the match
+        return False
+    return ov <= 0 and not (1 / UNLIKE_AREA <= ratio <= UNLIKE_AREA)
+
+
 def rebind(profile: dict, part) -> dict:
     """Where the sketch goes on `part` (the part built so far):
     {status, moved_by, plane, outline}.
 
     The face it was drawn on is looked for among part's planar faces facing
     the same way (face_ref.find: centre across and along the normal, area,
-    outline box overlap). The best wins and the plane moves along its normal onto it, keeping its in-plane origin and
+    outline box overlap), and one with no overlap and a very different area
+    isn't taken (_unlike). The best wins and the plane moves along its normal onto it, keeping its in-plane origin and
     x axis (so the sketch's coordinates still mean the same place).
 
     status: "same" (not moved), "moved", "ambiguous" (another face scored
-    within 10% — the best is used), "not_found" (the stored plane is used).
+    within 10% — the best is used), "not_found" (the stored plane, though
+    bind()'s sketch() then stops the build there rather than draw it on
+    nothing: lost_face()).
     outline: the matched face's edges in the sketch's own coordinates on the
     new plane (face_outline), so the sketch's reference outline can follow
     the face; only when a face was matched."""
@@ -363,7 +386,7 @@ def rebind(profile: dict, part) -> dict:
                                  "area": face["area"], "box": face.get("box")}, pl)
     except Exception:  # noqa: BLE001 - a part we can't read: leave the sketch where it was
         return keep
-    if m["face"] is None:
+    if m["face"] is None or _unlike(face, m["face"], pl):
         return {**keep, "status": "not_found"}
     offset = (m["center"] - pl.origin).dot(n)
     moved = round(offset, 6)
@@ -406,20 +429,38 @@ def on_plane(profile: dict, name: str, ns: dict | None) -> dict | None:
     return {"status": status, "moved_by": moved if status != "same" else 0.0, "plane": spec, "planeRef": ref}
 
 
+def lost_face(name: str, profile: dict) -> str:
+    """What the step says when the face a sketch was drawn on isn't in the
+    part any more: the plain words, then how to put it on another face."""
+    face = profile.get("face") or {}
+    hint = face.get("hint") or "face"
+    return (f"Sketch {name!r} lost its face ({hint}) — pick a new one: select the face it "
+            f"belongs on, press K and choose Move {name!r} here")
+
+
 def bind(profiles: dict, ns: dict | None = None, report: dict | None = None) -> dict:
     """The script-namespace sketch(): looks names up in `profiles`
     ({name: profile}, sent by the engine with the build). A face sketch is
     rebound onto the script's `part` as it is when sketch() is called (`ns`
-    is the script namespace); where each went is recorded in `report`."""
-    def sketch(name: str, regions=None):
-        """The face sketch `name` as a Face (or a Compound of faces) on its
-        plane; with `regions` ((x, y) points), only the regions holding them."""
+    is the script namespace); where each went is recorded in `report`. A
+    sketch whose face isn't found stops the build at its line (lost_face()):
+    the step shows as broken instead of the sketch landing where the face
+    used to be."""
+    def placed(name: str) -> tuple[dict, dict]:
         if name not in profiles:
             raise SketchError(f"no sketch named {name!r} in this part")
         profile = profiles[name]
         where = on_plane(profile, name, ns) or rebind(profile, (ns or {}).get("part"))
         if report is not None:
             report[name] = where
+        if where["status"] == "not_found":
+            raise SketchError(lost_face(name, profile))
+        return profile, where
+
+    def sketch(name: str, regions=None):
+        """The face sketch `name` as a Face (or a Compound of faces) on its
+        plane; with `regions` ((x, y) points), only the regions holding them."""
+        profile, where = placed(name)
         if where["plane"]:
             profile = {**profile, "plane": where["plane"]}
         faces = picked_faces(profile, name, regions) if regions is not None else profile_faces(profile, name)
@@ -431,12 +472,7 @@ def bind(profiles: dict, ns: dict | None = None, report: dict | None = None) -> 
         """The face sketch `name`'s points and circle centres, on its plane
         as rebound onto `part` (a list of Vectors; .normal points out of the
         face it was drawn on)."""
-        if name not in profiles:
-            raise SketchError(f"no sketch named {name!r} in this part")
-        profile = profiles[name]
-        where = on_plane(profile, name, ns) or rebind(profile, (ns or {}).get("part"))
-        if report is not None:
-            report[name] = where
+        profile, where = placed(name)
         return profile_points({**profile, "plane": where["plane"] or profile.get("plane")}, name)
 
     def sketch_line(name: str, line: str) -> SketchLine:
@@ -444,12 +480,7 @@ def bind(profiles: dict, ns: dict | None = None, report: dict | None = None) -> 
         / "axis-v", a construction or a reference line, by entity id) as an
         axis on the sketch's plane as rebound onto `part`: what revolve()
         turns a profile around."""
-        if name not in profiles:
-            raise SketchError(f"no sketch named {name!r} in this part")
-        profile = profiles[name]
-        where = on_plane(profile, name, ns) or rebind(profile, (ns or {}).get("part"))
-        if report is not None:
-            report[name] = where
+        profile, where = placed(name)
         return profile_line({**profile, "plane": where["plane"] or profile.get("plane")}, name, line)
     return {"sketch": sketch, "sketch_points": sketch_points, "sketch_line": sketch_line}
 
