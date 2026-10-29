@@ -147,16 +147,26 @@ class RebindTests(SimpleTestCase):
         self.assertIn("Sketch 'Mount' lost its face (right face)", r["warning"])
         self.assertAlmostEqual(r["metrics"]["volume"], 50 * 40 * 5, delta=0.01)
 
-    def test_equally_good_faces_are_ambiguous_and_the_best_is_used(self):
+    def test_two_equally_good_faces_fail_the_step_rather_than_pick_one(self):
         code = ('part = Pos(0, 0, 3) * Box(60, 40, 6)\n'
                 'part += Pos(-4, 0, 9) * Box(6, 6, 6)\npart += Pos(4, 0, 9) * Box(6, 6, 6)\n'
                 'part -= extrude(sketch("x"), amount=-1)\n')
         prof = {"plane": {"origin": [0, 0, 10], "normal": [0, 0, 1], "xAxis": [1, 0, 0]},
                 "loops": [_circle(-4, 0, 1)],
                 "face": {"center": [0, 0, 10], "normal": [0, 0, 1], "area": 36.0, "box": [-3, -3, 3, 3]}}
-        rep = run_script(code, sketches={"x": prof})["sketches"]["x"]
-        self.assertEqual(rep["status"], "ambiguous")
-        self.assertAlmostEqual(rep["moved_by"], 2, places=6)
+        r = run_script(code, sketches={"x": prof})
+        self.assertEqual(r["sketches"]["x"]["status"], "not_found")
+        self.assertIn("Sketch 'x' lost its face", r["warning"])
+        self.assertAlmostEqual(r["metrics"]["volume"], 60 * 40 * 6 + 2 * 6 * 6 * 6, delta=0.01)
+
+    def test_a_slot_that_splits_the_top_face_in_two_halves_loses_the_sketch(self):
+        # a centred slot across the plate, before the hole: two equal top halves
+        prof = {"plane": TOP, "loops": [_circle(10, 0, 2.5)], "face": TOP_FACE}
+        code = PLATE.format(t=6) + 'part -= Pos(0, 0, 5) * Box(4, 40, 2)\n' + HOLE
+        r = run_script(code, sketches={"hole": prof})
+        self.assertEqual(r["sketches"]["hole"]["status"], "not_found")
+        self.assertIn("Sketch 'hole' lost its face (top face)", r["warning"])
+        self.assertAlmostEqual(r["metrics"]["volume"], 60 * 40 * 6 - 4 * 40 * 2, delta=0.01)
 
     def test_a_case_wall_cutout_stays_on_its_wall_when_the_walls_get_taller(self):
         # the inside of the opposite wall faces the same way and, as the walls

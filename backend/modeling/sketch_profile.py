@@ -367,10 +367,11 @@ def rebind(profile: dict, part) -> dict:
     isn't taken (_unlike). The best wins and the plane moves along its normal onto it, keeping its in-plane origin and
     x axis (so the sketch's coordinates still mean the same place).
 
-    status: "same" (not moved), "moved", "ambiguous" (another face scored
-    within 10% — the best is used), "not_found" (the stored plane, though
+    status: "same" (not moved), "moved", "not_found" (the stored plane, though
     bind()'s sketch() then stops the build there rather than draw it on
-    nothing: lost_face()).
+    nothing: lost_face()). Two faces that match about equally well (another
+    scored within 10%, e.g. a slot split the face in two) are not_found too:
+    guessing would put the sketch on either half.
     outline: the matched face's edges in the sketch's own coordinates on the
     new plane (face_outline), so the sketch's reference outline can follow
     the face; only when a face was matched."""
@@ -386,13 +387,11 @@ def rebind(profile: dict, part) -> dict:
                                  "area": face["area"], "box": face.get("box")}, pl)
     except Exception:  # noqa: BLE001 - a part we can't read: leave the sketch where it was
         return keep
-    if m["face"] is None or _unlike(face, m["face"], pl):
+    if m["face"] is None or m["status"] == "ambiguous" or _unlike(face, m["face"], pl):
         return {**keep, "status": "not_found"}
     offset = (m["center"] - pl.origin).dot(n)
     moved = round(offset, 6)
     status = "moved" if abs(moved) > 1e-6 else "same"
-    if m["status"] == "ambiguous":
-        status = "ambiguous"
     plane = _plane_spec(spec, pl.origin + n * offset)
     try:
         outline = face_outline(m["face"], _plane(plane))

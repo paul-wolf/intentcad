@@ -166,8 +166,10 @@ faces of a part:
 - Sketches **follow the part**: if the face moves or its edges change, the sketch moves
   with it. A deeper or shallower extrude, a fillet or a hole made earlier keeps it on
   the same face.
-- **A sketch that lost its face**: if an earlier change removes the face, or leaves only
-  a face that looks nothing like it, the sketch isn't moved anywhere else. Its step shows
+- **A sketch that lost its face**: if an earlier change removes the face, leaves only
+  a face that looks nothing like it, or splits it into two faces that match equally well
+  (a slot across the middle of a top face, say), the sketch isn't moved anywhere else,
+  or onto a half it might not belong on. Its step shows
   as failed: "Sketch 'X' lost its face — pick a new one". Select the face it belongs on,
   press K and choose **Move 'X' here**: the drawing is kept, the new face's outline comes
   in, and the part rebuilds.
