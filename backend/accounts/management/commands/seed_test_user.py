@@ -1,6 +1,7 @@
 """Create (or reset) the local test user from accounts/dev_seed.py.
 
-Only against SQLite: a test server's database, never Postgres or production.
+Only with DEBUG on and against SQLite: a test server's database, never
+Postgres or production.
     DB_HOST= .venv/bin/python manage.py seed_test_user
 """
 from django.conf import settings
@@ -11,9 +12,11 @@ from accounts.models import Organisation, User
 
 
 class Command(BaseCommand):
-    help = "Create or reset the local test user (accounts/dev_seed.py); SQLite databases only."
+    help = "Create or reset the local test user (accounts/dev_seed.py); DEBUG on and SQLite databases only."
 
     def handle(self, *args, **options):
+        if not settings.DEBUG:
+            raise CommandError("seed_test_user only runs with DEBUG on (a test server, not production).")
         if "sqlite" not in settings.DATABASES["default"]["ENGINE"]:
             raise CommandError("seed_test_user only runs against a SQLite database (run with DB_HOST empty).")
         from projects.models import Project
